@@ -1,0 +1,63 @@
+[gd_scene load_steps=9 format=3 uid="uid://vapormain000001"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://scenes/ui/sidebar/sidebar.tscn" id="2_sid"]
+[ext_resource type="PackedScene" path="res://scenes/ui/tab_bar/tab_bar.tscn" id="3_tab"]
+[ext_resource type="PackedScene" path="res://scenes/ui/mini_player/mini_player.tscn" id="4_mp"]
+[ext_resource type="PackedScene" path="res://scenes/screens/library/library_screen.tscn" id="5_lib"]
+[ext_resource type="PackedScene" path="res://scenes/screens/search/search_screen.tscn" id="6_srch"]
+[ext_resource type="PackedScene" path="res://scenes/screens/settings/settings_screen.tscn" id="7_set"]
+[ext_resource type="PackedScene" path="res://scenes/screens/setup_wizard/setup_wizard.tscn" id="8_swiz"]
+
+[node name="Main" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_main")
+
+[node name="Background" type="ColorRect" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Sidebar" parent="." instance=ExtResource("2_sid")]
+anchor_bottom = 1.0
+offset_right = 240.0
+
+[node name="ContentFrame" type="Control" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 240.0
+offset_bottom = -72.0
+
+[node name="ScreenContainer" type="Control" parent="ContentFrame"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="LibraryScreen" parent="ContentFrame/ScreenContainer" instance=ExtResource("5_lib")]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="SearchScreen" parent="ContentFrame/ScreenContainer" instance=ExtResource("6_srch")]
+anchor_right = 1.0
+anchor_bottom = 1.0
+visible = false
+
+[node name="SettingsScreen" parent="ContentFrame/ScreenContainer" instance=ExtResource("7_set")]
+anchor_right = 1.0
+anchor_bottom = 1.0
+visible = false
+
+[node name="MiniPlayer" parent="." instance=ExtResource("4_mp")]
+anchor_right = 1.0
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 240.0
+offset_top = -72.0
+
+[node name="TabBar" parent="." instance=ExtResource("3_tab")]
+anchor_right = 1.0
+anchor_bottom = 1.0
+visible = false
+
+[node name="SetupWizard" parent="." instance=ExtResource("8_swiz")]
+layout_mode = 1
+visible = false

@@ -1,0 +1,32 @@
+[gd_scene load_steps=2 format=3 uid="uid://vaporminiplayer01"]
+
+[ext_resource type="Script" path="res://scripts/ui/mini_player.gd" id="1_mp"]
+
+[node name="MiniPlayer" type="PanelContainer"]
+anchor_right = 1.0
+script = ExtResource("1_mp")
+
+[node name="HBox" type="HBoxContainer" parent="."]
+theme_override_constants/separation = 12
+
+[node name="AlbumArt" type="Panel" parent="HBox"]
+custom_minimum_size = Vector2(40, 40)
+
+[node name="TrackInfo" type="VBoxContainer" parent="HBox"]
+size_flags_horizontal = 3
+
+[node name="TrackTitle" type="Label" parent="HBox/TrackInfo"]
+text = "No track playing"
+vertical_alignment = 1
+
+[node name="ArtistLabel" type="Label" parent="HBox/TrackInfo"]
+text = ""
+vertical_alignment = 1
+
+[node name="PlayPauseBtn" type="Button" parent="HBox"]
+text = "▶"
+custom_minimum_size = Vector2(44, 44)
+
+[node name="LikeBtn" type="Button" parent="HBox"]
+text = "♡"
+custom_minimum_size = Vector2(44, 44)

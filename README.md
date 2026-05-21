@@ -63,9 +63,9 @@ The primary reason everyday users stay on Spotify is friction. Setting up Navidr
 ```
 [ Your Music Files ]  ──►  [ Encrypted Cloud Storage ]  ──►  [ Smart Client Apps ]
  (PC / NAS / Drive)         (Proton Drive / WebDAV /          (Desktop / Mobile)
-                             Mega / Google Drive)                      │
-                                                       Local AI analysis runs here
-                                                       (BPM, Key, Energy Mapping)
+							 Mega / Google Drive)                      │
+													   Local AI analysis runs here
+													   (BPM, Key, Energy Mapping)
 ```
 
 - **Bring Your Own Cloud** — Users connect their existing private cloud storage directly. Supported backends target Proton Drive, Mega, Google Drive, Dropbox, and any WebDAV-compatible server. No Vapor-controlled infrastructure sits between the user and their files.
@@ -141,27 +141,27 @@ vapor-music/
 │   ├── liner_notes/         # Album art, metadata editor, credits
 │   └── settings/            # EQ profiles, themes, cloud config
 └── ai/
-    └── dj/                  # Harmonic path construction, mood graph
+	└── dj/                  # Harmonic path construction, mood graph
 ```
 
 ### Data Flow
 
 ```
  Import Track
-      │
-      ▼
+	  │
+	  ▼
  [Analyzer] ─── BPM, Key, Energy, Spectral Profile
-      │
-      ▼
+	  │
+	  ▼
  [SQLite Library] ─── Indexed, searchable, portable
-      │
-      ▼
+	  │
+	  ▼
  [AI DJ Module] ─── Constructs harmonic listening paths
-      │
-      ▼
+	  │
+	  ▼
  [Audio Engine] ─── Intelligent crossfade, pitch correction, EQ
-      │
-      ▼
+	  │
+	  ▼
  [Output] ─── Calibrated by headphone profile
 ```
 

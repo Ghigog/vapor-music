@@ -1,0 +1,35 @@
+[gd_scene load_steps=2 format=3 uid="uid://vaporsidebar0001"]
+
+[ext_resource type="Script" path="res://scripts/ui/sidebar.gd" id="1_sid"]
+
+[node name="Sidebar" type="PanelContainer"]
+script = ExtResource("1_sid")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+
+[node name="Header" type="HBoxContainer" parent="VBox"]
+custom_minimum_size = Vector2(0, 64)
+
+[node name="LogoContainer" type="HBoxContainer" parent="VBox/Header"]
+
+[node name="LogoIcon" type="Label" parent="VBox/Header/LogoContainer"]
+text = "◈"
+
+[node name="AppName" type="Label" parent="VBox/Header/LogoContainer"]
+text = "vapor"
+
+[node name="Sep" type="HSeparator" parent="VBox"]
+
+[node name="NavItems" type="VBoxContainer" parent="VBox"]
+
+[node name="NavLibrary" type="Button" parent="VBox/NavItems"]
+text = "  ♪  Library"
+
+[node name="NavSearch" type="Button" parent="VBox/NavItems"]
+text = "  ⌕  Search"
+
+[node name="NavSettings" type="Button" parent="VBox/NavItems"]
+text = "  ⚙  Settings"
+
+[node name="Footer" type="Control" parent="VBox"]
+size_flags_vertical = 3

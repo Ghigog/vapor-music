@@ -1,0 +1,30 @@
+[gd_scene load_steps=2 format=3 uid="uid://vaporsettings0001"]
+
+[ext_resource type="Script" path="res://scripts/screens/settings_screen.gd" id="1_set"]
+
+[node name="SettingsScreen" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_set")
+
+[node name="Center" type="CenterContainer" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Placeholder" type="VBoxContainer" parent="Center"]
+custom_minimum_size = Vector2(300, 0)
+theme_override_constants/separation = 20
+alignment = 1
+
+[node name="IconLabel" type="Label" parent="Center/Placeholder"]
+text = "⚙"
+horizontal_alignment = 1
+
+[node name="HeadingLabel" type="Label" parent="Center/Placeholder"]
+text = "Settings"
+horizontal_alignment = 1
+
+[node name="BodyLabel" type="Label" parent="Center/Placeholder"]
+text = "Coming soon — EQ profiles, themes, and cloud configuration."
+horizontal_alignment = 1
+autowrap_mode = 3

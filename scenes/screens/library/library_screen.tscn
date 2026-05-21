@@ -1,0 +1,36 @@
+[gd_scene load_steps=2 format=3 uid="uid://vaporlibrary0001"]
+
+[ext_resource type="Script" path="res://scripts/screens/library_screen.gd" id="1_lib"]
+
+[node name="LibraryScreen" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_lib")
+
+[node name="Center" type="CenterContainer" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="EmptyState" type="VBoxContainer" parent="Center"]
+custom_minimum_size = Vector2(300, 0)
+theme_override_constants/separation = 20
+alignment = 1
+
+[node name="IconLabel" type="Label" parent="Center/EmptyState"]
+text = "♪"
+horizontal_alignment = 1
+
+[node name="HeadingLabel" type="Label" parent="Center/EmptyState"]
+text = "Your library is empty"
+horizontal_alignment = 1
+
+[node name="BodyLabel" type="Label" parent="Center/EmptyState"]
+text = "Add your local music to get started."
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="BtnRow" type="HBoxContainer" parent="Center/EmptyState"]
+alignment = 1
+
+[node name="AddMusicBtn" type="Button" parent="Center/EmptyState/BtnRow"]
+text = "  Add Music  "

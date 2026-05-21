@@ -1,0 +1,142 @@
+[gd_scene load_steps=5 format=3 uid="uid://csetupwizard1"]
+
+[ext_resource type="Script" path="res://scenes/screens/setup_wizard/setup_wizard.gd" id="1_swiz"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bg"]
+bg_color = Color(0, 0, 0, 0.784314)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_modal"]
+bg_color = Color(0.12, 0.12, 0.14, 0.95)
+corner_radius_top_left = 16
+corner_radius_top_right = 16
+corner_radius_bottom_right = 16
+corner_radius_bottom_left = 16
+shadow_color = Color(0, 0, 0, 0.3)
+shadow_size = 20
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_m"]
+content_margin_left = 32.0
+content_margin_top = 32.0
+content_margin_right = 32.0
+content_margin_bottom = 32.0
+
+[node name="SetupWizard" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_swiz")
+
+[node name="DimBackground" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_bg")
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ModalPanel" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(400, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_modal")
+
+[node name="MarginContainer" type="MarginContainer" parent="CenterContainer/ModalPanel"]
+layout_mode = 2
+theme_override_styles/margin = SubResource("StyleBoxEmpty_m")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="CenterContainer/ModalPanel/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TitleLabel" type="Label" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Connect Music Source"
+horizontal_alignment = 1
+
+[node name="DescLabel" type="Label" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Enter your WebDAV details to sync your library."
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="UrlContainer" type="VBoxContainer" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Label" type="Label" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/UrlContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Server Base URL"
+
+[node name="UrlInput" type="LineEdit" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/UrlContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "https://app.koofr.net/dav/Koofr"
+
+[node name="UserContainer" type="VBoxContainer" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Label" type="Label" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/UserContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Username (Email)"
+
+[node name="UsernameInput" type="LineEdit" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/UserContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "you@example.com"
+
+[node name="PassContainer" type="VBoxContainer" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Label" type="Label" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/PassContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "App Password"
+
+[node name="PasswordInput" type="LineEdit" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/PassContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "••••••••••••"
+secret = true
+
+[node name="StatusLabel" type="Label" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="HBoxContainer" type="HBoxContainer" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="TestButton" type="Button" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/HBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Test Connection"
+
+[node name="SaveButton" type="Button" parent="CenterContainer/ModalPanel/MarginContainer/VBoxContainer/HBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+disabled = true
+text = "Save & Start"
