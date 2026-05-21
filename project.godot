@@ -12,7 +12,11 @@ config_version=5
 
 config/name="vapor music"
 config/features=PackedStringArray("4.6", "Forward Plus")
-config/icon="res://icon.svg"
+config/icon="uid://d0k2oxtxkwd2c"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gut/plugin.cfg")
 
 [physics]
 
