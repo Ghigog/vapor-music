@@ -50,12 +50,18 @@ func _ready() -> void:
 func _check_setup() -> void:
 	if SettingsManager.has_credentials():
 		setup_wizard.visible = false
+		_trigger_library_scan()
 	else:
 		setup_wizard.visible = true
 		setup_wizard.wizard_completed.connect(_on_wizard_completed)
 
 func _on_wizard_completed() -> void:
 	setup_wizard.visible = false
+	_trigger_library_scan()
+
+func _trigger_library_scan() -> void:
+	library_screen.show_loading()
+	WebDAVService.scan_music_directory()
 
 
 # ---------------------------------------------------------------------------

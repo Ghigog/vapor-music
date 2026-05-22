@@ -222,3 +222,21 @@ func _parse_webdav_xml(xml_content: String) -> Array:
 						tracked_files.append(current_href)
 
 	return tracked_files
+# This is a perfect template for creating robust and actionable tickets!
+# 
+# Since you haven't provided the feature request or bug report yet, I am ready to
+# fill out this template for you. **Please provide the details of the feature or bug
+# you want to track**, and I will structure it perfectly using the format you provided.
+# 
+# ---
+# 
+# ### 📝 **Example Guidance:**
+# To get the best ticket, try to answer these questions about the feature/bug:
+# 
+# 1.  **What is the overall problem?** (This informs the *Ticket Body* and *Goal*.)
+# 2.  **Who needs this?** (This helps define the *Users* and *Priority*.)
+# 3.  **How should it work technically?** (This is for the *Ticket Details* and *Acceptance
+# Criteria*.)
+# 
+# ---
+# ***Awaiting your input!***

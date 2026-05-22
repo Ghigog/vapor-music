@@ -1,17 +1,35 @@
 ## library_screen.gd
 ## Main music library browser screen.
-## MVP: polished empty state with a CTA to add music.
-## Phase 2: grid / list of imported tracks, albums, and playlists.
+## Shows a loading state while WebDAV is scanning, a populated track list on
+## success, or an empty state CTA if no audio files are found.
 extends Control
 
-@onready var icon_label:    Label  = $Center/EmptyState/IconLabel
-@onready var heading:       Label  = $Center/EmptyState/HeadingLabel
-@onready var body:          Label  = $Center/EmptyState/BodyLabel
-@onready var add_music_btn: Button = $Center/EmptyState/BtnRow/AddMusicBtn
+@onready var icon_label:    Label           = $Center/EmptyState/IconLabel
+@onready var heading:       Label           = $Center/EmptyState/HeadingLabel
+@onready var body:          Label           = $Center/EmptyState/BodyLabel
+@onready var add_music_btn: Button          = $Center/EmptyState/BtnRow/AddMusicBtn
+@onready var center_panel:  CenterContainer = $Center
+@onready var status_label:  Label           = %StatusLabel
+@onready var track_scroll:  ScrollContainer = %TrackScroll
+@onready var track_list:    VBoxContainer   = %TrackList
 
 
 func _ready() -> void:
 	_apply_styles()
+	WebDAVService.library_scanned.connect(_on_library_scanned)
+
+
+# ---------------------------------------------------------------------------
+# Public API — called by main.gd
+# ---------------------------------------------------------------------------
+
+## Shows a "Scanning…" message and hides other panels.
+func show_loading() -> void:
+	center_panel.visible = false
+	track_scroll.visible = false
+	status_label.text    = "Scanning your library…"
+	status_label.add_theme_color_override("font_color", ThemeManager.TEXT_SECONDARY)
+	status_label.visible = true
 
 
 # ---------------------------------------------------------------------------
@@ -45,11 +63,41 @@ func _apply_styles() -> void:
 
 	add_music_btn.pressed.connect(_on_add_music_pressed)
 
+	# Style the status label
+	status_label.add_theme_font_override("font", ThemeManager.font_ui)
+	status_label.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+
 
 # ---------------------------------------------------------------------------
-# Handlers
+# Signal Handlers
 # ---------------------------------------------------------------------------
+
+## Receives the scanned file list from WebDAVService.
+func _on_library_scanned(files: Array) -> void:
+	status_label.visible = false
+
+	if files.is_empty():
+		center_panel.visible = true
+		track_scroll.visible = false
+		return
+
+	# Clear previous results.
+	for child in track_list.get_children():
+		child.queue_free()
+
+	# Populate track rows.
+	for href: String in files:
+		var label := Label.new()
+		label.text = href.get_file()  # Show just the filename, not the full path.
+		label.add_theme_font_override("font", ThemeManager.font_ui)
+		label.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+		label.add_theme_color_override("font_color", ThemeManager.TEXT_PRIMARY)
+		track_list.add_child(label)
+
+	center_panel.visible = false
+	track_scroll.visible = true
+
 
 func _on_add_music_pressed() -> void:
-	# TODO (phase 2): Open native file-picker via DisplayServer or a GDNative plugin.
+	# TODO (phase 2): Open native file-picker or re-open wizard.
 	pass

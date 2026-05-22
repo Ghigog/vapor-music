@@ -39,8 +39,8 @@ vapor-music/
 ├── sync/                # (phase 2) cloud and P2P sync
 ├── ai/                  # (phase 2) AI DJ / harmonic path construction
 └── docs/
-    ├── DESIGN_LANGUAGE.md
-    └── ARCHITECTURE.md
+	├── DESIGN_LANGUAGE.md
+	└── ARCHITECTURE.md
 ```
 
 ---
@@ -145,17 +145,17 @@ uniform in the Now Playing panel. Extraction runs on a background `Thread`.
 
 ```
 User taps nav item
-        │
-        ▼
+		│
+		▼
 NavManager.navigate_to("screen")
-        │
-        ├─► pushes previous screen to _history
-        ├─► sets current_screen
-        └─► emits navigation_requested("screen")
-                │
-                ├─► main.gd._on_navigation_requested  → toggles screen visibility
-                ├─► sidebar.gd._on_navigation_requested → updates active highlight
-                └─► tab_bar.gd._on_navigation_requested → updates active tab
+		│
+		├─► pushes previous screen to _history
+		├─► sets current_screen
+		└─► emits navigation_requested("screen")
+				│
+				├─► main.gd._on_navigation_requested  → toggles screen visibility
+				├─► sidebar.gd._on_navigation_requested → updates active highlight
+				└─► tab_bar.gd._on_navigation_requested → updates active tab
 ```
 
 ---
