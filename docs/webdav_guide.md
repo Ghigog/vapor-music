@@ -145,3 +145,17 @@ To keep the application fast and avoid long download screen delays, **do not dow
 3. **Dynamic Playback Injection:** Feed the incoming byte array arrays straight into a custom Godot AudioStreamGeneratorPlayback object buffer. This initializes track playback instantly while downloading the rest of the stream smoothly in the background.
 
 This process gives your player an immediate, seamless response time that rivals heavy commercial streaming clients, all while relying on fully independent cloud storage.
+
+
+---
+NEW CONTEXT:
+	
+	🔴 What's Left to Do (per the ticket)
+The open ticket is "Connect to Music Source Wizard" and it's already mostly implemented — but a few ticket requirements are not yet met:
+
+Helper text / tooltips — The wizard has no in-context explanation of what an "App Password" is or where to find WebDAV details. The ticket explicitly requires this.
+Library screen not connected to WebDAV scan — After the wizard completes and credentials are saved, 
+library_screen.gd
+ still shows a static empty state. WebDAVService.scan_music_directory() is never called — the scanned file list goes nowhere.
+"Add Music" button on the empty state — _on_add_music_pressed() is a no-op pass. It should re-open the wizard (or trigger a re-scan if credentials already exist).
+No loading/scanning state — once the wizard is done, the library screen has no feedback that it's fetching from the server.
