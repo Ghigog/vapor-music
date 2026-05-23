@@ -1,14 +1,17 @@
-[gd_scene load_steps=2 format=3 uid="uid://vaporlibrary0001"]
+[gd_scene format=3 uid="uid://b20adm7oxslci"]
 
-[ext_resource type="Script" path="res://scripts/screens/library_screen.gd" id="1_lib"]
+[ext_resource type="Script" uid="uid://u81f8rih0daq" path="res://scripts/screens/library_screen.gd" id="1_lib"]
 
-[node name="LibraryScreen" type="Control"]
+[node name="LibraryScreen" type="Control" unique_id=213050083]
+layout_mode = 3
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource("1_lib")
 
-[node name="StatusLabel" type="Label" parent="."]
+[node name="StatusLabel" type="Label" parent="." unique_id=1705197944]
 unique_name_in_owner = true
+visible = false
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -19,25 +22,24 @@ grow_horizontal = 2
 grow_vertical = 2
 horizontal_alignment = 1
 vertical_alignment = 1
-visible = false
 
-[node name="TrackScroll" type="ScrollContainer" parent="."]
+[node name="TrackScroll" type="ScrollContainer" parent="." unique_id=590275425]
 unique_name_in_owner = true
+visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-visible = false
 
-[node name="TrackList" type="VBoxContainer" parent="TrackScroll"]
+[node name="TrackList" type="VBoxContainer" parent="TrackScroll" unique_id=468267506]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 2
 
-[node name="Center" type="CenterContainer" parent="."]
+[node name="Center" type="CenterContainer" parent="." unique_id=208729851]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -45,26 +47,32 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="EmptyState" type="VBoxContainer" parent="Center"]
+[node name="EmptyState" type="VBoxContainer" parent="Center" unique_id=1397251786]
 custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
 theme_override_constants/separation = 20
 alignment = 1
 
-[node name="IconLabel" type="Label" parent="Center/EmptyState"]
+[node name="IconLabel" type="Label" parent="Center/EmptyState" unique_id=663024685]
+layout_mode = 2
 text = "♪"
 horizontal_alignment = 1
 
-[node name="HeadingLabel" type="Label" parent="Center/EmptyState"]
+[node name="HeadingLabel" type="Label" parent="Center/EmptyState" unique_id=2042730646]
+layout_mode = 2
 text = "Your library is empty"
 horizontal_alignment = 1
 
-[node name="BodyLabel" type="Label" parent="Center/EmptyState"]
+[node name="BodyLabel" type="Label" parent="Center/EmptyState" unique_id=1574965239]
+layout_mode = 2
 text = "Add your local music to get started."
 horizontal_alignment = 1
 autowrap_mode = 3
 
-[node name="BtnRow" type="HBoxContainer" parent="Center/EmptyState"]
+[node name="BtnRow" type="HBoxContainer" parent="Center/EmptyState" unique_id=2013535924]
+layout_mode = 2
 alignment = 1
 
-[node name="AddMusicBtn" type="Button" parent="Center/EmptyState/BtnRow"]
+[node name="AddMusicBtn" type="Button" parent="Center/EmptyState/BtnRow" unique_id=176675141]
+layout_mode = 2
 text = "  Add Music  "

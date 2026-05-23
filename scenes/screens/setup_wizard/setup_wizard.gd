@@ -5,6 +5,8 @@ signal wizard_completed
 @onready var url_input: LineEdit = %UrlInput
 @onready var username_input: LineEdit = %UsernameInput
 @onready var password_input: LineEdit = %PasswordInput
+# NEW: Grab the scene node for the target directory field
+@onready var folder_input: LineEdit = %FolderInput
 @onready var test_button: Button = %TestButton
 @onready var save_button: Button = %SaveButton
 @onready var status_label: Label = %StatusLabel
@@ -20,13 +22,22 @@ func _ready() -> void:
 	save_button.disabled = true
 	status_label.text = ""
 	
-	# Pre-fill with Koofr URL as default
-	url_input.text = "https://app.koofr.net/dav/Koofr"
+	# Pre-fill fields with smart defaults or existing saved values
+	if SettingsManager.has_credentials():
+		url_input.text = SettingsManager.webdav_url
+		username_input.text = SettingsManager.webdav_username
+		password_input.text = SettingsManager.webdav_password
+		# If SettingsManager has a custom folder parameter saved, pull it here:
+		folder_input.text = SettingsManager.get("webdav_folder") if SettingsManager.get("webdav_folder") != null else "Music"
+	else:
+		url_input.text = "https://app.koofr.net/dav/Koofr"
+		folder_input.text = "Music" # Matches your cloud setup out of the box!
 	
 	# Every time text changes, require re-testing
 	url_input.text_changed.connect(_on_text_changed)
 	username_input.text_changed.connect(_on_text_changed)
 	password_input.text_changed.connect(_on_text_changed)
+	folder_input.text_changed.connect(_on_text_changed)
 
 func _on_text_changed(_new_text: String) -> void:
 	save_button.disabled = true
@@ -69,6 +80,19 @@ func _on_save_button_pressed() -> void:
 	var url = url_input.text.strip_edges()
 	var username = username_input.text.strip_edges()
 	var password = password_input.text.strip_edges()
+	var target_folder = folder_input.text.strip_edges()
 	
+	# Save primary credentials
 	SettingsManager.save_credentials(url, username, password)
+	
+	# NEW: Store your designated directory key in your local config properties drawer
+	# (Ensure your SettingsManager script exposes a custom folder save attribute field)
+	if SettingsManager.has_method("save_target_folder"):
+		SettingsManager.save_target_folder(target_folder)
+	else:
+		SettingsManager.webdav_folder = target_folder
+	
+	# Fire the background scan immediately using your manual path target string variable
+	WebDAVService.scan_music_directory(target_folder)
+	
 	wizard_completed.emit()

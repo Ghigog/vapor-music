@@ -47,13 +47,19 @@ func _get_auth_header(username: String, password: String) -> String:
 
 ## Builds a raw HTTP/1.1 PROPFIND request string.
 func _build_propfind_request(host: String, path: String, auth_header: String, depth: int = 1) -> String:
-	var body := '<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:getcontentlength/><d:resourcetype/></d:prop></d:propfind>'
+	var body := "<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n"
+	body += "<d:propfind xmlns:d=\"DAV:\">\n"
+	body += "  <d:prop><d:displayname/><d:getcontentlength/><d:resourcetype/></d:prop>\n"
+	body += "</d:propfind>"
+	
 	var body_bytes := body.to_utf8_buffer()
+	
 	var req := "PROPFIND %s HTTP/1.1\r\n" % path
 	req += "Host: %s\r\n" % host
+	req += "User-Agent: VaporMusicPlayer/1.0 (Godot Engine)\r\n"
 	req += auth_header + "\r\n"
 	req += "Depth: %d\r\n" % depth
-	req += "Content-Type: application/xml; charset=utf-8\r\n"
+	req += "Content-Type: text/xml; charset=\"utf-8\"\r\n"
 	req += "Content-Length: %d\r\n" % body_bytes.size()
 	req += "Connection: close\r\n"
 	req += "\r\n"
@@ -153,6 +159,19 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 
 	return [response_code, header_str, body_str]
 
+## Helper to filter absolute URLs down to clean relative paths for socket delivery.
+func _sanitize_href_path(href: String, host_domain: String) -> String:
+	if href.begins_with("http://") or href.begins_with("https://"):
+		var split_parts := href.split("://" + host_domain, true, 1)
+		if split_parts.size() == 2:
+			return split_parts[1]
+		# Fallback split configuration if port bindings differ
+		var secondary_split := href.split("://", true, 1)
+		var slash_index := secondary_split[1].find("/")
+		if slash_index != -1:
+			return secondary_split[1].substr(slash_index)
+	return href
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -162,7 +181,12 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 func test_connection(url: String, username: String, app_password: String) -> void:
 	var parts := _parse_url(url)
 	var auth := _get_auth_header(username, app_password)
-	var result := await _send_propfind(parts.host, parts.port, parts.path, auth, 0)
+	
+	var test_path: String = parts.path
+	if not test_path.ends_with("/"):
+		test_path += "/"
+		
+	var result := await _send_propfind(parts.host, parts.port, test_path, auth, 0)
 	var response_code: int = result[0]
 	var error_body: String = result[2]
 
@@ -178,31 +202,107 @@ func test_connection(url: String, username: String, app_password: String) -> voi
 		_:
 			connection_tested.emit(false, "Server returned unexpected code: %d" % response_code)
 
-## Scans the target music folder on the server using stored credentials.
-## Emits library_scanned(files) on success.
-func scan_music_directory(target_folder: String = "Vapor Music") -> void:
+## Scans the targeted music folder and safely indexes all nested subfolders sequentially.
+## Pass the folder name directly from your UI text settings into 'target_folder'.
+func scan_music_directory(target_folder: String = "Music") -> void:
 	if not SettingsManager.has_credentials():
-		push_error("WebDAVService: No credentials stored.")
 		return
 
 	var base_url: String = SettingsManager.webdav_url
 	var parts := _parse_url(base_url)
-	var scan_path: String = parts.path.rstrip("/") + "/" + target_folder
 	var auth := _get_auth_header(SettingsManager.webdav_username, SettingsManager.webdav_password)
+	
+	# Clean up the initial base path structure
+	var base_path: String = parts.path
+	if not base_path.ends_with("/"):
+		base_path += "/"
+		
+	# If target_folder is blank or "/", scan the root directory directly.
+	# Otherwise, append the user's custom folder name cleanly.
+	var initial_path: String = base_path
+	if not target_folder.is_empty() and target_folder != "/":
+		initial_path = base_path + target_folder.strip_edges().uri_encode()
+		if not initial_path.ends_with("/"):
+			initial_path += "/"
+			
+	var folder_queue: Array[String] = [initial_path]
+	var all_discovered_tracks := []
+	var scanned_paths: Array[String] = []
 
-	var result := await _send_propfind(parts.host, parts.port, scan_path, auth, 1)
-	var response_code: int = result[0]
-	var body_str: String = result[2]
+	print("WebDAVService: Starting deep library traversal at target path: %s" % initial_path)
 
-	if response_code != 207:
-		push_error("WebDAVService: PROPFIND returned %d" % response_code)
-		return
+	while not folder_queue.is_empty():
+		var current_scan_path: String = folder_queue.pop_front()
+		
+		# Keep track of what we already scanned to completely prevent circular reference infinite loops
+		if scanned_paths.has(current_scan_path):
+			continue
+		scanned_paths.append(current_scan_path)
+		
+		var result := await _send_propfind(parts.host, parts.port, current_scan_path, auth, 1)
+		if result[0] != 207:
+			print("WebDAVService: Skipping unreachable directory level: %s (Code %d)" % [current_scan_path, result[0]])
+			continue
+			
+		var body_str: String = result[2]
+		
+		# 1. Extract music files from this folder layer
+		var tracks_at_level := _parse_webdav_xml(body_str, parts.host)
+		all_discovered_tracks.append_array(tracks_at_level)
+		
+		# 2. Extract nested subfolders at this layer (like "Vanilla - Origin")
+		var subfolders_at_level := _discover_folders_from_xml(body_str, parts.host)
+		for sub_folder: String in subfolders_at_level:
+			# FIX: Standardize comparisons using standard string formats 
+			# so spaces ("%20") don't confuse the duplicate manager.
+			var clean_sub := sub_folder.strip_edges()
+			var clean_current := current_scan_path.strip_edges()
+			
+			if clean_sub != clean_current and not scanned_paths.has(clean_sub) and not folder_queue.has(clean_sub):
+				# Make sure the sub_folder is actually a child directory of our current path
+				if clean_sub.begins_with(clean_current) or clean_sub.uri_decode().begins_with(clean_current.uri_decode()):
+					folder_queue.append(clean_sub)
+				
+	print("WebDAVService: Deep traversal finished. Found %d total tracks." % all_discovered_tracks.size())
+	library_scanned.emit(all_discovered_tracks)
 
-	var audio_files := _parse_webdav_xml(body_str)
-	library_scanned.emit(audio_files)
+
+## Internal helper to extract subdirectory href targets from a parent directory XML payload.
+func _discover_folders_from_xml(xml_content: String, host_domain: String) -> Array:
+	var folders := []
+	var parser := XMLParser.new()
+	parser.open_buffer(xml_content.to_utf8_buffer())
+	
+	var current_href := ""
+	var is_directory := false
+	
+	while parser.read() == OK:
+		if parser.get_node_type() == XMLParser.NODE_ELEMENT:
+			var node_name := parser.get_node_name().to_lower()
+			
+			if node_name == "d:href" or node_name == "href":
+				if parser.read() == OK:
+					var raw_href := parser.get_node_data().strip_edges()
+					current_href = _sanitize_href_path(raw_href, host_domain)
+					is_directory = false
+					
+			if node_name == "d:collection" or node_name == "collection":
+				is_directory = true
+				
+		elif parser.get_node_type() == XMLParser.NODE_ELEMENT_END:
+			var node_name := parser.get_node_name().to_lower()
+			if node_name == "d:response" or node_name == "response":
+				if is_directory and not current_href.is_empty():
+					if not current_href.ends_with("/"):
+						current_href += "/"
+					folders.append(current_href)
+				current_href = ""
+				is_directory = false
+					
+	return folders
 
 ## Parses audio file hrefs out of a WebDAV Multi-Status XML response.
-func _parse_webdav_xml(xml_content: String) -> Array:
+func _parse_webdav_xml(xml_content: String, host_domain: String = "") -> Array:
 	var tracked_files := []
 	var parser := XMLParser.new()
 	parser.open_buffer(xml_content.to_utf8_buffer())
@@ -212,10 +312,10 @@ func _parse_webdav_xml(xml_content: String) -> Array:
 	while parser.read() == OK:
 		if parser.get_node_type() == XMLParser.NODE_ELEMENT:
 			var node_name := parser.get_node_name().to_lower()
-			# Strip namespace prefix (d:href, D:href → href)
 			if node_name == "d:href" or node_name == "href":
 				if parser.read() == OK:
-					current_href = parser.get_node_data().strip_edges()
+					var raw_href := parser.get_node_data().strip_edges()
+					current_href = _sanitize_href_path(raw_href, host_domain)
 					var lower_href := current_href.to_lower()
 					if lower_href.ends_with(".mp3") or lower_href.ends_with(".flac") \
 							or lower_href.ends_with(".ogg") or lower_href.ends_with(".wav"):

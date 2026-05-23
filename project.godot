@@ -33,7 +33,7 @@ window/handheld/orientation=1
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/ai_assistant_hub/plugin.cfg", "res://addons/gdterm/plugin.cfg", "res://addons/gut/plugin.cfg")
+enabled=PackedStringArray("res://addons/gut/plugin.cfg")
 
 [physics]
 
