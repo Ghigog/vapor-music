@@ -91,21 +91,41 @@ func _on_library_scanned(files: Array) -> void:
 	for child in track_list.get_children():
 		child.queue_free()
 
-	# Populate track rows
+	# Populate track rows using Flat interactive buttons
 	for href: String in files:
-		var label := Label.new()
-		label.text = href.get_file().uri_decode()
+		var raw_filename := href.get_file().uri_decode()
 		
-		# Apply typography styling match rules
-		label.add_theme_font_override("font", ThemeManager.font_ui)
-		label.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
-		label.add_theme_color_override("font_color", ThemeManager.TEXT_PRIMARY)
+		# Strip off the ".mp3" or ".flac" extensions cleanly
+		var display_name := raw_filename.get_basename()
 		
-		# Explicitly tell the label node to expand and occupy its horizontal alignment block
-		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		
-		track_list.add_child(label)
+		# OPTIONAL CLEANUP: Remove "Vanilla - Origin - " if you just want song titles in the list
+		if " - " in display_name:
+			var parts := display_name.split(" - ")
+			# Looks for a structure like ["Vanilla", "Origin", "01 Past..."]
+			if parts.size() >= 3:
+				display_name = parts[2] # Just show the track number + song name
+			else:
+				display_name = parts[parts.size() - 1]
 
+		var track_btn := Button.new()
+		track_btn.text = "   ▶   " + display_name
+		track_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		track_btn.flat = true
+		
+		# Standard layout typography constraints
+		track_btn.add_theme_font_override("font", ThemeManager.font_ui)
+		track_btn.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+		track_btn.add_theme_color_override("font_color", ThemeManager.TEXT_PRIMARY)
+		track_btn.add_theme_color_override("font_hover_color", ThemeManager.ACCENT_BRIGHT)
+		
+		# Pipe track context into play mechanics on click
+		track_btn.pressed.connect(
+			func(): AudioManager.play_track(href, files)
+		)
+		
+		track_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		track_list.add_child(track_btn)
+	
 	# --- FIX 2: FORCE EXPAND SCROLL CONTAINERS TO OCCUPY SPACE ---
 	center_panel.visible = false
 	

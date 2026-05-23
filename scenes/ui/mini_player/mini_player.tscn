@@ -1,32 +1,39 @@
-[gd_scene load_steps=2 format=3 uid="uid://vaporminiplayer01"]
+[gd_scene format=3 uid="uid://d15njsphawx4k"]
 
-[ext_resource type="Script" path="res://scripts/ui/mini_player.gd" id="1_mp"]
+[ext_resource type="Script" uid="uid://cwpu4jeotrglj" path="res://scripts/ui/mini_player.gd" id="1_mp"]
 
-[node name="MiniPlayer" type="PanelContainer"]
+[node name="MiniPlayer" type="PanelContainer" unique_id=1961534883]
+anchors_preset = 10
 anchor_right = 1.0
 script = ExtResource("1_mp")
 
-[node name="HBox" type="HBoxContainer" parent="."]
+[node name="HBox" type="HBoxContainer" parent="." unique_id=1021783544]
+layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="AlbumArt" type="Panel" parent="HBox"]
+[node name="AlbumArt" type="Panel" parent="HBox" unique_id=653742320]
 custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
 
-[node name="TrackInfo" type="VBoxContainer" parent="HBox"]
+[node name="TrackInfo" type="VBoxContainer" parent="HBox" unique_id=2076905498]
+layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="TrackTitle" type="Label" parent="HBox/TrackInfo"]
+[node name="TrackTitle" type="Label" parent="HBox/TrackInfo" unique_id=364084197]
+layout_mode = 2
 text = "No track playing"
 vertical_alignment = 1
 
-[node name="ArtistLabel" type="Label" parent="HBox/TrackInfo"]
-text = ""
+[node name="ArtistLabel" type="Label" parent="HBox/TrackInfo" unique_id=262776779]
+layout_mode = 2
 vertical_alignment = 1
 
-[node name="PlayPauseBtn" type="Button" parent="HBox"]
+[node name="PlayPauseBtn" type="Button" parent="HBox" unique_id=1985718635]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
 text = "▶"
-custom_minimum_size = Vector2(44, 44)
 
-[node name="LikeBtn" type="Button" parent="HBox"]
-text = "♡"
+[node name="LikeBtn" type="Button" parent="HBox" unique_id=2065415661]
 custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+text = "♡"

@@ -22,6 +22,7 @@ PlatformManager="*res://autoloads/PlatformManager.gd"
 NavManager="*res://autoloads/NavManager.gd"
 SettingsManager="*res://scripts/services/settings_manager.gd"
 WebDAVService="*res://scripts/services/webdav_service.gd"
+AudioManager="*uid://bxledcc7ud1e8"
 
 [display]
 
