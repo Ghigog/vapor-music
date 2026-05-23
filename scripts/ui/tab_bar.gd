@@ -38,14 +38,14 @@ func _apply_pill_style() -> void:
 
 
 func _setup_tab_buttons() -> void:
-	for name: String in _tabs:
-		var btn: Button = _tabs[name]
+	for tab_name: String in _tabs:
+		var btn: Button = _tabs[tab_name]
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.custom_minimum_size.y = ThemeManager.NAV_BAR_HEIGHT_MOBILE
 		btn.add_theme_font_override("font", ThemeManager.font_ui)
 		btn.add_theme_font_size_override("font_size", ThemeManager.TYPE_2XS)
 		btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
-		btn.pressed.connect(_on_tab_pressed.bind(name))
+		btn.pressed.connect(_on_tab_pressed.bind(tab_name))
 
 
 func _style_tab_button(btn: Button, active: bool) -> void:
@@ -58,8 +58,8 @@ func _style_tab_button(btn: Button, active: bool) -> void:
 
 
 func _set_active_tab(screen_name: String) -> void:
-	for name: String in _tabs:
-		_style_tab_button(_tabs[name], name == screen_name)
+	for tab_name: String in _tabs:
+		_style_tab_button(_tabs[tab_name], tab_name == screen_name)
 
 
 # ---------------------------------------------------------------------------

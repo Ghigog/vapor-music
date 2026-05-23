@@ -15,16 +15,16 @@ extends Control
 
 func _ready() -> void:
 	_apply_styles()
-	WebDAVService.library_scanned.connect(_on_library_scanned)
 	
-	# Ensure this main root screen node fills up the entire right-hand viewport panel
+	# Safe connection layout wrapper
+	if not WebDAVService.library_scanned.is_connected(_on_library_scanned):
+		WebDAVService.library_scanned.connect(_on_library_scanned)
+	
+	# Set our viewport dimension bounds 
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	
-	if SettingsManager.has_credentials():
-		show_loading()
-		var active_folder: String = SettingsManager.webdav_folder if "webdav_folder" in SettingsManager else "Music"
-		WebDAVService.scan_music_directory(active_folder)
-
+	# REMOVED: WebDAVService.scan_music_directory() is gone from here!
+	# We let our UI buttons and main.gd make the explicit network calls cleanly.
 # ---------------------------------------------------------------------------
 # Public API — called by main.gd
 # ---------------------------------------------------------------------------

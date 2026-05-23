@@ -163,8 +163,8 @@ func _apply_mobile_layout() -> void:
 
 ## Shows the screen matching [param screen_name] and hides all others.
 func _show_screen(screen_name: String) -> void:
-	for name: String in _screens:
-		_screens[name].visible = (name == screen_name)
+	for tab_name: String in _screens:
+		_screens[tab_name].visible = (tab_name == screen_name)
 
 
 # ---------------------------------------------------------------------------

@@ -72,8 +72,8 @@ func _style_nav_button(btn: Button, active: bool) -> void:
 
 
 func _set_active_nav(screen_name: String) -> void:
-	for name: String in _nav_buttons:
-		_style_nav_button(_nav_buttons[name], name == screen_name)
+	for tab_name: String in _nav_buttons:
+		_style_nav_button(_nav_buttons[tab_name], tab_name == screen_name)
 
 
 # ---------------------------------------------------------------------------

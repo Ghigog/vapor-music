@@ -61,13 +61,12 @@ func _build_propfind_request(host: String, path: String, auth_header: String, de
 	req += "Depth: %d\r\n" % depth
 	req += "Content-Type: text/xml; charset=\"utf-8\"\r\n"
 	req += "Content-Length: %d\r\n" % body_bytes.size()
-	req += "Connection: close\r\n"
+	req += "Connection: keep-alive\r\n" # Changed to keep-alive to protect the pipe
 	req += "\r\n"
 	req += body
 	return req
 
 ## Sends a raw PROPFIND request over TLS and returns [response_code, header_string, body_string].
-## Returns [-1, "", ""] on network failure.
 func _send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
 	# --- TCP connect ---
 	var tcp := StreamPeerTCP.new()
@@ -109,75 +108,150 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 	if err != OK:
 		return [-1, "", "Failed to send request: %d" % err]
 
-	# --- Read response ---
+# --- Read response ---
 	var response_bytes := PackedByteArray()
-	var done := false
-	start = Time.get_ticks_msec()
+	start = Time.get_ticks_msec() 
+	
+	var headers_parsed := false
+	var is_chunked := false
+	var content_length := -1
+	var header_end_idx := -1
 
-	while not done:
+	while true:
 		tls.poll()
-		var tls_status := tls.get_status()
-		if tls_status == StreamPeerTLS.STATUS_CONNECTED:
-			var available := tls.get_available_bytes()
-			if available > 0:
-				var chunk := tls.get_data(available)
-				if chunk[0] == OK:
-					response_bytes.append_array(chunk[1])
-					start = Time.get_ticks_msec()
+		var status := tls.get_status()
+		var available := tls.get_available_bytes()
+		
+		# 1. ALWAYS consume bytes if they are waiting in the TLS buffer
+		if available > 0:
+			var chunk := tls.get_data(available)
+			if chunk[0] == OK:
+				response_bytes.append_array(chunk[1])
+				start = Time.get_ticks_msec() # Reset timeout window on fresh data
+				
+				if not headers_parsed:
+					header_end_idx = _find_header_delimiter(response_bytes)
+					if header_end_idx != -1:
+						headers_parsed = true
+						var loop_header := response_bytes.slice(0, header_end_idx).get_string_from_utf8().to_lower()
+						is_chunked = "transfer-encoding: chunked" in loop_header
+						if "content-length:" in loop_header:
+							var cl_line := loop_header.split("content-length:")[1].split("\r\n")[0].strip_edges()
+							content_length = cl_line.to_int()
+				
+				if headers_parsed:
+					var body_bytes := response_bytes.slice(header_end_idx)
+					if is_chunked:
+						if _has_terminal_chunk_marker(body_bytes):
+							break
+					elif content_length != -1:
+						if body_bytes.size() >= content_length:
+							break
 		else:
-			done = true
-
-		if Time.get_ticks_msec() - start > READ_TIMEOUT_MS:
-			break
-
-		if not done:
+			# 2. Only exit due to a closed stream if our buffer is completely dry
+			if status != StreamPeerTLS.STATUS_CONNECTED:
+				break
 			await Engine.get_main_loop().process_frame
-
+			
+		if Time.get_ticks_msec() - start > READ_TIMEOUT_MS:
+			print("WebDAVService: Reading window closed due to channel inactivity timeout.")
+			break
+	
 	tcp.disconnect_from_host()
 
 	if response_bytes.is_empty():
 		return [-1, "", "Empty response from server"]
 
 	# --- Parse HTTP response ---
-	var header_end := -1
-	for i in range(response_bytes.size() - 3):
-		if response_bytes[i] == 13 and response_bytes[i+1] == 10 \
-				and response_bytes[i+2] == 13 and response_bytes[i+3] == 10:
-			header_end = i + 4
-			break
-
+	var header_end := _find_header_delimiter(response_bytes)
 	if header_end == -1:
 		return [-1, "", "Malformed HTTP response (no header delimiter)"]
 
 	var header_str := response_bytes.slice(0, header_end).get_string_from_utf8()
-	var body_str := response_bytes.slice(header_end).get_string_from_utf8()
+	var raw_body_bytes := response_bytes.slice(header_end)
+	
+	if header_str.to_lower().contains("transfer-encoding: chunked"):
+		raw_body_bytes = _decode_chunked_body(raw_body_bytes)
 
-	# Parse status code from first line, e.g. "HTTP/1.1 207 Multi-Status"
+	var body_str := raw_body_bytes.get_string_from_utf8()
+
 	var status_line := header_str.split("\r\n")[0]
 	var status_parts := status_line.split(" ", true, 2)
 	var response_code := status_parts[1].to_int() if status_parts.size() >= 2 else -1
 
 	return [response_code, header_str, body_str]
 
-## Helper to filter absolute URLs down to clean relative paths for socket delivery.
-func _sanitize_href_path(href: String, host_domain: String) -> String:
-	if href.begins_with("http://") or href.begins_with("https://"):
-		var split_parts := href.split("://" + host_domain, true, 1)
-		if split_parts.size() == 2:
-			return split_parts[1]
-		# Fallback split configuration if port bindings differ
-		var secondary_split := href.split("://", true, 1)
-		var slash_index := secondary_split[1].find("/")
-		if slash_index != -1:
-			return secondary_split[1].substr(slash_index)
-	return href
+func _find_header_delimiter(bytes: PackedByteArray) -> int:
+	for i in range(bytes.size() - 3):
+		if bytes[i] == 13 and bytes[i+1] == 10 and bytes[i+2] == 13 and bytes[i+3] == 10:
+			return i + 4
+	return -1
+
+func _has_terminal_chunk_marker(body_bytes: PackedByteArray) -> bool:
+	var sz := body_bytes.size()
+	# Standard HTTP chunked streams terminate cleanly with "0\r\n\r\n"
+	if sz >= 5:
+		if body_bytes[sz-5] == 48 and body_bytes[sz-4] == 13 and body_bytes[sz-3] == 10 and body_bytes[sz-2] == 13 and body_bytes[sz-1] == 10:
+			return true
+	return false
+
+## Low-level HTTP payload utility to reconstruct fragmented chunk boundaries safely.
+func _decode_chunked_body(chunked_bytes: PackedByteArray) -> PackedByteArray:
+	var decoded := PackedByteArray()
+	var idx := 0
+	var total_size := chunked_bytes.size()
+	
+	while idx < total_size:
+		var line_end := -1
+		for i in range(idx, min(idx + 16, total_size - 1)):
+			if chunked_bytes[i] == 13 and chunked_bytes[i+1] == 10:
+				line_end = i
+				break
+				
+		if line_end == -1:
+			break
+			
+		var hex_str := chunked_bytes.slice(idx, line_end).get_string_from_utf8().strip_edges()
+		var chunk_size := hex_str.hex_to_int()
+		
+		if chunk_size == 0:
+			break
+			
+		idx = line_end + 2
+		
+		if idx + chunk_size > total_size:
+			decoded.append_array(chunked_bytes.slice(idx, total_size))
+			break
+			
+		decoded.append_array(chunked_bytes.slice(idx, idx + chunk_size))
+		idx += chunk_size
+		
+		if idx < total_size and chunked_bytes[idx] == 13:
+			idx += 1
+		if idx < total_size and chunked_bytes[idx] == 10:
+			idx += 1
+			
+	return decoded
+
+## Aggressive baseline path normalizer to eliminate matching false-negatives
+func _normalize_path(path: String) -> String:
+	var clean := path.strip_edges().uri_decode()
+	
+	if "://" in clean:
+		clean = clean.split("://", true, 1)[1]
+		if "/" in clean:
+			clean = clean.substr(clean.find("/"))
+			
+	if not clean.begins_with("/"):
+		clean = "/" + clean
+	if not clean.ends_with("/"):
+		clean += "/"
+	return clean
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-## Tests if the provided credentials can connect to the server via PROPFIND.
-## Emits connection_tested(success, error_message) when done.
 func test_connection(url: String, username: String, app_password: String) -> void:
 	var parts := _parse_url(url)
 	var auth := _get_auth_header(username, app_password)
@@ -187,23 +261,11 @@ func test_connection(url: String, username: String, app_password: String) -> voi
 		test_path += "/"
 		
 	var result := await _send_propfind(parts.host, parts.port, test_path, auth, 0)
-	var response_code: int = result[0]
-	var error_body: String = result[2]
+	if result[0] == 207:
+		connection_tested.emit(true, "")
+	else:
+		connection_tested.emit(false, "Server responded with code: %d" % result[0])
 
-	match response_code:
-		207:
-			connection_tested.emit(true, "")
-		401, 403:
-			connection_tested.emit(false, "Authentication failed. Check your username and app password.")
-		404:
-			connection_tested.emit(false, "URL not found on server. Check the WebDAV path.")
-		-1:
-			connection_tested.emit(false, "Connection failed: " + error_body)
-		_:
-			connection_tested.emit(false, "Server returned unexpected code: %d" % response_code)
-
-## Scans the targeted music folder and safely indexes all nested subfolders sequentially.
-## Pass the folder name directly from your UI text settings into 'target_folder'.
 func scan_music_directory(target_folder: String = "Music") -> void:
 	if not SettingsManager.has_credentials():
 		return
@@ -212,63 +274,58 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 	var parts := _parse_url(base_url)
 	var auth := _get_auth_header(SettingsManager.webdav_username, SettingsManager.webdav_password)
 	
-	# Clean up the initial base path structure
 	var base_path: String = parts.path
 	if not base_path.ends_with("/"):
 		base_path += "/"
 		
-	# If target_folder is blank or "/", scan the root directory directly.
-	# Otherwise, append the user's custom folder name cleanly.
 	var initial_path: String = base_path
 	if not target_folder.is_empty() and target_folder != "/":
 		initial_path = base_path + target_folder.strip_edges().uri_encode()
 		if not initial_path.ends_with("/"):
 			initial_path += "/"
 			
-	var folder_queue: Array[String] = [initial_path]
+	var folder_queue: Array[String] = [_normalize_path(initial_path)]
 	var all_discovered_tracks := []
 	var scanned_paths: Array[String] = []
 
-	print("WebDAVService: Starting deep library traversal at target path: %s" % initial_path)
+	print("WebDAVService: Starting clear deep traversal at: %s" % _normalize_path(initial_path))
 
 	while not folder_queue.is_empty():
 		var current_scan_path: String = folder_queue.pop_front()
 		
-		# Keep track of what we already scanned to completely prevent circular reference infinite loops
 		if scanned_paths.has(current_scan_path):
 			continue
 		scanned_paths.append(current_scan_path)
 		
-		var result := await _send_propfind(parts.host, parts.port, current_scan_path, auth, 1)
+		var request_path = current_scan_path.uri_encode().replace("%2F", "/")
+		var result := await _send_propfind(parts.host, parts.port, request_path, auth, 1)
+		
 		if result[0] != 207:
-			print("WebDAVService: Skipping unreachable directory level: %s (Code %d)" % [current_scan_path, result[0]])
+			# ADDED: Essential debugging print statement
+			print("WebDAVService Error: PROPFIND failed for path '%s' with status code: %d. Server message: %s" % [request_path, result[0], result[2]])
 			continue
 			
 		var body_str: String = result[2]
 		
-		# 1. Extract music files from this folder layer
-		var tracks_at_level := _parse_webdav_xml(body_str, parts.host)
+		# 1. Parse tracks
+		var tracks_at_level := _parse_webdav_xml(body_str)
 		all_discovered_tracks.append_array(tracks_at_level)
 		
-		# 2. Extract nested subfolders at this layer (like "Vanilla - Origin")
-		var subfolders_at_level := _discover_folders_from_xml(body_str, parts.host)
+		# 2. Parse subfolders safely
+		var subfolders_at_level := _discover_folders_from_xml(body_str)
 		for sub_folder: String in subfolders_at_level:
-			# FIX: Standardize comparisons using standard string formats 
-			# so spaces ("%20") don't confuse the duplicate manager.
-			var clean_sub := sub_folder.strip_edges()
-			var clean_current := current_scan_path.strip_edges()
+			var norm_sub := _normalize_path(sub_folder)
+			var norm_current := _normalize_path(current_scan_path)
 			
-			if clean_sub != clean_current and not scanned_paths.has(clean_sub) and not folder_queue.has(clean_sub):
-				# Make sure the sub_folder is actually a child directory of our current path
-				if clean_sub.begins_with(clean_current) or clean_sub.uri_decode().begins_with(clean_current.uri_decode()):
-					folder_queue.append(clean_sub)
+			if norm_sub != norm_current and not scanned_paths.has(norm_sub) and not folder_queue.has(norm_sub):
+				if norm_sub.begins_with(norm_current):
+					folder_queue.append(norm_sub)
 				
 	print("WebDAVService: Deep traversal finished. Found %d total tracks." % all_discovered_tracks.size())
 	library_scanned.emit(all_discovered_tracks)
 
-
-## Internal helper to extract subdirectory href targets from a parent directory XML payload.
-func _discover_folders_from_xml(xml_content: String, host_domain: String) -> Array:
+## Internal XML structural extraction engines
+func _discover_folders_from_xml(xml_content: String) -> Array:
 	var folders := []
 	var parser := XMLParser.new()
 	parser.open_buffer(xml_content.to_utf8_buffer())
@@ -279,13 +336,10 @@ func _discover_folders_from_xml(xml_content: String, host_domain: String) -> Arr
 	while parser.read() == OK:
 		if parser.get_node_type() == XMLParser.NODE_ELEMENT:
 			var node_name := parser.get_node_name().to_lower()
-			
 			if node_name == "d:href" or node_name == "href":
 				if parser.read() == OK:
-					var raw_href := parser.get_node_data().strip_edges()
-					current_href = _sanitize_href_path(raw_href, host_domain)
+					current_href = parser.get_node_data().strip_edges()
 					is_directory = false
-					
 			if node_name == "d:collection" or node_name == "collection":
 				is_directory = true
 				
@@ -293,32 +347,29 @@ func _discover_folders_from_xml(xml_content: String, host_domain: String) -> Arr
 			var node_name := parser.get_node_name().to_lower()
 			if node_name == "d:response" or node_name == "response":
 				if is_directory and not current_href.is_empty():
-					if not current_href.ends_with("/"):
-						current_href += "/"
-					folders.append(current_href)
+					folders.append(_normalize_path(current_href))
 				current_href = ""
 				is_directory = false
-					
 	return folders
 
-## Parses audio file hrefs out of a WebDAV Multi-Status XML response.
-func _parse_webdav_xml(xml_content: String, host_domain: String = "") -> Array:
+func _parse_webdav_xml(xml_content: String) -> Array:
 	var tracked_files := []
 	var parser := XMLParser.new()
 	parser.open_buffer(xml_content.to_utf8_buffer())
-
-	var current_href := ""
 
 	while parser.read() == OK:
 		if parser.get_node_type() == XMLParser.NODE_ELEMENT:
 			var node_name := parser.get_node_name().to_lower()
 			if node_name == "d:href" or node_name == "href":
-				if parser.read() == OK:
+				if parser.read() == OK and parser.get_node_type() == XMLParser.NODE_TEXT:
 					var raw_href := parser.get_node_data().strip_edges()
-					current_href = _sanitize_href_path(raw_href, host_domain)
-					var lower_href := current_href.to_lower()
+					var lower_href := raw_href.to_lower()
 					if lower_href.ends_with(".mp3") or lower_href.ends_with(".flac") \
 							or lower_href.ends_with(".ogg") or lower_href.ends_with(".wav"):
-						tracked_files.append(current_href)
-
+						var clean_path = raw_href
+						if "://" in clean_path:
+							var path_parts = clean_path.split("://", true, 1)[1]
+							if "/" in path_parts:
+								clean_path = path_parts.substr(path_parts.find("/"))
+						tracked_files.append(clean_path)
 	return tracked_files
