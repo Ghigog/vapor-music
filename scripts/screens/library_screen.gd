@@ -15,6 +15,7 @@ extends Control
 
 func _ready() -> void:
 	_apply_styles()
+	ThemeManager.theme_changed.connect(_apply_styles)
 	
 	# Safe connection layout wrapper
 	if not WebDAVService.library_scanned.is_connected(_on_library_scanned):
@@ -36,7 +37,7 @@ func show_loading() -> void:
 	
 	# FIX 1: Hard-center the status label dynamically so it doesn't float top-left
 	status_label.text = "Scanning your library…"
-	status_label.add_theme_color_override("font_color", ThemeManager.TEXT_SECONDARY)
+	status_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
 	status_label.visible = true
 	status_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 
@@ -45,31 +46,31 @@ func show_loading() -> void:
 # ---------------------------------------------------------------------------
 
 func _apply_styles() -> void:
-	icon_label.add_theme_color_override("font_color", ThemeManager.TEXT_TERTIARY)
+	icon_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
 	icon_label.add_theme_font_size_override("font_size", 80)
 
-	heading.add_theme_color_override("font_color", ThemeManager.TEXT_PRIMARY)
-	heading.add_theme_font_override("font", ThemeManager.font_display)
-	heading.add_theme_font_size_override("font_size", ThemeManager.TYPE_LG)
+	heading.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	heading.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+	heading.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_LG)
 
-	body.add_theme_color_override("font_color", ThemeManager.TEXT_SECONDARY)
-	body.add_theme_font_override("font", ThemeManager.font_ui)
-	body.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+	body.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+	body.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	body.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 
 	add_music_btn.add_theme_stylebox_override("normal",  ThemeManager.make_cta_button(false))
 	add_music_btn.add_theme_stylebox_override("hover",   ThemeManager.make_cta_button(true))
 	add_music_btn.add_theme_stylebox_override("pressed", ThemeManager.make_cta_button(true))
 	add_music_btn.add_theme_stylebox_override("focus",   ThemeManager.make_transparent())
-	add_music_btn.add_theme_color_override("font_color",       ThemeManager.ACCENT_BRIGHT)
-	add_music_btn.add_theme_color_override("font_hover_color", ThemeManager.TEXT_INVERSE)
-	add_music_btn.add_theme_font_override("font", ThemeManager.font_ui)
-	add_music_btn.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+	add_music_btn.add_theme_color_override("font_color",       ThemeManager.current_theme.ACCENT_BRIGHT)
+	add_music_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.TEXT_INVERSE)
+	add_music_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	add_music_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 
 	if not add_music_btn.pressed.is_connected(_on_add_music_pressed):
 		add_music_btn.pressed.connect(_on_add_music_pressed)
 
-	status_label.add_theme_font_override("font", ThemeManager.font_ui)
-	status_label.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+	status_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	status_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 
 # ---------------------------------------------------------------------------
 # Signal Handlers
@@ -113,10 +114,10 @@ func _on_library_scanned(files: Array) -> void:
 		track_btn.flat = true
 		
 		# Standard layout typography constraints
-		track_btn.add_theme_font_override("font", ThemeManager.font_ui)
-		track_btn.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
-		track_btn.add_theme_color_override("font_color", ThemeManager.TEXT_PRIMARY)
-		track_btn.add_theme_color_override("font_hover_color", ThemeManager.ACCENT_BRIGHT)
+		track_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		track_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+		track_btn.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		track_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
 		
 		# Pipe track context into play mechanics on click
 		track_btn.pressed.connect(

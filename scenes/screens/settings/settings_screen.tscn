@@ -1,30 +1,47 @@
-[gd_scene load_steps=2 format=3 uid="uid://vaporsettings0001"]
+[gd_scene format=3 uid="uid://dmyajuekdcds"]
 
-[ext_resource type="Script" path="res://scripts/screens/settings_screen.gd" id="1_set"]
+[ext_resource type="Script" uid="uid://6r86hbbwo6gd" path="res://scripts/screens/settings_screen.gd" id="1_set"]
 
-[node name="SettingsScreen" type="Control"]
+[node name="SettingsScreen" type="Control" unique_id=1189031825]
+layout_mode = 3
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_set")
 
-[node name="Center" type="CenterContainer" parent="."]
-anchor_right = 1.0
-anchor_bottom = 1.0
+[node name="Center" type="CenterContainer" parent="." unique_id=1914367418]
+layout_mode = 1
+offset_right = 300.0
+offset_bottom = 218.0
 
-[node name="Placeholder" type="VBoxContainer" parent="Center"]
+[node name="Placeholder" type="VBoxContainer" parent="Center" unique_id=260718531]
 custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
 theme_override_constants/separation = 20
 alignment = 1
 
-[node name="IconLabel" type="Label" parent="Center/Placeholder"]
+[node name="IconLabel" type="Label" parent="Center/Placeholder" unique_id=493372753]
+layout_mode = 2
 text = "⚙"
 horizontal_alignment = 1
 
-[node name="HeadingLabel" type="Label" parent="Center/Placeholder"]
+[node name="HeadingLabel" type="Label" parent="Center/Placeholder" unique_id=1739415921]
+layout_mode = 2
 text = "Settings"
 horizontal_alignment = 1
 
-[node name="BodyLabel" type="Label" parent="Center/Placeholder"]
+[node name="BodyLabel" type="Label" parent="Center/Placeholder" unique_id=185036689]
+layout_mode = 2
 text = "Coming soon — EQ profiles, themes, and cloud configuration."
 horizontal_alignment = 1
 autowrap_mode = 3
+
+[node name="Select a theme" type="Label" parent="Center/Placeholder" unique_id=1602768150]
+layout_mode = 2
+text = "Select a Theme:"
+horizontal_alignment = 1
+
+[node name="ThemeSelector" type="OptionButton" parent="Center/Placeholder" unique_id=302810268]
+layout_mode = 2

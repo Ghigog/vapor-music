@@ -19,6 +19,9 @@ func _ready() -> void:
 	_register_nav_buttons()
 	_connect_signals()
 	_set_active_nav(NavManager.current_screen)
+	ThemeManager.theme_changed.connect(_apply_panel_style)
+	ThemeManager.theme_changed.connect(_apply_logo_style)
+	ThemeManager.theme_changed.connect(_refresh_nav_button_styles)
 
 
 # ---------------------------------------------------------------------------
@@ -27,13 +30,13 @@ func _ready() -> void:
 
 func _apply_panel_style() -> void:
 	add_theme_stylebox_override("panel", ThemeManager.make_nav_panel())
-	custom_minimum_size.x = ThemeManager.SIDEBAR_WIDTH
+	custom_minimum_size.x = ThemeManager.current_theme.SIDEBAR_WIDTH
 
 
 func _apply_logo_style() -> void:
-	app_name.add_theme_color_override("font_color", ThemeManager.ACCENT_BRIGHT)
-	app_name.add_theme_font_override("font", ThemeManager.font_display)
-	app_name.add_theme_font_size_override("font_size", ThemeManager.TYPE_MD)
+	app_name.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+	app_name.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+	app_name.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_MD)
 
 
 # ---------------------------------------------------------------------------
@@ -48,26 +51,32 @@ func _register_nav_buttons() -> void:
 	}
 	for screen_name: String in _nav_buttons:
 		var btn: Button = _nav_buttons[screen_name]
-		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		btn.custom_minimum_size.y = ThemeManager.TOUCH_TARGET_MIN
-		btn.add_theme_font_override("font", ThemeManager.font_ui)
-		btn.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
 		btn.pressed.connect(_on_nav_pressed.bind(screen_name))
 
 
+func _refresh_nav_button_styles() -> void:
+	for nav in _nav_buttons:
+		var btn = _nav_buttons[nav]
+		var is_active = (nav == NavManager.current_screen)
+		_style_nav_button(btn, is_active)
+
 func _style_nav_button(btn: Button, active: bool) -> void:
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.custom_minimum_size.y = ThemeManager.current_theme.TOUCH_TARGET_MIN
+	btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 	if active:
 		btn.add_theme_stylebox_override("normal",  ThemeManager.make_nav_item_active())
 		btn.add_theme_stylebox_override("hover",   ThemeManager.make_nav_item_active())
 		btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_active())
-		btn.add_theme_color_override("font_color",       ThemeManager.ACCENT_CORE)
-		btn.add_theme_color_override("font_hover_color", ThemeManager.ACCENT_BRIGHT)
+		btn.add_theme_color_override("font_color",       ThemeManager.current_theme.ACCENT_CORE)
+		btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
 	else:
 		btn.add_theme_stylebox_override("normal",  ThemeManager.make_transparent())
 		btn.add_theme_stylebox_override("hover",   ThemeManager.make_nav_item_hover())
 		btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
-		btn.add_theme_color_override("font_color",       ThemeManager.TEXT_TERTIARY)
-		btn.add_theme_color_override("font_hover_color", ThemeManager.TEXT_SECONDARY)
+		btn.add_theme_color_override("font_color",       ThemeManager.current_theme.TEXT_TERTIARY)
+		btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.TEXT_SECONDARY)
 	btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 
 

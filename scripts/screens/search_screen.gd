@@ -10,16 +10,17 @@ extends Control
 
 func _ready() -> void:
 	_apply_styles()
+	ThemeManager.theme_changed.connect(_apply_styles)
 
 
 func _apply_styles() -> void:
-	icon_label.add_theme_color_override("font_color", ThemeManager.TEXT_TERTIARY)
+	icon_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
 	icon_label.add_theme_font_size_override("font_size", 80)
 
-	heading.add_theme_color_override("font_color", ThemeManager.TEXT_PRIMARY)
-	heading.add_theme_font_override("font", ThemeManager.font_display)
-	heading.add_theme_font_size_override("font_size", ThemeManager.TYPE_LG)
+	heading.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	heading.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+	heading.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_LG)
 
-	body.add_theme_color_override("font_color", ThemeManager.TEXT_SECONDARY)
-	body.add_theme_font_override("font", ThemeManager.font_ui)
-	body.add_theme_font_size_override("font_size", ThemeManager.TYPE_SM)
+	body.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+	body.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	body.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)

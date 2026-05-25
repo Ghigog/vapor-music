@@ -1,0 +1,7 @@
+[gd_resource type="Resource" script_class="ThemeData" format=3 uid="uid://dsjd5jgewrsrp"]
+
+[ext_resource type="Script" uid="uid://bxmlfq0q7rbbj" path="res://assets/theme_data.gd" id="1_j8bh1"]
+
+[resource]
+script = ExtResource("1_j8bh1")
+metadata/_custom_type_script = "uid://bxmlfq0q7rbbj"

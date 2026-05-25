@@ -4,10 +4,12 @@ extends Node
 
 signal track_changed(track_name: String)
 signal playback_toggled(is_playing: bool)
+signal loading_track(is_loading: bool)
 
 var player: AudioStreamPlayer
 var current_playlist: Array[String] = []
 var current_track_index: int = -1
+var current_track_length: float
 var is_playing := false
 
 func _ready() -> void:
@@ -50,6 +52,7 @@ func _load_and_stream_remote_file(href_path: String) -> void:
 	var full_target_endpoint = host_base + safe_encoded_path
 	
 	print("AudioManager: Requesting stream from: ", full_target_endpoint)
+	loading_track.emit(true)
 	track_changed.emit(href_path.get_file().uri_decode())
 	
 	var http_client := HTTPRequest.new()
@@ -75,8 +78,11 @@ func _load_and_stream_remote_file(href_path: String) -> void:
 		return
 		
 	# Instantiate and stream standard MP3 byte headers directly into memory audio layers
+	loading_track.emit(false)
 	var stream := AudioStreamMP3.new()
 	stream.data = response_body
+	current_track_length = stream.get_length()
+	print(current_track_length)
 	
 	# Double-check that data was actually fed into the stream buffer
 	if stream.data.size() == 0:
@@ -98,6 +104,23 @@ func toggle_play() -> void:
 		player.stream_paused = false
 		is_playing = true
 	playback_toggled.emit(is_playing)
+
+func play_next() -> void:
+	if current_playlist.is_empty():
+		return
+	current_track_index = (current_track_index + 1) % current_playlist.size()
+	play_track(current_playlist[current_track_index], current_playlist)
+	
+func play_previous() -> void:
+	if current_playlist.is_empty():
+		return
+	# Subtract 1, add size() to ensure the result is positive before the modulo
+	current_track_index = (current_track_index - 1 + current_playlist.size()) % current_playlist.size()
+	play_track(current_playlist[current_track_index], current_playlist)
+
+
+func scroll_track(value) -> void:
+	player.seek(value)
 
 func _on_track_finished() -> void:
 	if current_playlist.is_empty() or current_track_index == -1:

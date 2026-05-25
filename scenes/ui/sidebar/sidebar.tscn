@@ -1,35 +1,49 @@
-[gd_scene load_steps=2 format=3 uid="uid://vaporsidebar0001"]
+[gd_scene format=3 uid="uid://b27ae876qslci"]
 
-[ext_resource type="Script" path="res://scripts/ui/sidebar.gd" id="1_sid"]
+[ext_resource type="Script" uid="uid://0n0u5at313dg" path="res://scripts/ui/sidebar.gd" id="1_sid"]
+[ext_resource type="Texture2D" uid="uid://d0k2oxtxkwd2c" path="res://assets/Vapor Logo 500.png" id="2_48v00"]
 
-[node name="Sidebar" type="PanelContainer"]
+[node name="Sidebar" type="PanelContainer" unique_id=1954680690]
 script = ExtResource("1_sid")
 
-[node name="VBox" type="VBoxContainer" parent="."]
+[node name="VBox" type="VBoxContainer" parent="." unique_id=93778840]
+layout_mode = 2
 
-[node name="Header" type="HBoxContainer" parent="VBox"]
+[node name="Header" type="HBoxContainer" parent="VBox" unique_id=701100102]
 custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
 
-[node name="LogoContainer" type="HBoxContainer" parent="VBox/Header"]
+[node name="LogoContainer" type="HBoxContainer" parent="VBox/Header" unique_id=86516821]
+layout_mode = 2
 
-[node name="LogoIcon" type="Label" parent="VBox/Header/LogoContainer"]
-text = "◈"
+[node name="LogoControl" type="TextureRect" parent="VBox/Header/LogoContainer" unique_id=334224450]
+clip_contents = true
+layout_mode = 2
+texture = ExtResource("2_48v00")
+expand_mode = 2
 
-[node name="AppName" type="Label" parent="VBox/Header/LogoContainer"]
+[node name="AppName" type="Label" parent="VBox/Header/LogoContainer" unique_id=282413385]
+layout_mode = 2
 text = "vapor"
 
-[node name="Sep" type="HSeparator" parent="VBox"]
+[node name="Sep" type="HSeparator" parent="VBox" unique_id=2072507393]
+layout_mode = 2
 
-[node name="NavItems" type="VBoxContainer" parent="VBox"]
+[node name="NavItems" type="VBoxContainer" parent="VBox" unique_id=753665606]
+layout_mode = 2
 
-[node name="NavLibrary" type="Button" parent="VBox/NavItems"]
+[node name="NavLibrary" type="Button" parent="VBox/NavItems" unique_id=1158763471]
+layout_mode = 2
 text = "  ♪  Library"
 
-[node name="NavSearch" type="Button" parent="VBox/NavItems"]
+[node name="NavSearch" type="Button" parent="VBox/NavItems" unique_id=1701566622]
+layout_mode = 2
 text = "  ⌕  Search"
 
-[node name="NavSettings" type="Button" parent="VBox/NavItems"]
+[node name="NavSettings" type="Button" parent="VBox/NavItems" unique_id=356337049]
+layout_mode = 2
 text = "  ⚙  Settings"
 
-[node name="Footer" type="Control" parent="VBox"]
+[node name="Footer" type="Control" parent="VBox" unique_id=633844415]
+layout_mode = 2
 size_flags_vertical = 3

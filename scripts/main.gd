@@ -44,7 +44,6 @@ func _ready() -> void:
 	_update_layout()
 	# Show the default screen without pushing history.
 	_show_screen(NavManager.current_screen)
-	
 	_check_setup()
 
 func _check_setup() -> void:
@@ -77,12 +76,15 @@ func _register_screens() -> void:
 
 
 func _apply_background() -> void:
-	background.color = ThemeManager.BG_VOID
+	background.color = ThemeManager.current_theme.BG_VOID
 
 
 func _connect_signals() -> void:
 	PlatformManager.layout_changed.connect(_on_layout_changed)
 	NavManager.navigation_requested.connect(_on_navigation_requested)
+	ThemeManager.theme_changed.connect(_apply_background)
+	ThemeManager.theme_changed.connect(_update_layout)
+
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +101,8 @@ func _update_layout() -> void:
 
 ## Desktop layout: sidebar pinned to the left, content fills the remainder.
 func _apply_desktop_layout() -> void:
-	var sw  := float(ThemeManager.SIDEBAR_WIDTH)
-	var mph := float(ThemeManager.MINI_PLAYER_HEIGHT)
+	var sw  := float(ThemeManager.current_theme.SIDEBAR_WIDTH)
+	var mph := float(ThemeManager.current_theme.MINI_PLAYER_HEIGHT)
 
 	sidebar.visible   = true
 	tab_bar.visible   = false
