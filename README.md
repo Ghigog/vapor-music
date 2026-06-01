@@ -96,7 +96,7 @@ Vapor's UI is built for focused, distraction-free listening.
 - High-contrast, minimalist interface that scales gracefully from full-screen desktop to mobile
 - **Low-Glare Ambient Mode** — a distraction-free, dimmed UI designed for late-night or ambient listening
 - Dashboard widget mode — a minimal, unobtrusive now-playing overlay for multitaskers
-- Fully themeable with community-shareable color schemes
+- Fully themeable with community-shareable color schemes (see the [Theme System Developer Guide](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/theme_system.md) for details on creating custom visual presets)
 
 ---
 

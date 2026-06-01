@@ -33,7 +33,11 @@ func _setup_fonts() -> void:
 func _make_system_font(names: Array[String]) -> SystemFont:
 	var f := SystemFont.new()
 	f.font_names = names
-	f.antialiasing = TextServer.FONT_ANTIALIASING_LCD
+	# GRAY (not LCD) antialiasing: LCD subpixel rendering assumes an opaque
+	# background and produces dark colour-fringe halos when composited over a
+	# transparent window. GRAY uses pure alpha coverage and works correctly on
+	# any background colour, including fully transparent ones.
+	f.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
 	return f
 
 

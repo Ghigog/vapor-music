@@ -7,6 +7,8 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_lib")
 
 [node name="StatusLabel" type="Label" parent="." unique_id=1705197944]
@@ -64,6 +66,7 @@ text = "Your library is empty"
 horizontal_alignment = 1
 
 [node name="BodyLabel" type="Label" parent="Center/EmptyState" unique_id=1574965239]
+custom_minimum_size = Vector2(1, 1)
 layout_mode = 2
 text = "Add your local music to get started."
 horizontal_alignment = 1

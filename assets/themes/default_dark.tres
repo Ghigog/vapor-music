@@ -4,4 +4,5 @@
 
 [resource]
 script = ExtResource("1_j8bh1")
+BG_VOID = Color(0.023529412, 0.023529412, 0.039215688, 0)
 metadata/_custom_type_script = "uid://bxmlfq0q7rbbj"

@@ -17,6 +17,7 @@ This file provides context and best practices for Gemini CLI agents working on t
   - **Constants:** `SCREAMING_SNAKE_CASE`.
   - **Classes:** `PascalCase`.
 - **Typing:** Use static typing where possible for performance and clarity.
+  - *Warning:* Avoid using dynamic type inference (`:=`) on untyped dictionary retrievals (e.g., `var val := dict.key`). Because dictionary fields return untyped Variants, Godot cannot infer the type at compile-time, resulting in a compilation error. Use explicit static types instead: `var val: String = dict.key`.
 
 ### 2. Architecture & Communication
 - **Decoupling:** Prefer signals over direct node references (`get_parent().get_node(...)`) to keep systems modular.
@@ -40,7 +41,18 @@ This file provides context and best practices for Gemini CLI agents working on t
 - Ensure the feature is workable with the larger project context
 
 ### 3. Verification
-- Use `run_command` to run headless tests if the project has them (check `addons/` for testing frameworks).
+- Use `run_command` to run headless unit tests.
+- **Locating Godot Executable (macOS)**:
+  - The standard system PATH may not have a global `godot` command.
+  - The Godot engine is typically installed in `/Applications/Godot.app/Contents/MacOS/Godot`.
+- **Running Headless GUT Tests**:
+  - Run Godot with the `--headless` flag, set `--path .` to target the workspace directory, and execute the GUT CLI runner script.
+  - **CRITICAL NOTE**: The GUT command-line runner is spelled `gut_cmdln.gd` (NOT `gut_cmdline.gd`).
+  - Specify the unit tests folder using the `-gdir` option.
+  - **Full command string**:
+    ```bash
+    /Applications/Godot.app/Contents/MacOS/Godot --headless --path . -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit
+    ```
 - Make sure your findings are documented in a dedicated "walkthrough" document, taking the walkthrough template file as a basis.
 - Announce that the implementation is complete.
 
