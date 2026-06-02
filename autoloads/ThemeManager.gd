@@ -60,6 +60,11 @@ func make_glass_panel(radius: int = current_theme.RADIUS_MD, alpha: float = 0.55
 	s.shadow_color = Color(0.0, 0.0, 0.0, 0.0)
 	s.shadow_size = 0
 	s.shadow_offset = Vector2(0, 0)
+	
+	s.content_margin_left = 12
+	s.content_margin_top = 12
+	s.content_margin_right = 12
+	s.content_margin_bottom = 12
 	return s
 
 
@@ -134,5 +139,21 @@ func load_theme(path: String) -> void:
 		current_theme = new_theme
 		# Re-apply system fonts to the new resource
 		_setup_fonts() 
-		# Notify all listening UI components to refresh
-		theme_changed.emit()
+		# Re-apply base font size if SettingsManager exists
+		var sm = get_node_or_null("/root/SettingsManager")
+		if sm and "base_font_size" in sm:
+			set_base_font_size(sm.base_font_size)
+		else:
+			theme_changed.emit()
+
+func set_base_font_size(size: int) -> void:
+	current_theme.TYPE_2XS = max(6, size - 5)
+	current_theme.TYPE_XS = max(8, size - 3)
+	current_theme.TYPE_SM = max(9, size - 2)
+	current_theme.TYPE_BASE = size
+	current_theme.TYPE_MD = size + 2
+	current_theme.TYPE_LG = size + 4 # 4 points bigger than default (base size) for titles
+	current_theme.TYPE_XL = size + 8
+	current_theme.TYPE_2XL = size + 14
+	current_theme.TYPE_DISPLAY = size + 20
+	theme_changed.emit()

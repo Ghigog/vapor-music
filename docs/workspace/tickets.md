@@ -247,3 +247,86 @@ So that the playback controls feel sleek, minimalist, and integrated into the pr
 - And the bottom horizontal mini-player is hidden.
 - Given mobile layout
 - Then the horizontal mini-player is visible at the bottom and functional.
+
+---
+
+### VIS-007 : Setup Wizard Redesign & Settings Integration (done)
+**User Story:**
+As a user,
+I'd like the Setup Wizard to match the modern glassmorphism aesthetic of the app, and be accessible at any time from the Settings screen,
+So that I can easily connect or change my music library provider and adjust app settings like font sizes in one place.
+
+**Context:** The old Setup Wizard was a basic placeholder using hardcoded dark styling. Users could not re-open the wizard after initial setup, and the Settings screen was off-centered and lacked font size configuration.
+
+**Description:** Redesign the Setup Wizard modal container, fields, and buttons using `ThemeManager` styling. Center the Settings screen UI. Add a "Connect Music Library" button to launch the wizard from Settings, and implement universal font scaling.
+
+**Requirements:**
+- Center the settings screen using full anchors (`anchors_preset = 15`).
+- Add a base font size setting that dynamically scales all typography elements (titles remain 4 points larger than base size).
+- Add a Connect Music Library button to settings that launches the Setup Wizard.
+- Update Setup Wizard modal panel, inputs, and buttons to use dynamic `ThemeManager` styling.
+- Add a Cancel button to the Setup Wizard so users can dismiss it when opened from Settings.
+
+**Acceptance Criteria:**
+- Given the Settings screen is visible
+- When the user modifies the base font size setting
+- Then the text sizes of all UI elements scale dynamically.
+- When the user clicks "Connect Music Library"
+- Then the redesigned Setup Wizard modal is shown, pre-filling saved credentials and allowing cancellation.
+
+---
+
+### VIS-008 : Premium Glassmorphism Shader (done)
+**User Story:**
+As a user,
+I'd like the UI panels to look like high-fidelity frosted glass (matching macOS/visionOS materials) even over a transparent background or when in-app components move underneath them,
+So that the interface feels tactile, premium, and visually stunning.
+
+**Context:** The standard shader relied on low-frequency blocky grain and a wide linear gradient fade border that didn't align with the StyleBox's rounded corners or behave realistically with lighting.
+
+**Description:** Create a new custom shader `premium_glass.gdshader` that renders procedural rounded corner outlines utilizing an SDF representation of the container's layout size, applying a dual-stroke highlight (top-left gleam, bottom-right shadow), a 1-pixel resolution-independent frosted noise grain, a backdrop saturation/vibrancy booster, and a fallback for fully transparent regions.
+
+**Requirements:**
+- Implement in a new shader file `assets/shaders/premium_glass.gdshader`.
+- Use a signed distance field (SDF) of a rounded rectangle inside the shader.
+- Compute surface normals mathematically to shade the borders dynamically based on a top-left light source.
+- Add fine frosted pixel-level noise using the screen-space fragment coordinates.
+- Perform a saturation boost to blurred colors to prevent muddy colors.
+- Maintain a fallback so the panels default to their flat translucent StyleBox colors if nothing is drawn behind the window.
+- Dynamically bind and update the `container_size` uniform in `main.gd` on window resizing.
+- All existing unit tests pass without errors.
+
+**Acceptance Criteria:**
+- Given the application runs with transparent settings
+- When UI panels render or resize
+- Then the SDF borders remain crisp, rounded, and align with the panel layout boundaries.
+- And the shader compiles successfully and all unit tests pass.
+
+---
+
+### UI-002 : Confine Loading Animation to Playback Scrubber Bar (done)
+**User Story:**
+As a user,
+I'd like the track loading animation to be confined to the progress bar area on mobile and show as a loading indicator on the vertical separator line on desktop,
+So that the loading state is subtle, beautiful, and I can still see and interact with player controls during track changes.
+
+**Context:** The mobile player bar used a `LoadingBar` that spanned the entire `PanelContainer` when visible, obstructing all navigation and playback buttons. In addition, the desktop view lacked any loading animation on its custom vertical progress bar. Confining it to the progress track on mobile and animating the vertical scrubber on desktop creates a consistent, premium user experience.
+
+**Description:** 
+- Mobile: Move `LoadingBar` inside `VBox/ProgressContainer` (MarginContainer) to overlay it exactly on top of `ProgressBar`. Adjust `@onready` references in `mini_player.gd`, update the scene connection paths, and hide the `ProgressBar` slider when the loading bar is active.
+- Desktop: Listen to `AudioManager.loading_track` in `vertical_progress.gd`. When loading, disable the standard progress fill and grabber rendering, and instead animate a themed `AQUA_CORE` circle moving smoothly up and down the track line using a sine wave.
+
+**Requirements:**
+- Nest `ProgressBar` and `LoadingBar` inside a `ProgressContainer` (`MarginContainer`) in `mini_player.tscn`.
+- Update `@onready` node paths in `mini_player.gd`.
+- Update signal connection paths in `mini_player.tscn`.
+- Hide `progress_bar` when `loading_bar` is active (`is_loading = true`) in `_on_loading_track`.
+- Add `is_loading` variable, `AudioManager.loading_track` connection, and `_process()` rendering animation logic in `vertical_progress.gd`.
+
+**Acceptance Criteria:**
+- Given mobile layout during track change loading
+- When a track is loading (`is_loading` is true)
+- Then the loading bar overlays the progress bar path exactly, and the main player controls remain visible and interactive.
+- Given desktop layout during track change loading
+- When a track is loading (`is_loading` is true)
+- Then the vertical progress bar animates an aqua-colored dot traveling up and down the separator track line, while disabling standard progress drawing.

@@ -29,4 +29,24 @@ func test_sidebar_has_playback_control_buttons() -> void:
 	assert_not_null(forward, "Sidebar must contain ForwardBtn under ControlsHBox")
 
 func test_minimum_window_size_limits() -> void:
-	assert_eq(main_node.MIN_WINDOW_SIZE, Vector2i(480, 400), "MIN_WINDOW_SIZE must be exactly 480x400")
+	assert_eq(main_node.MIN_WINDOW_SIZE, Vector2i(380, 400), "MIN_WINDOW_SIZE must be exactly 380x400")
+
+func test_mini_player_responsive_squeeze() -> void:
+	var mini_player = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/MiniPlayer")
+	assert_not_null(mini_player, "MiniPlayer must exist")
+	
+	# Clear opposite anchors to prevent Godot layout warning when manually sizing
+	mini_player.anchor_left = 0.0
+	mini_player.anchor_right = 0.0
+	
+	# Simulate wide layout
+	mini_player.size.x = 600
+	mini_player._on_resized()
+	assert_eq(mini_player.nav_library.text, "♪ Library", "Should show full text at large width")
+	
+	# Simulate narrow layout
+	mini_player.size.x = 400
+	mini_player._on_resized()
+	assert_eq(mini_player.nav_library.text, "♪", "Should show icon-only at narrow width")
+
+

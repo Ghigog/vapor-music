@@ -29,6 +29,14 @@ signal navigation_requested(screen_name: String)
 ## Emitted when back navigation is triggered (e.g. Android back button).
 signal back_requested()
 
+## Emitted when the setup wizard is requested to open.
+signal setup_wizard_requested()
+
+## Request to show the setup wizard
+func show_setup_wizard() -> void:
+	setup_wizard_requested.emit()
+
+
 
 # ---------------------------------------------------------------------------
 # State

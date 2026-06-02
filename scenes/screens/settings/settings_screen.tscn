@@ -13,13 +13,16 @@ script = ExtResource("1_set")
 
 [node name="Center" type="CenterContainer" parent="." unique_id=1914367418]
 layout_mode = 1
-offset_right = 300.0
-offset_bottom = 218.0
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 
 [node name="Placeholder" type="VBoxContainer" parent="Center" unique_id=260718531]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
-theme_override_constants/separation = 20
+theme_override_constants/separation = 16
 alignment = 1
 
 [node name="IconLabel" type="Label" parent="Center/Placeholder" unique_id=493372753]
@@ -34,7 +37,7 @@ horizontal_alignment = 1
 
 [node name="BodyLabel" type="Label" parent="Center/Placeholder" unique_id=185036689]
 layout_mode = 2
-text = "Coming soon — EQ profiles, themes, and cloud configuration."
+text = "Configure your preferences and cloud music providers below."
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -45,3 +48,28 @@ horizontal_alignment = 1
 
 [node name="ThemeSelector" type="OptionButton" parent="Center/Placeholder" unique_id=302810268]
 layout_mode = 2
+
+[node name="FontSizeContainer" type="HBoxContainer" parent="Center/Placeholder"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="FontSizeLabel" type="Label" parent="Center/Placeholder/FontSizeContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Base Font Size"
+
+[node name="FontSizeSpinBox" type="SpinBox" parent="Center/Placeholder/FontSizeContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 10.0
+max_value = 32.0
+value = 16.0
+rounded = true
+alignment = 1
+
+[node name="ConnectLibraryButton" type="Button" parent="Center/Placeholder"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Connect Music Library"
+

@@ -19,14 +19,34 @@ var max_value: float = 1.0:
 		max_value = maxf(val, 1.0)
 		queue_redraw()
 
+var is_loading: bool = false:
+	set(val):
+		is_loading = val
+		queue_redraw()
+		set_process(is_loading)
+		if is_loading:
+			_loading_time = 0.0
+
 var _dragging := false
 var _hovered := false
+var _loading_time := 0.0
 
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	ThemeManager.theme_changed.connect(queue_redraw)
 	mouse_entered.connect(func(): _hovered = true; queue_redraw())
 	mouse_exited.connect(func(): _hovered = false; queue_redraw())
+	
+	AudioManager.loading_track.connect(func(loading):
+		is_loading = loading
+	)
+	set_process(false)
+
+
+func _process(delta: float) -> void:
+	if is_loading:
+		_loading_time += delta
+		queue_redraw()
 
 
 func _draw() -> void:
@@ -38,27 +58,38 @@ func _draw() -> void:
 	var track_color = Color(theme.GLASS_BORDER_SUBTLE.r, theme.GLASS_BORDER_SUBTLE.g, theme.GLASS_BORDER_SUBTLE.b, 0.25)
 	draw_line(Vector2(w / 2.0, 0), Vector2(w / 2.0, h), track_color, 1.0)
 	
-	# Draw the filled progress line (ACCENT_CORE) from top (0) to current position
-	var ratio = 0.0
-	if max_value > 0.0:
-		ratio = value / max_value
-	
-	var current_y = ratio * h
-	var fill_color = theme.ACCENT_CORE
-	if _hovered or _dragging:
-		fill_color = theme.ACCENT_BRIGHT
+	if is_loading:
+		# Draw the loading spot (ball/pill) moving up and down
+		# Period of 1.5 seconds for a full round trip
+		var ping_pong = 0.5 + 0.5 * sin(_loading_time * (2.0 * PI / 1.5))
+		var current_y = ping_pong * h
+		var fill_color = theme.AQUA_CORE
 		
-	if current_y > 0.0:
-		draw_line(Vector2(w / 2.0, 0), Vector2(w / 2.0, current_y), fill_color, 2.0)
+		# Draw the loading spot
+		var thumb_radius = 5.0
+		draw_circle(Vector2(w / 2.0, current_y), thumb_radius, fill_color)
+	else:
+		# Draw the filled progress line (ACCENT_CORE) from top (0) to current position
+		var ratio = 0.0
+		if max_value > 0.0:
+			ratio = value / max_value
 		
-	# Draw the grabber circle thumb
-	var thumb_radius = 4.0
-	if _dragging:
-		thumb_radius = 7.0
-	elif _hovered:
-		thumb_radius = 6.0
-		
-	draw_circle(Vector2(w / 2.0, current_y), thumb_radius, fill_color)
+		var current_y = ratio * h
+		var fill_color = theme.ACCENT_CORE
+		if _hovered or _dragging:
+			fill_color = theme.ACCENT_BRIGHT
+			
+		if current_y > 0.0:
+			draw_line(Vector2(w / 2.0, 0), Vector2(w / 2.0, current_y), fill_color, 2.0)
+			
+		# Draw the grabber circle thumb
+		var thumb_radius = 4.0
+		if _dragging:
+			thumb_radius = 7.0
+		elif _hovered:
+			thumb_radius = 6.0
+			
+		draw_circle(Vector2(w / 2.0, current_y), thumb_radius, fill_color)
 
 
 func _gui_input(event: InputEvent) -> void:

@@ -20,10 +20,16 @@ extends PanelContainer
 ## Maps screen-name strings to their corresponding Button nodes.
 var _nav_buttons: Dictionary = {}
 var _dragging := false
-
+var _custom_stylebox: StyleBoxFlat = null
 
 
 func _ready() -> void:
+	if has_theme_stylebox_override("panel"):
+		var sb = get_theme_stylebox("panel")
+		if sb is StyleBoxFlat:
+			_custom_stylebox = sb.duplicate()
+			add_theme_stylebox_override("panel", _custom_stylebox)
+
 	# Enable drag clicks to pass through to the PanelContainer background
 	$VBox.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/Header.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -55,7 +61,11 @@ func _ready() -> void:
 # ---------------------------------------------------------------------------
 
 func _apply_panel_style() -> void:
-	add_theme_stylebox_override("panel", ThemeManager.make_nav_panel())
+	if _custom_stylebox:
+		_custom_stylebox.bg_color = ThemeManager.current_theme.BG_BASE
+		_custom_stylebox.border_color = ThemeManager.current_theme.GLASS_BORDER_SUBTLE
+	else:
+		add_theme_stylebox_override("panel", ThemeManager.make_nav_panel())
 	custom_minimum_size.x = ThemeManager.current_theme.SIDEBAR_WIDTH
 
 

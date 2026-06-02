@@ -6,6 +6,7 @@ extends Node
 
 const SETTINGS_FILE_PATH = "user://settings.cfg"
 const SECTION_WEBDAV = "webdav"
+const SECTION_SYSTEM = "system"
 
 var config := ConfigFile.new()
 
@@ -13,6 +14,10 @@ var config := ConfigFile.new()
 var webdav_url: String = ""
 var webdav_username: String = ""
 var webdav_password: String = ""
+var webdav_folder: String = "Music"
+
+# UI Settings
+var base_font_size: int = 16
 
 signal credentials_loaded()
 
@@ -25,12 +30,19 @@ func load_settings() -> void:
 		webdav_url = config.get_value(SECTION_WEBDAV, "url", "")
 		webdav_username = config.get_value(SECTION_WEBDAV, "username", "")
 		webdav_password = config.get_value(SECTION_WEBDAV, "password", "")
+		webdav_folder = config.get_value(SECTION_WEBDAV, "folder", "Music")
+		base_font_size = config.get_value(SECTION_SYSTEM, "base_font_size", 16)
 		credentials_loaded.emit()
+		
+		# Set initial base font size in ThemeManager
+		ThemeManager.set_base_font_size(base_font_size)
 
 func save_settings() -> void:
 	config.set_value(SECTION_WEBDAV, "url", webdav_url)
 	config.set_value(SECTION_WEBDAV, "username", webdav_username)
 	config.set_value(SECTION_WEBDAV, "password", webdav_password)
+	config.set_value(SECTION_WEBDAV, "folder", webdav_folder)
+	config.set_value(SECTION_SYSTEM, "base_font_size", base_font_size)
 	config.save(SETTINGS_FILE_PATH)
 
 func has_credentials() -> bool:
@@ -41,3 +53,12 @@ func save_credentials(url: String, user: String, passw: String) -> void:
 	webdav_username = user
 	webdav_password = passw
 	save_settings()
+
+func save_target_folder(folder: String) -> void:
+	webdav_folder = folder
+	save_settings()
+
+func save_base_font_size(size: int) -> void:
+	base_font_size = size
+	save_settings()
+	ThemeManager.set_base_font_size(base_font_size)

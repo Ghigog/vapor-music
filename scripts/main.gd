@@ -35,7 +35,7 @@ var _screens: Dictionary = {}
 
 # Window resizing variables
 const RESIZE_BORDER = 12
-const MIN_WINDOW_SIZE = Vector2i(480, 400)
+const MIN_WINDOW_SIZE = Vector2i(380, 400)
 
 
 var _is_resizing := false
@@ -53,10 +53,28 @@ var _start_window_size := Vector2i()
 # ---------------------------------------------------------------------------
 
 var _vp_dragging := false
+var _custom_window_stylebox: StyleBoxFlat = null
 
 func _ready() -> void:
+	get_window().min_size = MIN_WINDOW_SIZE
+	if app_window_frame.has_theme_stylebox_override("panel"):
+		var sb = app_window_frame.get_theme_stylebox("panel")
+		if sb is StyleBoxFlat:
+			_custom_window_stylebox = sb.duplicate()
+			app_window_frame.add_theme_stylebox_override("panel", _custom_window_stylebox)
+
 	_register_screens()
 	_apply_background()
+	app_window_frame.resized.connect(func():
+		var mat = app_window_frame.material as ShaderMaterial
+		if mat:
+			mat.set_shader_parameter("container_size", app_window_frame.size)
+	)
+	get_tree().process_frame.connect(func():
+		var mat = app_window_frame.material as ShaderMaterial
+		if mat:
+			mat.set_shader_parameter("container_size", app_window_frame.size)
+	, CONNECT_ONE_SHOT)
 	_connect_signals()
 	_connect_vp_signals()
 	if PlatformManager.is_desktop():
@@ -99,15 +117,18 @@ func _check_setup() -> void:
 		_trigger_library_scan()
 	else:
 		setup_wizard.visible = true
-		setup_wizard.wizard_completed.connect(_on_wizard_completed)
 
 func _on_wizard_completed() -> void:
 	setup_wizard.visible = false
 	_trigger_library_scan()
 
+func _on_wizard_cancelled() -> void:
+	setup_wizard.visible = false
+
 func _trigger_library_scan() -> void:
 	library_screen.show_loading()
 	WebDAVService.scan_music_directory()
+
 
 
 # ---------------------------------------------------------------------------
@@ -126,25 +147,47 @@ func _apply_background() -> void:
 	background.color = ThemeManager.current_theme.BG_VOID
 	
 	# Apply glass panel style box to AppWindowFrame
-	var glass_style = ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_LG, 0.55)
-	app_window_frame.add_theme_stylebox_override("panel", glass_style)
+	if _custom_window_stylebox:
+		_custom_window_stylebox.bg_color = Color(ThemeManager.current_theme.BG_GLASS.r, ThemeManager.current_theme.BG_GLASS.g, ThemeManager.current_theme.BG_GLASS.b, _custom_window_stylebox.bg_color.a)
+		_custom_window_stylebox.border_color = Color(ThemeManager.current_theme.GLASS_BORDER.r, ThemeManager.current_theme.GLASS_BORDER.g, ThemeManager.current_theme.GLASS_BORDER.b, _custom_window_stylebox.border_color.a)
+	else:
+		var glass_style = ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_LG, 0.55)
+		app_window_frame.add_theme_stylebox_override("panel", glass_style)
 	
-	# Load and assign our custom glass shader
-	var shader = load("res://assets/shaders/vapor_glass.gdshader") as Shader
-	if shader:
-		var mat = ShaderMaterial.new()
-		mat.shader = shader
-		mat.set_shader_parameter("blur_amount", 2.5)
-		mat.set_shader_parameter("grain_amount", 0.03)
-		mat.set_shader_parameter("edge_highlight", 0.15)
-		app_window_frame.material = mat
+	# Load and assign our custom glass shader (reusing the editor material if present)
+	var mat = app_window_frame.material as ShaderMaterial
+	if not mat:
+		var shader = load("res://assets/shaders/premium_glass.gdshader") as Shader
+		if shader:
+			mat = ShaderMaterial.new()
+			mat.shader = shader
+			app_window_frame.material = mat
+			
+	if mat:
+		mat.set_shader_parameter("blur_amount", 4.0)
+		mat.set_shader_parameter("saturation_boost", 1.3)
+		mat.set_shader_parameter("grain_amount", 0.04)
+		mat.set_shader_parameter("border_thickness", 1.5)
+		mat.set_shader_parameter("border_color_highlight", Color(1.0, 1.0, 1.0, 0.45))
+		mat.set_shader_parameter("border_color_shadow", Color(0.0, 0.0, 0.0, 0.15))
+		mat.set_shader_parameter("shimmer_amount", 0.12)
+		mat.set_shader_parameter("container_size", app_window_frame.size)
+		mat.set_shader_parameter("corner_radius", float(ThemeManager.current_theme.RADIUS_LG))
 
 
 func _connect_signals() -> void:
 	PlatformManager.layout_changed.connect(_on_layout_changed)
 	NavManager.navigation_requested.connect(_on_navigation_requested)
+	NavManager.setup_wizard_requested.connect(func():
+		if setup_wizard.has_method("refresh_fields_and_visibility"):
+			setup_wizard.refresh_fields_and_visibility()
+		setup_wizard.visible = true
+	)
+	setup_wizard.wizard_completed.connect(_on_wizard_completed)
+	setup_wizard.wizard_cancelled.connect(_on_wizard_cancelled)
 	ThemeManager.theme_changed.connect(_apply_background)
 	ThemeManager.theme_changed.connect(_update_layout)
+
 
 
 

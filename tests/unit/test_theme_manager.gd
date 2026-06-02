@@ -116,3 +116,16 @@ func test_touch_target_meets_minimum() -> void:
 		44,
 		"Touch target must be at least 44px (Apple HIG / WCAG)"
 	)
+
+
+func test_font_scaling() -> void:
+	var original_base = ThemeManager.current_theme.TYPE_BASE
+	ThemeManager.set_base_font_size(20)
+	
+	assert_eq(ThemeManager.current_theme.TYPE_BASE, 20, "Base font size should be updated to 20")
+	assert_eq(ThemeManager.current_theme.TYPE_LG, 24, "Title (TYPE_LG) should be base size + 4 (24)")
+	assert_lt(ThemeManager.current_theme.TYPE_XS, ThemeManager.current_theme.TYPE_BASE, "Subtitle (TYPE_XS) should be smaller than base")
+	
+	# Restore original base font size
+	ThemeManager.set_base_font_size(original_base)
+

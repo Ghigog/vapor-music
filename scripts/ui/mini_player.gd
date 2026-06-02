@@ -2,8 +2,8 @@
 ## Bottom UI controller component handling merged navigation and playback.
 extends Control
 
-@onready var progress_bar: HSlider = $VBox/ProgressBar
-@onready var loading_bar: ProgressBar = $LoadingBar
+@onready var progress_bar: HSlider = $VBox/ProgressContainer/ProgressBar
+@onready var loading_bar: ProgressBar = $VBox/ProgressContainer/LoadingBar
 
 @onready var nav_library: Button = $VBox/HBox/NavLibrary
 @onready var nav_search: Button = $VBox/HBox/NavSearch
@@ -15,9 +15,16 @@ extends Control
 
 var dragging = false
 var _panel_dragging = false
+var _custom_stylebox: StyleBoxFlat = null
 
 
 func _ready() -> void:
+	if has_theme_stylebox_override("panel"):
+		var sb = get_theme_stylebox("panel")
+		if sb is StyleBoxFlat:
+			_custom_stylebox = sb.duplicate()
+			add_theme_stylebox_override("panel", _custom_stylebox)
+
 	# Configure container mouse filters to pass clicks through to panel background for window dragging
 	$VBox.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/HBox.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -29,6 +36,10 @@ func _ready() -> void:
 	# Connect to dynamic ThemeManager updates
 	ThemeManager.theme_changed.connect(_apply_styles)
 	_apply_styles()
+	
+	# Connect to resized signal for responsive layout adjustments
+	resized.connect(_on_resized)
+	_on_resized()
 
 
 func _process(delta: float) -> void:
@@ -49,17 +60,30 @@ func _apply_styles() -> void:
 	var is_dark := theme.BG_VOID.v < 0.5
 	
 	# 1. Root Container Style (Glass panel, rounded only at bottom corners to match main window)
-	var style = ThemeManager.make_glass_panel(0)
-	style.shadow_size = 0
-	style.set_corner_radius(2, theme.RADIUS_LG) # CORNER_BOTTOM_RIGHT
-	style.set_corner_radius(3, theme.RADIUS_LG) # CORNER_BOTTOM_LEFT
-	add_theme_stylebox_override("panel", style)
+	var style: StyleBoxFlat
+	if _custom_stylebox:
+		style = _custom_stylebox
+		style.bg_color = Color(theme.BG_GLASS.r, theme.BG_GLASS.g, theme.BG_GLASS.b, style.bg_color.a)
+		style.border_color = Color(theme.GLASS_BORDER.r, theme.GLASS_BORDER.g, theme.GLASS_BORDER.b, style.border_color.a)
+	else:
+		style = ThemeManager.make_glass_panel(0)
+		style.shadow_size = 0
+		add_theme_stylebox_override("panel", style)
+
+	# Prevent borders on left, right, and bottom from clashing/overlapping with the parent window border
+	style.set_border_width_all(0)
+	style.border_width_top = 1
+	# Adjust corner radius to fit inside the parent window's corner radius (RADIUS_LG - margins)
+	var inner_radius = max(0, theme.RADIUS_LG - 12)
+	style.set_corner_radius(0, 0) # CORNER_TOP_LEFT
+	style.set_corner_radius(1, 0) # CORNER_TOP_RIGHT
+	style.set_corner_radius(2, inner_radius) # CORNER_BOTTOM_RIGHT
+	style.set_corner_radius(3, inner_radius) # CORNER_BOTTOM_LEFT
+
 	custom_minimum_size.y = theme.MINI_PLAYER_HEIGHT
 
 	
-	# 2. Layout Container spacing
-	if has_node("VBox/HBox"):
-		$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_3)
+	# 2. Layout Container spacing is handled dynamically in _on_resized() based on width.
 		
 	# 3. Style all buttons similarly
 	var hover_bg := Color(1.0, 1.0, 1.0, 0.06) if is_dark else Color(0.0, 0.0, 0.0, 0.06)
@@ -202,6 +226,8 @@ func _on_progress_bar_value_changed(value: float) -> void:
 func _on_loading_track(is_loading: bool) -> void:
 	if loading_bar:
 		loading_bar.visible = is_loading
+	if progress_bar:
+		progress_bar.visible = !is_loading
 
 
 func _on_backward_btn_pressed() -> void:
@@ -232,3 +258,30 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion and _panel_dragging:
 		get_window().position += Vector2i(event.relative)
 		get_viewport().set_input_as_handled()
+
+
+func _on_resized() -> void:
+	if not is_inside_tree():
+		return
+	var theme := ThemeManager.current_theme
+	var w := size.x
+	
+	if w < 540:
+		if nav_library: nav_library.text = "♪"
+		if nav_search: nav_search.text = "⌕"
+		if nav_settings: nav_settings.text = "⚙"
+		if future_btn: future_btn.text = "⋯"
+		
+		if has_node("VBox/HBox"):
+			if w < 480:
+				$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_1) # 4px
+			else:
+				$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_2) # 8px
+	else:
+		if nav_library: nav_library.text = "♪ Library"
+		if nav_search: nav_search.text = "⌕ Search"
+		if nav_settings: nav_settings.text = "⚙ Settings"
+		if future_btn: future_btn.text = "⋯ More"
+		
+		if has_node("VBox/HBox"):
+			$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_3) # 12px

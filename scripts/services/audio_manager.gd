@@ -11,15 +11,23 @@ var current_playlist: Array[String] = []
 var current_track_index: int = -1
 var current_track_length: float
 var is_playing := false
+var _debounce_timer: Timer
 
 func _ready() -> void:
 	# Build out runtime child container component dynamically
 	player = AudioStreamPlayer.new()
 	add_child(player)
 	player.finished.connect(_on_track_finished)
+	
+	_debounce_timer = Timer.new()
+	_debounce_timer.one_shot = true
+	_debounce_timer.timeout.connect(_on_debounce_timeout)
+	add_child(_debounce_timer)
 
 ## Prepares a new track vector array queue context state
 func play_track(track_href: String, playlist: Array) -> void:
+	if _debounce_timer and not _debounce_timer.is_stopped():
+		_debounce_timer.stop()
 	current_playlist = Array(playlist, TYPE_STRING, &"", null)
 	current_track_index = current_playlist.find(track_href)
 	
@@ -109,15 +117,24 @@ func play_next() -> void:
 	if current_playlist.is_empty():
 		return
 	current_track_index = (current_track_index + 1) % current_playlist.size()
-	play_track(current_playlist[current_track_index], current_playlist)
+	_start_debounce()
 	
 func play_previous() -> void:
 	if current_playlist.is_empty():
 		return
 	# Subtract 1, add size() to ensure the result is positive before the modulo
 	current_track_index = (current_track_index - 1 + current_playlist.size()) % current_playlist.size()
-	play_track(current_playlist[current_track_index], current_playlist)
+	_start_debounce()
 
+func _start_debounce() -> void:
+	var track_href = current_playlist[current_track_index]
+	track_changed.emit(track_href.get_file().uri_decode())
+	_debounce_timer.start(3.0)
+
+func _on_debounce_timeout() -> void:
+	if current_playlist.is_empty() or current_track_index == -1:
+		return
+	_load_and_stream_remote_file(current_playlist[current_track_index])
 
 func scroll_track(value) -> void:
 	player.seek(value)
@@ -126,5 +143,5 @@ func _on_track_finished() -> void:
 	if current_playlist.is_empty() or current_track_index == -1:
 		return
 	# Loop playlist sequence
-	var next_index := (current_track_index + 1) % current_playlist.size()
-	_load_and_stream_remote_file(current_playlist[next_index])
+	current_track_index = (current_track_index + 1) % current_playlist.size()
+	_load_and_stream_remote_file(current_playlist[current_track_index])

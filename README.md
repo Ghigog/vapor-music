@@ -181,6 +181,14 @@ vapor-music/
 
 > 🚧 Early development — Godot project scaffolding in progress.
 >
+> **v1.6 (2026-06-02):** Redesigned track loading animation by confining the indeterminate loading progress bar to overlay exactly on top of the playback progress bar/scrubber track on mobile. Also implemented a custom vertical loading animation on the desktop vertical progress bar, where a themed loading circle dynamically travels up and down the separator track during track loading states.
+>
+> **v1.5 (2026-06-02):** Implemented a 3-second debounce timer on skip (next/previous) controls to avoid spamming network requests to the WebDAV server. The track metadata and UI now update instantly when skipping to provide a responsive interface, while the remote streaming requests are delayed until skipping stops. Direct track selection immediately cancels the timer and plays the song. Added full test coverage for the debounce logic in a new AudioManager test file. All 27 unit tests passing.
+>
+> **v1.4 (2026-06-02):** Implemented dynamic UI squeezing for the bottom player bar at narrow widths, switching button text to symbol-only mode and reducing spacing constraints dynamically. Lowered the minimum window size constraint to 380x400 to allow squeezing elements together to a minimum, and locked OS window resizing to prevent the player bar from coming off the panel. Removed side/bottom borders and aligned the bottom corner radius mathematically (`RADIUS_LG - margins = 12px`) to fit perfectly within the parent window frame. Added test coverage with all 25 unit tests passing.
+>
+> **v1.3 (2026-06-02):** Implemented a premium, Apple-quality glassmorphism shader (`assets/shaders/premium_glass.gdshader`) featuring dynamic SDF-based rounded borders, light source highlight/shadow shading, 1-pixel resolution-independent noise grain, and a backdrop saturation boost with a transparency fallback. Bound container dimensions and corner radius dynamically on window resize. All 24 unit tests passing.
+>
 > **v1.2 (2026-06-02):** Restructured playback controls. Replaced bottom horizontal mini-player on desktop with a top-to-bottom vertical progress bar running directly along the sidebar separator line, and square windows-style media control tiles in the sidebar footer. Repositioned mobile progress bar to sit horizontally at the top edge of the bottom panel. Implemented custom borderless window drag-to-move (via sidebar) and corner/edge drag-to-resize. All 23 unit tests passing.
 >
 > **v1.1 (2026-06-02):** Visual overhaul to Apple-inspired glassmorphism. New Vapor Dark and Vapor Light themes. Single-accent palette (`#007AFF` / `#0A84FF`). All 13 theme manager unit tests passing.
