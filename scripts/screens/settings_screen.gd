@@ -9,8 +9,8 @@ extends Control
 @onready var select_a_theme: Label = $"Center/Placeholder/Select a theme"
 @onready var theme_selector: OptionButton = $Center/Placeholder/ThemeSelector
 const THEME_MAP = {
-	"Default Dark" : "res://assets/themes/default_dark.tres",
-	"Light Mode" : "res://assets/themes/default_light.tres"
+	"Vapor Dark" : "res://assets/themes/default_dark.tres",
+	"Vapor Light" : "res://assets/themes/default_light.tres"
 }
 
 func _ready() -> void:

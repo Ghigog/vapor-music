@@ -56,9 +56,10 @@ func make_glass_panel(radius: int = current_theme.RADIUS_MD, alpha: float = 0.55
 	s.border_color = current_theme.GLASS_BORDER
 	s.set_border_width_all(1)
 	s.set_corner_radius_all(radius)
-	s.shadow_color = Color(0.024, 0.024, 0.039, 0.50)
-	s.shadow_size = 16
-	s.shadow_offset = Vector2(0, 4)
+	# Neutral dark shadow — disabled completely to match flat Apple widgets look.
+	s.shadow_color = Color(0.0, 0.0, 0.0, 0.0)
+	s.shadow_size = 0
+	s.shadow_offset = Vector2(0, 0)
 	return s
 
 
@@ -66,10 +67,18 @@ func make_glass_panel(radius: int = current_theme.RADIUS_MD, alpha: float = 0.55
 func make_nav_panel() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = current_theme.BG_BASE
-	# Hairline right-edge separator
-	s.border_color = Color(1.0, 1.0, 1.0, 0.05)
+	# Hairline right-edge separator — reads from theme so it inverts correctly
+	# between the dark and light glass palettes.
+	s.border_color = current_theme.GLASS_BORDER_SUBTLE
 	s.border_width_right = 1
 	s.set_corner_radius_all(0)
+	s.set_corner_radius(0, current_theme.RADIUS_LG) # CORNER_TOP_LEFT
+	s.set_corner_radius(3, current_theme.RADIUS_LG) # CORNER_BOTTOM_LEFT
+	
+	s.content_margin_left = 16
+	s.content_margin_top = 16
+	s.content_margin_right = 16
+	s.content_margin_bottom = 16
 	return s
 
 
@@ -86,7 +95,9 @@ func make_nav_item_active() -> StyleBoxFlat:
 ## Returns a StyleBoxFlat for a hovered-over navigation item.
 func make_nav_item_hover() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(1.0, 1.0, 1.0, 0.04)
+	# Use GLASS_TINT so the hover is a subtle warm-neutral wash in both modes
+	# rather than a hard-coded white that looks wrong on light backgrounds.
+	s.bg_color = current_theme.GLASS_TINT
 	s.set_corner_radius_all(current_theme.RADIUS_SM)
 	return s
 

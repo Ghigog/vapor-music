@@ -1,30 +1,31 @@
 ## mini_player.gd
-## Bottom UI controller component handling active state indicators and playback toggles.
-## Hooks into ThemeManager to dynamically adapt colors, fonts, sizes, and StyleBoxes.
+## Bottom UI controller component handling merged navigation and playback.
 extends Control
 
-# Hardened onready node paths referencing your exact scene tree hierarchy
-@onready var track_title_label: Label = $HBox/ProgressBar/TrackInfo/TrackTitle
-@onready var artist_label: Label = $HBox/ProgressBar/TrackInfo/ArtistLabel
-@onready var play_pause_btn: Button = $HBox/PlayPauseBtn
-@onready var progress_bar: HSlider = $HBox/ProgressBar
+@onready var progress_bar: HSlider = $VBox/ProgressBar
 @onready var loading_bar: ProgressBar = $LoadingBar
-@onready var album_art: Panel = $HBox/AlbumArt
-@onready var backward_btn: Button = $HBox/BackwardBtn
-@onready var forward_btn: Button = $HBox/ForwardBtn
+
+@onready var nav_library: Button = $VBox/HBox/NavLibrary
+@onready var nav_search: Button = $VBox/HBox/NavSearch
+@onready var backward_btn: Button = $VBox/HBox/BackwardBtn
+@onready var play_pause_btn: Button = $VBox/HBox/PlayPauseBtn
+@onready var forward_btn: Button = $VBox/HBox/ForwardBtn
+@onready var nav_settings: Button = $VBox/HBox/NavSettings
+@onready var future_btn: Button = $VBox/HBox/FutureBtn
 
 var dragging = false
+var _panel_dragging = false
 
 
 func _ready() -> void:
+	# Configure container mouse filters to pass clicks through to panel background for window dragging
+	$VBox.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/HBox.mouse_filter = Control.MOUSE_FILTER_PASS
+	
 	# Connect to our global audio singleton signals
-	AudioManager.track_changed.connect(_on_track_changed)
 	AudioManager.playback_toggled.connect(_on_playback_toggled)
 	AudioManager.loading_track.connect(_on_loading_track)
 	
-	if play_pause_btn:
-		play_pause_btn.pressed.connect(_on_play_pause_pressed)
-		
 	# Connect to dynamic ThemeManager updates
 	ThemeManager.theme_changed.connect(_apply_styles)
 	_apply_styles()
@@ -32,14 +33,14 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	if AudioManager.is_playing and !dragging:
-		progress_bar.value = AudioManager.player.get_playback_position()
+		if AudioManager.player and AudioManager.player.is_inside_tree():
+			progress_bar.value = AudioManager.player.get_playback_position()
 
 
 # ---------------------------------------------------------------------------
 # Theme System & Dynamic Styling
 # ---------------------------------------------------------------------------
 
-## Applies all visual tokens from the active ThemeManager theme to the miniplayer controls.
 func _apply_styles() -> void:
 	if not is_inside_tree():
 		return
@@ -47,24 +48,25 @@ func _apply_styles() -> void:
 	var theme := ThemeManager.current_theme
 	var is_dark := theme.BG_VOID.v < 0.5
 	
-	# 1. Root Container Style (Glass panel, --radius-lg)
-	add_theme_stylebox_override("panel", ThemeManager.make_glass_panel(theme.RADIUS_LG))
+	# 1. Root Container Style (Glass panel, rounded only at bottom corners to match main window)
+	var style = ThemeManager.make_glass_panel(0)
+	style.shadow_size = 0
+	style.set_corner_radius(2, theme.RADIUS_LG) # CORNER_BOTTOM_RIGHT
+	style.set_corner_radius(3, theme.RADIUS_LG) # CORNER_BOTTOM_LEFT
+	add_theme_stylebox_override("panel", style)
 	custom_minimum_size.y = theme.MINI_PLAYER_HEIGHT
+
 	
 	# 2. Layout Container spacing
-	if has_node("HBox"):
-		$HBox.add_theme_constant_override("separation", theme.SPACE_3)
+	if has_node("VBox/HBox"):
+		$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_3)
 		
-	# 3. Album Art Placeholder (Circular, 40x40)
-	if album_art:
-		album_art.add_theme_stylebox_override("panel", ThemeManager.make_circle_placeholder())
-		album_art.custom_minimum_size = Vector2(40, 40)
-		
-	# 4. Standard Navigation Buttons (Backward, Forward)
+	# 3. Style all buttons similarly
 	var hover_bg := Color(1.0, 1.0, 1.0, 0.06) if is_dark else Color(0.0, 0.0, 0.0, 0.06)
 	var pressed_bg := Color(1.0, 1.0, 1.0, 0.12) if is_dark else Color(0.0, 0.0, 0.0, 0.12)
 	
-	for btn in [backward_btn, forward_btn]:
+	var buttons = [nav_library, nav_search, backward_btn, play_pause_btn, forward_btn, nav_settings, future_btn]
+	for btn in buttons:
 		if btn:
 			btn.custom_minimum_size = Vector2(theme.TOUCH_TARGET_MIN, theme.TOUCH_TARGET_MIN)
 			btn.add_theme_font_override("font", theme.font_ui)
@@ -78,28 +80,8 @@ func _apply_styles() -> void:
 			btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
 			btn.add_theme_color_override("font_pressed_color", theme.ACCENT_DIM)
 			btn.add_theme_color_override("font_focus_color", theme.TEXT_SECONDARY)
-			
-	# 5. Play/Pause Button (Signature styled circular button per §7.3)
-	if play_pause_btn:
-		play_pause_btn.custom_minimum_size = Vector2(theme.TOUCH_TARGET_MIN, theme.TOUCH_TARGET_MIN)
-		play_pause_btn.add_theme_font_override("font", theme.font_ui)
-		play_pause_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
-		
-		var play_normal := _make_circle_button_style(theme.ACCENT_SURFACE, theme.ACCENT_CORE)
-		var play_hover := _make_circle_button_style(theme.ACCENT_SURFACE * 1.5, theme.ACCENT_BRIGHT)
-		var play_pressed := _make_circle_button_style(theme.ACCENT_SURFACE * 0.8, theme.ACCENT_DIM)
-		
-		play_pause_btn.add_theme_stylebox_override("normal", play_normal)
-		play_pause_btn.add_theme_stylebox_override("hover", play_hover)
-		play_pause_btn.add_theme_stylebox_override("pressed", play_pressed)
-		play_pause_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
-		
-		play_pause_btn.add_theme_color_override("font_color", theme.ACCENT_BRIGHT)
-		play_pause_btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
-		play_pause_btn.add_theme_color_override("font_pressed_color", theme.ACCENT_DIM)
-		play_pause_btn.add_theme_color_override("font_focus_color", theme.ACCENT_BRIGHT)
 
-	# 6. Scrubber Bar (HSlider / progress_bar)
+	# 4. Scrubber Bar (HSlider / progress_bar)
 	if progress_bar:
 		var slider_bg := StyleBoxFlat.new()
 		slider_bg.bg_color = Color(1.0, 1.0, 1.0, 0.12) if is_dark else Color(0.0, 0.0, 0.0, 0.12)
@@ -128,13 +110,14 @@ func _apply_styles() -> void:
 		slider_fill_hl.set_corner_radius_all(theme.RADIUS_PILL)
 		progress_bar.add_theme_stylebox_override("grabber_area_highlight", slider_fill_hl)
 		
-		# Custom generated circle textures for the grabber thumb (invisible at rest, 14px on hover)
-		var grabber_normal := _create_circle_texture(3, Color(0, 0, 0, 0))
+		# Custom generated circle textures for the grabber thumb (visible at rest, scales on hover)
+		var grabber_normal := _create_circle_texture(4, theme.ACCENT_CORE)
 		var grabber_hover := _create_circle_texture(7, theme.ACCENT_BRIGHT)
 		progress_bar.add_theme_icon_override("grabber", grabber_normal)
 		progress_bar.add_theme_icon_override("grabber_highlight", grabber_hover)
 
-	# 7. LoadingBar (ProgressBar)
+
+	# 5. LoadingBar (ProgressBar)
 	if loading_bar:
 		var loading_bg := StyleBoxFlat.new()
 		loading_bg.bg_color = Color(1.0, 1.0, 1.0, 0.05) if is_dark else Color(0.0, 0.0, 0.0, 0.05)
@@ -146,30 +129,18 @@ func _apply_styles() -> void:
 		loading_fill.set_corner_radius_all(theme.RADIUS_PILL)
 		loading_bar.add_theme_stylebox_override("fill", loading_fill)
 
-	# 8. Typography and Labels (TrackTitle, ArtistLabel)
-	if track_title_label:
-		track_title_label.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
-		track_title_label.add_theme_font_override("font", theme.font_ui)
-		track_title_label.add_theme_font_size_override("font_size", theme.TYPE_SM)
-		
-	if artist_label:
-		artist_label.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
-		artist_label.add_theme_font_override("font", theme.font_ui)
-		artist_label.add_theme_font_size_override("font_size", theme.TYPE_XS)
 
-
-## Returns a circular flat StyleBox for button highlights.
-func _make_circle_button_style(bg_color: Color, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
+func _make_circle_button_style(bg_color: Color, border_color: Color = Color.TRANSPARENT, margin_left: int = 0) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = bg_color
 	s.border_color = border_color
 	if border_color != Color.TRANSPARENT:
 		s.set_border_width_all(1)
 	s.set_corner_radius_all(ThemeManager.current_theme.RADIUS_PILL)
+	s.content_margin_left = margin_left
 	return s
 
 
-## Generates a smooth, antialiased circular texture of a given radius and color.
 func _create_circle_texture(radius: int, color: Color) -> ImageTexture:
 	var size := radius * 2
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
@@ -183,28 +154,24 @@ func _create_circle_texture(radius: int, color: Color) -> ImageTexture:
 
 
 # ---------------------------------------------------------------------------
-# Audio / Signal Event Handlers
+# Navigation Click Handlers
 # ---------------------------------------------------------------------------
 
-func _on_track_changed(track_name: String) -> void:
-	if track_title_label:
-		# If the filename contains a long prefix like "Vanilla - Origin - ", 
-		# we clean it up so just the song title displays nicely in the small bar!
-		var clean_name := track_name
-		var artist_name := ""
-		if " - " in track_name:
-			var parts := track_name.split(" - ")
-			clean_name = parts[parts.size() - 1] # Grabs just the song name at the end
-			if parts.size() > 1:
-				# Assemble artist name from previous parts
-				artist_name = parts[0]
-				for i in range(1, parts.size() - 1):
-					artist_name += " - " + parts[i]
-			
-		track_title_label.text = clean_name
-		if artist_label:
-			artist_label.text = artist_name if artist_name != "" else "Unknown Artist"
+func _on_nav_library_pressed() -> void:
+	NavManager.navigate_to("library")
 
+
+func _on_nav_search_pressed() -> void:
+	NavManager.navigate_to("search")
+
+
+func _on_nav_settings_pressed() -> void:
+	NavManager.navigate_to("settings")
+
+
+# ---------------------------------------------------------------------------
+# Audio / Playback Handlers
+# ---------------------------------------------------------------------------
 
 func _on_playback_toggled(is_playing: bool) -> void:
 	progress_bar.max_value = AudioManager.current_track_length
@@ -228,6 +195,10 @@ func _on_progress_bar_drag_ended(value_changed: bool) -> void:
 	AudioManager.scroll_track(progress_bar.value)
 
 
+func _on_progress_bar_value_changed(value: float) -> void:
+	pass
+
+
 func _on_loading_track(is_loading: bool) -> void:
 	if loading_bar:
 		loading_bar.visible = is_loading
@@ -239,3 +210,25 @@ func _on_backward_btn_pressed() -> void:
 
 func _on_forward_btn_pressed() -> void:
 	AudioManager.play_next()
+
+
+# ---------------------------------------------------------------------------
+# Bottom Bar Window Dragging
+# ---------------------------------------------------------------------------
+
+func _gui_input(event: InputEvent) -> void:
+	if not PlatformManager.is_desktop():
+		return
+		
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_panel_dragging = true
+				get_viewport().set_input_as_handled()
+			else:
+				if _panel_dragging:
+					_panel_dragging = false
+					get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _panel_dragging:
+		get_window().position += Vector2i(event.relative)
+		get_viewport().set_input_as_handled()

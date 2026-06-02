@@ -28,12 +28,12 @@ All variables are declared in `res://assets/theme_data.gd` and categorized as su
 
 ### Base Categories
 
-- **Background Layers**: `BG_VOID` (opaque background), `BG_BASE` (sidebars/nav bars), `BG_ELEVATED` (cards), `BG_FLOAT` (modals/popups), `BG_GLASS` (semi-transparent frosted material base).
-- **Glass Surfaces**: `GLASS_TINT`, `GLASS_BORDER` (top-left highlighting), `GLASS_BORDER_SUBTLE`, `GLASS_SHIMMER` (gloss gradient), `GLASS_BLUR` (24px std blur).
-- **Text Hierarchy**: `TEXT_PRIMARY` (headings), `TEXT_SECONDARY` (artists, subtitles), `TEXT_TERTIARY` (hints, timestamps), `TEXT_DISABLED` (inactive state), `TEXT_INVERSE` (dark text on light accents).
-- **Primary Accent ("Aurora Blue-Violet")**: `ACCENT_CORE`, `ACCENT_BRIGHT`, `ACCENT_DIM`, `ACCENT_GLOW`, `ACCENT_SURFACE`.
-- **Secondary Accent ("Vapor Aqua")**: `AQUA_CORE` (waveform visualizer, loading, cloud sync), `AQUA_DIM`, `AQUA_GLOW`.
-- **Semantic States**: `SEMANTIC_SUCCESS`, `SEMANTIC_WARNING`, `SEMANTIC_ERROR`, `SEMANTIC_INFO`.
+- **Background Layers**: `BG_VOID` (fully opaque background — charcoal `#141414` dark / `#F5F5F7` light), `BG_BASE` (sidebars/nav bars), `BG_ELEVATED` (cards), `BG_FLOAT` (modals/popups), `BG_GLASS` (semi-transparent frosted material base — 55% charcoal dark / 50% white light).
+- **Glass Surfaces**: `GLASS_TINT` (barely perceptible surface wash), `GLASS_BORDER` (top-left edge highlight — white 15% dark / white 80% light), `GLASS_BORDER_SUBTLE` (lower/right edge — white 6% dark / black 6% light), `GLASS_SHIMMER` (gloss gradient), `GLASS_BLUR` (24px std blur).
+- **Text Hierarchy**: `TEXT_PRIMARY` (pure white in dark / near-black `#262626` in light), `TEXT_SECONDARY` (white 60% dark / `#8E8E93` Apple grey light), `TEXT_TERTIARY` (hints, timestamps), `TEXT_DISABLED` (inactive state), `TEXT_INVERSE` (inverted text on accent surfaces).
+- **Primary Accent ("Apple System Blue")**: `ACCENT_CORE` (`#0A84FF` dark / `#007AFF` light), `ACCENT_BRIGHT`, `ACCENT_DIM`, `ACCENT_GLOW`, `ACCENT_SURFACE`. Single accent — no competing secondary colour.
+- **Secondary Accent (`AQUA_*`)**: Token group retained for API compatibility. In all default themes, `AQUA_*` values alias the blue accent family. Custom themes may override to a distinct colour.
+- **Semantic States**: `SEMANTIC_SUCCESS`, `SEMANTIC_WARNING`, `SEMANTIC_ERROR`, `SEMANTIC_INFO` — unchanged, always used as glows/tints, never flat blocks.
 - **Radius Scale (px)**: `RADIUS_XS` (6px) through `RADIUS_PILL` (9999px).
 - **Spacing Scale (4px grid)**: `SPACE_1` (4px) through `SPACE_16` (64px).
 - **Typography Scale (px)**: `TYPE_2XS` (11px) through `TYPE_DISPLAY` (48px).
@@ -144,7 +144,10 @@ Execute the headless runner to perform diagnostic checks on ascending scales, al
 
 ### Verified Assertions
 
-- Background alphas: VOID and BASE must remain fully opaque (1.0), while GLASS remains semi-transparent (< 1.0).
-- Ascent curves: Spacing scales, typography sizes, and corner radius measures must ascend strictly to preserve responsive scales.
-- Primary text colors: Must stay within high-contrast ranges (near-white in dark mode).
-- Typography fallbacks: SystemFont structures must be fully initialized.
+- **Background alphas**: `BG_VOID` and `BG_BASE` must remain fully opaque (alpha = 1.0); `BG_GLASS` must be semi-transparent (alpha < 1.0).
+- **Ascent curves**: Spacing scales, typography sizes, and corner radius measures must ascend strictly to preserve responsive scales.
+- **Dark mode primary text**: `TEXT_PRIMARY` must be near-white (all channels > 0.9) — verified against the default dark theme.
+- **Light mode primary text**: `TEXT_PRIMARY` in `default_light.tres` must be near-black (all channels < 0.2) — separate test loads the light resource directly.
+- **Accent — Apple System Blue**: `ACCENT_CORE.b > 0.9` (blue dominant), `ACCENT_CORE.g < ACCENT_CORE.b`, and `ACCENT_CORE.r < 0.1` (near-zero red, distinguishes pure blue from the former blue-violet `#7B6EF6`).
+- **Typography fallbacks**: SystemFont structures must be fully initialized.
+- **Touch targets**: `TOUCH_TARGET_MIN` must be ≥ 44px (Apple HIG / WCAG).

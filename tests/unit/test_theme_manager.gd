@@ -5,23 +5,36 @@ extends GutTest
 
 
 func test_background_colors_have_correct_alpha() -> void:
-	assert_eq(ThemeManager.current_theme.BG_VOID.a,  1.0, "BG_VOID must be fully opaque")
-	assert_eq(ThemeManager.current_theme.BG_BASE.a,  1.0, "BG_BASE must be fully opaque")
+	assert_eq(ThemeManager.current_theme.BG_VOID.a,  0.0, "BG_VOID must be fully transparent")
+	assert_lt(ThemeManager.current_theme.BG_BASE.a,  1.0, "BG_BASE must be semi-transparent/translucent")
 	assert_lt(ThemeManager.current_theme.BG_GLASS.a, 1.0, "BG_GLASS must be semi-transparent")
 
 
-func test_accent_core_is_blue_violet() -> void:
-	# #7B6EF6 — hue sits between blue and violet.
+func test_accent_core_is_system_blue() -> void:
+	# #0A84FF (dark) / #007AFF (light) — Apple System Blue.
+	# Red channel is near-zero, distinguishing it from the old blue-violet (#7B6EF6).
 	var c := ThemeManager.current_theme.ACCENT_CORE
-	assert_gt(c.b, 0.9, "Accent blue channel should dominate")
-	assert_lt(c.g, c.b, "Accent green channel should be less than blue")
+	assert_gt(c.b, 0.9, "Accent blue channel must dominate")
+	assert_lt(c.g, c.b, "Accent green channel must be less than blue")
+	assert_lt(c.r, 0.1, "Accent red channel must be near-zero (pure blue, not blue-violet)")
 
 
 func test_text_primary_is_near_white() -> void:
+	# The default dark theme (Vapor Dark) must have near-white primary text.
 	var c := ThemeManager.current_theme.TEXT_PRIMARY
 	assert_gt(c.r, 0.9, "TEXT_PRIMARY red channel near 1")
 	assert_gt(c.g, 0.9, "TEXT_PRIMARY green channel near 1")
 	assert_gt(c.b, 0.9, "TEXT_PRIMARY blue channel near 1")
+
+
+func test_light_theme_text_primary_is_near_black() -> void:
+	# Vapor Light uses near-black (#262626) for primary text — opposite of dark mode.
+	var light := load("res://assets/themes/default_light.tres") as ThemeData
+	assert_not_null(light, "default_light.tres must load as ThemeData")
+	var c := light.TEXT_PRIMARY
+	assert_lt(c.r, 0.2, "Light TEXT_PRIMARY red must be near-zero (near-black)")
+	assert_lt(c.g, 0.2, "Light TEXT_PRIMARY green must be near-zero (near-black)")
+	assert_lt(c.b, 0.2, "Light TEXT_PRIMARY blue must be near-zero (near-black)")
 
 
 func test_text_hierarchy_alpha_descending() -> void:

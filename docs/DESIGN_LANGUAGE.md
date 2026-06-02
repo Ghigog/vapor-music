@@ -10,15 +10,13 @@
 
 ## 1. Design Philosophy
 
-### The Aesthetic: Modern Frutiger Aero × Apple Glassmorphism
+### The Aesthetic: Apple Glassmorphism × Modern Minimalism
 
-Vapor Music exists at the intersection of two design lineages:
+Vapor Music's primary design lineage is **Apple's evolving material language** — from macOS Big Sur through to visionOS. This means: frosted glass, layered depth, ambient light bleeding through surfaces, and a ruthless commitment to letting the content (the music) be the hero. The UI recedes; the music leads.
 
-**Frutiger Aero** (ca. 2004–2013) was the last era of computing where software felt *alive*. It was optimistic. It had depth, light, translucency, organic curves, and a sense that you were interacting with something physical — something that existed in space. Reflections, gloss, bokeh, soft glows. It was joyful.
+**Frutiger Aero** (ca. 2004–2013) remains a cherished secondary inspiration — the era of software that felt *alive*, with warmth, organic curves, and physical presence. But we filter those feelings through Apple's modern restraint, not reproduce them.
 
-**Apple Glassmorphism** (macOS Big Sur → present) is the mature, restrained evolution of those ideas. It strips away the excess — the heavy drop shadows, the aggressive chrome — and distills the feeling into pure material: frosted glass, layered depth, ambient light bleeding through surfaces.
-
-Vapor synthesizes both. We take Frutiger Aero's **warmth, life, and sense of physical presence** and filter it through Apple's **restraint, whitespace, and material precision**. The result is a UI that feels:
+The result is a UI that feels:
 
 - **Alive** — surfaces breathe, elements respond, light moves
 - **Tactile** — glass has weight, buttons have depth, sliders have resistance
@@ -44,94 +42,89 @@ Color in Vapor is *atmospheric*, not decorative. We do not use color to signal b
 3. Indicate **interactive state** without aggression
 4. Create **ambient warmth** in an otherwise cool glass material
 
-### 2.2 Base Palette — Dark Mode (Primary)
+### 2.2 Base Palette — Dark Mode ("Vapor Dark")
 
-Dark mode is the primary and default experience. It is not "dark mode" in the corporate accessibility-checkbox sense — it is the *intended* environment, like a darkened listening room where the music takes center stage.
+Dark mode is the primary and default experience. Built on deep charcoal with pure-white text and a single Apple system-blue accent — clean, professional, and at home on any desktop.
 
 #### Background Layers
 
-| Token | Hex | HSL | Usage |
+| Token | Hex | Opacity | Usage |
 |---|---|---|---|
-| `--bg-void` | `#06060A` | `240° 25% 4%` | True background. Behind everything. The "room." |
-| `--bg-base` | `#0D0D14` | `240° 25% 6%` | Primary app surface. Navigation bars, sidebars. |
-| `--bg-elevated` | `#12121C` | `240° 20% 9%` | Card backgrounds. Slightly elevated surfaces. |
-| `--bg-float` | `#1A1A28` | `240° 22% 13%` | Modals, drawers, overlay panels. |
-| `--bg-glass` | `rgba(18, 18, 28, 0.55)` | — | The frosted glass base. Applied with `backdrop-filter: blur`. |
+| `BG_VOID` | `#141414` | 100% | True background. Behind everything. |
+| `BG_BASE` | `#1E1E1E` | 100% | Primary app surface. Navigation bars, sidebars. |
+| `BG_ELEVATED` | `#282828` | 100% | Card backgrounds. Slightly elevated surfaces. |
+| `BG_FLOAT` | `#333333` | 100% | Modals, drawers, overlay panels. |
+| `BG_GLASS` | `#1E1E1E` | 55% | Frosted glass base. Applied with backdrop blur. |
 
 #### Glass Surface Tints
 
-Glass panels are not neutral. They carry a subtle cool-blue tint — the color of light passing through ice.
-
 | Token | Value | Usage |
 |---|---|---|
-| `--glass-tint` | `rgba(120, 140, 255, 0.04)` | Overlay on every frosted surface |
-| `--glass-border` | `rgba(255, 255, 255, 0.10)` | Top/left edge highlight (simulates light hitting glass) |
-| `--glass-border-subtle` | `rgba(255, 255, 255, 0.05)` | Bottom/right edge shadow |
-| `--glass-shimmer` | `rgba(255, 255, 255, 0.06)` | Subtle gradient sheen across glass panels |
-| `--glass-blur` | `24px` | Standard backdrop blur radius |
-| `--glass-blur-heavy` | `40px` | For primary modals and Now Playing full-screen |
+| `GLASS_TINT` | `rgba(255, 255, 255, 0.03)` | Barely perceptible white wash over frosted surfaces |
+| `GLASS_BORDER` | `rgba(255, 255, 255, 0.15)` | Top/left edge highlight (simulates light hitting glass) |
+| `GLASS_BORDER_SUBTLE` | `rgba(255, 255, 255, 0.06)` | Bottom/right edge shadow |
+| `GLASS_SHIMMER` | `rgba(255, 255, 255, 0.05)` | Subtle gradient sheen across glass panels |
+| `GLASS_BLUR` | `24px` | Standard backdrop blur radius |
+| `GLASS_BLUR_HEAVY` | `40px` | For primary modals and Now Playing full-screen |
 
 #### Text Colors
 
+| Token | Hex | Opacity | Usage |
+|---|---|---|---|
+| `TEXT_PRIMARY` | `#FFFFFF` | 100% | Headings, track titles, primary labels. |
+| `TEXT_SECONDARY` | `#FFFFFF` | 60% — `#999999` | Artist names, subtitles, secondary metadata. |
+| `TEXT_TERTIARY` | `#FFFFFF` | 35% | Timestamps, inactive tabs, hints. |
+| `TEXT_DISABLED` | `#FFFFFF` | 18% | Disabled states. |
+| `TEXT_INVERSE` | `#141414` | 100% | Text on light/accent surfaces. |
+
+#### Accent — "Apple System Blue"
+
+A single, professional cool blue. No secondary accent competes for attention.
+
 | Token | Hex | Usage |
 |---|---|---|
-| `--text-primary` | `#F0F0FF` | Headings, track titles, primary labels. Warm cool white. |
-| `--text-secondary` | `rgba(240, 240, 255, 0.65)` | Artist names, subtitles, secondary metadata. |
-| `--text-tertiary` | `rgba(240, 240, 255, 0.35)` | Timestamps, inactive tabs, hints. |
-| `--text-disabled` | `rgba(240, 240, 255, 0.18)` | Disabled states. |
-| `--text-inverse` | `#06060A` | Text on light/accent surfaces. |
+| `ACCENT_CORE` | `#0A84FF` | Primary interactive elements, active states, progress. |
+| `ACCENT_BRIGHT` | `#42A4FF` | Hover states, focus rings, highlights. |
+| `ACCENT_DIM` | `#0066DE` | Pressed states, deep accents. |
+| `ACCENT_GLOW` | `rgba(10, 132, 255, 0.35)` | Box shadows, ambient glow effects. |
+| `ACCENT_SURFACE` | `rgba(10, 132, 255, 0.12)` | Tinted glass panels, selected states. |
 
-#### Accent — "Aurora Blue-Violet"
+#### Secondary Accent
 
-The primary accent is not a pure blue and not a pure purple. It sits exactly at the boundary — the color of the sky just before a full aurora appears.
-
-| Token | Hex | HSL | Usage |
-|---|---|---|---|
-| `--accent-core` | `#7B6EF6` | `245° 87% 70%` | Primary interactive elements, active states, progress. |
-| `--accent-bright` | `#9B8EFF` | `247° 100% 78%` | Hover states, focus rings, highlights. |
-| `--accent-dim` | `#5A4ED4` | `245° 63% 57%` | Pressed states, deep accents. |
-| `--accent-glow` | `rgba(123, 110, 246, 0.35)` | — | Box shadows, ambient glow effects. |
-| `--accent-surface` | `rgba(123, 110, 246, 0.12)` | — | Tinted glass panels, selected states. |
-
-#### Secondary Accent — "Vapor Aqua"
-
-A nod to Frutiger Aero's aqua heritage. Used sparingly — for the waveform visualizer, AI DJ mode indicator, and cloud sync status.
-
-| Token | Hex | HSL | Usage |
-|---|---|---|---|
-| `--aqua-core` | `#3DD6C8` | `175° 67% 54%` | Waveform, AI DJ pulse, sync animation. |
-| `--aqua-dim` | `#2AA89C` | `175° 60% 41%` | Pressed aqua states. |
-| `--aqua-glow` | `rgba(61, 214, 200, 0.30)` | — | Waveform glow, sync ring glow. |
+The `AQUA_*` token group is retained for API compatibility but aliased to the blue accent family in all default themes. Custom themes may override it.
 
 #### Semantic Colors
 
 | Token | Hex | Usage |
 |---|---|---|
-| `--semantic-success` | `#34D399` | Sync complete, track loaded, analysis done. |
-| `--semantic-warning` | `#FBBF24` | Offline mode indicator, sync conflict. |
-| `--semantic-error` | `#F87171` | Playback failure, auth error. |
-| `--semantic-info` | `#60A5FA` | General informational toasts. |
+| `SEMANTIC_SUCCESS` | `#34D399` | Sync complete, track loaded, analysis done. |
+| `SEMANTIC_WARNING` | `#FBBF24` | Offline mode indicator, sync conflict. |
+| `SEMANTIC_ERROR` | `#F87171` | Playback failure, auth error. |
+| `SEMANTIC_INFO` | `#60A5FA` | General informational toasts. |
 
 All semantic colors are used as glows and tinted surfaces — never as flat, saturated blocks.
 
 ---
 
-### 2.3 Light Mode — "Daylight Glass"
+### 2.3 Light Mode — "Vapor Light"
 
-Light mode is available but secondary. It is not "inverted dark mode." It is its own aesthetic — like a glass building on a clear afternoon.
+Light mode is available and fully supported. Built on Apple's `#F5F5F7` system grey with pure-white frosted panels and a single `#007AFF` accent. It adapts seamlessly to any wallpaper and feels native on macOS.
 
-| Token | Hex | HSL | Usage |
+| Token | Hex | Opacity | Usage |
 |---|---|---|---|
-| `--bg-void` | `#E8EAF2` | `230° 20% 87%` | Background. Pale blue-grey sky. |
-| `--bg-base` | `#F0F2FA` | `230° 40% 96%` | Primary surface. |
-| `--bg-elevated` | `#FFFFFF` | — | Cards. Pure white glass. |
-| `--bg-glass` | `rgba(255, 255, 255, 0.55)` | — | Frosted glass, light mode variant. |
-| `--glass-border` | `rgba(255, 255, 255, 0.80)` | — | Glass edge highlight. |
-| `--text-primary` | `#1A1A2E` | — | Deep navy. Not pure black. |
-| `--text-secondary` | `rgba(26, 26, 46, 0.60)` | — | Secondary text. |
-| `--text-tertiary` | `rgba(26, 26, 46, 0.35)` | — | Tertiary text. |
+| `BG_VOID` | `#F5F5F7` | 100% | Background. Apple system light grey. |
+| `BG_BASE` | `#F9F9F9` | 100% | Primary surface. |
+| `BG_ELEVATED` | `#FFFFFF` | 100% | Cards. Pure white glass. |
+| `BG_GLASS` | `#FFFFFF` | 50% | Frosted glass, light mode variant. |
+| `GLASS_BORDER` | `#FFFFFF` | 80% | Glass edge highlight — crisp top/left edge. |
+| `GLASS_BORDER_SUBTLE` | `#000000` | 6% | Soft lower/right edge for depth. |
+| `TEXT_PRIMARY` | `#262626` | 100% | Near-black. Crisp and readable. |
+| `TEXT_SECONDARY` | `#8E8E93` | 100% | Apple cool medium grey. Soft but legible. |
+| `TEXT_TERTIARY` | `#8E8E93` | 60% | Tertiary text. |
+| `TEXT_DISABLED` | `#8E8E93` | 30% | Disabled states. |
+| `ACCENT_CORE` | `#007AFF` | 100% | Apple Light System Blue. |
 
-Accents remain identical between modes.
+Accent family and semantic colors follow the same pattern as dark mode.
 
 ---
 
@@ -146,6 +139,7 @@ This is one of Vapor's signature touches. When a track is playing, the app extra
 - Transition duration: `1200ms` ease-in-out when track changes
 - Cap saturation at 60% HSL to prevent garish results
 - Never override semantic colors or the primary accent with extracted colors
+- The dynamic accent always blends within the blue family — it does not override `ACCENT_CORE`
 
 ```
 Album Art → Color Extraction → Desaturate + Cool Shift → Ambient Bloom
@@ -273,10 +267,10 @@ Every frosted glass panel is built from the same stack of layers:
   position: absolute;
   inset: 0;
   background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.06) 0%,
-    transparent 50%,
-    rgba(255, 255, 255, 0.02) 100%
+	135deg,
+	rgba(255, 255, 255, 0.06) 0%,
+	transparent 50%,
+	rgba(255, 255, 255, 0.02) 100%
   );
   border-radius: inherit;
   pointer-events: none;
@@ -621,19 +615,29 @@ TYPEFACES
   UI:         Inter (400, 500, 600)
   Technical:  JetBrains Mono (400, 500)
 
-ACCENTS
-  Primary:    #7B6EF6  (Aurora Blue-Violet)
-  Secondary:  #3DD6C8  (Vapor Aqua)
+ACCENTS (single-accent system)
+  Primary (Dark):   #0A84FF  (Apple Dark System Blue)
+  Primary (Light):  #007AFF  (Apple Light System Blue)
 
-TEXT
-  Primary:    #F0F0FF
-  Secondary:  rgba(240,240,255,0.65)
-  Tertiary:   rgba(240,240,255,0.35)
+TEXT — DARK MODE
+  Primary:    #FFFFFF  (full opacity)
+  Secondary:  #FFFFFF  at 60%  → #999999
+  Tertiary:   #FFFFFF  at 35%
 
-GLASS
-  Base:       rgba(18,18,28,0.55)  blur(24px)
-  Border:     rgba(255,255,255,0.10)
-  Shimmer:    135deg gradient, 0%→6% white
+TEXT — LIGHT MODE
+  Primary:    #262626  (near-black, 85% black)
+  Secondary:  #8E8E93  (Apple cool medium grey)
+  Tertiary:   #8E8E93  at 60%
+
+GLASS — DARK MODE
+  Base:       rgba(30, 30, 30, 0.55)  blur(24px)
+  Border:     rgba(255, 255, 255, 0.15)
+  Shimmer:    135deg gradient, 0%→5% white
+
+GLASS — LIGHT MODE
+  Base:       rgba(255, 255, 255, 0.50)  blur(24px)
+  Border:     rgba(255, 255, 255, 0.80)
+  Lower edge: rgba(0, 0, 0, 0.06)
 
 RADIUS
   Standard card:  16px
@@ -657,3 +661,4 @@ MOTION
 | Date | Version | Change |
 |---|---|---|
 | 2026-05-21 | 1.0 | Initial design language established |
+| 2026-06-02 | 1.1 | Migrated to Apple Glassmorphism palette. Single blue accent (#007AFF / #0A84FF). Retired dual-accent (Aurora + Aqua) in default themes. Updated all colour tables, Appendix A, and §2.3 light mode. |

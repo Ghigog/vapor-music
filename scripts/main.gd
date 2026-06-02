@@ -17,34 +17,81 @@ extends Control
 # ---------------------------------------------------------------------------
 
 @onready var background:       ColorRect = $Background
-@onready var sidebar:          Control   = $Sidebar
-@onready var content_frame:    Control   = $ContentFrame
-@onready var screen_container: Control   = $ContentFrame/ScreenContainer
-@onready var mini_player:      Control   = $MiniPlayer
-@onready var tab_bar:          Control   = $TabBar
+@onready var app_window_frame: PanelContainer = $AppWindowFrame
+@onready var sidebar:          Control   = $AppWindowFrame/LayoutRoot/Sidebar
+@onready var content_frame:    Control   = $AppWindowFrame/LayoutRoot/ContentFrame
+@onready var screen_container: Control   = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer
+@onready var mini_player:      Control   = $AppWindowFrame/LayoutRoot/MiniPlayer
 @onready var setup_wizard:     Control   = $SetupWizard
 
+
 # Screens — all present in the scene tree; only one is visible at a time.
-@onready var library_screen:  Control = $ContentFrame/ScreenContainer/LibraryScreen
-@onready var search_screen:   Control = $ContentFrame/ScreenContainer/SearchScreen
-@onready var settings_screen: Control = $ContentFrame/ScreenContainer/SettingsScreen
+@onready var library_screen:  Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/LibraryScreen
+@onready var search_screen:   Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/SearchScreen
+@onready var settings_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/SettingsScreen
 
 ## Maps screen name strings to their scene-tree Control nodes.
 var _screens: Dictionary = {}
+
+# Window resizing variables
+const RESIZE_BORDER = 12
+const MIN_WINDOW_SIZE = Vector2i(480, 400)
+
+
+var _is_resizing := false
+var _resize_mode := ""
+var _start_mouse_pos := Vector2i()
+var _start_window_position := Vector2i()
+var _start_window_size := Vector2i()
+
+@onready var vertical_progress: Control = $AppWindowFrame/LayoutRoot/VerticalProgress
+
 
 
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 
+var _vp_dragging := false
+
 func _ready() -> void:
 	_register_screens()
 	_apply_background()
 	_connect_signals()
+	_connect_vp_signals()
+	if PlatformManager.is_desktop():
+		_create_resize_handles()
 	_update_layout()
 	# Show the default screen without pushing history.
 	_show_screen(NavManager.current_screen)
 	_check_setup()
+
+func _connect_vp_signals() -> void:
+	if not vertical_progress:
+		return
+	vertical_progress.drag_started.connect(func(): _vp_dragging = true)
+	vertical_progress.drag_ended.connect(func(_val_changed):
+		_vp_dragging = false
+		AudioManager.scroll_track(vertical_progress.value)
+	)
+	vertical_progress.value_changed.connect(func(new_val):
+		if _vp_dragging:
+			# If dragging, optionally update audio position or let drag_ended handle it.
+			pass
+	)
+	AudioManager.track_changed.connect(func(_name):
+		vertical_progress.max_value = AudioManager.current_track_length
+		vertical_progress.value = 0.0
+	)
+	AudioManager.playback_toggled.connect(func(_is_playing):
+		vertical_progress.max_value = AudioManager.current_track_length
+	)
+func _process(_delta: float) -> void:
+	if PlatformManager.is_desktop() and vertical_progress and vertical_progress.visible and AudioManager.is_playing and not _vp_dragging:
+		if AudioManager.player and AudioManager.player.is_inside_tree():
+			vertical_progress.value = AudioManager.player.get_playback_position()
+
+
 
 func _check_setup() -> void:
 	if SettingsManager.has_credentials():
@@ -77,6 +124,20 @@ func _register_screens() -> void:
 
 func _apply_background() -> void:
 	background.color = ThemeManager.current_theme.BG_VOID
+	
+	# Apply glass panel style box to AppWindowFrame
+	var glass_style = ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_LG, 0.55)
+	app_window_frame.add_theme_stylebox_override("panel", glass_style)
+	
+	# Load and assign our custom glass shader
+	var shader = load("res://assets/shaders/vapor_glass.gdshader") as Shader
+	if shader:
+		var mat = ShaderMaterial.new()
+		mat.shader = shader
+		mat.set_shader_parameter("blur_amount", 2.5)
+		mat.set_shader_parameter("grain_amount", 0.03)
+		mat.set_shader_parameter("edge_highlight", 0.15)
+		app_window_frame.material = mat
 
 
 func _connect_signals() -> void:
@@ -102,12 +163,11 @@ func _update_layout() -> void:
 ## Desktop layout: sidebar pinned to the left, content fills the remainder.
 func _apply_desktop_layout() -> void:
 	var sw  := float(ThemeManager.current_theme.SIDEBAR_WIDTH)
-	var mph := float(ThemeManager.current_theme.MINI_PLAYER_HEIGHT)
 
 	sidebar.visible   = true
-	tab_bar.visible   = false
+	mini_player.visible = false
 
-	# Content frame: starts at sidebar right-edge, ends above mini-player.
+	# Content frame: starts at sidebar right-edge, spans full height
 	content_frame.anchor_left   = 0.0
 	content_frame.anchor_top    = 0.0
 	content_frame.anchor_right  = 1.0
@@ -115,28 +175,28 @@ func _apply_desktop_layout() -> void:
 	content_frame.offset_left   = sw
 	content_frame.offset_top    = 0.0
 	content_frame.offset_right  = 0.0
-	content_frame.offset_bottom = -mph
+	content_frame.offset_bottom = 0.0
 
-	# Mini-player: anchored to the bottom, to the right of the sidebar.
-	mini_player.anchor_left   = 0.0
-	mini_player.anchor_top    = 1.0
-	mini_player.anchor_right  = 1.0
-	mini_player.anchor_bottom = 1.0
-	mini_player.offset_left   = sw
-	mini_player.offset_top    = -mph
-	mini_player.offset_right  = 0.0
-	mini_player.offset_bottom = 0.0
+	# Vertical progress bar: centered along the separator boundary (x = sw)
+	if vertical_progress:
+		vertical_progress.visible = true
+		vertical_progress.anchor_left = 0.0
+		vertical_progress.anchor_top = 0.0
+		vertical_progress.anchor_right = 0.0
+		vertical_progress.anchor_bottom = 1.0
+		vertical_progress.offset_left = sw - 8.0
+		vertical_progress.offset_top = 0.0
+		vertical_progress.offset_right = sw + 8.0
+		vertical_progress.offset_bottom = 0.0
 
 
-## Mobile layout: full-width content; tab bar floats above bottom inset.
+## Mobile layout: full-width content; bottom bar flush.
 func _apply_mobile_layout() -> void:
-	var mph := float(ThemeManager.MINI_PLAYER_HEIGHT)
-	# Extra clearance below the floating tab-bar pill.
-	var tab_clearance := float(ThemeManager.NAV_BAR_HEIGHT_MOBILE) \
-		+ float(ThemeManager.SPACE_4) * 2.0
+	var mph := float(ThemeManager.current_theme.MINI_PLAYER_HEIGHT)
 
 	sidebar.visible = false
-	tab_bar.visible = true
+	if vertical_progress:
+		vertical_progress.visible = false
 
 	# Content fills full width, stops above mini-player.
 	content_frame.anchor_left   = 0.0
@@ -146,17 +206,20 @@ func _apply_mobile_layout() -> void:
 	content_frame.offset_left   = 0.0
 	content_frame.offset_top    = 0.0
 	content_frame.offset_right  = 0.0
-	content_frame.offset_bottom = -(mph + tab_clearance)
+	content_frame.offset_bottom = -mph
 
-	# Mini-player sits directly above the tab bar.
+	# Mini-player sits flush at the bottom.
+	mini_player.visible = true
 	mini_player.anchor_left   = 0.0
 	mini_player.anchor_top    = 1.0
 	mini_player.anchor_right  = 1.0
 	mini_player.anchor_bottom = 1.0
 	mini_player.offset_left   = 0.0
-	mini_player.offset_top    = -(mph + tab_clearance)
+	mini_player.offset_top    = -mph
 	mini_player.offset_right  = 0.0
-	mini_player.offset_bottom = -tab_clearance
+	mini_player.offset_bottom = 0.0
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -179,3 +242,126 @@ func _on_layout_changed(_bp_name: String) -> void:
 
 func _on_navigation_requested(screen_name: String) -> void:
 	_show_screen(screen_name)
+
+
+# ---------------------------------------------------------------------------
+# Custom Window Resizing
+# ---------------------------------------------------------------------------
+
+func _create_resize_handles() -> void:
+	var layout_root = $AppWindowFrame/LayoutRoot
+	if not layout_root:
+		return
+		
+	var handles = {
+		"top_left": {
+			"cursor": Control.CURSOR_FDIAGSIZE,
+			"anchor_left": 0.0, "anchor_top": 0.0, "anchor_right": 0.0, "anchor_bottom": 0.0,
+			"offset_left": -6.0, "offset_top": -6.0, "offset_right": 6.0, "offset_bottom": 6.0
+		},
+		"top_right": {
+			"cursor": Control.CURSOR_BDIAGSIZE,
+			"anchor_left": 1.0, "anchor_top": 0.0, "anchor_right": 1.0, "anchor_bottom": 0.0,
+			"offset_left": -6.0, "offset_top": -6.0, "offset_right": 6.0, "offset_bottom": 6.0
+		},
+		"bottom_left": {
+			"cursor": Control.CURSOR_BDIAGSIZE,
+			"anchor_left": 0.0, "anchor_top": 1.0, "anchor_right": 0.0, "anchor_bottom": 1.0,
+			"offset_left": -6.0, "offset_top": -6.0, "offset_right": 6.0, "offset_bottom": 6.0
+		},
+		"bottom_right": {
+			"cursor": Control.CURSOR_FDIAGSIZE,
+			"anchor_left": 1.0, "anchor_top": 1.0, "anchor_right": 1.0, "anchor_bottom": 1.0,
+			"offset_left": -6.0, "offset_top": -6.0, "offset_right": 6.0, "offset_bottom": 6.0
+		},
+		"left": {
+			"cursor": Control.CURSOR_HSIZE,
+			"anchor_left": 0.0, "anchor_top": 0.0, "anchor_right": 0.0, "anchor_bottom": 1.0,
+			"offset_left": -6.0, "offset_top": 6.0, "offset_right": 6.0, "offset_bottom": -6.0
+		},
+		"right": {
+			"cursor": Control.CURSOR_HSIZE,
+			"anchor_left": 1.0, "anchor_top": 0.0, "anchor_right": 1.0, "anchor_bottom": 1.0,
+			"offset_left": -6.0, "offset_top": 6.0, "offset_right": 6.0, "offset_bottom": -6.0
+		},
+		"top": {
+			"cursor": Control.CURSOR_VSIZE,
+			"anchor_left": 0.0, "anchor_top": 0.0, "anchor_right": 1.0, "anchor_bottom": 0.0,
+			"offset_left": 6.0, "offset_top": -6.0, "offset_right": -6.0, "offset_bottom": 6.0
+		},
+		"bottom": {
+			"cursor": Control.CURSOR_VSIZE,
+			"anchor_left": 0.0, "anchor_top": 1.0, "anchor_right": 1.0, "anchor_bottom": 1.0,
+			"offset_left": 6.0, "offset_top": -6.0, "offset_right": -6.0, "offset_bottom": 6.0
+		}
+	}
+	
+	for dir in handles:
+		var cfg = handles[dir]
+		var ctrl = Control.new()
+		ctrl.name = "ResizeHandle_" + dir
+		ctrl.mouse_default_cursor_shape = cfg.cursor
+		ctrl.anchor_left = cfg.anchor_left
+		ctrl.anchor_top = cfg.anchor_top
+		ctrl.anchor_right = cfg.anchor_right
+		ctrl.anchor_bottom = cfg.anchor_bottom
+		ctrl.offset_left = cfg.offset_left
+		ctrl.offset_top = cfg.offset_top
+		ctrl.offset_right = cfg.offset_right
+		ctrl.offset_bottom = cfg.offset_bottom
+		
+		# Wire up click drag
+		ctrl.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+				if event.pressed:
+					_is_resizing = true
+					_resize_mode = dir
+					_start_mouse_pos = DisplayServer.mouse_get_position()
+					_start_window_position = get_window().position
+					_start_window_size = get_window().size
+					ctrl.accept_event()
+		)
+		
+		layout_root.add_child(ctrl)
+
+
+func _input(event: InputEvent) -> void:
+	if not PlatformManager.is_desktop():
+		return
+		
+	if _is_resizing:
+		if event is InputEventMouseMotion:
+			_handle_resize(event)
+		elif event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+				_is_resizing = false
+				_resize_mode = ""
+
+
+func _handle_resize(_event: InputEventMouseMotion) -> void:
+	var curr_mouse_pos = DisplayServer.mouse_get_position()
+	var diff = curr_mouse_pos - _start_mouse_pos
+	
+	var new_size = _start_window_size
+	var new_pos = _start_window_position
+	
+	# Handle X axis
+	if "left" in _resize_mode:
+		var target_w = _start_window_size.x - diff.x
+		if target_w >= MIN_WINDOW_SIZE.x:
+			new_size.x = target_w
+			new_pos.x = _start_window_position.x + diff.x
+	elif "right" in _resize_mode:
+		new_size.x = max(_start_window_size.x + diff.x, MIN_WINDOW_SIZE.x)
+		
+	# Handle Y axis
+	if "top" in _resize_mode:
+		var target_h = _start_window_size.y - diff.y
+		if target_h >= MIN_WINDOW_SIZE.y:
+			new_size.y = target_h
+			new_pos.y = _start_window_position.y + diff.y
+	elif "bottom" in _resize_mode:
+		new_size.y = max(_start_window_size.y + diff.y, MIN_WINDOW_SIZE.y)
+		
+	get_window().size = new_size
+	get_window().position = new_pos

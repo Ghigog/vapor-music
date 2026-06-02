@@ -93,10 +93,10 @@ For audiophiles playing back lossless FLAC or ALAC files, output calibration mat
 ### 🖼️ Visual Aesthetic Customization
 Vapor's UI is built for focused, distraction-free listening.
 
-- High-contrast, minimalist interface that scales gracefully from full-screen desktop to mobile
+- **Apple-inspired glassmorphism** — frosted-glass panels, a minimal 3-colour palette, and seamless adaptation to any wallpaper or desktop. Two built-in themes: **Vapor Dark** (deep charcoal glass, `#0A84FF` accent) and **Vapor Light** (white frosted glass, `#007AFF` accent).
 - **Low-Glare Ambient Mode** — a distraction-free, dimmed UI designed for late-night or ambient listening
 - Dashboard widget mode — a minimal, unobtrusive now-playing overlay for multitaskers
-- Fully themeable with community-shareable color schemes (see the [Theme System Developer Guide](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/theme_system.md) for details on creating custom visual presets)
+- Fully themeable with community-shareable colour schemes (see the [Theme System Developer Guide](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/theme_system.md) and [Design Language](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/design_language.md) for details on creating custom visual presets)
 
 ---
 
@@ -180,6 +180,10 @@ vapor-music/
 ## Status
 
 > 🚧 Early development — Godot project scaffolding in progress.
+>
+> **v1.2 (2026-06-02):** Restructured playback controls. Replaced bottom horizontal mini-player on desktop with a top-to-bottom vertical progress bar running directly along the sidebar separator line, and square windows-style media control tiles in the sidebar footer. Repositioned mobile progress bar to sit horizontally at the top edge of the bottom panel. Implemented custom borderless window drag-to-move (via sidebar) and corner/edge drag-to-resize. All 23 unit tests passing.
+>
+> **v1.1 (2026-06-02):** Visual overhaul to Apple-inspired glassmorphism. New Vapor Dark and Vapor Light themes. Single-accent palette (`#007AFF` / `#0A84FF`). All 13 theme manager unit tests passing.
 
 ---
 

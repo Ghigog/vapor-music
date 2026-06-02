@@ -1,0 +1,12 @@
+- Step 1: [x]
+	- Implement window border/corner resizing in main.gd
+- Step 2: [x]
+	- Implement sidebar dragging in sidebar.gd
+- Step 3: [x]
+	- Add vertical progress bar on separator line
+- Step 4: [x]
+	- Add playback tiles to sidebar footer
+- Step 5: [x]
+	- Reposition mobile progress bar to top line of mini player
+- Step 6: [x]
+	- Run gut tests and verify
