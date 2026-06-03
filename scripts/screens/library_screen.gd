@@ -273,112 +273,18 @@ func _is_track_number_prefix(s: String) -> bool:
 	var match_obj := regex.search(clean)
 	return match_obj != null
 
-## Smart metadata parser that handles structured filenames and path/directory fallbacks
 func _parse_track_info(href: String) -> Dictionary:
-	# Check metadata service cache first
 	if is_instance_valid(MetadataService):
-		var cached := MetadataService.get_cached_metadata(href)
-		if not cached.is_empty():
-			var cached_artist: String = cached.get("artist_name", "")
-			var cached_album: String = cached.get("album_name", "")
-			var cached_track: String = cached.get("track_title", "")
-			if not cached_artist.is_empty() and cached_artist != "Unknown Artist" \
-					and not cached_album.is_empty() and cached_album != "Unknown Album":
-				return {
-					"artist": cached_artist,
-					"album": cached_album,
-					"track": cached_track if not cached_track.is_empty() else href.get_file().uri_decode().get_basename()
-				}
-
+		return MetadataService.parse_track_info(href)
+		
+	# Fallback in case MetadataService is not loaded/valid
 	var raw_filename := href.get_file().uri_decode()
-	var display_name := raw_filename.get_basename()
-	
-	var file_artist := ""
-	var file_album := ""
-	var file_track := display_name
-	
-	# Parse path segments for directory structure fallback
-	var decoded_path := href.uri_decode()
-	var path_segments := []
-	for segment in decoded_path.split("/"):
-		if not segment.is_empty():
-			path_segments.append(segment)
-			
-	var base_folder := "Music"
-	if SettingsManager.has_credentials() and "webdav_folder" in SettingsManager:
-		base_folder = SettingsManager.webdav_folder
-		
-	var relative_start := -1
-	for i in range(path_segments.size()):
-		if path_segments[i].to_lower() == base_folder.to_lower():
-			relative_start = i + 1
-			break
-			
-	var relative_segments := []
-	if relative_start != -1 and relative_start < path_segments.size():
-		relative_segments = path_segments.slice(relative_start, path_segments.size() - 1)
-	else:
-		if path_segments.size() >= 2:
-			relative_segments = path_segments.slice(0, path_segments.size() - 1)
-			
-	var folder_artist := ""
-	var folder_album := ""
-	
-	if relative_segments.size() >= 2:
-		folder_artist = relative_segments[0].strip_edges()
-		folder_album = relative_segments[1].strip_edges()
-	elif relative_segments.size() == 1:
-		var seg: String = relative_segments[0].strip_edges()
-		var clean_seg := seg.replace("–", "-").replace("—", "-")
-		if " - " in clean_seg:
-			var parts: PackedStringArray = clean_seg.split(" - ")
-			if parts.size() == 2:
-				folder_artist = parts[0].strip_edges()
-				folder_album = parts[1].strip_edges()
-			else:
-				folder_album = seg
-		else:
-			folder_album = seg
-
-	# Parse structured filename "Artist - Album - Track" or "Artist - Track"
-	var clean_display := display_name.replace("–", "-").replace("—", "-")
-	if " - " in clean_display:
-		var raw_parts := clean_display.split(" - ")
-		# If the first part is a track number, remove it to normalize parsing
-		if raw_parts.size() > 1 and _is_track_number_prefix(raw_parts[0]):
-			raw_parts.remove_at(0)
-			
-		if raw_parts.size() >= 3:
-			file_artist = raw_parts[0].strip_edges()
-			file_album = raw_parts[1].strip_edges()
-			var track_parts := []
-			for i in range(2, raw_parts.size()):
-				track_parts.append(raw_parts[i])
-			file_track = " - ".join(track_parts).strip_edges()
-		elif raw_parts.size() == 2:
-			file_artist = raw_parts[0].strip_edges()
-			file_track = raw_parts[1].strip_edges()
-		elif raw_parts.size() == 1:
-			file_track = raw_parts[0].strip_edges()
-
-	# Combine information with sensible priority: file-parsed first, then folder-derived.
-	var artist := "Unknown Artist"
-	if not file_artist.is_empty():
-		artist = file_artist
-	elif not folder_artist.is_empty():
-		artist = folder_artist
-		
-	var album := "Unknown Album"
-	if not file_album.is_empty():
-		album = file_album
-	elif not folder_album.is_empty():
-		album = folder_album
-		
 	return {
-		"artist": artist,
-		"album": album,
-		"track": file_track.strip_edges()
+		"artist": "Unknown Artist",
+		"album": "Unknown Album",
+		"track": raw_filename.get_basename()
 	}
+
 
 func _on_add_music_pressed() -> void:
 	if SettingsManager.has_credentials():

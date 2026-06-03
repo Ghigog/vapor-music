@@ -11,7 +11,6 @@ extends PanelContainer
 
 @onready var track_title_label: Label = $VBox/NowPlaying/HBox/Info/TrackTitle
 @onready var artist_label: Label = $VBox/NowPlaying/HBox/Info/ArtistLabel
-@onready var album_art: Panel = $VBox/NowPlaying/HBox/AlbumArt
 @onready var play_pause_btn: Button = $VBox/PlayerTiles/PlayPauseBtn
 @onready var backward_btn: Button = $VBox/PlayerTiles/ControlsHBox/BackwardBtn
 @onready var forward_btn: Button = $VBox/PlayerTiles/ControlsHBox/ForwardBtn
@@ -194,9 +193,6 @@ func _style_player_buttons() -> void:
 		
 	var theme = ThemeManager.current_theme
 	
-	# Album art style
-	album_art.add_theme_stylebox_override("panel", ThemeManager.make_circle_placeholder())
-	
 	# Typography & colors for labels
 	track_title_label.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
 	track_title_label.add_theme_font_override("font", theme.font_ui)
@@ -261,6 +257,11 @@ func _on_track_changed(track_name: String) -> void:
 				
 	track_title_label.text = clean_name
 	artist_label.text = artist_name if artist_name != "" else "Unknown Artist"
+
+	if is_instance_valid(MetadataService) and AudioManager.current_track_index != -1 and AudioManager.current_track_index < AudioManager.current_playlist.size():
+		var href = AudioManager.current_playlist[AudioManager.current_track_index]
+		MetadataService.focus_track_by_href(href)
+
 
 
 func _on_playback_toggled(is_playing: bool) -> void:
