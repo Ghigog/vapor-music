@@ -143,6 +143,7 @@ func _rebuild_tree() -> void:
 			var expanded: bool = not albums_container.visible
 			albums_container.visible = expanded
 			artist_row.label.text = ("▼  👤  " if expanded else "▶  👤  ") + artist_name
+			MetadataService.focus_artist(artist_name)
 		)
 
 		var albums_map: Dictionary = library_tree[artist_name]
@@ -173,6 +174,7 @@ func _rebuild_tree() -> void:
 				var expanded: bool = not tracks_container.visible
 				tracks_container.visible = expanded
 				album_row.label.text = ("▼  💿  " if expanded else "▶  💿  ") + album_name
+				MetadataService.focus_album(artist_name, album_name)
 			)
 
 			var tracks: Array = albums_map[album_name]
@@ -190,6 +192,7 @@ func _rebuild_tree() -> void:
 				)
 				track_row.button.pressed.connect(func() -> void:
 					AudioManager.play_track(track_info.href as String, _scanned_files)
+					MetadataService.focus_track(track_info.href as String, artist_name, album_name, track_info.title as String)
 				)
 				# Highlight label on hover via button's mouse_entered / mouse_exited signals
 				track_row.button.mouse_entered.connect(func() -> void:
@@ -260,33 +263,41 @@ func _make_row_button(
 
 	return {"container": row, "button": btn, "label": lbl}
 
+## Helper to identify numeric/alphanumeric track number prefixes (e.g., "01", "1", "A1", "1-01")
+func _is_track_number_prefix(s: String) -> bool:
+	var clean := s.strip_edges()
+	if clean.is_valid_int():
+		return true
+	var regex := RegEx.new()
+	regex.compile("^[A-Za-z]?\\d+[-a-zA-Z]?$")
+	var match_obj := regex.search(clean)
+	return match_obj != null
+
 ## Smart metadata parser that handles structured filenames and path/directory fallbacks
 func _parse_track_info(href: String) -> Dictionary:
+	# Check metadata service cache first
+	if is_instance_valid(MetadataService):
+		var cached := MetadataService.get_cached_metadata(href)
+		if not cached.is_empty():
+			var cached_artist: String = cached.get("artist_name", "")
+			var cached_album: String = cached.get("album_name", "")
+			var cached_track: String = cached.get("track_title", "")
+			if not cached_artist.is_empty() and cached_artist != "Unknown Artist" \
+					and not cached_album.is_empty() and cached_album != "Unknown Album":
+				return {
+					"artist": cached_artist,
+					"album": cached_album,
+					"track": cached_track if not cached_track.is_empty() else href.get_file().uri_decode().get_basename()
+				}
+
 	var raw_filename := href.get_file().uri_decode()
 	var display_name := raw_filename.get_basename()
 	
-	var artist := "Unknown Artist"
-	var album := "Unknown Album"
-	var track := display_name
+	var file_artist := ""
+	var file_album := ""
+	var file_track := display_name
 	
-	# First check: If filename itself is structured as "Artist - Album - Track"
-	if " - " in display_name:
-		var parts := display_name.split(" - ")
-		if parts.size() >= 3:
-			artist = parts[0].strip_edges()
-			album = parts[1].strip_edges()
-			track = parts[2].strip_edges()
-			if parts.size() > 3:
-				var track_parts = []
-				for i in range(2, parts.size()):
-					track_parts.append(parts[i])
-				track = " - ".join(track_parts).strip_edges()
-			return {"artist": artist, "album": album, "track": track}
-		elif parts.size() == 2:
-			artist = parts[0].strip_edges()
-			track = parts[1].strip_edges()
-			
-	# Second check: Fallback to directory structure
+	# Parse path segments for directory structure fallback
 	var decoded_path := href.uri_decode()
 	var path_segments := []
 	for segment in decoded_path.split("/"):
@@ -303,30 +314,70 @@ func _parse_track_info(href: String) -> Dictionary:
 			relative_start = i + 1
 			break
 			
-	if relative_start != -1 and relative_start < path_segments.size() - 1:
-		var relative_segments = path_segments.slice(relative_start, path_segments.size() - 1)
-		if relative_segments.size() >= 2:
-			if artist == "Unknown Artist":
-				artist = relative_segments[0]
-			if album == "Unknown Album":
-				album = relative_segments[1]
-		elif relative_segments.size() == 1:
-			if artist == "Unknown Artist":
-				artist = relative_segments[0]
+	var relative_segments := []
+	if relative_start != -1 and relative_start < path_segments.size():
+		relative_segments = path_segments.slice(relative_start, path_segments.size() - 1)
 	else:
-		if path_segments.size() >= 3:
-			if artist == "Unknown Artist":
-				artist = path_segments[path_segments.size() - 3]
-			if album == "Unknown Album":
-				album = path_segments[path_segments.size() - 2]
-		elif path_segments.size() == 2:
-			if artist == "Unknown Artist":
-				artist = path_segments[path_segments.size() - 2]
-				
+		if path_segments.size() >= 2:
+			relative_segments = path_segments.slice(0, path_segments.size() - 1)
+			
+	var folder_artist := ""
+	var folder_album := ""
+	
+	if relative_segments.size() >= 2:
+		folder_artist = relative_segments[0].strip_edges()
+		folder_album = relative_segments[1].strip_edges()
+	elif relative_segments.size() == 1:
+		var seg: String = relative_segments[0].strip_edges()
+		var clean_seg := seg.replace("–", "-").replace("—", "-")
+		if " - " in clean_seg:
+			var parts: PackedStringArray = clean_seg.split(" - ")
+			if parts.size() == 2:
+				folder_artist = parts[0].strip_edges()
+				folder_album = parts[1].strip_edges()
+			else:
+				folder_album = seg
+		else:
+			folder_album = seg
+
+	# Parse structured filename "Artist - Album - Track" or "Artist - Track"
+	var clean_display := display_name.replace("–", "-").replace("—", "-")
+	if " - " in clean_display:
+		var raw_parts := clean_display.split(" - ")
+		# If the first part is a track number, remove it to normalize parsing
+		if raw_parts.size() > 1 and _is_track_number_prefix(raw_parts[0]):
+			raw_parts.remove_at(0)
+			
+		if raw_parts.size() >= 3:
+			file_artist = raw_parts[0].strip_edges()
+			file_album = raw_parts[1].strip_edges()
+			var track_parts := []
+			for i in range(2, raw_parts.size()):
+				track_parts.append(raw_parts[i])
+			file_track = " - ".join(track_parts).strip_edges()
+		elif raw_parts.size() == 2:
+			file_artist = raw_parts[0].strip_edges()
+			file_track = raw_parts[1].strip_edges()
+		elif raw_parts.size() == 1:
+			file_track = raw_parts[0].strip_edges()
+
+	# Combine information with sensible priority: file-parsed first, then folder-derived.
+	var artist := "Unknown Artist"
+	if not file_artist.is_empty():
+		artist = file_artist
+	elif not folder_artist.is_empty():
+		artist = folder_artist
+		
+	var album := "Unknown Album"
+	if not file_album.is_empty():
+		album = file_album
+	elif not folder_album.is_empty():
+		album = folder_album
+		
 	return {
-		"artist": artist.strip_edges(),
-		"album": album.strip_edges(),
-		"track": track.strip_edges()
+		"artist": artist,
+		"album": album,
+		"track": file_track.strip_edges()
 	}
 
 func _on_add_music_pressed() -> void:

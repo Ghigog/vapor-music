@@ -330,3 +330,60 @@ So that the loading state is subtle, beautiful, and I can still see and interact
 - Given desktop layout during track change loading
 - When a track is loading (`is_loading` is true)
 - Then the vertical progress bar animates an aqua-colored dot traveling up and down the separator track line, while disabling standard progress drawing.
+
+---
+
+### MET-001 : Sidebar Preview Square & Metadata Populator (done)
+**User Story:**
+As a user,
+I'd like to see a preview square in the left side panel that displays the artist image, album cover, or song lyrics depending on what I last touched,
+So that I feel connected to the visual and textual elements of my music.
+
+**Context:** The user wants a dynamic preview square in the sidebar, which is updated based on user interactions:
+- Artist selection -> Artist image.
+- Album selection -> Album cover art.
+- Song selection -> Heavily blurred background image with lyrics overlaid.
+
+**Description:** Implement a square visual container in the sidebar between the buttons and options above. Wire it to show artist, album, and song metadata based on user interactions.
+
+**Requirements:**
+- Add an AspectRatioContainer called `PreviewSquare` in the sidebar layout.
+- Ensure the preview square occupies a perfect square space layout-wise.
+- Display artist image when an artist is clicked/pressed.
+- Display album cover art when an album is clicked/opened.
+- When a song is clicked, apply a heavy blur over the current image and display the lyrics text.
+- Connect the preview square to `MetadataService` to fetch images and lyrics.
+
+**Acceptance Criteria:**
+- Given the desktop sidebar is visible
+- When an artist is clicked in the library screen
+- Then the preview square displays the fetched artist image.
+- When an album is clicked
+- Then the preview square displays the fetched album cover.
+- When a song is clicked
+- Then the preview square applies a heavy blur to the image and displays the lyrics text.
+
+---
+
+### MET-002 : Robust Metadata & Track Parsing (done)
+**User Story:**
+As a user,
+I'd like the app to correctly parse my track paths and filenames,
+So that albums are not split into multiple artists and unknown albums due to numeric track prefixes or compilation tracks.
+
+**Context:**
+Filenames formatted like "01 - Track Title.mp3" or compilation layouts were matching a generic " - " split and assigning the track number as the artist and leaving the album as unknown.
+
+**Description:**
+Update the parser in `library_screen.gd` to strip track number/alphanumeric prefixes first, handle single-folder parent-only directory fallbacks, and combine folder and file segments in a prioritized hierarchy.
+
+**Requirements:**
+- Implement track number prefix stripping (handles `01`, `1`, `A1`, `1-01`).
+- Parse single folder parent directory structure correctly as the album name (no "Unknown Album" for `/Music/Album Name/Track.mp3`).
+- Set priority: file-parsed artist/album first, then directory-level fallback, then defaults ("Unknown Artist"/"Unknown Album").
+- Write comprehensive unit tests for different path variations.
+
+**Acceptance Criteria:**
+- Given a file path `/Music/Discovery/01 - Intro.mp3`
+- When parsed
+- Then the album is resolved to "Discovery", the artist is "Unknown Artist", and the track is "Intro".

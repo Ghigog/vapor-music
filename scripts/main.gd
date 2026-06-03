@@ -208,6 +208,16 @@ func _apply_desktop_layout() -> void:
 	var sw  := float(ThemeManager.current_theme.SIDEBAR_WIDTH)
 
 	sidebar.visible   = true
+	# Sidebar: anchored to left, width = sw
+	sidebar.anchor_left   = 0.0
+	sidebar.anchor_top    = 0.0
+	sidebar.anchor_right  = 0.0
+	sidebar.anchor_bottom = 1.0
+	sidebar.offset_left   = 0.0
+	sidebar.offset_top    = 0.0
+	sidebar.offset_right  = sw
+	sidebar.offset_bottom = 0.0
+
 	mini_player.visible = false
 
 	# Content frame: starts at sidebar right-edge, spans full height

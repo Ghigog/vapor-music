@@ -16,6 +16,16 @@ extends PanelContainer
 @onready var backward_btn: Button = $VBox/PlayerTiles/ControlsHBox/BackwardBtn
 @onready var forward_btn: Button = $VBox/PlayerTiles/ControlsHBox/ForwardBtn
 
+@onready var preview_square: AspectRatioContainer = $VBox/PreviewSquare
+@onready var preview_texture: TextureRect = $VBox/PreviewSquare/PreviewTexture
+@onready var blur_overlay: Panel = $VBox/PreviewSquare/BlurOverlay
+@onready var lyrics_scroll: ScrollContainer = $VBox/PreviewSquare/LyricsScroll
+@onready var lyrics_container: VBoxContainer = $VBox/PreviewSquare/LyricsScroll/LyricsContainer
+
+var lyrics_list: Array = []
+var active_line_index: int = -1
+var is_synced_lyrics := false
+
 
 ## Maps screen-name strings to their corresponding Button nodes.
 var _nav_buttons: Dictionary = {}
@@ -47,8 +57,10 @@ func _ready() -> void:
 	_register_nav_buttons()
 	_connect_signals()
 	_connect_audio_signals()
+	_connect_metadata_signals()
 	_set_active_nav(NavManager.current_screen)
 	_style_player_buttons()
+	_setup_blur_shader()
 	ThemeManager.theme_changed.connect(_apply_panel_style)
 	ThemeManager.theme_changed.connect(_apply_logo_style)
 	ThemeManager.theme_changed.connect(_refresh_nav_button_styles)
@@ -66,7 +78,11 @@ func _apply_panel_style() -> void:
 		_custom_stylebox.border_color = ThemeManager.current_theme.GLASS_BORDER_SUBTLE
 	else:
 		add_theme_stylebox_override("panel", ThemeManager.make_nav_panel())
-	custom_minimum_size.x = ThemeManager.current_theme.SIDEBAR_WIDTH
+	var sw = ThemeManager.current_theme.SIDEBAR_WIDTH
+	custom_minimum_size.x = sw
+	if preview_square:
+		var sq_size = float(sw) - 32.0
+		preview_square.custom_minimum_size = Vector2(sq_size, sq_size)
 
 
 func _apply_logo_style() -> void:
@@ -252,3 +268,130 @@ func _on_playback_toggled(is_playing: bool) -> void:
 		play_pause_btn.text = "⏸ Pause"
 	else:
 		play_pause_btn.text = "▶ Play"
+
+func _connect_metadata_signals() -> void:
+	var ms = get_node_or_null("/root/MetadataService")
+	if ms:
+		if ms.has_signal("artist_focused"):
+			ms.artist_focused.connect(_on_artist_focused)
+		if ms.has_signal("album_focused"):
+			ms.album_focused.connect(_on_album_focused)
+		if ms.has_signal("track_focused"):
+			ms.track_focused.connect(_on_track_focused)
+
+func _setup_blur_shader() -> void:
+	var shader = load("res://assets/shaders/blur.gdshader") as Shader
+	if shader:
+		var mat = ShaderMaterial.new()
+		mat.shader = shader
+		blur_overlay.material = mat
+
+func _load_image_to_texture(path: String) -> void:
+	if path.is_empty() or not FileAccess.file_exists(path):
+		preview_texture.texture = null
+		return
+		
+	var img = Image.load_from_file(path)
+	if img:
+		var tex = ImageTexture.create_from_image(img)
+		preview_texture.texture = tex
+	else:
+		preview_texture.texture = null
+
+func _on_artist_focused(_artist: String, image_path: String) -> void:
+	_load_image_to_texture(image_path)
+	blur_overlay.visible = false
+	lyrics_scroll.visible = false
+
+func _on_album_focused(_artist: String, _album: String, image_path: String) -> void:
+	_load_image_to_texture(image_path)
+	blur_overlay.visible = false
+	lyrics_scroll.visible = false
+
+func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: Dictionary, image_path: String) -> void:
+	if not image_path.is_empty():
+		_load_image_to_texture(image_path)
+	
+	# Clear previous lyrics
+	for child in lyrics_container.get_children():
+		child.queue_free()
+		
+	lyrics_list = []
+	active_line_index = -1
+	is_synced_lyrics = false
+	
+	if lyrics.is_empty():
+		var label = Label.new()
+		label.text = "[No Lyrics Found]"
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+		label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+		lyrics_container.add_child(label)
+	elif lyrics.get("synced", false):
+		is_synced_lyrics = true
+		lyrics_list = lyrics.get("lines", [])
+		for line in lyrics_list:
+			var label = Label.new()
+			label.text = line.get("text", "")
+			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+			label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+			label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+			lyrics_container.add_child(label)
+	else:
+		var label = Label.new()
+		label.text = lyrics.get("plain", "")
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+		lyrics_container.add_child(label)
+		
+	blur_overlay.visible = true
+	lyrics_scroll.visible = true
+
+func _process(_delta: float) -> void:
+	if is_synced_lyrics and lyrics_scroll.visible and AudioManager.is_playing:
+		if AudioManager.player and AudioManager.player.is_inside_tree():
+			var song_time = AudioManager.player.get_playback_position()
+			_update_lyrics_scroller(song_time)
+
+func _update_lyrics_scroller(song_time: float) -> void:
+	if lyrics_list.is_empty():
+		return
+		
+	var target_index: int = -1
+	for i in range(lyrics_list.size()):
+		if song_time >= lyrics_list[i]["time"]:
+			target_index = i
+		else:
+			break
+			
+	if target_index != active_line_index and target_index != -1:
+		active_line_index = target_index
+		var children = lyrics_container.get_children()
+		for i in range(children.size()):
+			var label = children[i] as Label
+			if not label: continue
+			
+			if i == active_line_index:
+				# Highlight active line
+				label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+				label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+				label.add_theme_color_override("font_outline_color", ThemeManager.current_theme.ACCENT_CORE)
+				label.add_theme_constant_override("outline_size", 2)
+				
+				# Smoothly center scroller
+				var target_y = label.position.y - (lyrics_scroll.size.y / 2.0) + (label.size.y / 2.0)
+				var tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+				tween.tween_property(lyrics_scroll, "scroll_vertical", int(max(0, target_y)), 0.3)
+			else:
+				# Dim inactive lines
+				label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+				label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+				label.remove_theme_color_override("font_outline_color")
+				label.remove_theme_constant_override("outline_size")

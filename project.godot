@@ -13,6 +13,9 @@ config_version=5
 config/name="vapor music"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
+boot_splash/bg_color=Color(0.14117648, 0.14117648, 0.14117648, 0)
+boot_splash/stretch_mode=0
+boot_splash/image="uid://d0k2oxtxkwd2c"
 config/icon="uid://d0k2oxtxkwd2c"
 
 [autoload]
@@ -22,6 +25,7 @@ PlatformManager="*res://autoloads/PlatformManager.gd"
 NavManager="*res://autoloads/NavManager.gd"
 SettingsManager="*res://scripts/services/settings_manager.gd"
 WebDAVService="*res://scripts/services/webdav_service.gd"
+MetadataService="*res://scripts/services/metadata_service.gd"
 AudioManager="*uid://bxledcc7ud1e8"
 
 [display]
@@ -30,7 +34,6 @@ window/size/viewport_width=1280
 window/size/viewport_height=720
 window/size/borderless=true
 window/size/transparent=true
-window/stretch/mode="disabled"
 window/stretch/aspect="expand"
 window/per_pixel_transparency/allowed=true
 window/handheld/orientation=1
