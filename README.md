@@ -181,6 +181,8 @@ vapor-music/
 
 > 🚧 Early development — Godot project scaffolding in progress.
 >
+> **v1.10 (2026-06-03):** Refined the sidebar lyrics overlay background blur shader (`blur.gdshader`) by reducing the default blur amount (from 5.0 to 2.0) and darkening mix factor (from 50% to 30%), providing a cleaner and more subtle legibility backdrop over album art without over-obscuring the visual details. All 48 tests passing.
+>
 > **v1.9 (2026-06-03):** Implemented a robust track metadata parsing algorithm in the library screen, resolving a major bug where track number prefixes or varied track artists were causing compilation albums to split into 15+ different artists under an "Unknown Album". Added support for parsing "Artist - Album" formatting in single-folder directories (e.g. `gorillaz - demon days`). Integrated a dynamic fallback system that uses the `MetadataService` cache and query capabilities (via Deezer search) to resolve missing artist, album, and track details for unknown tags. Added new unit tests confirming correct parsing of structured filenames and single-folder album structures; all 47 tests passing.
 >
 > **v1.8 (2026-06-02):** Implemented the Sidebar Preview Square (`PreviewSquare` AspectRatioContainer) that displays artist images, album covers, or lyrics based on active focus selection in the library. Added automatic local file downloading and caching to `user://metadata_images/` in `MetadataService`, along with signal dispatch for focus states. Integrated a screen-space background blur shader (`blur.gdshader`) for the lyric overlay. Added new unit tests verifying focus flow; all 37 tests passing.
