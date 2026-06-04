@@ -6,7 +6,7 @@ extends PanelContainer
 
 @onready var app_name:     Label  = $VBox/Header/LogoContainer/AppName
 @onready var nav_library:  Button = $VBox/NavItems/NavLibrary
-@onready var nav_search:   Button = $VBox/NavItems/NavSearch
+@onready var nav_vibe:   Button = $VBox/NavItems/NavVibe
 @onready var nav_settings: Button = $VBox/NavItems/NavSettings
 
 @onready var track_title_label: Label = $VBox/NowPlaying/HBox/Info/TrackTitle
@@ -14,6 +14,7 @@ extends PanelContainer
 @onready var play_pause_btn: Button = $VBox/PlayerTiles/PlayPauseBtn
 @onready var backward_btn: Button = $VBox/PlayerTiles/ControlsHBox/BackwardBtn
 @onready var forward_btn: Button = $VBox/PlayerTiles/ControlsHBox/ForwardBtn
+@onready var shuffle_btn: Button = $VBox/PlayerTiles/ShuffleBtn
 
 @onready var preview_square: AspectRatioContainer = $VBox/PreviewSquare
 @onready var preview_texture: TextureRect = $VBox/PreviewSquare/PreviewTexture
@@ -97,7 +98,7 @@ func _apply_logo_style() -> void:
 func _register_nav_buttons() -> void:
 	_nav_buttons = {
 		"library":  nav_library,
-		"search":   nav_search,
+		"vibe":     nav_vibe,
 		"settings": nav_settings,
 	}
 	for screen_name: String in _nav_buttons:
@@ -185,6 +186,7 @@ func _connect_audio_signals() -> void:
 	play_pause_btn.pressed.connect(func(): AudioManager.toggle_play())
 	backward_btn.pressed.connect(func(): AudioManager.play_previous())
 	forward_btn.pressed.connect(func(): AudioManager.play_next())
+	shuffle_btn.pressed.connect(func(): AudioManager.play_harmonic_shuffle())
 
 
 func _style_player_buttons() -> void:
@@ -223,15 +225,18 @@ func _style_player_buttons() -> void:
 	tile_pressed.set_border_width_all(1)
 	tile_pressed.set_corner_radius_all(0)
 	
-	for btn in [play_pause_btn, backward_btn, forward_btn]:
+	for btn in [play_pause_btn, backward_btn, forward_btn, shuffle_btn]:
 		var normal_style = tile_normal.duplicate()
 		var hover_style = tile_hover.duplicate()
 		var pressed_style = tile_pressed.duplicate()
 		
-		if btn == backward_btn:
+		if btn == shuffle_btn:
 			normal_style.set_corner_radius(3, theme.RADIUS_LG) # CORNER_BOTTOM_LEFT
+			normal_style.set_corner_radius(2, theme.RADIUS_LG) # CORNER_BOTTOM_RIGHT
 			hover_style.set_corner_radius(3, theme.RADIUS_LG)
+			hover_style.set_corner_radius(2, theme.RADIUS_LG)
 			pressed_style.set_corner_radius(3, theme.RADIUS_LG)
+			pressed_style.set_corner_radius(2, theme.RADIUS_LG)
 			
 		btn.add_theme_stylebox_override("normal", normal_style)
 		btn.add_theme_stylebox_override("hover", hover_style)

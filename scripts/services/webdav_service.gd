@@ -8,9 +8,17 @@ extends Node
 signal library_scanned(files: Array)
 signal connection_tested(success: bool, error_message: String)
 
+var scanned_files: Array = []
+var had_scan_errors: bool = false
+
 const TCP_TIMEOUT_MS := 5000
 const TLS_TIMEOUT_MS := 5000
 const READ_TIMEOUT_MS := 10000
+
+var _active_tcp: StreamPeerTCP = null
+var _active_tls: StreamPeerTLS = null
+var _current_connected_host: String = ""
+var _current_connected_port: int = -1
 
 ## Parses a WebDAV URL into its component parts.
 func _parse_url(url: String) -> Dictionary:
@@ -66,29 +74,38 @@ func _build_propfind_request(host: String, path: String, auth_header: String, de
 	req += body
 	return req
 
-## Sends a raw PROPFIND request over TLS and returns [response_code, header_string, body_string].
-func _send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
-	# --- TCP connect ---
+func _is_connection_alive() -> bool:
+	if not _active_tcp or not _active_tls:
+		return false
+	_active_tcp.poll()
+	_active_tls.poll()
+	return _active_tcp.get_status() == StreamPeerTCP.STATUS_CONNECTED and _active_tls.get_status() == StreamPeerTLS.STATUS_CONNECTED
+
+func _ensure_connection(host: String, port: int) -> int:
+	if _is_connection_alive() and _current_connected_host == host and _current_connected_port == port:
+		return OK
+		
+	disconnect_active_connection()
+	
 	var tcp := StreamPeerTCP.new()
 	var err := tcp.connect_to_host(host, port)
 	if err != OK:
-		return [-1, "", "TCP connect failed: %d" % err]
+		return err
 
 	var start := Time.get_ticks_msec()
 	while tcp.get_status() == StreamPeerTCP.STATUS_CONNECTING:
 		tcp.poll()
 		await Engine.get_main_loop().process_frame
 		if Time.get_ticks_msec() - start > TCP_TIMEOUT_MS:
-			return [-1, "", "TCP connection timed out"]
+			return ERR_CONNECTION_ERROR
 
 	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
-		return [-1, "", "TCP connect status error: %d" % tcp.get_status()]
+		return ERR_CONNECTION_ERROR
 
-	# --- TLS handshake ---
 	var tls := StreamPeerTLS.new()
 	err = tls.connect_to_stream(tcp, host, TLSOptions.client())
 	if err != OK:
-		return [-1, "", "TLS setup failed: %d" % err]
+		return err
 
 	start = Time.get_ticks_msec()
 	while true:
@@ -97,20 +114,47 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 		if tls_status == StreamPeerTLS.STATUS_CONNECTED:
 			break
 		elif tls_status == StreamPeerTLS.STATUS_ERROR or tls_status == StreamPeerTLS.STATUS_DISCONNECTED:
-			return [-1, "", "TLS handshake failed: status %d" % tls_status]
+			return ERR_CONNECTION_ERROR
 		await Engine.get_main_loop().process_frame
 		if Time.get_ticks_msec() - start > TLS_TIMEOUT_MS:
-			return [-1, "", "TLS handshake timed out"]
+			return ERR_CONNECTION_ERROR
+
+	_active_tcp = tcp
+	_active_tls = tls
+	_current_connected_host = host
+	_current_connected_port = port
+	return OK
+
+func disconnect_active_connection() -> void:
+	if _active_tcp:
+		_active_tcp.disconnect_from_host()
+	_active_tcp = null
+	_active_tls = null
+	_current_connected_host = ""
+	_current_connected_port = -1
+
+## Sends a raw PROPFIND request over TLS and returns [response_code, header_string, body_string].
+func _send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
+	var err = await _ensure_connection(host, port)
+	if err != OK:
+		return [-1, "", "Connection establishment failed: %d" % err]
 
 	# --- Send PROPFIND ---
 	var request_str := _build_propfind_request(host, path, auth_header, depth)
-	err = tls.put_data(request_str.to_utf8_buffer())
+	err = _active_tls.put_data(request_str.to_utf8_buffer())
 	if err != OK:
-		return [-1, "", "Failed to send request: %d" % err]
+		print("WebDAVService: Send failed, retrying connection...")
+		disconnect_active_connection()
+		err = await _ensure_connection(host, port)
+		if err != OK:
+			return [-1, "", "Reconnection failed: %d" % err]
+		err = _active_tls.put_data(request_str.to_utf8_buffer())
+		if err != OK:
+			return [-1, "", "Failed to send request after retry: %d" % err]
 
-# --- Read response ---
+	# --- Read response ---
 	var response_bytes := PackedByteArray()
-	start = Time.get_ticks_msec() 
+	var start = Time.get_ticks_msec() 
 	
 	var headers_parsed := false
 	var is_chunked := false
@@ -118,13 +162,13 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 	var header_end_idx := -1
 
 	while true:
-		tls.poll()
-		var status := tls.get_status()
-		var available := tls.get_available_bytes()
+		_active_tls.poll()
+		var status := _active_tls.get_status()
+		var available := _active_tls.get_available_bytes()
 		
 		# 1. ALWAYS consume bytes if they are waiting in the TLS buffer
 		if available > 0:
-			var chunk := tls.get_data(available)
+			var chunk := _active_tls.get_data(available)
 			if chunk[0] == OK:
 				response_bytes.append_array(chunk[1])
 				start = Time.get_ticks_msec() # Reset timeout window on fresh data
@@ -133,7 +177,7 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 					header_end_idx = _find_header_delimiter(response_bytes)
 					if header_end_idx != -1:
 						headers_parsed = true
-						var loop_header := response_bytes.slice(0, header_end_idx).get_string_from_utf8().to_lower()
+						var loop_header := _safe_get_string(response_bytes.slice(0, header_end_idx)).to_lower()
 						is_chunked = "transfer-encoding: chunked" in loop_header
 						if "content-length:" in loop_header:
 							var cl_line := loop_header.split("content-length:")[1].split("\r\n")[0].strip_edges()
@@ -156,24 +200,68 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 		if Time.get_ticks_msec() - start > READ_TIMEOUT_MS:
 			print("WebDAVService: Reading window closed due to channel inactivity timeout.")
 			break
-	
-	tcp.disconnect_from_host()
 
 	if response_bytes.is_empty():
-		return [-1, "", "Empty response from server"]
+		print("WebDAVService: Empty response, retrying with fresh connection...")
+		disconnect_active_connection()
+		err = await _ensure_connection(host, port)
+		if err == OK:
+			err = _active_tls.put_data(request_str.to_utf8_buffer())
+			if err == OK:
+				response_bytes.clear()
+				start = Time.get_ticks_msec()
+				headers_parsed = false
+				is_chunked = false
+				content_length = -1
+				header_end_idx = -1
+				while true:
+					_active_tls.poll()
+					var status := _active_tls.get_status()
+					var available := _active_tls.get_available_bytes()
+					if available > 0:
+						var chunk := _active_tls.get_data(available)
+						if chunk[0] == OK:
+							response_bytes.append_array(chunk[1])
+							start = Time.get_ticks_msec()
+							if not headers_parsed:
+								header_end_idx = _find_header_delimiter(response_bytes)
+								if header_end_idx != -1:
+									headers_parsed = true
+									var loop_header := _safe_get_string(response_bytes.slice(0, header_end_idx)).to_lower()
+									is_chunked = "transfer-encoding: chunked" in loop_header
+									if "content-length:" in loop_header:
+										var cl_line := loop_header.split("content-length:")[1].split("\r\n")[0].strip_edges()
+										content_length = cl_line.to_int()
+							if headers_parsed:
+								var body_bytes := response_bytes.slice(header_end_idx)
+								if is_chunked:
+									if _has_terminal_chunk_marker(body_bytes):
+										break
+								elif content_length != -1:
+									if body_bytes.size() >= content_length:
+										break
+					else:
+						if status != StreamPeerTLS.STATUS_CONNECTED:
+							break
+						await Engine.get_main_loop().process_frame
+					if Time.get_ticks_msec() - start > READ_TIMEOUT_MS:
+						break
+
+	if response_bytes.is_empty():
+		return [-1, "", "Empty response from server after retry"]
 
 	# --- Parse HTTP response ---
 	var header_end := _find_header_delimiter(response_bytes)
 	if header_end == -1:
 		return [-1, "", "Malformed HTTP response (no header delimiter)"]
 
-	var header_str := response_bytes.slice(0, header_end).get_string_from_utf8()
+	var header_str := _safe_get_string(response_bytes.slice(0, header_end))
 	var raw_body_bytes := response_bytes.slice(header_end)
 	
 	if header_str.to_lower().contains("transfer-encoding: chunked"):
 		raw_body_bytes = _decode_chunked_body(raw_body_bytes)
 
-	var body_str := raw_body_bytes.get_string_from_utf8()
+	var body_str := _safe_get_string(raw_body_bytes)
 
 	var status_line := header_str.split("\r\n")[0]
 	var status_parts := status_line.split(" ", true, 2)
@@ -211,7 +299,7 @@ func _decode_chunked_body(chunked_bytes: PackedByteArray) -> PackedByteArray:
 		if line_end == -1:
 			break
 			
-		var hex_str := chunked_bytes.slice(idx, line_end).get_string_from_utf8().strip_edges()
+		var hex_str := _safe_get_string(chunked_bytes.slice(idx, line_end)).strip_edges()
 		var chunk_size := hex_str.hex_to_int()
 		
 		if chunk_size == 0:
@@ -261,6 +349,7 @@ func test_connection(url: String, username: String, app_password: String) -> voi
 		test_path += "/"
 		
 	var result := await _send_propfind(parts.host, parts.port, test_path, auth, 0)
+	disconnect_active_connection()
 	if result[0] == 207:
 		connection_tested.emit(true, "")
 	else:
@@ -269,6 +358,8 @@ func test_connection(url: String, username: String, app_password: String) -> voi
 func scan_music_directory(target_folder: String = "Music") -> void:
 	if not SettingsManager.has_credentials():
 		return
+
+	had_scan_errors = false
 
 	var base_url: String = SettingsManager.webdav_url
 	var parts := _parse_url(base_url)
@@ -301,6 +392,7 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 		var result := await _send_propfind(parts.host, parts.port, request_path, auth, 1)
 		
 		if result[0] != 207:
+			had_scan_errors = true
 			# ADDED: Essential debugging print statement
 			print("WebDAVService Error: PROPFIND failed for path '%s' with status code: %d. Server message: %s" % [request_path, result[0], result[2]])
 			continue
@@ -321,7 +413,9 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 				if norm_sub.begins_with(norm_current):
 					folder_queue.append(norm_sub)
 				
+	disconnect_active_connection()
 	print("WebDAVService: Deep traversal finished. Found %d total tracks." % all_discovered_tracks.size())
+	scanned_files = all_discovered_tracks
 	library_scanned.emit(all_discovered_tracks)
 
 ## Internal XML structural extraction engines
@@ -373,3 +467,10 @@ func _parse_webdav_xml(xml_content: String) -> Array:
 								clean_path = path_parts.substr(path_parts.find("/"))
 						tracked_files.append(clean_path)
 	return tracked_files
+
+func _safe_get_string(bytes: PackedByteArray) -> String:
+	var clean := PackedByteArray()
+	for b in bytes:
+		if b != 0:
+			clean.append(b)
+	return clean.get_string_from_utf8()

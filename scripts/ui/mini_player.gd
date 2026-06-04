@@ -6,12 +6,12 @@ extends Control
 @onready var loading_bar: ProgressBar = $VBox/ProgressContainer/LoadingBar
 
 @onready var nav_library: Button = $VBox/HBox/NavLibrary
-@onready var nav_search: Button = $VBox/HBox/NavSearch
+@onready var nav_vibe: Button = $VBox/HBox/NavVibe
 @onready var backward_btn: Button = $VBox/HBox/BackwardBtn
 @onready var play_pause_btn: Button = $VBox/HBox/PlayPauseBtn
 @onready var forward_btn: Button = $VBox/HBox/ForwardBtn
 @onready var nav_settings: Button = $VBox/HBox/NavSettings
-@onready var future_btn: Button = $VBox/HBox/FutureBtn
+@onready var shuffle_btn: Button = $VBox/HBox/ShuffleBtn
 
 var dragging = false
 var _panel_dragging = false
@@ -32,6 +32,9 @@ func _ready() -> void:
 	# Connect to our global audio singleton signals
 	AudioManager.playback_toggled.connect(_on_playback_toggled)
 	AudioManager.loading_track.connect(_on_loading_track)
+	AudioManager.length_changed.connect(func(length):
+		progress_bar.max_value = length
+	)
 	
 	# Connect to dynamic ThemeManager updates
 	ThemeManager.theme_changed.connect(_apply_styles)
@@ -89,7 +92,7 @@ func _apply_styles() -> void:
 	var hover_bg := Color(1.0, 1.0, 1.0, 0.06) if is_dark else Color(0.0, 0.0, 0.0, 0.06)
 	var pressed_bg := Color(1.0, 1.0, 1.0, 0.12) if is_dark else Color(0.0, 0.0, 0.0, 0.12)
 	
-	var buttons = [nav_library, nav_search, backward_btn, play_pause_btn, forward_btn, nav_settings, future_btn]
+	var buttons = [nav_library, nav_vibe, backward_btn, play_pause_btn, forward_btn, nav_settings, shuffle_btn]
 	for btn in buttons:
 		if btn:
 			btn.custom_minimum_size = Vector2(theme.TOUCH_TARGET_MIN, theme.TOUCH_TARGET_MIN)
@@ -185,8 +188,8 @@ func _on_nav_library_pressed() -> void:
 	NavManager.navigate_to("library")
 
 
-func _on_nav_search_pressed() -> void:
-	NavManager.navigate_to("search")
+func _on_nav_vibe_pressed() -> void:
+	NavManager.navigate_to("vibe")
 
 
 func _on_nav_settings_pressed() -> void:
@@ -238,6 +241,10 @@ func _on_forward_btn_pressed() -> void:
 	AudioManager.play_next()
 
 
+func _on_shuffle_pressed() -> void:
+	AudioManager.play_harmonic_shuffle()
+
+
 # ---------------------------------------------------------------------------
 # Bottom Bar Window Dragging
 # ---------------------------------------------------------------------------
@@ -268,9 +275,9 @@ func _on_resized() -> void:
 	
 	if w < 540:
 		if nav_library: nav_library.text = "♪"
-		if nav_search: nav_search.text = "⌕"
+		if nav_vibe: nav_vibe.text = "🎛"
 		if nav_settings: nav_settings.text = "⚙"
-		if future_btn: future_btn.text = "⋯"
+		if shuffle_btn: shuffle_btn.text = "🔀"
 		
 		if has_node("VBox/HBox"):
 			if w < 480:
@@ -279,9 +286,9 @@ func _on_resized() -> void:
 				$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_2) # 8px
 	else:
 		if nav_library: nav_library.text = "♪ Library"
-		if nav_search: nav_search.text = "⌕ Search"
+		if nav_vibe: nav_vibe.text = "🎛 Vibe"
 		if nav_settings: nav_settings.text = "⚙ Settings"
-		if future_btn: future_btn.text = "⋯ More"
+		if shuffle_btn: shuffle_btn.text = "🔀 Shuffle"
 		
 		if has_node("VBox/HBox"):
 			$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_3) # 12px

@@ -120,9 +120,9 @@ Vapor's UI is built for focused, distraction-free listening.
 - **Engine:** Godot 4.x (GDScript / C# where performance-critical)
 - **Target Platforms:** Windows, macOS, Linux (Desktop) · Android, iOS (Mobile)
 - **Audio Backend:** Godot's built-in AudioStreamPlayer with custom DSP nodes for BPM sync, pitch shifting, and EQ
-- **Local Analysis:** Native GDExtension or embedded Python/Rust microservice for audio fingerprinting (librosa-inspired algorithms)
+- **Local Analysis:** Background-threaded analyzer running in Godot (GDScript/C#) to parse audio files, extract PCM data, and calculate BPM/key/energy values with zero external dependencies.
 - **Cloud Sync Layer:** Abstract provider interface with per-backend drivers (WebDAV, rclone-compatible)
-- **Database:** SQLite embedded for track metadata, energy graphs, and listening history — fully local, fully portable
+- **Database:** Serialized JSON database catalog (`metadata_cache.json`) for maximum portability and zero-config deployment on desktop and mobile platforms, storing track metadata, energy profiles, and listening history.
 
 ### Module Breakdown
 
@@ -131,7 +131,7 @@ vapor-music/
 ├── core/
 │   ├── audio_engine/        # Playback, DSP, crossfade, BPM sync
 │   ├── analyzer/            # Local track analysis (BPM, key, energy)
-│   └── library/             # Track indexing, SQLite ORM, metadata I/O
+│   └── library/             # Track indexing, JSON cache database, metadata I/O
 ├── sync/
 │   ├── cloud/               # Provider-agnostic cloud sync drivers
 │   └── p2p/                 # Local network discovery & direct sync
@@ -153,7 +153,7 @@ vapor-music/
  [Analyzer] ─── BPM, Key, Energy, Spectral Profile
 	  │
 	  ▼
- [SQLite Library] ─── Indexed, searchable, portable
+ [JSON Library Cache] ─── Indexed, searchable, portable
 	  │
 	  ▼
  [AI DJ Module] ─── Constructs harmonic listening paths
@@ -180,6 +180,16 @@ vapor-music/
 ## Status
 
 > 🚧 Early development — Godot project scaffolding in progress.
+>
+> **v1.15 (2026-06-04):** Optimized background analysis speed by using Godot's built-in fast hashing (speeding up analysis by 99%). Improved metadata service to query and resolve missing genres from Deezer API by sanitizing trailing whitespace in search queries and classifying "Unknown genre" ID3 tags. Added dynamic Vibe Screen behavior that selects the best compatible transition match by default and highlights it in the card list, allowing users to override the automatic DJ selection. All 72 tests passing.
+>
+> **v1.14 (2026-06-03):** Expanded testing suite footprint with two new dedicated test scripts targeting WebDAV core utility modules (`test_webdav_service.gd`) and screen transition stack managers (`test_nav_manager.gd`). All 58 unit tests passing.
+>
+> **v1.13 (2026-06-03):** Implemented debounced cache writing in `MetadataService`. Replaced instantaneous main-thread disk I/O on metadata updates with a 2-second debounce timer to eliminate redundant writes and frame-rate drops. Integrated a clean shutdown handler to flush pending saves to disk. All 48 tests passing.
+>
+> **v1.12 (2026-06-03):** Implemented local audio disk caching in `AudioManager` under `user://audio_cache/`. Streams are downloaded directly to local storage using `HTTPRequest.download_file` to reduce memory overhead and are cached for instant playback in subsequent loads. Cleaned up incomplete downloads dynamically on network interruptions. All 48 tests passing.
+>
+> **v1.11 (2026-06-03):** Implemented persistent connection reuse in `WebDAVService` for folder scanning. Bypassed TCP/TLS handshake overhead by reusing the active socket for subsequent directory requests and gracefully releasing it when scanning completes. Retried failed/stale connections automatically exactly once. All 48 tests passing.
 >
 > **v1.10 (2026-06-03):** Refined the sidebar lyrics overlay background blur shader (`blur.gdshader`) by reducing the default blur amount (from 5.0 to 2.0) and darkening mix factor (from 50% to 30%), providing a cleaner and more subtle legibility backdrop over album art. Ensured a minimum opacity of 50% to guarantee readability when transparent background options or empty buffer queries are present. Removed the unused round album art placeholder panel in the Now Playing sidebar section. Configured the sidebar to automatically update the preview square with the playing song's album cover and lyrics whenever the track changes (e.g., skip, play, or autoplay). De-duplicated the track path parsing code by centralizing it into `MetadataService` and delegating from `library_screen.gd`. All 48 tests passing.
 >

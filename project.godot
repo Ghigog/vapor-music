@@ -26,6 +26,7 @@ NavManager="*res://autoloads/NavManager.gd"
 SettingsManager="*res://scripts/services/settings_manager.gd"
 WebDAVService="*res://scripts/services/webdav_service.gd"
 MetadataService="*res://scripts/services/metadata_service.gd"
+AudioAnalyzer="*res://scripts/services/audio_analyzer.gd"
 AudioManager="*uid://bxledcc7ud1e8"
 
 [display]

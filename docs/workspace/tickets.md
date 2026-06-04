@@ -171,7 +171,7 @@ So that I can build new components correctly from day one.
 
 ---
 
-### WIN-001 : Window Corner Resizing
+### WIN-001 : Window Corner Resizing (done)
 **User Story:**
 As a user,
 I'd like to click and drag the corners/edges of the application,
@@ -196,7 +196,7 @@ So that I can resize the borderless application window like a typical desktop ap
 
 ---
 
-### WIN-002 : Sidebar Window Dragging
+### WIN-002 : Sidebar Window Dragging (done)
 **User Story:**
 As a user,
 I'd like to click and drag the leftmost navigation panel (Sidebar),
@@ -219,7 +219,7 @@ So that I can reposition the application window on my desktop.
 
 ---
 
-### UI-001 : Vertical Progress Bar & Sidebar Player Tiles
+### UI-001 : Vertical Progress Bar & Sidebar Player Tiles (done)
 **User Story:**
 As a user,
 I'd like a vertical progress bar sandwiched between the sidebar and the music list, and square windows-style media control tiles in the sidebar,
@@ -387,3 +387,325 @@ Update the parser in `library_screen.gd` to strip track number/alphanumeric pref
 - Given a file path `/Music/Discovery/01 - Intro.mp3`
 - When parsed
 - Then the album is resolved to "Discovery", the artist is "Unknown Artist", and the track is "Intro".
+
+---
+
+### AI-001 : Local Track Waveform & Energy Analysis (done)
+**User Story:**
+As a listener,
+I'd like the application to analyze my imported music files locally,
+So that musical properties like BPM, key, and energy can be extracted for smooth mixing.
+
+**Context:** The app's core USP is harmonic mixing. Before tracks can be blended seamlessly, we must extract and index their key characteristics locally without third-party servers.
+
+**Description:** Implement the `AudioAnalyzer` service that runs on a background thread (`Thread` class) to parse cached audio files, decode audio samples (PCM bytes), and run fast frequency analysis to detect beats per minute (BPM), musical key signatures (mapped to the Camelot Wheel), and perceived energy level curves.
+
+**Requirements:**
+- Perform audio parsing sequentially in a background thread to prevent UI stutter/frame drops.
+- Implement dynamic waveform peak/beat envelope detection to extract average BPM.
+- Analyze frequency spectrum arrays to identify dominant pitches and assign a key signature (e.g., 8A, 11B).
+- Classify perceived energy/mood levels and generate a compressed energy profile (array of values).
+
+**Acceptance Criteria:**
+- Given an audio track with a known BPM and key
+- When processed by the AudioAnalyzer on a background thread
+- Then the calculated BPM is within ±2% margin of error
+- And the Camelot key corresponds correctly to the track's musical key signature
+- And the main UI thread remains fully responsive (no frame rate drops) during analysis.
+
+---
+
+### AI-002 : Database Schema & Metadata Tag Storage (done)
+**User Story:**
+As a developer,
+I'd like to extend the metadata cache schema to support BPM, musical key, energy ratings, energy graphs, and listening history,
+So that the player can query these properties instantly during playback and queue generation.
+
+**Context:** The existing metadata cache at `user://metadata_cache.json` only stores artist, album, track name, local paths, and lyrics. We need structured fields to record the analyzer results, listening history, and energy graphs as detailed in our system architecture.
+
+**Description:** Update `MetadataService` and `SettingsManager` to support database schemas/fields for `bpm`, `musical_key`, `energy_level`, `energy_graph`, and `listening_history`. Ensure metadata reader/writer processes these new fields.
+
+**Requirements:**
+- Extend the `metadata_cache.json` structure to include `bpm` (float), `musical_key` (String), `energy_level` (float), `energy_graph` (Array of floats), and `listening_history` (Array of floats/ints representing play timestamps).
+- Update `MetadataService.lookup_metadata()` to populate and save these fields.
+- Implement tag fallback parsing (e.g., reading ID3 TBP tags for BPM and TKEY for musical key).
+
+**Acceptance Criteria:**
+- Given a newly analyzed track
+- When metadata is saved to the local JSON cache
+- Then the JSON cache contains valid entries for `bpm`, `musical_key`, `energy_level`, `energy_graph`, and `listening_history`
+- And reloading the cache returns the exact properties.
+
+---
+
+### AI-003 : Harmonic Shuffle / DJ Mood-Pathing Algorithm (done)
+**User Story:**
+As a listener,
+I'd like the shuffle button to generate a transition queue sorted by harmonic compatibility and energy level,
+So that track transitions do not feel jarring or disjointed.
+
+**Context:** Traditional shuffle selections feel erratic. Using the Camelot Wheel (adjacent keys like 8A and 9A or 8B) and matching energy levels allows us to transition tracks seamlessly.
+
+**Description:** Implement a playlist generator algorithm that builds a path between compatible tracks, arranging songs in the queue based on closest BPM differences, Camelot Wheel compatibility, and energy curves.
+
+**Requirements:**
+- Define standard Camelot Wheel transition rules (adjacent numbers, same number opposite letter).
+- Implement a search/sorting algorithm to arrange the queued tracks along a smooth energy curve.
+- Ensure the track skipping flow respects this dynamically calculated queue.
+
+**Acceptance Criteria:**
+- Given a list of tracks with diverse keys and tempos
+- When harmonic shuffle is triggered
+- Then each successive track in the queue is adjacent to the prior track on the Camelot Wheel (or matches it)
+- And the queue contains a smooth gradient of energy levels.
+
+---
+
+### AI-004 : Intelligent Cross-Fading Playback Engine (active)
+**User Story:**
+As a listener,
+I'd like the player to align beats and dynamically transition between tracks,
+So that the exit of one track blends seamlessly into the intro of the next.
+
+**Context:** Traditional crossfading only fades volume linear-style, which sounds amateurish. Aligning beats and transition boundaries using a dual-deck playback system provides a professional DJ experience.
+
+**Description:** Extend `AudioManager` with a dual-deck playback system utilizing primary and secondary `AudioStreamPlayer` nodes. Implement beat-matching and intro/outro overlap detection to transition audio tracks dynamically.
+
+**Requirements:**
+- Implement dual `AudioStreamPlayer` nodes to support playing two tracks simultaneously during a transition.
+- Calculate exit and entry alignment points (overlapping the outro of the old track with the intro of the next based on the cached `energy_graph` profile).
+- Adjust the playback speed (tempo) of the incoming track by adjusting `pitch_scale` by ±2% to sync beat boundaries.
+- Implement a volume crossfade transition driven by `Tween` or frame-based updates mapped to the crossfade audio bus.
+
+**Acceptance Criteria:**
+- Given the current track is approaching its outro boundary
+- When a transition begins
+- Then the incoming track starts playing on the secondary player, matches the exit beat timing, and crossfades volumes in sync with the beat grid.
+
+---
+
+### AI-005 : Playlist Visualizer & Camelot Wheel UI (active)
+**User Story:**
+As a user,
+I'd like a visual dashboard showing Camelot Wheel connections and the upcoming mix transitions,
+So that I can see and adjust how my tracks are being blended together.
+
+**Context:** Users should see the "vibe" represented visually to understand the AI DJ's pathing decisions and adjust them interactively.
+
+**Description:** Design a dashboard widget showing the Camelot Wheel, highlighting active/upcoming keys, and displaying the transition timeline showingoutro/intro overlaps.
+
+**Requirements:**
+- Draw a custom vector visualizer of the Camelot Wheel showing currently queued keys.
+- Show an interactive timeline overlay indicating transition points, BPM offsets, and volume crossfade curves.
+- Add sliders to let users adjust crossover duration and energy thresholds.
+
+**Acceptance Criteria:**
+- Given the now playing screen is active
+- When the mix visualizer is opened
+- Then the visual Camelot Wheel highlights the current and next track keys
+- And adjusting the crossover slider updates the playback transition timing instantly.
+
+---
+
+### EQ-001 : Godot AudioServer Multiband Parametric EQ Layout (active)
+**User Story:**
+As a developer,
+I'd like to implement a multi-band parametric equalizer layout in the audio server,
+So that individual frequency bands can be adjusted dynamically at runtime.
+
+**Context:** Godot supports adding audio effects to buses. We need to scaffold a dedicated master effects bus featuring a parametric equalizer with configurable bands.
+
+**Description:** Setup a master EQ effect bus layout programmatically or via editor settings. Expose interfaces in `AudioManager` to modify frequency, Q-factor, and gain of individual bands.
+
+**Requirements:**
+- Add an `AudioEffectEQ` or multiple `AudioEffectFilter` bands to the master bus.
+- Expose methods in `AudioManager` to configure bands (e.g., `set_eq_band(frequency, gain, q)`).
+- Ensure audio routing does not introduce distortion or latency when filters are active.
+
+**Acceptance Criteria:**
+- Given a master output channel
+- When a band gain is modified via the API
+- Then the master audio signal reflects the frequency attenuation or boost.
+
+---
+
+### EQ-002 : AutoEQ Calibration Profile Parser (active)
+**User Story:**
+As a developer,
+I'd like to parse parametric filter parameters from standard AutoEQ text profiles,
+So that headphone calibration settings can be imported directly into our EQ filter engine.
+
+**Context:** The AutoEQ project outputs text files containing specific frequency bands, gains, and Q-values. We need to parse these values to apply them automatically.
+
+**Description:** Implement a parser script `autoeq_parser.gd` to read and convert AutoEQ parametric filter files into structured Godot dictionary data.
+
+**Requirements:**
+- Parse text configurations representing parametric bands (typically 5 to 10 bands containing Center Frequency, Gain, and Q-factor).
+- Map parsed variables directly to the Godot `AudioServer` parametric EQ filter properties.
+- Validate values to prevent clipping (e.g. automatically adjust preamp/post-gain).
+
+**Acceptance Criteria:**
+- Given a raw AutoEQ calibration text file
+- When loaded by the parser
+- Then a structured array of bands is returned with correct frequency, gain, and Q-factor mappings.
+
+---
+
+### EQ-003 : Settings Headphone Calibration Selection UI (active)
+**User Story:**
+As a user,
+I'd like to select my headphone model from a list in the Settings screen,
+So that the correct corrective EQ profile is applied automatically.
+
+**Context:** The Settings screen needs an elegant selector interface showing supported headphone models, with search capability, and a master calibration toggle.
+
+**Description:** Redesign settings options to include an AutoEQ section. Add a searchable OptionButton/dropdown for headphone models, a master bypass switch, and target visual graphs showing the correction curve.
+
+**Requirements:**
+- Build a list of common headphone presets (packaged inside a local JSON or fetched from a repository).
+- Bind the item selection to trigger `EQ-002` parser and update `EQ-001` audio bus filters.
+- Draw a clean vector graph showing the corrective frequency curve applied.
+
+**Acceptance Criteria:**
+- Given settings screen is active
+- When the user selects a headphone model and enables calibration
+- Then the EQ parameters update in the audio server
+- And a graphical representation of the target response curve is displayed.
+
+---
+
+### SYNC-001 : Local Subnet Peer Discovery (mDNS/UDP) (active)
+**User Story:**
+As a user with multiple devices,
+I'd like the apps to discover each other automatically on my local Wi-Fi subnet,
+So that I don't have to input IP addresses manually to start syncing.
+
+**Context:** Local synchronization should feel seamless. Automatic discovery removes the technical friction of manual IP setup.
+
+**Description:** Implement multicast DNS (mDNS) or UDP broadcast discovery inside a network synchronization service (`SyncService`). Broadcast active device properties and listen for peers on the subnet.
+
+**Requirements:**
+- Set up a UDP broadcaster sending device identities on a specific port.
+- Implement a UDP listener socket to collect discovered peer IPs, device names, and client types.
+- Maintain an active peers directory in `SyncService`.
+
+**Acceptance Criteria:**
+- Given two client instances running on the same local Wi-Fi network
+- When subnet discovery is active
+- Then both devices automatically populate their active peers lists with each other's details.
+
+---
+
+### SYNC-002 : Secure Direct Pairing & Session Handshake (active)
+**User Story:**
+As a user,
+I'd like to authorize and pair devices using a numeric PIN code,
+So that unauthorized local network devices cannot read or modify my music library.
+
+**Context:** Security is vital on shared networks. A pairing handshake prevents unauthorized connections from querying files or configurations.
+
+**Description:** Build a secure handshake handler that executes when a connection is initiated. Display a pairing modal showing a PIN code, verifying it on the peer to establish an encrypted session.
+
+**Requirements:**
+- Implement a secure handshake protocol using Diffie-Hellman or basic token validation.
+- Display a temporary 6-digit PIN modal.
+- Verify matching credentials and record trusted device IDs locally.
+
+**Acceptance Criteria:**
+- Given a pairing request from a client
+- When a matching PIN is input on both devices
+- Then the connection is authenticated, and the devices are stored as trusted peers.
+
+---
+
+### SYNC-003 : Database Reconciliation Protocol (active)
+**User Story:**
+As a developer,
+I'd like to compare and reconcile track metadata between paired devices,
+So that missing tracks and updated ratings are identified before transfers start.
+
+**Context:** Reconciling databases requires calculating delta diffs representing missing, updated, or orphaned tracks without transferring redundant assets.
+
+**Description:** Develop a reconciliation engine that serializes the local track database to light hash maps, exchanging them over the network connection to calculate transfer tasks.
+
+**Requirements:**
+- Generate SHA-256 track fingerprints representing database records.
+- Compare fingerprints to identify missing tracks on either device.
+- Compare track update timestamps to handle ratings or playlist updates.
+
+**Acceptance Criteria:**
+- Given two reconciled databases
+- When synced
+- Then a delta list of missing files and metadata updates is generated correctly.
+
+---
+
+### SYNC-004 : Direct Peer File Transfer Pipeline (active)
+**User Story:**
+As a user,
+I'd like missing files to transfer rapidly over local sockets,
+So that my music library is synchronized without cloud bandwidth limits.
+
+**Context:** Syncing can involve gigabytes of audio files. Direct TCP/WebSocket streaming provides high-speed file transfers on local routers.
+
+**Description:** Implement a parallel file-chunk sender and receiver socket architecture to transfer audio streams and album art directly.
+
+**Requirements:**
+- Set up a dedicated TCP file transfer port or WebSocket server.
+- Stream files in binary chunks, verifying integrity via MD5 checksum checks.
+- Support resume logic for interrupted file transfers.
+
+**Acceptance Criteria:**
+- Given a transfer task of 5 files
+- When execution begins
+- Then the files stream over the local socket at maximum network speed
+- And completed transfers match the source file checksums.
+
+---
+
+### SYNC-005 : Peer-to-Peer Synchronization Dashboard UI (active)
+**User Story:**
+As a user,
+I'd like a sync dashboard in Settings to view paired devices, see transfer progress, and initiate local syncs,
+So that I have full visibility and control over my data transfers.
+
+**Context:** Users need visual feedback during large sync processes to see file progress, speeds, and connection status.
+
+**Description:** Create a dashboard panel in Settings showing active connections, pairing status, a "Sync Now" CTA button, and real-time progress bars for file transfers.
+
+**Requirements:**
+- Render a list of discovered and paired devices with active connection indicators.
+- Display a sync progress bar showing percentage, speed (MB/s), and current file name.
+- Provide toggles to filter what synced (e.g., playlists only, track files, meta only).
+
+**Acceptance Criteria:**
+- Given a synchronization is active
+- When viewing the settings sync panel
+- Then the interface updates progress bars in real-time, showing transfer speed and remaining counts.
+
+---
+
+### AI-006 : Vibe Workbench & Metadata Improvements (done)
+**User Story:**
+As a listener,
+I'd like my "Next" skip actions to honor suggested tracks, unanalyzed songs to be prioritized upon play, and a persistent status bar to track background analysis progress and fix genre lookups,
+So that the AI DJ transitions and metadata elements feel seamless, reliable, and premium.
+
+**Context:** Skip actions bypassed prepared overrides, unanalyzed tracks were harmonically path-sorted using dummy values, and the Deezer search structure broke genre lookups.
+
+**Description:** Adjust skip mechanics to prioritize `upcoming_track_override`. Group and append unanalyzed tracks in the pathfinder. Elevate played track analysis to index `0` of the background thread queue. Implement a status label in the header showing analysed-to-total track ratios. Rewrite Deezer search queries to the standard `Artist Album` format.
+
+**Requirements:**
+- Skip button uses `upcoming_track_override` if present.
+- Played tracks enqueued at front of `AudioAnalyzer` background queue.
+- `WebDAVService.scanned_files` records complete scanned file collection.
+- `vibe_screen.tscn` contains an `AnalysisStatus` label in an HBox header layout.
+- Status bar displays `⏳ Analyzing library... X / Y ready` and `✓ All Y tracks analyzed`.
+- Deezer search syntax changed from `artist:"..." album:"..."` to `Artist Album` with fallback logic.
+
+**Acceptance Criteria:**
+- Given a suggested track is clicked as upcoming
+- When the user clicks "Next"
+- Then the app transitions directly to that track.
+- Given the vibe screen is loaded
+- Then the header displays the persistent background analysis status.

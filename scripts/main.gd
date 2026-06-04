@@ -27,7 +27,7 @@ extends Control
 
 # Screens — all present in the scene tree; only one is visible at a time.
 @onready var library_screen:  Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/LibraryScreen
-@onready var search_screen:   Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/SearchScreen
+@onready var vibe_screen:   Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/VibeScreen
 @onready var settings_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/SettingsScreen
 
 ## Maps screen name strings to their scene-tree Control nodes.
@@ -104,6 +104,9 @@ func _connect_vp_signals() -> void:
 	AudioManager.playback_toggled.connect(func(_is_playing):
 		vertical_progress.max_value = AudioManager.current_track_length
 	)
+	AudioManager.length_changed.connect(func(length):
+		vertical_progress.max_value = length
+	)
 func _process(_delta: float) -> void:
 	if PlatformManager.is_desktop() and vertical_progress and vertical_progress.visible and AudioManager.is_playing and not _vp_dragging:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
@@ -138,7 +141,7 @@ func _trigger_library_scan() -> void:
 func _register_screens() -> void:
 	_screens = {
 		"library":  library_screen,
-		"search":   search_screen,
+		"vibe":     vibe_screen,
 		"settings": settings_screen,
 	}
 

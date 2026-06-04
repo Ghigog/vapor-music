@@ -5,7 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://b27ae876qslci" path="res://scenes/ui/sidebar/sidebar.tscn" id="2_sid"]
 [ext_resource type="PackedScene" uid="uid://d15njsphawx4k" path="res://scenes/ui/mini_player/mini_player.tscn" id="4_mp"]
 [ext_resource type="PackedScene" uid="uid://b20adm7oxslci" path="res://scenes/screens/library/library_screen.tscn" id="5_lib"]
-[ext_resource type="PackedScene" uid="uid://b265cnaeyslci" path="res://scenes/screens/search/search_screen.tscn" id="6_srch"]
+[ext_resource type="PackedScene" uid="uid://vaporvibe00001" path="res://scenes/screens/vibe/vibe_screen.tscn" id="6_srch"]
 [ext_resource type="PackedScene" uid="uid://dmyajuekdcds" path="res://scenes/screens/settings/settings_screen.tscn" id="7_set"]
 [ext_resource type="PackedScene" uid="uid://csetupwi0ard1" path="res://scenes/screens/setup_wizard/setup_wizard.tscn" id="8_swiz"]
 [ext_resource type="Script" uid="uid://c8747tn3s4lad" path="res://scripts/ui/vertical_progress.gd" id="9_vp"]
@@ -83,7 +83,7 @@ grow_vertical = 2
 [node name="LibraryScreen" parent="AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer" unique_id=1973212053 instance=ExtResource("5_lib")]
 layout_mode = 1
 
-[node name="SearchScreen" parent="AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer" unique_id=1299514914 instance=ExtResource("6_srch")]
+[node name="VibeScreen" parent="AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer" unique_id=1299514914 instance=ExtResource("6_srch")]
 visible = false
 layout_mode = 1
 anchors_preset = 15

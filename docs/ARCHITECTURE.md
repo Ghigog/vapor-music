@@ -188,7 +188,7 @@ godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://tests -gexit
 | Phase | Goal | Key Features |
 |-------|------|--------------|
 | MVP (current) | App opens | Layout, navigation, design tokens, empty state |
-| Phase 2 | Library import | File picker, SQLite metadata, library grid/list |
+| Phase 2 | Library import | File picker, JSON metadata cache, library grid/list |
 | Phase 3 | Playback | AudioStreamPlayer, mini-player, Now Playing screen |
 | Phase 4 | AI DJ | BPM/key analysis, harmonic path, crossfade |
 | Phase 5 | Cloud sync | WebDAV driver, P2P local discovery |

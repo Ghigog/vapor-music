@@ -35,7 +35,7 @@ func test_load_save_cache() -> void:
 			"lyrics": "Test Lyrics"
 		}
 	}
-	service.save_cache()
+	service.save_cache(true)
 	
 	# Clear in-memory cache and reload
 	service.cache = {}
@@ -103,7 +103,10 @@ func test_lookup_metadata_uses_cache() -> void:
 		"file1.mp3": {
 			"artist_image_url": "cached_artist",
 			"album_art_url": "cached_album",
-			"lyrics": {"synced": false, "plain": "cached_lyrics"}
+			"lyrics": {"synced": false, "plain": "cached_lyrics"},
+			"bpm": 120.0,
+			"musical_key": "4A",
+			"genre": "Electronic"
 		}
 	}
 	
@@ -184,4 +187,85 @@ func test_lookup_metadata_resolves_unknown() -> void:
 	assert_eq(result["artist_name"], "Gorillaz", "Should resolve and return Gorillaz")
 	assert_eq(result["album_name"], "Demon Days", "Should resolve and return Demon Days")
 	assert_eq(result["track_title"], "Feel Good Inc.", "Should resolve and return track title")
+
+func test_extended_schema_defaults() -> void:
+	service.mock_response = "{}"
+	var result = await service.lookup_metadata("nonexistent.mp3", "Artist", "Album", "Track")
+	assert_eq(result["bpm"], 0.0, "BPM should default to 0.0")
+	assert_eq(result["musical_key"], "", "Key should default to empty string")
+	assert_eq(result["genre"], "Unknown", "Genre should default to Unknown")
+	assert_eq(result["energy_level"], 0.0, "Energy should default to 0.0")
+	assert_eq(result["energy_graph"], [], "Energy graph should default to empty array")
+	assert_eq(result["dynamic_range"], 0.0, "Dynamic range should default to 0.0")
+	assert_eq(result["harmony_map"], {}, "Harmony map should default to empty dictionary")
+	assert_eq(result["listening_history"], [], "Listening history should default to empty array")
+
+func test_listening_history() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Artist",
+			"album_name": "Album",
+			"track_title": "Track",
+			"listening_history": []
+		}
+	}
+	await service.add_play_timestamp("file1.mp3", 12345678)
+	var meta = service.get_cached_metadata("file1.mp3")
+	assert_eq(meta["listening_history"], [12345678], "History should contain the play timestamp")
+
+func test_id3v2_tag_parsing() -> void:
+	var temp_path = "user://test_id3_parse.mp3"
+	var file = FileAccess.open(temp_path, FileAccess.WRITE)
+	if not file:
+		fail_test("Could not open temp file for writing ID3 test tags")
+		return
+		
+	# ID3v2.3 Header (10 bytes)
+	var bytes = PackedByteArray([
+		0x49, 0x44, 0x33, # "ID3"
+		0x03, 0x00,       # v2.3.0
+		0x00,             # Flags
+		0x00, 0x00, 0x00, 0x2A # Size: 42 bytes (synchsafe: 42)
+	])
+	
+	# TBPM frame (13 bytes total: ID=4, Size=4, Flags=2, Encoding=1, Value=5)
+	# "TBPM", Size=6, Flags=0, Encoding=0, Value="120"
+	bytes.append_array(PackedByteArray([
+		0x54, 0x42, 0x50, 0x4D, # "TBPM"
+		0x00, 0x00, 0x00, 0x04, # Size = 4 (encoding + "120")
+		0x00, 0x00,             # Flags
+		0x00,                   # Encoding: ISO-8859-1
+		0x31, 0x32, 0x30        # "120"
+	]))
+	
+	# TKEY frame
+	# "TKEY", Size=3, Flags=0, Encoding=0, Value="8A"
+	bytes.append_array(PackedByteArray([
+		0x54, 0x4B, 0x45, 0x59, # "TKEY"
+		0x00, 0x00, 0x00, 0x03, # Size = 3 (encoding + "8A")
+		0x00, 0x00,             # Flags
+		0x00,                   # Encoding: ISO-8859-1
+		0x38, 0x41              # "8A"
+	]))
+	
+	# TCON frame
+	# "TCON", Size=5, Flags=0, Encoding=0, Value="Rock"
+	bytes.append_array(PackedByteArray([
+		0x54, 0x43, 0x4F, 0x4E, # "TCON"
+		0x00, 0x00, 0x00, 0x05, # Size = 5 (encoding + "Rock")
+		0x00, 0x00,             # Flags
+		0x00,                   # Encoding: ISO-8859-1
+		0x52, 0x6F, 0x63, 0x6B  # "Rock"
+	]))
+	
+	file.store_buffer(bytes)
+	file.close()
+	
+	var tags = service._parse_id3v2_tags(temp_path)
+	DirAccess.remove_absolute(temp_path)
+	
+	assert_eq(tags["bpm"], 120.0, "BPM should be parsed as 120")
+	assert_eq(tags["musical_key"], "8A", "Key should be parsed as 8A")
+	assert_eq(tags["genre"], "Rock", "Genre should be parsed as Rock")
+
 

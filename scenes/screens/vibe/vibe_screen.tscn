@@ -1,0 +1,111 @@
+[gd_scene load_steps=2 format=3 uid="uid://vaporvibe00001"]
+
+[ext_resource type="Script" path="res://scripts/screens/vibe_screen.gd" id="1_vibe"]
+
+[node name="VibeScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_vibe")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = 24.0
+offset_right = -24.0
+offset_bottom = -24.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+
+[node name="Header" type="MarginContainer" parent="VBox"]
+layout_mode = 2
+
+[node name="HBox" type="HBoxContainer" parent="VBox/Header"]
+layout_mode = 2
+
+[node name="Heading" type="Label" parent="VBox/Header/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "🎛  Vibe Workbench"
+
+[node name="AnalysisStatus" type="Label" parent="VBox/Header/HBox"]
+layout_mode = 2
+text = "Analyzing library..."
+
+[node name="NowPlayingCard" type="PanelContainer" parent="VBox"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="VBox/NowPlayingCard"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="CardTitle" type="Label" parent="VBox/NowPlayingCard/VBox"]
+layout_mode = 2
+text = "NOW PLAYING"
+
+[node name="TrackTitle" type="Label" parent="VBox/NowPlayingCard/VBox"]
+layout_mode = 2
+text = "Not Playing"
+
+[node name="ArtistLabel" type="Label" parent="VBox/NowPlayingCard/VBox"]
+layout_mode = 2
+text = "Choose a song to start the session"
+
+[node name="BadgesHBox" type="HBoxContainer" parent="VBox/NowPlayingCard/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="KeyBadge" type="Label" parent="VBox/NowPlayingCard/VBox/BadgesHBox"]
+layout_mode = 2
+text = "--"
+
+[node name="BpmBadge" type="Label" parent="VBox/NowPlayingCard/VBox/BadgesHBox"]
+layout_mode = 2
+text = "-- BPM"
+
+[node name="EnergyBadge" type="Label" parent="VBox/NowPlayingCard/VBox/BadgesHBox"]
+layout_mode = 2
+text = "Energy: --%"
+
+[node name="GenreBadge" type="Label" parent="VBox/NowPlayingCard/VBox/BadgesHBox"]
+layout_mode = 2
+text = "Genre: --"
+
+[node name="TransitionCard" type="PanelContainer" parent="VBox"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="VBox/TransitionCard"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="SectionTitle" type="Label" parent="VBox/TransitionCard/VBox"]
+layout_mode = 2
+text = "ACTIVE AI BLEND MODE"
+
+[node name="TransitionLabel" type="Label" parent="VBox/TransitionCard/VBox"]
+layout_mode = 2
+text = "AI DJ: Monitoring Vibe..."
+
+[node name="RunnerUpsSection" type="PanelContainer" parent="VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="VBox" type="VBoxContainer" parent="VBox/RunnerUpsSection"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SectionTitle" type="Label" parent="VBox/RunnerUpsSection/VBox"]
+layout_mode = 2
+text = "NEXT COMPATIBLE BLENDS"
+
+[node name="RunnerUpsList" type="VBoxContainer" parent="VBox/RunnerUpsSection/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8

@@ -6,7 +6,7 @@
 ##
 ## Screens (MVP):
 ##   "library"     — Music library browser (default)
-##   "search"      — In-library search
+##   "vibe"        — DJ Vibe Workbench
 ##   "now_playing" — Full-screen Now Playing view
 ##   "queue"       — Playback queue
 ##   "settings"    — App settings
