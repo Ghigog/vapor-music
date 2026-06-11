@@ -39,12 +39,14 @@ custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "♪ Library"
+clip_text = true
 
 [node name="NavVibe" type="Button" parent="VBox/HBox" unique_id=100000004]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "🎛 Vibe"
+clip_text = true
 
 [node name="BackwardBtn" type="Button" parent="VBox/HBox" unique_id=1982662063]
 custom_minimum_size = Vector2(44, 44)
@@ -69,12 +71,16 @@ custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "⚙ Settings"
+clip_text = true
 
-[node name="ShuffleBtn" type="Button" parent="VBox/HBox" unique_id=100000006]
+[node name="ShuffleBtn" type="CheckBox" parent="VBox/HBox" unique_id=100000006]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "🔀 Shuffle"
+clip_text = true
+
+
+
 
 [connection signal="drag_ended" from="VBox/ProgressContainer/ProgressBar" to="." method="_on_progress_bar_drag_ended"]
 [connection signal="drag_started" from="VBox/ProgressContainer/ProgressBar" to="." method="_on_progress_bar_drag_started"]

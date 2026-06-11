@@ -27,9 +27,12 @@ var is_loading: bool = false:
 		if is_loading:
 			_loading_time = 0.0
 
+var _track_loading := false
+var _transitioning := false
 var _dragging := false
 var _hovered := false
 var _loading_time := 0.0
+
 
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -38,9 +41,24 @@ func _ready() -> void:
 	mouse_exited.connect(func(): _hovered = false; queue_redraw())
 	
 	AudioManager.loading_track.connect(func(loading):
-		is_loading = loading
+		_track_loading = loading
+		_update_loading_state()
 	)
+	if AudioManager.has_signal("transition_started"):
+		AudioManager.transition_started.connect(func(_next_track, _type):
+			_transitioning = true
+			_update_loading_state()
+		)
+	if AudioManager.has_signal("transition_completed"):
+		AudioManager.transition_completed.connect(func(_track):
+			_transitioning = false
+			_update_loading_state()
+		)
 	set_process(false)
+
+
+func _update_loading_state() -> void:
+	is_loading = _track_loading or _transitioning
 
 
 func _process(delta: float) -> void:

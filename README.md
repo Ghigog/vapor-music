@@ -52,6 +52,9 @@ Traditional players shuffle by picking `Random Song A` and crossfading it into `
 
 **Key Differentiator:** All analysis and mixing logic runs entirely **on-device**. No cloud AI, no subscriptions, no privacy compromise.
 
+> [!NOTE]
+> A critical analysis of the current transition limitations and a technical roadmap for professional-grade mixing can be found in the [AI DJ Refactor Plan](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/ai_dj_refactor_plan.md).
+
 ---
 
 ### 2. ☁️ Zero-Config Cloud Sync — *Local-First, Frictionless Everywhere*
@@ -75,6 +78,16 @@ The primary reason everyday users stay on Spotify is friction. Setting up Navidr
 ---
 
 ## High-Value Feature Set
+
+### 📂 Playlist Management & Interactive Curation
+Vapor Music features a local-first, drag-and-drop playlist curation system that natively integrates with our Vibe DJ transitions:
+* **Collapsible Sidebar Hub**: The navigation sidebar houses a collapsible **Playlists** section. Create new playlists on-the-fly using the inline `+` button, and rename existing entries by double-clicking them to expose dynamic text inputs.
+* **Fluid Drag-and-Drop Workflow**:
+  * Drag tracks from the main **Library** browser and drop them onto sidebar playlist items to add them instantly.
+  * Drop tracks anywhere in the active **Playlist Screen** to append them, or drop them directly onto a track row to insert them at that specific index.
+* **Drag-to-Reorder Mechanics**: Arrange your vibe by grabbing track row drag handles (`☰`) in the playlist view and dragging them to reorder.
+* **Living Custom Covers & Metadata**: Customize playlist cover art using the visual `Pencil` icon overlay. Select files using the built-in `FileDialog` or drag-and-drop cover art files directly from your operating system explorer. If no cover art is defined, the system automatically falls back to displaying the cached album art from the playlist's first track.
+* **Vibe DJ Integration**: Playlists aren't static lists; they feed into the Vibe DJ's engine. Toggle **Smart Mixing** to dynamically generate transition effects (Standard Crossfade, Bass Swap, or Filter Sweep) based on BPM and musical key differences between adjacent tracks. Engage **Harmonic Shuffle** to calculate an optimized, smooth blend transition sequence through your entire playlist.
 
 ### 🎨 Digital Liner Notes & Living Metadata
 Streaming services stripped away the beautiful context of music — the album art booklets, production credits, session notes, and lyrics. Vapor restores it.
@@ -180,6 +193,28 @@ vapor-music/
 ## Status
 
 > 🚧 Early development — Godot project scaffolding in progress.
+>
+> **v1.26 (2026-06-10):** Smoothed the Tempo Morph DJ transition effect. Increased the pitch scale morph ramp duration to 50% of the transition duration (max 3.0s) for a gentler tempo match, and fixed a bug where the incoming player's pitch_scale was prematurely reset to 1.0 at the end of the transition, causing abrupt post-transition tempo jumps. All 105 tests passing.
+>
+> **v1.25 (2026-06-10):** Resolved critical audio manager playback and DJ transition states. Fixed issue where manual skips triggered outro wait loops causing overlapping audio tracks, and corrected deck/tween pause states to synchronize correctly across all active channels. Introduced AudioStreamGenerator mocks for fast, offline unit test runs. Added regression unit tests for transition skips, pause synchronization, and silent incoming load state. All 102 tests passing.
+>
+> **v1.24 (2026-06-10):** Expanded Vibe transition effects to include Echo Out, Reverb Freeze, and Tempo Morph. Programmatically added delay and reverb effects to audio buses and integrated a smart selection mapping using BPM differences and match categories (Perfect, Interesting, Creative) to select from 6 transition types. Simplified and polished transition documentation to be extremely punchy and legible in the Vibe Workbench Help Modal. All 100 tests passing.
+>
+> **v1.23 (2026-06-10):** Refined DJ transition timings by introducing transition-specific durations (Bass Swap: 6.0s, Filter Sweep: 4.0s, Standard Crossfade: 3.0s) and implementing a wait-for-outro trigger loop to execute transitions exactly at the outgoing track's end. Implemented a browser-style back/forward playback history stack for "Next" and "Previous" skip buttons, ensuring navigation follows the actual playback path. Added new unit tests for history navigation. All 97 tests passing.
+>
+> **v1.22 (2026-06-10):** Refined the DJ transition effects (Bass Swap and Filter Sweep) to support proper, professional-grade track overlapping at high volumes instead of simple full-duration crossfades. Made audio bus initialization robust against existing configurations and expanded transition tests. Optimized unit test execution speed by 10x (down to 1.5s) using dynamic transition scaling. All 96 tests passing.
+>
+> **v1.21 (2026-06-10):** Standardized the active AI DJ blend status to remain consistent across transition completions. Added a new Transition Effects section to the interactive Help Modal powered by `docs/ai_dj_workflow.md` to detail the Bass Swap, Filter Sweep, and Standard Crossfade rules, and updated developer instructions to maintain parity when modifying transition logic. All 92 tests passing.
+>
+> **v1.20 (2026-06-10):** Implemented the Playlist management feature. Created PlaylistService to persist playlists to `user://playlists.json`, support creating, deleting, renaming, and custom cover art copied to local disk (`user://playlist_images/[hash].[ext]`), with fallback to the album art of the first track. Added a collapsible Playlist section to the Sidebar with LineEdit-based renaming, and implemented drag-and-drop targets. Created PlaylistScreen with edit-in-place title controls, cover art uploading (supporting FileDialog and OS drag-and-drop), a frosted glassmorphic empty state, and a track list with reorder handles and remove buttons (drag-and-drop track reordering supported). Added comprehensive unit tests; all 90 tests passing.
+>
+> **v1.19 (2026-06-10):** Optimized library scan startup speed by loading and displaying cached tracks instantly (less than 1s) from a local `user://library_cache.json` database. Initiated deep recursive WebDAV server directory scanning in the background and implemented cache diffing to dynamically sync added/deleted tracks only when discrepancies are found. All 83 tests passing.
+>
+> **v1.18 (2026-06-10):** Added a "?" help button to the Vibe Workbench header that opens an overlay Help Modal. Implemented a dynamic Markdown-to-BBCode translation engine that parses `docs/ai_dj_workflow.md` directly at runtime to populate the help text. All 83 tests passing.
+>
+> **v1.17 (2026-06-10):** Enhanced the active AI DJ blend status to display the intended upcoming transition track and transition effect (e.g., Standard Crossfade, Bass Swap, or Filter Sweep) throughout track playback. The intended transition dynamically updates when the user chooses a next track override or when the playlist context changes, replacing the "AI DJ standby" display. All 79 tests passing.
+>
+> **v1.16 (2026-06-05):** Resolved duplicate track metadata lookups by tracking active/pending requests in `MetadataService` and yielding process frames when a lookup is already running for a track. This prevents parallel, redundant Deezer and LRCLIB HTTP requests and API rate-limiting during startup, library scanning, or track transitions. All 73 tests passing.
 >
 > **v1.15 (2026-06-04):** Optimized background analysis speed by using Godot's built-in fast hashing (speeding up analysis by 99%). Improved metadata service to query and resolve missing genres from Deezer API by sanitizing trailing whitespace in search queries and classifying "Unknown genre" ID3 tags. Added dynamic Vibe Screen behavior that selects the best compatible transition match by default and highlights it in the card list, allowing users to override the automatic DJ selection. All 72 tests passing.
 >

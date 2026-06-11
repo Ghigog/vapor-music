@@ -41,3 +41,30 @@ func test_play_track_cancels_debounce_timer() -> void:
 	# But we can check if play_track stops the timer.
 	AudioManager.play_track("song1.mp3", ["song1.mp3", "song2.mp3"])
 	assert_true(AudioManager._debounce_timer.is_stopped(), "Debounce timer should be stopped when play_track is called directly")
+
+func test_smart_mixing_toggled_signal() -> void:
+	watch_signals(AudioManager)
+	AudioManager.smart_mixing_enabled = true
+	assert_signal_emitted(AudioManager, "smart_mixing_toggled")
+	assert_true(AudioManager.smart_mixing_enabled)
+	AudioManager.smart_mixing_enabled = false
+	assert_signal_emitted_with_parameters(AudioManager, "smart_mixing_toggled", [false])
+
+func test_smart_mixing_sequence_path() -> void:
+	AudioManager.smart_mixing_step_index = 0
+	AudioManager.update_preferred_type()
+	assert_eq(AudioManager.preferred_type_for_current_track, "perfect")
+	
+	AudioManager.smart_mixing_step_index = 1
+	AudioManager.update_preferred_type()
+	assert_eq(AudioManager.preferred_type_for_current_track, "interesting")
+	
+	AudioManager.smart_mixing_step_index = 2
+	AudioManager.update_preferred_type()
+	assert_eq(AudioManager.preferred_type_for_current_track, "perfect")
+	
+	AudioManager.smart_mixing_step_index = 3
+	AudioManager.update_preferred_type()
+	var choice = AudioManager.preferred_type_for_current_track
+	assert_true(choice == "creative" or choice == "interesting")
+

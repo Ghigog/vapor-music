@@ -5,6 +5,10 @@ extends Node
 ## Integrates with MetadataService to cache the results.
 
 signal analysis_completed(href: String, results: Dictionary)
+signal prefetch_started(total: int)
+signal prefetch_progress(downloaded: int, total: int)
+signal prefetch_completed()
+signal prefetch_stopped()
 
 var _queue: Array[String] = []
 var _thread: Thread
@@ -13,12 +17,24 @@ var _semaphore: Semaphore
 var _exit_thread := false
 var _metadata_service: Node = null
 
+var cache_dir := "user://audio_cache/"
+var background_caching_active := false
+var current_download_href := ""
+var download_http_request: HTTPRequest = null
+var _prefetch_queue: Array[String] = []
+var _prefetch_total := 0
+var _prefetch_downloaded := 0
+
 func _ready() -> void:
 	_mutex = Mutex.new()
 	_semaphore = Semaphore.new()
 	_metadata_service = get_node_or_null("/root/MetadataService")
 	_thread = Thread.new()
 	_thread.start(_thread_worker)
+	
+	var webdav = get_node_or_null("/root/WebDAVService")
+	if is_instance_valid(webdav) and webdav.has_signal("library_scanned"):
+		webdav.library_scanned.connect(scan_library_cache)
 
 func _exit_tree() -> void:
 	_mutex.lock()
@@ -48,12 +64,41 @@ func get_queue_size() -> int:
 	_mutex.unlock()
 	return size
 
+## Returns true if the track is both cached locally as an audio file and has its analysis data ready (bpm > 0).
+func is_track_ready(href: String) -> bool:
+	var metadata_service = _metadata_service
+	if not is_instance_valid(metadata_service):
+		metadata_service = get_node_or_null("/root/MetadataService")
+	if not is_instance_valid(metadata_service):
+		return false
+
+	var meta: Dictionary = metadata_service.get_cached_metadata(href)
+	if meta.is_empty() or meta.get("bpm", 0.0) <= 0.0:
+		return false
+
+	var ext: String = href.get_extension()
+	if ext.is_empty():
+		ext = "mp3"
+	var cache_path: String = cache_dir + href.md5_text() + "." + ext
+	return FileAccess.file_exists(cache_path)
+
+## Returns the number of ready tracks in the provided array.
+func get_ready_tracks_count(hrefs: Array) -> int:
+	var count := 0
+	for href in hrefs:
+		if is_track_ready(href):
+			count += 1
+	return count
+
 ## Scans a list of hrefs and queues any that (a) have a local disk cache but (b) have no analysis
 ## data yet (bpm == 0). Runs on the main thread, safe to call any time.
 func scan_library_cache(hrefs: Array) -> void:
 	var metadata_service = _metadata_service
 	if not is_instance_valid(metadata_service):
 		return
+
+	# Automatically prune orphaned cache files every time the library is scanned/loaded
+	prune_orphaned_cache_files(hrefs)
 
 	var queued := 0
 	var already_done := 0
@@ -70,7 +115,7 @@ func scan_library_cache(hrefs: Array) -> void:
 		var ext: String = href.get_extension()
 		if ext.is_empty():
 			ext = "mp3"
-		var cache_path: String = "user://audio_cache/" + href.md5_text() + "." + ext
+		var cache_path: String = cache_dir + href.md5_text() + "." + ext
 		if not FileAccess.file_exists(cache_path):
 			no_cache += 1
 			continue
@@ -84,6 +129,167 @@ func scan_library_cache(hrefs: Array) -> void:
 		_semaphore.post()
 
 	print("AudioAnalyzer: Library scan — queued=%d, already_analyzed=%d, not_cached=%d" % [queued, already_done, no_cache])
+
+func prune_orphaned_cache_files(hrefs: Array) -> void:
+	var valid_hashes := {}
+	for href in hrefs:
+		var ext: String = href.get_extension()
+		if ext.is_empty():
+			ext = "mp3"
+		var filename = href.md5_text() + "." + ext
+		valid_hashes[filename] = true
+
+	var dir = DirAccess.open(cache_dir)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				if file_name.ends_with(".tmp"):
+					var base_name = file_name.trim_suffix(".tmp")
+					if not valid_hashes.has(base_name):
+						dir.remove(file_name)
+						print("AudioAnalyzer: Pruned orphaned temp file: ", file_name)
+				else:
+					if not valid_hashes.has(file_name):
+						dir.remove(file_name)
+						print("AudioAnalyzer: Pruned orphaned cache file: ", file_name)
+			file_name = dir.get_next()
+		dir.list_dir_end()
+
+func start_prefetching(hrefs: Array) -> void:
+	if background_caching_active:
+		return
+		
+	background_caching_active = true
+	_prefetch_queue.clear()
+	
+	# Clean cache first
+	prune_orphaned_cache_files(hrefs)
+	
+	# Find uncached files
+	var already_cached_count := 0
+	for href in hrefs:
+		var ext: String = href.get_extension()
+		if ext.is_empty():
+			ext = "mp3"
+		var cache_path: String = cache_dir + href.md5_text() + "." + ext
+		if not FileAccess.file_exists(cache_path):
+			_prefetch_queue.append(href)
+		else:
+			already_cached_count += 1
+			
+	_prefetch_total = hrefs.size()
+	_prefetch_downloaded = already_cached_count
+	
+	prefetch_started.emit(_prefetch_total)
+	prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
+	print("AudioAnalyzer: Starting pre-fetch. Uncached tracks count: %d, already cached: %d" % [_prefetch_queue.size(), already_cached_count])
+	
+	if _prefetch_queue.is_empty():
+		background_caching_active = false
+		prefetch_completed.emit()
+		return
+		
+	_download_next_prefetch()
+
+func stop_prefetching() -> void:
+	if not background_caching_active:
+		return
+	background_caching_active = false
+	_prefetch_queue.clear()
+	if is_instance_valid(download_http_request):
+		download_http_request.cancel_request()
+		download_http_request.queue_free()
+		download_http_request = null
+	prefetch_stopped.emit()
+	print("AudioAnalyzer: Pre-fetching stopped.")
+
+func _download_next_prefetch() -> void:
+	if not background_caching_active or _prefetch_queue.is_empty():
+		background_caching_active = false
+		prefetch_completed.emit()
+		return
+		
+	var href: String = _prefetch_queue.pop_front()
+	current_download_href = href
+	
+	var ext: String = href.get_extension()
+	if ext.is_empty():
+		ext = "mp3"
+	var cache_path: String = cache_dir + href.md5_text() + "." + ext
+	var temp_download_path := cache_path + ".tmp"
+	
+	if FileAccess.file_exists(cache_path):
+		_prefetch_downloaded += 1
+		prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
+		call_deferred("_download_next_prefetch")
+		return
+		
+	if not DirAccess.dir_exists_absolute(cache_dir):
+		DirAccess.make_dir_recursive_absolute(cache_dir)
+		
+	var base_url: String = SettingsManager.webdav_url
+	var username := SettingsManager.webdav_username
+	var password := SettingsManager.webdav_password
+	
+	var auth_raw := "%s:%s" % [username, password]
+	var auth_header := "Authorization: Basic %s" % Marshalls.utf8_to_base64(auth_raw)
+	
+	var url_parts = base_url.split("/dav")
+	var host_base = url_parts[0]
+	
+	var clean_href = href
+	if not clean_href.begins_with("/"):
+		clean_href = "/" + clean_href
+	
+	var completely_decoded = clean_href.uri_decode()
+	var safe_encoded_path = completely_decoded.uri_encode().replace("%2F", "/")
+	var full_target_endpoint = host_base + safe_encoded_path
+	
+	download_http_request = HTTPRequest.new()
+	add_child(download_http_request)
+	download_http_request.timeout = 15.0
+	download_http_request.set_tls_options(TLSOptions.client_unsafe())
+	download_http_request.download_file = temp_download_path
+	
+	download_http_request.request_completed.connect(func(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray):
+		_on_prefetch_download_completed(href, cache_path, temp_download_path, response_code)
+	)
+	
+	var err := download_http_request.request(full_target_endpoint, [auth_header], HTTPClient.METHOD_GET)
+	if err != OK:
+		print("AudioAnalyzer prefetch error: request failed for ", href)
+		if FileAccess.file_exists(temp_download_path):
+			DirAccess.remove_absolute(temp_download_path)
+		download_http_request.queue_free()
+		download_http_request = null
+		_prefetch_downloaded += 1
+		prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
+		call_deferred("_download_next_prefetch")
+
+func _on_prefetch_download_completed(href: String, cache_path: String, temp_path: String, response_code: int) -> void:
+	if not is_instance_valid(download_http_request):
+		return
+	download_http_request.queue_free()
+	download_http_request = null
+	
+	if response_code != 200:
+		print("AudioAnalyzer prefetch: download failed code %d for %s" % [response_code, href])
+		if FileAccess.file_exists(temp_path):
+			DirAccess.remove_absolute(temp_path)
+	else:
+		var err = DirAccess.rename_absolute(temp_path, cache_path)
+		if err != OK:
+			print("AudioAnalyzer prefetch: rename error: ", err)
+		else:
+			print("AudioAnalyzer prefetch: downloaded ", href)
+			analyze_track(href, false)
+			
+	_prefetch_downloaded += 1
+	prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
+	
+	_download_next_prefetch()
 
 func _thread_worker() -> void:
 	while true:
@@ -119,6 +325,7 @@ func _on_analysis_completed(href: String, results: Dictionary) -> void:
 			existing[key] = results[key]
 		metadata_service.cache[href] = existing
 		metadata_service.save_cache()
+		metadata_service.metadata_updated.emit(href, existing)
 		
 		# Trigger a full metadata lookup (async) so genre, artist image, etc. are populated.
 		# Only needed if genre is still unknown, to avoid redundant API calls.
@@ -143,7 +350,7 @@ func _perform_analysis(href: String) -> Dictionary:
 	if ext.is_empty():
 		ext = "mp3"
 		
-	var cache_path := "user://audio_cache/" + href.md5_text() + "." + ext
+	var cache_path := cache_dir + href.md5_text() + "." + ext
 	if not FileAccess.file_exists(cache_path):
 		return {}
 		

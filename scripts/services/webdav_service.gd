@@ -11,6 +11,35 @@ signal connection_tested(success: bool, error_message: String)
 var scanned_files: Array = []
 var had_scan_errors: bool = false
 
+const LIBRARY_CACHE_FILE = "user://library_cache.json"
+
+func _ready() -> void:
+	load_cached_library()
+
+func load_cached_library() -> Array:
+	var start_time := Time.get_ticks_usec()
+	if FileAccess.file_exists(LIBRARY_CACHE_FILE):
+		var file := FileAccess.open(LIBRARY_CACHE_FILE, FileAccess.READ)
+		if file:
+			var content := file.get_as_text()
+			file.close()
+			var parsed = JSON.parse_string(content)
+			if parsed is Array:
+				scanned_files = parsed
+				var duration := (Time.get_ticks_usec() - start_time) / 1000000.0
+				print("WebDAVService: Loaded %d tracks from cache in %.3fs" % [scanned_files.size(), duration])
+				return scanned_files
+	var duration := (Time.get_ticks_usec() - start_time) / 1000000.0
+	print("WebDAVService: No cache found. Load completed in %.3fs" % duration)
+	return []
+
+func save_cached_library() -> void:
+	var file := FileAccess.open(LIBRARY_CACHE_FILE, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(scanned_files))
+		file.close()
+		print("WebDAVService: Library cache saved to disk.")
+
 const TCP_TIMEOUT_MS := 5000
 const TLS_TIMEOUT_MS := 5000
 const READ_TIMEOUT_MS := 10000
@@ -360,6 +389,7 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 		return
 
 	had_scan_errors = false
+	var scan_start_time := Time.get_ticks_usec()
 
 	var base_url: String = SettingsManager.webdav_url
 	var parts := _parse_url(base_url)
@@ -414,9 +444,37 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 					folder_queue.append(norm_sub)
 				
 	disconnect_active_connection()
-	print("WebDAVService: Deep traversal finished. Found %d total tracks." % all_discovered_tracks.size())
-	scanned_files = all_discovered_tracks
-	library_scanned.emit(all_discovered_tracks)
+	var duration := (Time.get_ticks_usec() - scan_start_time) / 1000000.0
+	print("WebDAVService: Deep traversal finished in %.3fs. Found %d total tracks." % [duration, all_discovered_tracks.size()])
+
+	if had_scan_errors:
+		print("WebDAVService: Scan encountered errors. Keeping current cached library list to avoid data loss.")
+		library_scanned.emit(scanned_files)
+		return
+
+	# Compare with cached version
+	var cache_changed := false
+	if all_discovered_tracks.size() != scanned_files.size():
+		cache_changed = true
+	else:
+		var sorted_new := all_discovered_tracks.duplicate()
+		sorted_new.sort()
+		var sorted_old := scanned_files.duplicate()
+		sorted_old.sort()
+		for i in range(sorted_new.size()):
+			if sorted_new[i] != sorted_old[i]:
+				cache_changed = true
+				break
+
+	if cache_changed:
+		print("WebDAVService: Discrepancy detected between cache and server sync. Updating cache.")
+		scanned_files = all_discovered_tracks
+		save_cached_library()
+		library_scanned.emit(all_discovered_tracks)
+	else:
+		print("WebDAVService: Sync finished. Server matches cache perfectly. (No UI rebuild required)")
+		# Still emit to dismiss any explicit refresh/loading indicator
+		library_scanned.emit(scanned_files)
 
 ## Internal XML structural extraction engines
 func _discover_folders_from_xml(xml_content: String) -> Array:

@@ -1,30 +1,46 @@
 extends GutTest
 
 const TEST_CACHE_PATH = "user://test_analyzer_metadata_cache.json"
+const TEST_CACHE_DIR = "user://test_audio_cache/"
 
 var analyzer: Node
+var _original_cache: Dictionary = {}
+var _original_path: String = ""
 
 func before_each() -> void:
 	# Temporary mock binding for testing
 	if is_instance_valid(MetadataService):
+		_original_cache = MetadataService.cache.duplicate()
+		_original_path = MetadataService.cache_file_path
 		MetadataService.cache = {}
-		MetadataService.set("CACHE_FILE_PATH", TEST_CACHE_PATH)
+		MetadataService.cache_file_path = TEST_CACHE_PATH
+		
+	if not DirAccess.dir_exists_absolute(TEST_CACHE_DIR):
+		DirAccess.make_dir_recursive_absolute(TEST_CACHE_DIR)
 	
 	analyzer = load("res://scripts/services/audio_analyzer.gd").new()
+	analyzer.cache_dir = TEST_CACHE_DIR
 	add_child_autofree(analyzer)
 
 func after_each() -> void:
 	if FileAccess.file_exists(TEST_CACHE_PATH):
 		DirAccess.remove_absolute(TEST_CACHE_PATH)
 		
-	# Clean up any test files using their MD5-hashed paths
-	var wav_path = "user://audio_cache/" + "test_track.wav".md5_text() + ".wav"
-	if FileAccess.file_exists(wav_path):
-		DirAccess.remove_absolute(wav_path)
+	if is_instance_valid(MetadataService):
+		MetadataService.cache = _original_cache
+		MetadataService.cache_file_path = _original_path
 		
-	var mp3_path = "user://audio_cache/" + "test_track.mp3".md5_text() + ".mp3"
-	if FileAccess.file_exists(mp3_path):
-		DirAccess.remove_absolute(mp3_path)
+	# Clean up test cache directory and files
+	var dir = DirAccess.open(TEST_CACHE_DIR)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				dir.remove(file_name)
+			file_name = dir.get_next()
+		dir.list_dir_end()
+		DirAccess.remove_absolute(TEST_CACHE_DIR)
 
 func test_analysis_defaults_for_missing_file() -> void:
 	var results = analyzer._perform_analysis("nonexistent.mp3")
@@ -32,10 +48,10 @@ func test_analysis_defaults_for_missing_file() -> void:
 
 func test_analyze_mock_wav_file() -> void:
 	var href = "test_track.wav"
-	var temp_path = "user://audio_cache/" + href.md5_text() + ".wav"
+	var temp_path = TEST_CACHE_DIR + href.md5_text() + ".wav"
 	
-	if not DirAccess.dir_exists_absolute("user://audio_cache/"):
-		DirAccess.make_dir_recursive_absolute("user://audio_cache/")
+	if not DirAccess.dir_exists_absolute(TEST_CACHE_DIR):
+		DirAccess.make_dir_recursive_absolute(TEST_CACHE_DIR)
 		
 	var file = FileAccess.open(temp_path, FileAccess.WRITE)
 	if not file:
@@ -72,10 +88,10 @@ func test_analyze_mock_wav_file() -> void:
 
 func test_analyze_mock_mp3_file() -> void:
 	var href = "test_track.mp3"
-	var temp_path = "user://audio_cache/" + href.md5_text() + ".mp3"
+	var temp_path = TEST_CACHE_DIR + href.md5_text() + ".mp3"
 	
-	if not DirAccess.dir_exists_absolute("user://audio_cache/"):
-		DirAccess.make_dir_recursive_absolute("user://audio_cache/")
+	if not DirAccess.dir_exists_absolute(TEST_CACHE_DIR):
+		DirAccess.make_dir_recursive_absolute(TEST_CACHE_DIR)
 		
 	var file = FileAccess.open(temp_path, FileAccess.WRITE)
 	if not file:
@@ -112,7 +128,7 @@ func test_analyze_mock_mp3_file() -> void:
 
 func test_thread_worker_signals_and_cache_update() -> void:
 	var href = "test_track.mp3"
-	var temp_path = "user://audio_cache/" + href.md5_text() + ".mp3"
+	var temp_path = TEST_CACHE_DIR + href.md5_text() + ".mp3"
 	
 	# Setup mock cache
 	MetadataService.cache[href] = {
@@ -151,3 +167,45 @@ func test_thread_worker_signals_and_cache_update() -> void:
 	assert_true(cached_meta.get("bpm", 0.0) > 0.0, "BPM should be cached in database")
 	assert_true(cached_meta.get("musical_key", "") != "", "Key should be cached in database")
 	assert_eq(cached_meta.get("energy_graph", []).size(), 20, "Energy graph should be cached in database")
+
+func test_cache_pruning() -> void:
+	var valid_href = "valid_track.mp3"
+	var invalid_href = "invalid_track.mp3"
+	
+	if not DirAccess.dir_exists_absolute(TEST_CACHE_DIR):
+		DirAccess.make_dir_recursive_absolute(TEST_CACHE_DIR)
+		
+	var valid_path = TEST_CACHE_DIR + valid_href.md5_text() + ".mp3"
+	var invalid_path = TEST_CACHE_DIR + invalid_href.md5_text() + ".mp3"
+	
+	# Write mock files
+	var f1 = FileAccess.open(valid_path, FileAccess.WRITE)
+	f1.store_string("dummy")
+	f1.close()
+	
+	var f2 = FileAccess.open(invalid_path, FileAccess.WRITE)
+	f2.store_string("dummy")
+	f2.close()
+	
+	assert_true(FileAccess.file_exists(valid_path))
+	assert_true(FileAccess.file_exists(invalid_path))
+	
+	# Run pruning only keeping valid_href
+	analyzer.prune_orphaned_cache_files([valid_href])
+	
+	assert_true(FileAccess.file_exists(valid_path), "Valid cached file should remain")
+	assert_false(FileAccess.file_exists(invalid_path), "Orphaned cached file should be pruned")
+	
+	# Clean up
+	DirAccess.remove_absolute(valid_path)
+
+func test_prefetch_state_toggles() -> void:
+	var hrefs = ["track1.mp3", "track2.mp3"]
+	
+	assert_false(analyzer.background_caching_active, "Should not be active initially")
+	
+	analyzer.start_prefetching(hrefs)
+	assert_true(analyzer.background_caching_active, "Should set active to true")
+	
+	analyzer.stop_prefetching()
+	assert_false(analyzer.background_caching_active, "Should set active to false after stop")

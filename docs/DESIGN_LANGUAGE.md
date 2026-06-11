@@ -217,6 +217,13 @@ All sizes are in pixels. The scale is based on a modular ratio of **1.25 (Major 
 5. **Letter spacing:** Large display text (≥28px) gets `letter-spacing: -0.02em`. Small text (≤13px) gets `letter-spacing: 0.01em` for legibility.
 6. **No fully uppercase strings** in the primary UI. Uppercase is reserved for subtle section dividers only, set at `--type-2xs` with `letter-spacing: 0.12em`.
 
+### 3.4 Font & Layout Consistency for New Features
+
+When introducing new UI components, sidebar extensions, lists, or custom navigators, developers must enforce the following rules:
+- **Button Typeface Matching**: All navigation list headers, buttons, toggle elements, and items must strictly use `font_ui` (Inter). Do not use `font_display` (Outfit) for small UI actions or list elements.
+- **Header Text Brightness**: Custom headers or toggle buttons (e.g., "Playlists") must match standard navigation elements. Use `--text-tertiary` when idle and `--text-secondary` on hover/pressed. Do not use `--text-secondary` as a baseline color for custom controls.
+- **Scroll Container Wrapping**: Sidebar navigation elements and dynamic lists must be wrapped inside a `ScrollContainer` with horizontal scroll disabled. The parent panel must never expand vertically beyond the window boundaries; vertical overflow must be handled strictly by scrolling within the container.
+
 ---
 
 ## 4. Depth & Layering

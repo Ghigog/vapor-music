@@ -39,6 +39,7 @@ This file provides context and best practices for Gemini CLI agents working on t
 - Loop the implementation until the tests pass
 - Review everything to make sure the code is clean, readable, and there are no vulnerabilities for future bugs.
 - Ensure the feature is workable with the larger project context
+- **Transition Effects Documentation**: Any changes or additions to the transition effects (e.g. in `audio_manager.gd`) must be immediately reflected in the user help workflow document (`docs/ai_dj_workflow.md`) so that the help UI remains accurate.
 
 ### 3. Verification
 - Use `run_command` to run headless unit tests.

@@ -29,6 +29,7 @@ extends Control
 @onready var library_screen:  Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/LibraryScreen
 @onready var vibe_screen:   Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/VibeScreen
 @onready var settings_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/SettingsScreen
+@onready var playlist_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/PlaylistScreen
 
 ## Maps screen name strings to their scene-tree Control nodes.
 var _screens: Dictionary = {}
@@ -129,7 +130,12 @@ func _on_wizard_cancelled() -> void:
 	setup_wizard.visible = false
 
 func _trigger_library_scan() -> void:
-	library_screen.show_loading()
+	var cached_tracks: Array = WebDAVService.scanned_files
+	if not cached_tracks.is_empty():
+		print("main.gd: Showing %d cached tracks instantly." % cached_tracks.size())
+		WebDAVService.library_scanned.emit(cached_tracks)
+	else:
+		library_screen.show_loading()
 	WebDAVService.scan_music_directory()
 
 
@@ -143,6 +149,7 @@ func _register_screens() -> void:
 		"library":  library_screen,
 		"vibe":     vibe_screen,
 		"settings": settings_screen,
+		"playlist": playlist_screen,
 	}
 
 

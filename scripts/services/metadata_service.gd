@@ -7,11 +7,14 @@ extends Node
 signal artist_focused(artist: String, image_path: String)
 signal album_focused(artist: String, album: String, image_path: String)
 signal track_focused(artist: String, album: String, title: String, lyrics: Dictionary, image_path: String)
+signal lyrics_fetched(href: String, lyrics: Dictionary)
+signal metadata_updated(href: String, metadata: Dictionary)
 
-const CACHE_FILE_PATH = "user://metadata_cache.json"
+var cache_file_path = "user://metadata_cache.json"
 
 var cache: Dictionary = {}
 var _save_timer: Timer
+var _pending_lookups: Dictionary = {}
 
 func _ready() -> void:
 	load_cache()
@@ -32,8 +35,8 @@ func _exit_tree() -> void:
 
 ## Loads the metadata cache from user://metadata_cache.json
 func load_cache() -> void:
-	if FileAccess.file_exists(CACHE_FILE_PATH):
-		var file := FileAccess.open(CACHE_FILE_PATH, FileAccess.READ)
+	if FileAccess.file_exists(cache_file_path):
+		var file := FileAccess.open(cache_file_path, FileAccess.READ)
 		if file:
 			var content := file.get_as_text()
 			file.close()
@@ -44,7 +47,7 @@ func load_cache() -> void:
 	cache = {}
 
 func _perform_save_cache() -> void:
-	var file := FileAccess.open(CACHE_FILE_PATH, FileAccess.WRITE)
+	var file := FileAccess.open(cache_file_path, FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(cache, "\t"))
 		file.close()
@@ -523,6 +526,12 @@ func add_play_timestamp(href: String, timestamp: int) -> void:
 
 ## Main lookup function. Fetches missing metadata fields for a track and caches it.
 func lookup_metadata(href: String, artist: String, album: String, title: String) -> Dictionary:
+	if _pending_lookups.has(href):
+		while _pending_lookups.has(href):
+			await get_tree().process_frame
+		return get_cached_metadata(href)
+		
+	_pending_lookups[href] = true
 	var existing: Dictionary = get_cached_metadata(href)
 	var updated: bool = false
 	
@@ -617,6 +626,8 @@ func lookup_metadata(href: String, artist: String, album: String, title: String)
 		
 	if lyrics.is_empty():
 		lyrics = await fetch_lyrics(artist, title)
+		if not lyrics.is_empty():
+			lyrics_fetched.emit(href, lyrics)
 		updated = true
 		
 	var result: Dictionary = {
@@ -652,7 +663,9 @@ func lookup_metadata(href: String, artist: String, album: String, title: String)
 				
 		cache[href] = current
 		save_cache()
+		metadata_updated.emit(href, current)
 		
+	_pending_lookups.erase(href)
 	return cache.get(href, result)
 
 func focus_artist(artist: String) -> void:

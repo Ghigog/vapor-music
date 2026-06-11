@@ -19,7 +19,7 @@ func before_each() -> void:
 	service = MockMetadataService.new()
 	service.cache = {}
 	# Set a separate cache file for unit tests
-	service.set("CACHE_FILE_PATH", TEST_CACHE_PATH)
+	service.cache_file_path = TEST_CACHE_PATH
 	add_child_autofree(service)
 
 func after_each() -> void:

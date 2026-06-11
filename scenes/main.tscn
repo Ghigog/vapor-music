@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://b20adm7oxslci" path="res://scenes/screens/library/library_screen.tscn" id="5_lib"]
 [ext_resource type="PackedScene" uid="uid://vaporvibe00001" path="res://scenes/screens/vibe/vibe_screen.tscn" id="6_srch"]
 [ext_resource type="PackedScene" uid="uid://dmyajuekdcds" path="res://scenes/screens/settings/settings_screen.tscn" id="7_set"]
+[ext_resource type="PackedScene" uid="uid://d1a5t876qslci" path="res://scenes/screens/playlist/playlist_screen.tscn" id="10_play"]
 [ext_resource type="PackedScene" uid="uid://csetupwi0ard1" path="res://scenes/screens/setup_wizard/setup_wizard.tscn" id="8_swiz"]
 [ext_resource type="Script" uid="uid://c8747tn3s4lad" path="res://scripts/ui/vertical_progress.gd" id="9_vp"]
 
@@ -91,6 +92,10 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="SettingsScreen" parent="AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer" unique_id=736771997 instance=ExtResource("7_set")]
+visible = false
+layout_mode = 1
+
+[node name="PlaylistScreen" parent="AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer" unique_id=999009 instance=ExtResource("10_play")]
 visible = false
 layout_mode = 1
 

@@ -73,3 +73,35 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Connect Music Library"
 
+[node name="CacheSection" type="VBoxContainer" parent="Center/Placeholder"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="CacheTitle" type="Label" parent="Center/Placeholder/CacheSection"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Local Audio Cache"
+horizontal_alignment = 1
+
+[node name="PrefetchButton" type="Button" parent="Center/Placeholder/CacheSection"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Pre-cache & Analyze Library"
+
+[node name="PrefetchProgress" type="ProgressBar" parent="Center/Placeholder/CacheSection"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+max_value = 100.0
+step = 1.0
+
+[node name="PrefetchStatus" type="Label" parent="Center/Placeholder/CacheSection"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "Idle"
+horizontal_alignment = 1
+
+

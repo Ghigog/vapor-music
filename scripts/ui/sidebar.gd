@@ -5,32 +5,40 @@
 extends PanelContainer
 
 @onready var app_name:     Label  = $VBox/Header/LogoContainer/AppName
-@onready var nav_library:  Button = $VBox/NavItems/NavLibrary
-@onready var nav_vibe:   Button = $VBox/NavItems/NavVibe
-@onready var nav_settings: Button = $VBox/NavItems/NavSettings
+@onready var nav_library:  Button = $VBox/Scroll/ScrollVBox/NavItems/NavLibrary
+@onready var nav_vibe:   Button = $VBox/Scroll/ScrollVBox/NavItems/NavVibe
+@onready var nav_settings: Button = $VBox/Scroll/ScrollVBox/NavItems/NavSettings
+@onready var toggle_playlists_btn: Button = $VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader/TogglePlaylistsBtn
+@onready var add_playlist_btn: Button = $VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader/AddPlaylistBtn
+@onready var playlists_container: VBoxContainer = $VBox/Scroll/ScrollVBox/NavItems/PlaylistsContainer
 
 @onready var track_title_label: Label = $VBox/NowPlaying/HBox/Info/TrackTitle
 @onready var artist_label: Label = $VBox/NowPlaying/HBox/Info/ArtistLabel
 @onready var play_pause_btn: Button = $VBox/PlayerTiles/PlayPauseBtn
 @onready var backward_btn: Button = $VBox/PlayerTiles/ControlsHBox/BackwardBtn
 @onready var forward_btn: Button = $VBox/PlayerTiles/ControlsHBox/ForwardBtn
-@onready var shuffle_btn: Button = $VBox/PlayerTiles/ShuffleBtn
+@onready var shuffle_btn: CheckBox = $VBox/PlayerTiles/ShuffleBtn
 
-@onready var preview_square: AspectRatioContainer = $VBox/PreviewSquare
-@onready var preview_texture: TextureRect = $VBox/PreviewSquare/PreviewTexture
-@onready var blur_overlay: Panel = $VBox/PreviewSquare/BlurOverlay
-@onready var lyrics_scroll: ScrollContainer = $VBox/PreviewSquare/LyricsScroll
-@onready var lyrics_container: VBoxContainer = $VBox/PreviewSquare/LyricsScroll/LyricsContainer
+
+@onready var preview_square: AspectRatioContainer = $VBox/Scroll/ScrollVBox/PreviewSquare
+@onready var preview_texture: TextureRect = $VBox/Scroll/ScrollVBox/PreviewSquare/PreviewTexture
+@onready var blur_overlay: Panel = $VBox/Scroll/ScrollVBox/PreviewSquare/BlurOverlay
+@onready var lyrics_scroll: ScrollContainer = $VBox/Scroll/ScrollVBox/PreviewSquare/LyricsScroll
+@onready var lyrics_container: VBoxContainer = $VBox/Scroll/ScrollVBox/PreviewSquare/LyricsScroll/LyricsContainer
 
 var lyrics_list: Array = []
 var active_line_index: int = -1
 var is_synced_lyrics := false
 
 
+var drop_indicator: ColorRect = null
+var active_drag_source_item: Control = null
+
 ## Maps screen-name strings to their corresponding Button nodes.
 var _nav_buttons: Dictionary = {}
 var _dragging := false
 var _custom_stylebox: StyleBoxFlat = null
+var _playlists_visible := true
 
 
 func _ready() -> void:
@@ -44,13 +52,16 @@ func _ready() -> void:
 	$VBox.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/Header.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/Header/LogoContainer.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/NavItems.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/Spacer.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/Scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/Scroll/ScrollVBox.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/Scroll/ScrollVBox/NavItems.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/NowPlaying.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/NowPlaying/HBox.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/NowPlaying/HBox/Info.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/PlayerTiles.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/PlayerTiles/ControlsHBox.mouse_filter = Control.MOUSE_FILTER_PASS
+
+	preview_square.visible = false
 
 	_apply_panel_style()
 	_apply_logo_style()
@@ -61,10 +72,12 @@ func _ready() -> void:
 	_set_active_nav(NavManager.current_screen)
 	_style_player_buttons()
 	_setup_blur_shader()
+	_setup_playlists_ui()
 	ThemeManager.theme_changed.connect(_apply_panel_style)
 	ThemeManager.theme_changed.connect(_apply_logo_style)
 	ThemeManager.theme_changed.connect(_refresh_nav_button_styles)
 	ThemeManager.theme_changed.connect(_style_player_buttons)
+	ThemeManager.theme_changed.connect(_style_playlists_header_buttons)
 
 
 
@@ -111,6 +124,7 @@ func _refresh_nav_button_styles() -> void:
 		var btn = _nav_buttons[nav]
 		var is_active = (nav == NavManager.current_screen)
 		_style_nav_button(btn, is_active)
+	_refresh_playlists_styles()
 
 func _style_nav_button(btn: Button, active: bool) -> void:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -186,7 +200,13 @@ func _connect_audio_signals() -> void:
 	play_pause_btn.pressed.connect(func(): AudioManager.toggle_play())
 	backward_btn.pressed.connect(func(): AudioManager.play_previous())
 	forward_btn.pressed.connect(func(): AudioManager.play_next())
-	shuffle_btn.pressed.connect(func(): AudioManager.play_harmonic_shuffle())
+	
+	shuffle_btn.button_pressed = AudioManager.smart_mixing_enabled
+	shuffle_btn.toggled.connect(func(pressed): AudioManager.smart_mixing_enabled = pressed)
+	AudioManager.smart_mixing_toggled.connect(func(enabled):
+		shuffle_btn.button_pressed = enabled
+	)
+
 
 
 func _style_player_buttons() -> void:
@@ -284,6 +304,15 @@ func _connect_metadata_signals() -> void:
 			ms.album_focused.connect(_on_album_focused)
 		if ms.has_signal("track_focused"):
 			ms.track_focused.connect(_on_track_focused)
+		if ms.has_signal("lyrics_fetched"):
+			ms.lyrics_fetched.connect(_on_lyrics_fetched)
+
+func _on_lyrics_fetched(href: String, lyrics: Dictionary) -> void:
+	if AudioManager.current_track_index != -1 and AudioManager.current_track_index < AudioManager.current_playlist.size():
+		var current_href = AudioManager.current_playlist[AudioManager.current_track_index]
+		if href == current_href:
+			# Update lyrics display on-the-fly
+			_on_track_focused("", "", "", lyrics, "")
 
 func _setup_blur_shader() -> void:
 	var shader = load("res://assets/shaders/blur.gdshader") as Shader
@@ -401,3 +430,179 @@ func _update_lyrics_scroller(song_time: float) -> void:
 				label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
 				label.remove_theme_color_override("font_outline_color")
 				label.remove_theme_constant_override("outline_size")
+
+func _setup_playlists_ui() -> void:
+	toggle_playlists_btn.pressed.connect(_on_toggle_playlists_pressed)
+	add_playlist_btn.pressed.connect(_on_add_playlist_pressed)
+	
+	if PlaylistService:
+		PlaylistService.playlist_created.connect(func(_p): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistService.playlist_deleted.connect(func(_id): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistService.playlist_renamed.connect(func(_id, _name): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistService.playlists_loaded.connect(func(): call_deferred(&"_rebuild_playlists_list"))
+	
+	# Initialize Drop Indicator for Playlists
+	drop_indicator = ColorRect.new()
+	drop_indicator.custom_minimum_size.y = 3
+	drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	drop_indicator.visible = false
+	playlists_container.add_child(drop_indicator)
+	
+	_style_playlists_header_buttons()
+	_rebuild_playlists_list()
+
+func _style_playlists_header_buttons() -> void:
+	var theme = ThemeManager.current_theme
+	
+	toggle_playlists_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	toggle_playlists_btn.custom_minimum_size.y = theme.TOUCH_TARGET_MIN
+	toggle_playlists_btn.add_theme_font_override("font", theme.font_ui)
+	toggle_playlists_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	toggle_playlists_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	toggle_playlists_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	toggle_playlists_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	toggle_playlists_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	toggle_playlists_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	toggle_playlists_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	
+	add_playlist_btn.flat = true
+	add_playlist_btn.custom_minimum_size.y = theme.TOUCH_TARGET_MIN
+	add_playlist_btn.add_theme_font_override("font", theme.font_ui)
+	add_playlist_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	add_playlist_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	add_playlist_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	add_playlist_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	add_playlist_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	add_playlist_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	add_playlist_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	
+	add_playlist_btn.visible = _playlists_visible
+
+func _on_toggle_playlists_pressed() -> void:
+	_playlists_visible = not _playlists_visible
+	playlists_container.visible = _playlists_visible
+	add_playlist_btn.visible = _playlists_visible
+
+func _on_add_playlist_pressed() -> void:
+	for child in playlists_container.get_children():
+		if child is LineEdit and child.has_meta("is_creation"):
+			child.grab_focus()
+			return
+			
+	var line_edit = LineEdit.new()
+	line_edit.placeholder_text = "New Playlist..."
+	line_edit.set_meta("is_creation", true)
+	line_edit.add_theme_stylebox_override("normal", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.3))
+	line_edit.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	line_edit.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	line_edit.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	
+	playlists_container.add_child(line_edit)
+	
+	line_edit.set_meta("committed", false)
+	var commit = func(new_text: String):
+		if line_edit.get_meta("committed", false):
+			return
+		line_edit.set_meta("committed", true)
+		var clean = new_text.strip_edges()
+		if not clean.is_empty():
+			PlaylistService.create_playlist(clean)
+		else:
+			line_edit.queue_free()
+	
+	line_edit.text_submitted.connect(commit)
+	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
+	
+	line_edit.grab_focus.call_deferred()
+
+func _rebuild_playlists_list() -> void:
+	for child in playlists_container.get_children():
+		if child != drop_indicator:
+			child.queue_free()
+		
+	if not PlaylistService:
+		return
+		
+	var playlists_list = PlaylistService.get_playlists()
+	for playlist in playlists_list:
+		var item_btn = Button.new()
+		item_btn.set_script(preload("res://scripts/ui/sidebar_playlist_item.gd"))
+		item_btn.playlist_id = playlist.id
+		item_btn.playlist_name = playlist.name
+		item_btn.text = "    ♪  " + playlist.name
+		playlists_container.add_child(item_btn)
+		
+		item_btn.pressed.connect(func():
+			PlaylistService.active_playlist_id = playlist.id
+			NavManager.navigate_to("playlist")
+		)
+		
+		item_btn.gui_input.connect(func(event):
+			if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
+				_show_inline_rename(playlist, item_btn)
+		)
+		
+	_refresh_playlists_styles()
+
+func show_drop_indicator(source_idx: int, target_idx: int, above: bool) -> void:
+	if not drop_indicator:
+		return
+		
+	drop_indicator.color = ThemeManager.current_theme.ACCENT_CORE
+	
+	if active_drag_source_item and is_instance_valid(active_drag_source_item):
+		active_drag_source_item.modulate.a = 1.0
+	if source_idx >= 0 and source_idx < playlists_container.get_child_count():
+		active_drag_source_item = playlists_container.get_child(source_idx)
+		active_drag_source_item.modulate.a = 0.4
+		
+	drop_indicator.visible = true
+	var new_idx = target_idx
+	if not above:
+		new_idx += 1
+	new_idx = clamp(new_idx, 0, playlists_container.get_child_count() - 1)
+	playlists_container.move_child(drop_indicator, new_idx)
+
+func hide_drop_indicator() -> void:
+	if drop_indicator:
+		drop_indicator.visible = false
+	if active_drag_source_item and is_instance_valid(active_drag_source_item):
+		active_drag_source_item.modulate.a = 1.0
+		active_drag_source_item = null
+
+func _show_inline_rename(playlist: Dictionary, item_btn: Button) -> void:
+	var line_edit = LineEdit.new()
+	line_edit.text = playlist.name
+	line_edit.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	line_edit.add_theme_stylebox_override("normal", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.3))
+	line_edit.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	line_edit.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	line_edit.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	
+	var idx = item_btn.get_index()
+	playlists_container.add_child(line_edit)
+	playlists_container.move_child(line_edit, idx)
+	item_btn.visible = false
+	
+	line_edit.set_meta("committed", false)
+	var commit = func(new_text: String):
+		if line_edit.get_meta("committed", false):
+			return
+		line_edit.set_meta("committed", true)
+		var clean = new_text.strip_edges()
+		if not clean.is_empty() and clean != playlist.name:
+			PlaylistService.rename_playlist(playlist.id, clean)
+		else:
+			_rebuild_playlists_list()
+
+	line_edit.text_submitted.connect(commit)
+	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
+	
+	line_edit.grab_focus.call_deferred()
+	line_edit.select_all.call_deferred()
+
+func _refresh_playlists_styles() -> void:
+	for child in playlists_container.get_children():
+		if child is Button and child.has_method("_can_drop_data"):
+			var is_active = (NavManager.current_screen == "playlist" and PlaylistService.active_playlist_id == child.playlist_id)
+			_style_nav_button(child, is_active)

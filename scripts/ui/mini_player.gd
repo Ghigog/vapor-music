@@ -11,11 +11,14 @@ extends Control
 @onready var play_pause_btn: Button = $VBox/HBox/PlayPauseBtn
 @onready var forward_btn: Button = $VBox/HBox/ForwardBtn
 @onready var nav_settings: Button = $VBox/HBox/NavSettings
-@onready var shuffle_btn: Button = $VBox/HBox/ShuffleBtn
+@onready var shuffle_btn: CheckBox = $VBox/HBox/ShuffleBtn
+
 
 var dragging = false
 var _panel_dragging = false
 var _custom_stylebox: StyleBoxFlat = null
+var _track_loading = false
+var _transitioning = false
 
 
 func _ready() -> void:
@@ -32,9 +35,29 @@ func _ready() -> void:
 	# Connect to our global audio singleton signals
 	AudioManager.playback_toggled.connect(_on_playback_toggled)
 	AudioManager.loading_track.connect(_on_loading_track)
+	if AudioManager.has_signal("transition_started"):
+		AudioManager.transition_started.connect(func(_next_track, _type):
+			_transitioning = true
+			_update_progress_visibility()
+		)
+	if AudioManager.has_signal("transition_completed"):
+		AudioManager.transition_completed.connect(func(_track):
+			_transitioning = false
+			_update_progress_visibility()
+		)
 	AudioManager.length_changed.connect(func(length):
 		progress_bar.max_value = length
 	)
+	
+	if shuffle_btn:
+		shuffle_btn.button_pressed = AudioManager.smart_mixing_enabled
+		shuffle_btn.toggled.connect(func(pressed):
+			AudioManager.smart_mixing_enabled = pressed
+		)
+		AudioManager.smart_mixing_toggled.connect(func(enabled):
+			shuffle_btn.button_pressed = enabled
+		)
+
 	
 	# Connect to dynamic ThemeManager updates
 	ThemeManager.theme_changed.connect(_apply_styles)
@@ -227,10 +250,16 @@ func _on_progress_bar_value_changed(value: float) -> void:
 
 
 func _on_loading_track(is_loading: bool) -> void:
+	_track_loading = is_loading
+	_update_progress_visibility()
+
+
+func _update_progress_visibility() -> void:
+	var active_loading = _track_loading or _transitioning
 	if loading_bar:
-		loading_bar.visible = is_loading
+		loading_bar.visible = active_loading
 	if progress_bar:
-		progress_bar.visible = !is_loading
+		progress_bar.visible = !active_loading
 
 
 func _on_backward_btn_pressed() -> void:
@@ -242,7 +271,7 @@ func _on_forward_btn_pressed() -> void:
 
 
 func _on_shuffle_pressed() -> void:
-	AudioManager.play_harmonic_shuffle()
+	pass
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +306,7 @@ func _on_resized() -> void:
 		if nav_library: nav_library.text = "♪"
 		if nav_vibe: nav_vibe.text = "🎛"
 		if nav_settings: nav_settings.text = "⚙"
-		if shuffle_btn: shuffle_btn.text = "🔀"
+		if shuffle_btn: shuffle_btn.text = ""
 		
 		if has_node("VBox/HBox"):
 			if w < 480:
@@ -288,7 +317,7 @@ func _on_resized() -> void:
 		if nav_library: nav_library.text = "♪ Library"
 		if nav_vibe: nav_vibe.text = "🎛 Vibe"
 		if nav_settings: nav_settings.text = "⚙ Settings"
-		if shuffle_btn: shuffle_btn.text = "🔀 Shuffle"
+		if shuffle_btn: shuffle_btn.text = "Smart Mixing"
 		
 		if has_node("VBox/HBox"):
 			$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_3) # 12px

@@ -188,7 +188,10 @@ func _rebuild_tree() -> void:
 					22,
 					ThemeManager.current_theme.font_ui,
 					ThemeManager.current_theme.TYPE_SM,
-					ThemeManager.current_theme.TEXT_SECONDARY
+					ThemeManager.current_theme.TEXT_SECONDARY,
+					true,
+					track_info.href as String,
+					track_info.title as String
 				)
 				track_row.button.pressed.connect(func() -> void:
 					AudioManager.play_track(track_info.href as String, _scanned_files)
@@ -221,7 +224,10 @@ func _make_row_button(
 	left_padding: int,
 	font: Font,
 	font_size: int,
-	color: Color
+	color: Color,
+	is_track: bool = false,
+	track_href: String = "",
+	track_title: String = ""
 ) -> Dictionary:
 	# MarginContainer provides indentation for the row.
 	var row := MarginContainer.new()
@@ -237,7 +243,14 @@ func _make_row_button(
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stack.custom_minimum_size   = Vector2(0, 28)
 
-	var btn := Button.new()
+	var btn: Button
+	if is_track:
+		var drag_btn = TrackDragButton.new()
+		drag_btn.href = track_href
+		drag_btn.track_title = track_title
+		btn = drag_btn
+	else:
+		btn = Button.new()
 	btn.flat = true
 	btn.text = ""  # Text is on the Label, not the Button.
 	btn.add_theme_stylebox_override("normal",   ThemeManager.make_transparent())
@@ -293,3 +306,27 @@ func _on_add_music_pressed() -> void:
 		WebDAVService.scan_music_directory(active_folder)
 	else:
 		body.text = "Please open the connection menu or main configuration wizard to link a WebDAV provider."
+
+
+class TrackDragButton extends Button:
+	var href: String = ""
+	var track_title: String = ""
+	
+	func _get_drag_data(_at_position: Vector2) -> Variant:
+		var data = {
+			"type": "track",
+			"href": href
+		}
+		
+		var preview = Label.new()
+		preview.text = "♫  " + track_title
+		preview.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		preview.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+		preview.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		
+		var container = PanelContainer.new()
+		container.add_theme_stylebox_override("panel", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.85))
+		container.add_child(preview)
+		set_drag_preview(container)
+		
+		return data

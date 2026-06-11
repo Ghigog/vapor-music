@@ -390,6 +390,32 @@ Update the parser in `library_screen.gd` to strip track number/alphanumeric pref
 
 ---
 
+### MET-003 : Local Library Caching and Background Sync (done)
+**User Story:**
+As a user,
+I'd like the application to load my music library instantly on startup using a local cache,
+So that I don't have to wait 5 seconds for a full WebDAV server scan every time I launch the app.
+
+**Context:**
+Currently, the application initiates a full recursive WebDAV directory scan on startup. For large libraries, this takes 5+ seconds and blocks navigation/display of the track list. By caching the track paths locally and performing the network synchronization in the background, we can display the library in less than a second.
+
+**Description:**
+Implement a persistent local JSON cache at `user://library_cache.json` in `WebDAVService`. Load this cache immediately on startup, and trigger the WebDAV server scan as a background task. If the background scan discovers any discrepancies (added or deleted files), update the local cache file, and rebuild the library tree UI seamlessly. Log time elapsed for both cache loading and background sync.
+
+**Requirements:**
+- Add `load_cached_library()` and `save_cached_library()` in `WebDAVService` using JSON serialization under `user://library_cache.json`.
+- Populate `scanned_files` from cache on startup and emit `library_scanned` immediately if cached files are found.
+- Time the execution duration of cache loading and deep server scanning, logging results.
+- In `scan_music_directory()`, compare server results with the cached `scanned_files`. Only update the cache and emit `library_scanned` if discrepancies exist (to avoid unnecessary UI rebuilding), while ensuring any loading states (e.g. manual refresh) are dismissed.
+
+**Acceptance Criteria:**
+- Given saved credentials exist
+- When the app is launched
+- Then the cached library is loaded and displayed in less than a second
+- And the background WebDAV sync runs silently and updates the cached list only if differences are found.
+
+---
+
 ### AI-001 : Local Track Waveform & Energy Analysis (done)
 **User Story:**
 As a listener,
@@ -709,3 +735,168 @@ So that the AI DJ transitions and metadata elements feel seamless, reliable, and
 - Then the app transitions directly to that track.
 - Given the vibe screen is loaded
 - Then the header displays the persistent background analysis status.
+
+**Note/Fix:**
+- Fixed an issue where locally cached tracks were not automatically analyzed on startup or folder scan, causing the status bar to show `1 / 230 ready` instead of including all cached tracks. Connected `WebDAVService.library_scanned` to `AudioAnalyzer.scan_library_cache` so that all cached tracks are automatically queued and analyzed in the background when the library is loaded or scanned.
+
+---
+
+### AI-007 : AI DJ Smart Mixing & Path Preference (done)
+**User Story:**
+As a listener,
+I'd like to toggle "Smart Mixing" via a checkbox instead of a button shuffle, and see distinct Match, Fresh, and Switch options with AI preferred choices highlighted in the vibe menu,
+So that the transition flows are predictable, diverse, and I can customize or override them at will.
+
+**Context:** The old "Harmonic Shuffle" button permanently re-sorted the playlist, and suggestions looping back to the same 2-3 tracks reduced song variety.
+
+**Description:**
+Convert UI shuffle buttons to toggle CheckBoxes for "Smart Mixing". If enabled, transitions utilize smart matches (Match, Fresh, Switch) following a repeating 4-step AI choice sequence. If disabled, transitions fall back to playing tracks sequentially. Highlight the selected track (AI preference or user manual override) and badge the AI choice.
+
+**Requirements:**
+- Rename shuffle buttons to "Smart Mixing" and convert to `CheckBox` nodes.
+- Sync checkbox toggle states globally via `AudioManager.smart_mixing_enabled`.
+- Implement `calculate_smart_matches()` in `DJPathfinder` resolving Match, Fresh, and Switch candidates.
+- Implement repeating 4-step AI choice sequence (Perfect -> Interesting -> Perfect -> Creative/Interesting 50-50).
+- Dynamically render suggestion cards as "Match", "Fresh", and "Switch" in the Vibe Workbench.
+- Highlight selected next track and display a `🤖 AI Choice` badge on the preferred choice card.
+
+**Acceptance Criteria:**
+- Given Smart Mixing is disabled
+- When a track finishes playing
+- Then the next track is chosen sequentially from the playlist.
+- Given Smart Mixing is enabled
+- When the vibe screen is loaded
+- Then exactly three cards (Match, Fresh, Switch) are rendered, with the AI's current sequence choice marked with a `🤖 AI Choice` badge.
+
+**Note/Fix:**
+- Updated the "ACTIVE AI BLEND MODE" UI label to display the upcoming transition info throughout track playback instead of "AI DJ standby" or "Ready — next blend selected by AI". The label now dynamically updates to show `Intended: Blend to [Track Title] via [Transition Type]` based on active playlist context, smart mixing modes, or user manual overrides, and recalculates the transition type whenever overrides change. Modified `_on_transition_completed` to call `_refresh_display()` directly, eliminating any residual "Ready — next blend selected by AI" state messages.
+
+---
+
+### PLAY-001 : Playlist Management Feature (done)
+**User Story:**
+As a listener,
+I'd like to create, rename, delete, and manage playlists, with drag-and-drop support for tracks and custom cover art,
+So that I can organize my music library dynamically.
+
+**Context:** The app needs a playlist feature with JSON persistence, artwork fallback logic, and drag-and-drop.
+
+**Description:**
+Implement PlaylistService managing playlists in user://playlists.json. Design dynamic sidebar playlist items with renaming LineEdits. Create a dedicated PlaylistScreen with edit-in-place title controls, cover art uploading (including drag-and-drop from local filesystem), track reordering drag handles, and a frosted glassmorphism empty state.
+
+**Requirements:**
+- PlaylistService manages playlists, user://playlists.json persistence, and custom image copy.
+- Fall back to first track's album art when custom art is not set.
+- Draggable tracks in LibraryScreen returning track type and href.
+- Sidebar list supporting dynamic creation (+ button), renaming, deletions, and drop targets.
+- PlaylistScreen displaying active playlist details (title, cover, track list).
+- Playlist track list supporting reorder handles, remove buttons, and drag-and-drop track reordering.
+- Test suite passing successfully with 0 errors.
+
+**Acceptance Criteria:**
+- Given a list of playlists
+- When a new playlist is created
+- Then it is persisted to JSON and displayed in the sidebar
+- When tracks are dragged from library and dropped on a sidebar playlist or the playlist screen
+- Then they are appended or inserted at the correct index.
+
+---
+
+### DJ-001 : Implement Echo Out (Delay Fade) Transition (done)
+**User Story:**
+As a listener,
+I'd like the player to perform an Echo Out transition when transitioning between tracks with large BPM differences or different genres,
+So that the exit of the outgoing song rings out cleanly and allows the incoming song to drop in with a clean energy change.
+
+**Context:** Fading between completely different tempos or genres (e.g. Rock to Electro, or 90 BPM to 140 BPM) sounds jarring if the beats clash. Cutting the outgoing song and letting a feedback delay tail ring out creates a professional "outro" effect that naturally masks the tempo jump.
+
+**Description:**
+Add an `AudioEffectDelay` to the audio server decks. When "Echo Out" is triggered, feed the outgoing deck into the delay with a 1/2 beat or 3/4 beat time setting, cut the primary/clean stream at the transition midpoint (4.0s) while leaving the delay feedback to naturally decay, and play the incoming deck clean.
+
+**Requirements:**
+- Add `AudioEffectDelay` programmatically at index 3 of the `DeckA` and `DeckB` buses in `_setup_audio_buses()`.
+- Define standard feedback and delay time parameters (e.g., 0.5s time, 0.4 feedback).
+- When a transition is "Echo Out", keep both decks at full volume (0 dB) initially.
+- At the transition midpoint (4.0s), mute the primary stream of the outgoing player by bypassing it or lowering its volume before the delay effect, or setting the delay's wet mix to 1.0 and dry to 0.0, or cutting its clean playback while keeping the delay tail audible.
+- Fade in the incoming deck clean to 0 dB in the first half of the transition.
+- Ensure the delay effect settings are properly reset in `_reset_bus_effects()`.
+
+**Acceptance Criteria:**
+- Given a transition is designated as Echo Out
+- When the midpoint is reached
+- Then the outgoing song's clean signal cuts immediately, and a delay echo effect decays over the remaining transition duration while the incoming song plays at full volume.
+
+---
+
+### DJ-002 : Implement Reverb Freeze Transition (done)
+**User Story:**
+As a listener,
+I'd like the player to perform a Reverb Freeze transition when playing creative mood shifts,
+So that the transition is characterized by a spacious ambient fade-out rather than a basic volume drop.
+
+**Context:** Ambient washes are excellent for bridging tracks with huge stylistic discrepancies. Freezing the reverb of the outgoing track and letting the tail wash out is a standard DJ technique to create a smooth, ethereal transition.
+
+**Description:**
+Add an `AudioEffectReverb` to the audio server decks. When "Reverb Freeze" is triggered, increase the room size and decay of the outgoing deck's reverb to maximum (freezing it), cut the dry output of the outgoing deck at the midpoint, and let the spacious reverb tail decay as the incoming track drops in.
+
+**Requirements:**
+- Add `AudioEffectReverb` programmatically at index 4 of the `DeckA` and `DeckB` buses in `_setup_audio_buses()`.
+- When transition type is "Reverb Freeze", set the outgoing deck's Reverb wet level to 0.0 initially, then ramp it up to 1.0 approaching the midpoint.
+- At the midpoint (4.0s), set dry level to 0.0 (cutting the dry song) and set Reverb room size to 1.0 and damping to 0.0 to create a "frozen" tail that ring decays.
+- Fade in the incoming deck clean in the first half.
+- Reset the reverb effects to default (wet 0.0, dry 1.0) in `_reset_bus_effects()`.
+
+**Acceptance Criteria:**
+- Given a transition is designated as Reverb Freeze
+- When the midpoint is reached
+- Then the outgoing song's dry signal cuts, and its reverb tail rings out like an ambient cloud while the incoming song starts playing.
+
+---
+
+### DJ-003 : Implement Tempo Morph (Tempo-Sync'd) Transition (done)
+**User Story:**
+As a listener,
+I'd like the player to match the tempos of both tracks exactly during a transition and then return to the native tempo,
+So that the rhythm and beats stay perfectly locked during the crossfade.
+
+**Context:** For medium BPM differences (e.g. 3.0 to 8.0 BPM), playing them at their native tempos during a crossfade causes the beats to slide against each other (trainwrecking). Matching their tempos during the blend and morphing the tempo post-transition keeps the rhythm locked.
+
+**Description:**
+Dynamically calculate the transition BPM midpoint. Scale the `pitch_scale` of both players during the transition so they match the midpoint tempo exactly. Once the transition completes, slowly ramp the `pitch_scale` of the active player to its native tempo (1.0) over 5-10 seconds.
+
+**Requirements:**
+- During the crossfade, calculate target BPM as the average of the two tracks, or match the outgoing track's BPM.
+- Adjust `pitch_scale` of both players based on the difference between their native BPMs and the target BPM.
+- Create a post-transition tween that ramps the active player's `pitch_scale` back to 1.0 over a configurable ramp duration (e.g. 6.0 seconds).
+- Ensure `pitch_scale` modifications do not introduce digital artifacts.
+
+**Acceptance Criteria:**
+- Given a transition is designated as Tempo Morph
+- When the transition is running
+- Then the playback speeds of both players are adjusted so their BPMs match exactly.
+- And when the transition completes, the new track's speed slowly slides back to its native tempo.
+
+---
+
+### DJ-004 : Implement Real DJ Matching and Harmonic Modulations (done)
+**User Story:**
+As a listener,
+I want the AI DJ to use real harmonic modulations and mask key clashes using transitions,
+So that the music suggested by the AI DJ is more diverse and transitions sound like a professional DJ set.
+
+**Context:** The previous implementation used heavy key penalties for all key differences, leading the AI DJ to only recommend tracks in the same key (10A -> 10A/9A). Transition effects were mapped without considering key compatibility.
+
+**Description:**
+Add `get_harmonic_relation_cost` in `dj_pathfinder.gd` classifying key relations (Exact, Mode Shift, Step, Diagonal, Energy Boost/Drop, Power fifth, Subdominant). Update `calculate_transition_cost` to use this cost. Refactor `calculate_smart_matches` to enforce harmonic key sets for `perfect` and modulated key sets for `interesting`, and ignore key clashes for `creative` match. Update transition choice logic in `_update_upcoming_transition()` in `audio_manager.gd` to select masking transitions (Echo Out/Reverb Freeze) for key clashes.
+
+**Requirements:**
+- Implement dynamic harmonic key modulations in `dj_pathfinder.gd` to reduce the cost penalty for Energy Boosts, Power Fifth Mixes, etc.
+- Update `calculate_smart_matches` to restrict `perfect` to compatible keys, `interesting` to modulations in the same genre, and `creative` to different genre ignoring key distance.
+- Update transition effect selection in `audio_manager.gd` to select wash/masking effects (Echo Out/Reverb Freeze) for clashing keys.
+
+**Acceptance Criteria:**
+- Given a key clash
+- When the transition is selected
+- Then the transition type is either Echo Out or Reverb Freeze.
+- Given smart matches are calculated
+- Then the perfect match uses harmonically compatible keys, and the interesting match uses key modulations.

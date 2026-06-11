@@ -63,3 +63,42 @@ func test_mood_path_generator() -> void:
 	assert_eq(path[1], "song_b.mp3", "Next song should be song_b.mp3 (BPM 121, Key 9A is compatible with 8A)")
 	assert_eq(path[2], "song_c.mp3", "Next song should be song_c.mp3 (BPM 122, Key 9B is compatible with 9A)")
 	assert_eq(path[3], "song_d.mp3", "Final song should be song_d.mp3 (less compatible, placed last)")
+
+class DummyMetadataService extends Node:
+	var cache = {}
+	func get_cached_metadata(href: String) -> Dictionary:
+		return cache.get(href, {})
+
+func test_smart_matches() -> void:
+	var dummy_ms = DummyMetadataService.new()
+	dummy_ms.cache = {
+		"song_a.mp3": {"bpm": 120.0, "musical_key": "8A", "energy_level": 0.5, "genre": "Rock"},
+		# Perfect Match (close BPM/energy, identical key, same genre)
+		"song_b.mp3": {"bpm": 121.0, "musical_key": "8A", "energy_level": 0.52, "genre": "Rock"},
+		# Interesting Match (same genre, changes BPM by 14 and energy by 0.22)
+		"song_c.mp3": {"bpm": 134.0, "musical_key": "8B", "energy_level": 0.72, "genre": "Rock"},
+		# Creative Match (different genre, matches BPM and energy closely but different key)
+		"song_d.mp3": {"bpm": 120.5, "musical_key": "9A", "energy_level": 0.51, "genre": "Electronic"},
+	}
+	
+	var playlist = ["song_a.mp3", "song_b.mp3", "song_c.mp3", "song_d.mp3"]
+	var matches = DJPathfinder.calculate_smart_matches("song_a.mp3", playlist, dummy_ms)
+
+	
+	assert_eq(matches.get("perfect", {}).get("href", ""), "song_b.mp3", "Perfect match should be song_b.mp3")
+	assert_eq(matches.get("interesting", {}).get("href", ""), "song_c.mp3", "Interesting match should be song_c.mp3")
+	assert_eq(matches.get("creative", {}).get("href", ""), "song_d.mp3", "Creative match should be song_d.mp3")
+	
+	dummy_ms.free()
+
+func test_harmonic_relation_costs() -> void:
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "10A"), 0.0, "Exact match should be 0.0")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "10B"), 1.0, "Mode shift should be 1.0")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "9A"), 1.5, "Harmonic step should be 1.5")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "9B"), 2.0, "Diagonal step should be 2.0")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "12A"), 2.5, "Energy boost (+2 steps) should be 2.5")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "8A"), 3.0, "Energy drop (-2 steps) should be 3.0")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "5A"), 3.0, "Power Fifth Mix (+7 steps) should be 3.0")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "3A"), 3.0, "Subdominant Mix (+5 steps) should be 3.0")
+	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "2A"), 8.0, "Incompatible keys should be 8.0")
+

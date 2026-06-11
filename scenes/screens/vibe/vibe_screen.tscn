@@ -39,6 +39,66 @@ text = "🎛  Vibe Workbench"
 layout_mode = 2
 text = "Analyzing library..."
 
+[node name="HelpButton" type="Button" parent="VBox/Header/HBox"]
+layout_mode = 2
+text = " ? "
+
+[node name="HelpModal" type="Control" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Overlay" type="ColorRect" parent="HelpModal"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.4)
+
+[node name="Panel" type="PanelContainer" parent="HelpModal"]
+custom_minimum_size = Vector2(650, 450)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="HelpModal/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Header" type="HBoxContainer" parent="HelpModal/Panel/VBox"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="HelpModal/Panel/VBox/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "AI DJ & VIBE GUIDE"
+
+[node name="CloseIcon" type="Button" parent="HelpModal/Panel/VBox/Header"]
+layout_mode = 2
+text = " ✕ "
+
+[node name="Scroll" type="ScrollContainer" parent="HelpModal/Panel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ContentText" type="RichTextLabel" parent="HelpModal/Panel/VBox/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+bbcode_enabled = true
+text = "Loading..."
+
 [node name="NowPlayingCard" type="PanelContainer" parent="VBox"]
 layout_mode = 2
 

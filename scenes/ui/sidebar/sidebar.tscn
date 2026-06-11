@@ -29,44 +29,64 @@ text = "vapor"
 [node name="Sep" type="HSeparator" parent="VBox" unique_id=2072507393]
 layout_mode = 2
 
-[node name="NavItems" type="VBoxContainer" parent="VBox" unique_id=753665606]
-layout_mode = 2
-
-[node name="NavLibrary" type="Button" parent="VBox/NavItems" unique_id=1158763471]
-layout_mode = 2
-text = "  ♪  Library"
-
-[node name="NavVibe" type="Button" parent="VBox/NavItems" unique_id=1701566622]
-layout_mode = 2
-text = "  🎛  Vibe"
-
-[node name="NavSettings" type="Button" parent="VBox/NavItems" unique_id=356337049]
-layout_mode = 2
-text = "  ⚙  Settings"
-
-[node name="Spacer" type="Control" parent="VBox" unique_id=633844415]
+[node name="Scroll" type="ScrollContainer" parent="VBox" unique_id=93778841]
 layout_mode = 2
 size_flags_vertical = 3
+horizontal_scroll_mode = 0
 
-[node name="PreviewSquare" type="AspectRatioContainer" parent="VBox" unique_id=555555551]
+[node name="ScrollVBox" type="VBoxContainer" parent="VBox/Scroll" unique_id=93778842]
 layout_mode = 2
-ratio = 1.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
 
-[node name="PreviewTexture" type="TextureRect" parent="VBox/PreviewSquare" unique_id=555555552]
+[node name="NavItems" type="VBoxContainer" parent="VBox/Scroll/ScrollVBox" unique_id=753665606]
+layout_mode = 2
+
+[node name="NavLibrary" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=1158763471]
+layout_mode = 2
+text = "  ♫  Library"
+
+[node name="NavVibe" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=1701566622]
+layout_mode = 2
+text = "  ✦  Vibe"
+
+[node name="PlaylistsHeader" type="HBoxContainer" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=999001]
+layout_mode = 2
+
+[node name="TogglePlaylistsBtn" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999002]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "  ▤  Playlists"
+
+[node name="AddPlaylistBtn" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999003]
+layout_mode = 2
+text = " + "
+
+[node name="PlaylistsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=999004]
+layout_mode = 2
+
+[node name="NavSettings" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=356337049]
+layout_mode = 2
+text = "  ⛭  Settings"
+
+[node name="PreviewSquare" type="AspectRatioContainer" parent="VBox/Scroll/ScrollVBox" unique_id=555555551]
+layout_mode = 2
+
+[node name="PreviewTexture" type="TextureRect" parent="VBox/Scroll/ScrollVBox/PreviewSquare" unique_id=555555552]
 layout_mode = 2
 expand_mode = 1
 stretch_mode = 6
 
-[node name="BlurOverlay" type="Panel" parent="VBox/PreviewSquare" unique_id=555555553]
+[node name="BlurOverlay" type="Panel" parent="VBox/Scroll/ScrollVBox/PreviewSquare" unique_id=555555553]
 visible = false
 layout_mode = 2
 
-[node name="LyricsScroll" type="ScrollContainer" parent="VBox/PreviewSquare" unique_id=555555554]
+[node name="LyricsScroll" type="ScrollContainer" parent="VBox/Scroll/ScrollVBox/PreviewSquare" unique_id=555555554]
 visible = false
 layout_mode = 2
 horizontal_scroll_mode = 0
 
-[node name="LyricsContainer" type="VBoxContainer" parent="VBox/PreviewSquare/LyricsScroll" unique_id=555555555]
+[node name="LyricsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollVBox/PreviewSquare/LyricsScroll" unique_id=555555555]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
@@ -122,7 +142,8 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "Next ⏭"
 
-[node name="ShuffleBtn" type="Button" parent="VBox/PlayerTiles" unique_id=222222226]
+[node name="ShuffleBtn" type="CheckBox" parent="VBox/PlayerTiles" unique_id=222222226]
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
-text = "🔀 Harmonic Shuffle"
+text = "Smart Mixing"
+alignment = 1
