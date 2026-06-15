@@ -108,11 +108,13 @@ layout_mode = 2
 size_flags_horizontal = 3
 
 [node name="TrackTitle" type="Label" parent="VBox/NowPlaying/HBox/Info" unique_id=111111116]
+custom_minimum_size = Vector2(10, 0)
 layout_mode = 2
 text = "Not Playing"
 text_overrun_behavior = 3
 
 [node name="ArtistLabel" type="Label" parent="VBox/NowPlaying/HBox/Info" unique_id=111111117]
+custom_minimum_size = Vector2(10, 0)
 layout_mode = 2
 text = "No Artist"
 text_overrun_behavior = 3
@@ -142,8 +144,9 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "Next ⏭"
 
-[node name="ShuffleBtn" type="CheckBox" parent="VBox/PlayerTiles" unique_id=222222226]
+[node name="ShuffleBtn" type="Button" parent="VBox/PlayerTiles" unique_id=222222226]
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
+toggle_mode = true
 text = "Smart Mixing"
 alignment = 1

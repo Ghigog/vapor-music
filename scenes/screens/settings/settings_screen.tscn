@@ -1,6 +1,7 @@
-[gd_scene format=3 uid="uid://dmyajuekdcds"]
+[gd_scene load_steps=3 format=3 uid="uid://dmyajuekdcds"]
 
-[ext_resource type="Script" uid="uid://6r86hbbwo6gd" path="res://scripts/screens/settings_screen.gd" id="1_set"]
+[ext_resource type="Script" path="res://scripts/screens/settings_screen.gd" id="1_set"]
+[ext_resource type="Script" path="res://scripts/ui/calibration_graph.gd" id="2_graph"]
 
 [node name="SettingsScreen" type="Control" unique_id=1189031825]
 layout_mode = 3
@@ -11,55 +12,72 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_set")
 
-[node name="Center" type="CenterContainer" parent="." unique_id=1914367418]
+[node name="ScrollContainer" type="ScrollContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+horizontal_scroll_mode = 0
 
-[node name="Placeholder" type="VBoxContainer" parent="Center" unique_id=260718531]
-custom_minimum_size = Vector2(300, 0)
+[node name="Center" type="CenterContainer" parent="ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="SettingsPanel" type="PanelContainer" parent="ScrollContainer/Center"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(500, 0)
+layout_mode = 2
+
+[node name="MarginContainer" type="MarginContainer" parent="ScrollContainer/Center/SettingsPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="Content" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer"]
 layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
 
-[node name="IconLabel" type="Label" parent="Center/Placeholder" unique_id=493372753]
+[node name="IconLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content" unique_id=493372753]
 layout_mode = 2
 text = "⚙"
 horizontal_alignment = 1
 
-[node name="HeadingLabel" type="Label" parent="Center/Placeholder" unique_id=1739415921]
+[node name="HeadingLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content" unique_id=1739415921]
 layout_mode = 2
 text = "Settings"
 horizontal_alignment = 1
 
-[node name="BodyLabel" type="Label" parent="Center/Placeholder" unique_id=185036689]
+[node name="BodyLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content" unique_id=185036689]
 layout_mode = 2
 text = "Configure your preferences and cloud music providers below."
 horizontal_alignment = 1
 autowrap_mode = 3
 
-[node name="Select a theme" type="Label" parent="Center/Placeholder" unique_id=1602768150]
+[node name="Select a theme" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content" unique_id=1602768150]
 layout_mode = 2
 text = "Select a Theme:"
 horizontal_alignment = 1
 
-[node name="ThemeSelector" type="OptionButton" parent="Center/Placeholder" unique_id=302810268]
+[node name="ThemeSelector" type="OptionButton" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content" unique_id=302810268]
 layout_mode = 2
 
-[node name="FontSizeContainer" type="HBoxContainer" parent="Center/Placeholder"]
+[node name="FontSizeContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
 layout_mode = 2
 theme_override_constants/separation = 12
 alignment = 1
 
-[node name="FontSizeLabel" type="Label" parent="Center/Placeholder/FontSizeContainer"]
+[node name="FontSizeLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/FontSizeContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Base Font Size"
 
-[node name="FontSizeSpinBox" type="SpinBox" parent="Center/Placeholder/FontSizeContainer"]
+[node name="FontSizeSpinBox" type="SpinBox" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/FontSizeContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 min_value = 10.0
@@ -68,40 +86,91 @@ value = 16.0
 rounded = true
 alignment = 1
 
-[node name="ConnectLibraryButton" type="Button" parent="Center/Placeholder"]
+[node name="ConnectLibraryButton" type="Button" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Connect Music Library"
 
-[node name="CacheSection" type="VBoxContainer" parent="Center/Placeholder"]
+[node name="CacheSection" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 10
 alignment = 1
 
-[node name="CacheTitle" type="Label" parent="Center/Placeholder/CacheSection"]
+[node name="CacheTitle" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/CacheSection"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Local Audio Cache"
 horizontal_alignment = 1
 
-[node name="PrefetchButton" type="Button" parent="Center/Placeholder/CacheSection"]
+[node name="PrefetchButton" type="Button" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/CacheSection"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Pre-cache & Analyze Library"
 
-[node name="PrefetchProgress" type="ProgressBar" parent="Center/Placeholder/CacheSection"]
+[node name="PrefetchProgress" type="ProgressBar" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/CacheSection"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 max_value = 100.0
 step = 1.0
 
-[node name="PrefetchStatus" type="Label" parent="Center/Placeholder/CacheSection"]
+[node name="PrefetchStatus" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/CacheSection"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 text = "Idle"
 horizontal_alignment = 1
 
+[node name="AutoEQSeparator" type="HSeparator" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
+unique_name_in_owner = true
+layout_mode = 2
 
+[node name="AutoEQSection" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="AutoEQTitle" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Headphone EQ Calibration"
+horizontal_alignment = 1
+
+[node name="AutoEQToggleContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+layout_mode = 2
+alignment = 1
+
+[node name="AutoEQToggleLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQToggleContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Enable Calibration"
+
+[node name="AutoEQToggle" type="CheckButton" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQToggleContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="AutoEQSearchContainer" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="AutoEQSearchLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQSearchContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Search Headphone Model"
+
+[node name="AutoEQSearch" type="LineEdit" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQSearchContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Type model name... (e.g. Sennheiser)"
+clear_button_enabled = true
+
+[node name="AutoEQSelector" type="OptionButton" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQSearchContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="CalibrationGraph" type="Control" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+unique_name_in_owner = true
+layout_mode = 2
+script = ExtResource("2_graph")

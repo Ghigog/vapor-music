@@ -111,7 +111,7 @@ func _connect_vp_signals() -> void:
 func _process(_delta: float) -> void:
 	if PlatformManager.is_desktop() and vertical_progress and vertical_progress.visible and AudioManager.is_playing and not _vp_dragging:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
-			vertical_progress.value = AudioManager.player.get_playback_position()
+			vertical_progress.value = AudioManager.get_playback_position()
 
 
 

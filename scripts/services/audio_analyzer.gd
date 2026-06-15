@@ -16,6 +16,7 @@ var _mutex: Mutex
 var _semaphore: Semaphore
 var _exit_thread := false
 var _metadata_service: Node = null
+var dsp: Node = null
 
 var cache_dir := "user://audio_cache/"
 var background_caching_active := false
@@ -24,6 +25,7 @@ var download_http_request: HTTPRequest = null
 var _prefetch_queue: Array[String] = []
 var _prefetch_total := 0
 var _prefetch_downloaded := 0
+var is_transitioning_active := false
 
 func _ready() -> void:
 	_mutex = Mutex.new()
@@ -32,9 +34,15 @@ func _ready() -> void:
 	_thread = Thread.new()
 	_thread.start(_thread_worker)
 	
+	if ClassDB.class_exists("AudioDSP"):
+		dsp = ClassDB.instantiate("AudioDSP")
+		add_child(dsp)
+	else:
+		print("AudioAnalyzer: AudioDSP class not registered in ClassDB yet.")
+	
 	var webdav = get_node_or_null("/root/WebDAVService")
 	if is_instance_valid(webdav) and webdav.has_signal("library_scanned"):
-		webdav.library_scanned.connect(scan_library_cache)
+		webdav.library_scanned.connect(_on_library_scanned)
 
 func _exit_tree() -> void:
 	_mutex.lock()
@@ -92,13 +100,15 @@ func get_ready_tracks_count(hrefs: Array) -> int:
 
 ## Scans a list of hrefs and queues any that (a) have a local disk cache but (b) have no analysis
 ## data yet (bpm == 0). Runs on the main thread, safe to call any time.
+func _on_library_scanned(hrefs: Array) -> void:
+	# Automatically prune orphaned cache files every time the library is scanned/loaded
+	prune_orphaned_cache_files(hrefs)
+	scan_library_cache(hrefs)
+
 func scan_library_cache(hrefs: Array) -> void:
 	var metadata_service = _metadata_service
 	if not is_instance_valid(metadata_service):
 		return
-
-	# Automatically prune orphaned cache files every time the library is scanned/loaded
-	prune_orphaned_cache_files(hrefs)
 
 	var queued := 0
 	var already_done := 0
@@ -146,7 +156,13 @@ func prune_orphaned_cache_files(hrefs: Array) -> void:
 		while file_name != "":
 			if not dir.current_is_dir():
 				if file_name.ends_with(".tmp"):
-					var base_name = file_name.trim_suffix(".tmp")
+					var base_name = file_name
+					if file_name.ends_with(".analyzer.tmp"):
+						base_name = file_name.trim_suffix(".analyzer.tmp")
+					elif file_name.ends_with(".manager.tmp"):
+						base_name = file_name.trim_suffix(".manager.tmp")
+					else:
+						base_name = file_name.trim_suffix(".tmp")
 					if not valid_hashes.has(base_name):
 						dir.remove(file_name)
 						print("AudioAnalyzer: Pruned orphaned temp file: ", file_name)
@@ -158,40 +174,74 @@ func prune_orphaned_cache_files(hrefs: Array) -> void:
 		dir.list_dir_end()
 
 func start_prefetching(hrefs: Array) -> void:
-	if background_caching_active:
-		return
-		
-	background_caching_active = true
-	_prefetch_queue.clear()
-	
-	# Clean cache first
-	prune_orphaned_cache_files(hrefs)
+	# Ensure all cached files are scanned and queued for background analysis
+	scan_library_cache(hrefs)
 	
 	# Find uncached files
-	var already_cached_count := 0
+	var new_queue: Array[String] = []
 	for href in hrefs:
 		var ext: String = href.get_extension()
 		if ext.is_empty():
 			ext = "mp3"
 		var cache_path: String = cache_dir + href.md5_text() + "." + ext
 		if not FileAccess.file_exists(cache_path):
-			_prefetch_queue.append(href)
-		else:
-			already_cached_count += 1
+			new_queue.append(href)
 			
-	_prefetch_total = hrefs.size()
-	_prefetch_downloaded = already_cached_count
-	
-	prefetch_started.emit(_prefetch_total)
-	prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
-	print("AudioAnalyzer: Starting pre-fetch. Uncached tracks count: %d, already cached: %d" % [_prefetch_queue.size(), already_cached_count])
-	
-	if _prefetch_queue.is_empty():
-		background_caching_active = false
-		prefetch_completed.emit()
-		return
+	var ready_count = get_ready_tracks_count(hrefs)
+			
+	if background_caching_active:
+		# If a download is active, check if it is still in the new look-ahead window
+		if not current_download_href.is_empty():
+			if not hrefs.has(current_download_href):
+				# Cancel current download request
+				if is_instance_valid(download_http_request):
+					download_http_request.cancel_request()
+					download_http_request.queue_free()
+					download_http_request = null
+				
+				# Remove temp file
+				var ext: String = current_download_href.get_extension()
+				if ext.is_empty():
+					ext = "mp3"
+				var temp_path = cache_dir + current_download_href.md5_text() + "." + ext + ".analyzer.tmp"
+				if FileAccess.file_exists(temp_path):
+					DirAccess.remove_absolute(temp_path)
+					
+				print("AudioAnalyzer: Cancelled download of ", current_download_href, " (no longer in look-ahead)")
+				current_download_href = ""
+			else:
+				# Keep current download, but erase from new queue
+				new_queue.erase(current_download_href)
+				
+		_prefetch_queue = new_queue
+		_prefetch_total = hrefs.size()
+		_prefetch_downloaded = ready_count
 		
-	_download_next_prefetch()
+		prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
+		
+		if current_download_href.is_empty():
+			if not _prefetch_queue.is_empty():
+				_download_next_prefetch()
+			else:
+				if _prefetch_downloaded >= _prefetch_total:
+					background_caching_active = false
+					prefetch_completed.emit()
+	else:
+		background_caching_active = true
+		_prefetch_queue = new_queue
+		_prefetch_total = hrefs.size()
+		_prefetch_downloaded = ready_count
+		
+		prefetch_started.emit(_prefetch_total)
+		prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
+		
+		if _prefetch_queue.is_empty():
+			if _prefetch_downloaded >= _prefetch_total:
+				background_caching_active = false
+				prefetch_completed.emit()
+			return
+			
+		_download_next_prefetch()
 
 func stop_prefetching() -> void:
 	if not background_caching_active:
@@ -206,9 +256,25 @@ func stop_prefetching() -> void:
 	print("AudioAnalyzer: Pre-fetching stopped.")
 
 func _download_next_prefetch() -> void:
-	if not background_caching_active or _prefetch_queue.is_empty():
-		background_caching_active = false
-		prefetch_completed.emit()
+	if not background_caching_active:
+		return
+		
+	if _prefetch_queue.is_empty():
+		current_download_href = ""
+		
+		# Check if background analysis is also finished
+		_mutex.lock()
+		var queue_empty = _queue.is_empty()
+		_mutex.unlock()
+		
+		var webdav = get_node_or_null("/root/WebDAVService")
+		var ready_count = 0
+		if is_instance_valid(webdav):
+			ready_count = get_ready_tracks_count(webdav.scanned_files)
+			
+		if ready_count >= _prefetch_total or queue_empty:
+			background_caching_active = false
+			prefetch_completed.emit()
 		return
 		
 	var href: String = _prefetch_queue.pop_front()
@@ -218,11 +284,9 @@ func _download_next_prefetch() -> void:
 	if ext.is_empty():
 		ext = "mp3"
 	var cache_path: String = cache_dir + href.md5_text() + "." + ext
-	var temp_download_path := cache_path + ".tmp"
+	var temp_download_path := cache_path + ".analyzer.tmp"
 	
 	if FileAccess.file_exists(cache_path):
-		_prefetch_downloaded += 1
-		prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
 		call_deferred("_download_next_prefetch")
 		return
 		
@@ -264,8 +328,6 @@ func _download_next_prefetch() -> void:
 			DirAccess.remove_absolute(temp_download_path)
 		download_http_request.queue_free()
 		download_http_request = null
-		_prefetch_downloaded += 1
-		prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
 		call_deferred("_download_next_prefetch")
 
 func _on_prefetch_download_completed(href: String, cache_path: String, temp_path: String, response_code: int) -> void:
@@ -279,16 +341,19 @@ func _on_prefetch_download_completed(href: String, cache_path: String, temp_path
 		if FileAccess.file_exists(temp_path):
 			DirAccess.remove_absolute(temp_path)
 	else:
-		var err = DirAccess.rename_absolute(temp_path, cache_path)
-		if err != OK:
-			print("AudioAnalyzer prefetch: rename error: ", err)
+		if FileAccess.file_exists(cache_path):
+			print("AudioAnalyzer prefetch: cache already exists for ", href)
+			if FileAccess.file_exists(temp_path):
+				DirAccess.remove_absolute(temp_path)
+			analyze_track(href, true)
 		else:
-			print("AudioAnalyzer prefetch: downloaded ", href)
-			analyze_track(href, false)
+			var err = DirAccess.rename_absolute(temp_path, cache_path)
+			if err != OK:
+				print("AudioAnalyzer prefetch: rename error: ", err)
+			else:
+				print("AudioAnalyzer prefetch: downloaded ", href)
+				analyze_track(href, true)
 			
-	_prefetch_downloaded += 1
-	prefetch_progress.emit(_prefetch_downloaded, _prefetch_total)
-	
 	_download_next_prefetch()
 
 func _thread_worker() -> void:
@@ -306,6 +371,18 @@ func _thread_worker() -> void:
 			
 		var href: String = _queue.pop_front()
 		_mutex.unlock()
+		
+		# Suspend popping/analyzing during active transitions
+		while is_transitioning_active:
+			OS.delay_msec(100)
+			_mutex.lock()
+			var should_exit = _exit_thread
+			_mutex.unlock()
+			if should_exit:
+				break
+				
+		if _exit_thread:
+			break
 		
 		var results := _perform_analysis(href)
 		call_deferred("_on_analysis_completed", href, results)
@@ -335,215 +412,41 @@ func _on_analysis_completed(href: String, results: Dictionary) -> void:
 			metadata_service.lookup_metadata(href, info.artist, info.album, info.track)
 		
 	analysis_completed.emit(href, results)
+	
+	if background_caching_active:
+		var webdav = get_node_or_null("/root/WebDAVService")
+		if is_instance_valid(webdav):
+			var scanned = webdav.scanned_files
+			var ready_count = get_ready_tracks_count(scanned)
+			_prefetch_downloaded = ready_count
+			prefetch_progress.emit(ready_count, _prefetch_total)
+			
+			_mutex.lock()
+			var queue_empty = _queue.is_empty()
+			_mutex.unlock()
+			
+			if ready_count >= _prefetch_total or (_prefetch_queue.is_empty() and current_download_href.is_empty() and queue_empty):
+				background_caching_active = false
+				prefetch_completed.emit()
 
 func _perform_analysis(href: String) -> Dictionary:
-	var results := {
-		"bpm": 0.0,
-		"musical_key": "",
-		"energy_level": 0.0,
-		"energy_graph": [],
-		"dynamic_range": 0.0,
-		"harmony_map": {}
-	}
-	
 	var ext := href.get_extension().to_lower()
 	if ext.is_empty():
 		ext = "mp3"
 		
 	var cache_path := cache_dir + href.md5_text() + "." + ext
 	if not FileAccess.file_exists(cache_path):
+		print("AudioAnalyzer: Cache file does not exist: ", cache_path)
 		return {}
 		
-	var file := FileAccess.open(cache_path, FileAccess.READ)
-	if not file:
+	var abs_path = ProjectSettings.globalize_path(cache_path)
+	
+	if not is_instance_valid(dsp):
+		print("AudioAnalyzer: AudioDSP not available, cannot analyze file.")
 		return {}
-		
-	var file_size := file.get_length()
-	if file_size < 100:
-		file.close()
-		return {}
-		
-	if ext == "wav":
-		_analyze_wav(file, results)
-	else:
-		_analyze_mp3(file, results, href)
-		
-	file.close()
+			
+	print("AudioAnalyzer: Analyzing via C++ AudioDSP: ", abs_path)
+	var results = dsp.analyze_file(abs_path)
+	if not results.is_empty():
+		results["vocal_presence"] = results.get("energy_level", 0.5) > 0.35
 	return results
-
-func _analyze_wav(file: FileAccess, results: Dictionary) -> void:
-	# Parse WAV Header
-	file.seek(0)
-	var riff := _get_ascii_string(file.get_buffer(4))
-	file.get_32() # File size
-	var wave := _get_ascii_string(file.get_buffer(4))
-	
-	if riff != "RIFF" or wave != "WAVE":
-		return
-		
-	# Simple chunk parsing to locate the "data" subchunk
-	var data_found := false
-	while file.get_position() < file.get_length() - 8:
-		var chunk_id := _get_ascii_string(file.get_buffer(4))
-		var chunk_size := file.get_32()
-		if chunk_id == "data":
-			data_found = true
-			break
-		else:
-			file.seek(file.get_position() + chunk_size)
-			
-	if not data_found:
-		return
-		
-	# Read PCM samples (limit to 1MB to avoid memory pressure)
-	var read_size: int = min(file.get_length() - file.get_position(), 1 * 1024 * 1024)
-	var raw_samples: PackedByteArray = file.get_buffer(read_size)
-	
-	# Extract peaks and dynamic envelope
-	var peaks: Array[float] = []
-	var sample_count: int = raw_samples.size() / 2 # 16-bit
-	var max_amplitude := 0.0
-	var min_amplitude := 32767.0
-	var sum_squares := 0.0
-	
-	# Process in 1024-sample blocks
-	var block_size := 1024
-	var i := 0
-	while i < raw_samples.size() - 1:
-		var b0: int = raw_samples[i]
-		var b1: int = raw_samples[i + 1]
-		var val: int = b0 | (b1 << 8)
-		if val >= 32768:
-			val -= 65536
-		var amp := absf(float(val) / 32768.0)
-		max_amplitude = maxf(max_amplitude, amp)
-		if amp > 0.0:
-			min_amplitude = minf(min_amplitude, amp)
-		sum_squares += amp * amp
-		
-		if (i / 2) % block_size == 0:
-			peaks.append(amp)
-		i += 2
-		
-	# Calculate BPM via peak envelope matching
-	var beats := 0
-	var threshold := max_amplitude * 0.7
-	var last_beat_index := 0
-	var intervals: Array[float] = []
-	
-	for idx in range(peaks.size()):
-		if peaks[idx] > threshold and (idx - last_beat_index) > 10: # Min spacing to prevent double beats
-			beats += 1
-			if last_beat_index > 0:
-				intervals.append(float(idx - last_beat_index))
-			last_beat_index = idx
-			
-	# Average interval to BPM mapping
-	if not intervals.is_empty():
-		var avg_interval := 0.0
-		for interval in intervals:
-			avg_interval += interval
-		avg_interval /= intervals.size()
-		# block size = 1024 samples. Sample rate = 44100. Frame rate of peaks = 44100 / 1024 = 43.06 Hz
-		var peaks_per_second := 43.06
-		results.bpm = roundf((60.0 * peaks_per_second) / avg_interval)
-	else:
-		results.bpm = 120.0
-		
-	# Clamp BPM to standard ranges
-	if results.bpm < 60:
-		results.bpm *= 2
-	elif results.bpm > 180:
-		results.bpm /= 2
-		
-	# Energy calculations
-	var rms := sqrt(sum_squares / float(sample_count))
-	results.energy_level = clampf(rms * 3.0, 0.0, 1.0)
-	results.dynamic_range = max_amplitude - min_amplitude
-	
-	# Build a 20-point energy graph profile
-	var graph_points := 20
-	var step: int = max(1, peaks.size() / graph_points)
-	for pt in range(graph_points):
-		var p_idx: int = min(pt * step, peaks.size() - 1)
-		results.energy_graph.append(clampf(peaks[p_idx] * 1.5, 0.0, 1.0))
-		
-	results.musical_key = "8A" # WAV default fallback key
-	results.harmony_map = {"8A": 1.0}
-
-func _analyze_mp3(file: FileAccess, results: Dictionary, href: String) -> void:
-	# Parse MP3 frame headers for duration & timing
-	file.seek(0)
-	var frame_count := 0
-	var bytes_hash := 0
-	
-	# Skip ID3 tags
-	var header := file.get_buffer(10)
-	if header.size() >= 10 and header[0] == 0x49 and header[1] == 0x44 and header[2] == 0x33:
-		var tag_size := (
-			((header[6] & 0x7F) << 21) |
-			((header[7] & 0x7F) << 14) |
-			((header[8] & 0x7F) << 7) |
-			(header[9] & 0x7F)
-		)
-		file.seek(10 + tag_size)
-		
-	# Sample first 200KB of audio data to build a deterministic hash for analysis simulation
-	var start_pos := file.get_position()
-	var sample_bytes := file.get_buffer(min(file.get_length() - start_pos, 200 * 1024))
-	bytes_hash = hash(sample_bytes)
-		
-	# Check if ID3 tags already have BPM or Key
-	var bpm_fallback := 0.0
-	var key_fallback := ""
-	var genre_fallback := "Unknown"
-	
-	var metadata_service = _metadata_service
-	if is_instance_valid(metadata_service):
-		var existing: Dictionary = metadata_service.get_cached_metadata(href)
-		if not existing.is_empty():
-			bpm_fallback = existing.get("bpm", 0.0)
-			key_fallback = existing.get("musical_key", "")
-			genre_fallback = existing.get("genre", "Unknown")
-			
-	# Algorithmic simulation mapping based on the file content hash
-	# Ensures repeatable, stable, and distinct parameters for every track
-	var final_bpm := bpm_fallback
-	if final_bpm <= 0.0:
-		var bpm_options = [95.0, 105.0, 112.0, 118.0, 120.0, 124.0, 128.0, 130.0, 140.0]
-		final_bpm = bpm_options[bytes_hash % bpm_options.size()]
-		
-	var final_key := key_fallback
-	if final_key.is_empty():
-		var key_options = ["8A", "9A", "10A", "11A", "12A", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "8B", "9B", "11B"]
-		final_key = key_options[bytes_hash % key_options.size()]
-		
-	results.bpm = final_bpm
-	results.musical_key = final_key
-	
-	# Generate a highly realistic dynamic envelope graph
-	var graph_points := 20
-	var base_energy := float((bytes_hash & 0xFF) % 50) / 100.0 + 0.3 # 0.3 to 0.8
-	results.energy_level = base_energy
-	
-	var graph: Array[float] = []
-	for pt in range(graph_points):
-		var wave_val := sin(float(pt) / 3.0) * 0.15
-		var noise_val := float((bytes_hash >> pt) & 1) * 0.05
-		var point_val := clampf(base_energy + wave_val + noise_val, 0.1, 1.0)
-		graph.append(point_val)
-	results.energy_graph = graph
-	
-	results.dynamic_range = clampf(float((bytes_hash >> 8) & 0xFF) / 255.0 * 0.5 + 0.2, 0.1, 0.9)
-	results.harmony_map = {final_key: 0.8, "Adjacent": 0.2}
-
-func _get_ascii_string(bytes: PackedByteArray) -> String:
-	var chars := []
-	for b in bytes:
-		if b == 0:
-			break
-		if b >= 32 and b <= 126: # Printable ASCII range
-			chars.append(char(b))
-		else:
-			chars.append("?") # Safe fallback
-	return "".join(chars)

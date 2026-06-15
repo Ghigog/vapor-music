@@ -510,7 +510,7 @@ So that the exit of one track blends seamlessly into the intro of the next.
 
 ---
 
-### AI-005 : Playlist Visualizer & Camelot Wheel UI (active)
+### AI-005 : Playlist Visualizer & Camelot Wheel UI (completed)
 **User Story:**
 As a user,
 I'd like a visual dashboard showing Camelot Wheel connections and the upcoming mix transitions,
@@ -533,7 +533,7 @@ So that I can see and adjust how my tracks are being blended together.
 
 ---
 
-### EQ-001 : Godot AudioServer Multiband Parametric EQ Layout (active)
+### EQ-001 : Godot AudioServer Multiband Parametric EQ Layout (completed)
 **User Story:**
 As a developer,
 I'd like to implement a multi-band parametric equalizer layout in the audio server,
@@ -555,7 +555,7 @@ So that individual frequency bands can be adjusted dynamically at runtime.
 
 ---
 
-### EQ-002 : AutoEQ Calibration Profile Parser (active)
+### EQ-002 : AutoEQ Calibration Profile Parser (completed)
 **User Story:**
 As a developer,
 I'd like to parse parametric filter parameters from standard AutoEQ text profiles,
@@ -577,7 +577,7 @@ So that headphone calibration settings can be imported directly into our EQ filt
 
 ---
 
-### EQ-003 : Settings Headphone Calibration Selection UI (active)
+### EQ-003 : Settings Headphone Calibration Selection UI (completed)
 **User Story:**
 As a user,
 I'd like to select my headphone model from a list in the Settings screen,
@@ -899,4 +899,505 @@ Add `get_harmonic_relation_cost` in `dj_pathfinder.gd` classifying key relations
 - When the transition is selected
 - Then the transition type is either Echo Out or Reverb Freeze.
 - Given smart matches are calculated
+- Given smart matches are calculated
 - Then the perfect match uses harmonically compatible keys, and the interesting match uses key modulations.
+
+---
+
+### DJ-005 : Scaffold C++ DSP Layer (GDExtension) & Integrate Rubber Band & Essentia (done)
+**User Story:**
+As a developer,
+I'd like to compile and bind Essentia and the Rubber Band Library to Godot via GDExtension,
+So that we have high-performance C++ audio analysis and time-stretching capabilities.
+
+**Context:** GDScript is too slow for full-file digital signal processing (DSP), and Godot's built-in `pitch_scale` couples speed and pitch, distorting vocals. We need native C++ libraries for advanced analysis and independent time-stretching.
+
+**Description:** Scaffold a GDExtension C++ project in the repository. Configure the build environment to compile native libraries for macOS, and provide scripts/stubs for mobile (Android/iOS). Bind Essentia for local file sweeps and Rubber Band for real-time time-stretching, exposing them as an `AudioDSP` node class.
+
+**Requirements:**
+- Create a `src/` directory with a standard GDExtension boilerplate (`register_types.cpp`, `register_types.h`).
+- Write an `AudioDSP` C++ class extending `Node` (`audio_dsp.h`, `audio_dsp.cpp`).
+- Write a `SConstruct` file configured to compile the source code into a dynamic library under `bin/`.
+- Download and link compiled static libraries for Essentia (and its dependencies like libsamplerate, fftw) and the Rubber Band Library for macOS.
+- Register `AudioDSP` class methods within the Godot ClassDB.
+- Expose basic verification methods (e.g., library version queries) to GDScript to test binding validity.
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_audio_dsp.gd` extending `GutTest`.
+- Implement `test_audio_dsp_node_registration()`: Assert that `ClassDB.class_exists("AudioDSP")` is true.
+- Implement `test_audio_dsp_node_instantiation()`: Assert that `AudioDSP.new()` returns a valid instance that does not crash the engine.
+- Implement `test_audio_dsp_method_presence()`: Assert that the instance responds to `get_library_version()`, `analyze_pcm()`, and `stretch_buffer()`.
+
+**Acceptance Criteria:**
+- Given the Godot project is opened and run
+- When the engine initializes
+- Then the `AudioDSP` GDExtension is loaded successfully, and the class can be instantiated via `AudioDSP.new()`.
+
+---
+
+### AI-008 : High-Fidelity Audio Analysis & Local Metadata Caching (done)
+**User Story:**
+As a listener,
+I'd like my music library to be analyzed using real DSP key, BPM, and segment detection,
+So that track transitions and paths are calculated using accurate, non-faked data.
+
+**Context:** The current MP3 key/BPM analysis is faked using a CRC32 byte-hash modulo, and WAV key detection is hardcoded to `8A` with a 6-second analysis cap. We need a real offline DSP scan of the entire audio file using the new `AudioDSP` GDExtension.
+
+**Description:** Overhaul `audio_analyzer.gd` to stream audio data to `AudioDSP`. Perform onset detection for a list of beat timestamps (`beat_grid`), Chromagram analysis for Camelot keys, and spectral flux for structural segments (intro, outro, chorus), saving the results to `user://metadata_cache.json`.
+
+**Requirements:**
+- Remove the faked CRC32 modulo math and the 1MB file read ceiling inside `audio_analyzer.gd`.
+- Stream audio file PCM data to the `AudioDSP` GDExtension module.
+- Retrieve a complete `beat_grid` array of floats (beat timestamps in seconds).
+- Retrieve a `downbeats` array of floats representing the "one" beat of each bar.
+- Calculate the accurate average BPM across the entire track.
+- Extract the musical key signature and format it into Camelot notation (e.g., `8A`).
+- Detect structural segment boundaries (timestamps for intro, chorus, breakdown, outro).
+- Serialize the results in `user://metadata_cache.json` matching the new expanded JSON schema.
+
+**Testing Requirements:**
+- Add unit tests to `tests/unit/test_audio_analyzer.gd`.
+- Implement `test_essentia_analysis_integration()`: Mock `AudioDSP` and assert that `_perform_analysis()` calls it and retrieves the mapped keys, average BPM, and beat grids.
+- Implement `test_caching_expanded_fields()`: Load an analyzed track metadata cache and assert that `beat_grid`, `downbeats`, and `segments` are successfully serialized to the JSON cache file and retrieved with their proper types.
+
+**Acceptance Criteria:**
+- Given an audio track with known musical properties (BPM, key, structure)
+- When background analysis runs
+- Then the cached metadata contains accurate keys, BPM, beat grid timestamps, and segment boundaries.
+
+---
+
+### MET-004 : Silence Trimming & EBU R128 Loudness Normalization (done)
+**User Story:**
+As a listener,
+I'd like tracks to play at consistent volumes and start without silent delays,
+So that transitions flow seamlessly and do not suffer from sudden volume spikes or dead air.
+
+**Context:** Differences in loudness between highly-compressed modern tracks and dynamic recordings create an uneven listening experience, and silence at the start/end of audio files disrupts transition pacing.
+
+**Description:** In `audio_analyzer.gd`, sweep the audio amplitude to find start and end cue points (trimming silence). Calculate EBU R128 integrated loudness (LUFS) during analysis. In `audio_manager.gd`, apply a pre-fade gain multiplier to match a target loudness of `-14 LUFS` on each deck.
+
+**Requirements:**
+- Scan PCM samples to find the first and last timestamps where the average amplitude rises above `-40dB` (representing `cue_in` and `cue_out`).
+- Implement an EBU R128 loudness analysis algorithm (K-weighting filter + gated RMS) to calculate integrated LUFS.
+- Save `cue_in`, `cue_out`, and `lufs` in `user://metadata_cache.json`.
+- In `audio_manager.gd`, parse the cached `cue_in` and play the incoming track starting from that offset rather than `0.0`.
+- Apply a pre-fade gain multiplier on `DeckA` and `DeckB` buses: `Gain = 10^((Target_LUFS - Track_LUFS) / 20)` (Target = `-14.0 LUFS`).
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_audio_normalization.gd` extending `GutTest`.
+- Implement `test_silence_detection_threshold()`: Generate a mock audio buffer with 2 seconds of silence followed by active audio. Assert that `cue_in` is detected at exactly 2.0 seconds.
+- Implement `test_lufs_loudness_calculation()`: Feed a reference sine wave at a known amplitude and assert that the calculated LUFS value matches standard reference targets within a 0.5dB tolerance.
+- Implement `test_gain_multiplier_calculation()`: Verify that the gain multiplier applied to the audio bus correctly scales with tracks of various LUFS values.
+
+**Acceptance Criteria:**
+- Given a track with a 4-second silent intro and a high volume level
+- When analyzed and played
+- Then playback begins instantly at the `cue_in` timestamp (4.0s) and its volume is attenuated to match the target reference loudness.
+
+---
+
+### DJ-006 : Beat Grid Sync & Phase-Locked Loop (PLL) Deck Alignment (done)
+**User Story:**
+As a listener,
+I'd like overlapping tracks to have their beats perfectly synchronized,
+So that kick drums hit at the exact same millisecond and do not trainwreck.
+
+**Context:** The current system plays the incoming track from 0.0 blindly without aligning beat phases, resulting in messy percussive clashes during transitions.
+
+**Description:** Rebuild the playback trigger in `audio_manager.gd` using cached `beat_grid` and `downbeats` arrays. Match the phase of incoming beats to outgoing beats, and run a phase-locked loop (PLL) to dynamically correct timing drift between the decks.
+
+**Requirements:**
+- Retrieve the `beat_grid` and `downbeats` arrays for both outgoing and incoming tracks.
+- Calculate the target start sample offset for the incoming track so its Beat 1 aligns with the next phrasing downbeat of the outgoing track.
+- Implement a software PLL in the manager's `_process()` loop running at 60fps.
+- Calculate the phase difference (in milliseconds) between the playing decks' beat timestamps.
+- Apply micro-adjustments to the playback rate of the incoming deck (within ±0.5%) to keep the beat boundaries locked in phase.
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_beat_sync_pll.gd` extending `GutTest`.
+- Implement `test_beat_alignment_offset_calculation()`: Given a mock outgoing track beat grid and an incoming track beat grid, verify the computed start offset aligns the downbeats.
+- Implement `test_pll_drift_correction_loop()`: Inject timing drift values in a mocked playback loop and assert that the PLL's rate adjustments successfully drive the timing offset back to zero.
+
+**Acceptance Criteria:**
+- Given two tracks playing during a transition
+- When the crossfade runs
+- Then the beat grids of both tracks remain locked in phase with sub-millisecond drift.
+
+---
+
+### DJ-007 : True Time-Stretching & Pitch-Locked Tempo Morphing (done)
+**User Story:**
+As a listener,
+I'd like the tempo of clashing BPM tracks to match during a transition without pitch distortions,
+So that vocals and melodies maintain their natural keys.
+
+**Context:** The current "Tempo Morph" transition modifies Godot's built-in `pitch_scale`, which couples tempo and pitch, creating chipmunk or demonic vocal warping. We need independent time-stretching.
+
+**Description:** Integrate the Rubber Band Library via the `AudioDSP` GDExtension to process audio buffers. Dynamically calculate target midpoint BPMs, feeding the stretch ratios to the time-stretch engine while keeping the key pitch-locked.
+
+**Requirements:**
+- Calculate the midpoint target BPM: `(BPM_out + BPM_in) / 2`.
+- Calculate the required time-stretch ratios for both the outgoing and incoming decks.
+- Route audio buffers through Rubber Band's processing engine in `AudioDSP`.
+- Keep the `pitch_scale` of the Godot players locked at `1.0` while stretching the time domain dynamically.
+- Implement a post-transition glide that slowly ramps the active deck's time-stretch ratio back to `1.0` over 6 seconds.
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_tempo_stretching.gd` extending `GutTest`.
+- Implement `test_morph_ratio_calculations()`: Assert that target BPM calculations and corresponding stretch ratios are mathematically correct.
+- Implement `test_pitch_remains_locked()`: Mock a morph transition and verify that the `pitch_scale` property of the `AudioStreamPlayer` nodes remains constant at `1.0` throughout the blend.
+- Implement `test_post_transition_speed_glide()`: Verify that the post-transition speed restoration glide runs over the exact configured duration (6.0s) and interpolates smoothly to 1.0.
+
+**Acceptance Criteria:**
+- Given a transition is running with a 10 BPM difference
+- When the tempo morphs
+- Then the tempo matches at the midpoint while both tracks maintain their native pitch without chipmunk effects.
+
+---
+
+### DJ-008 : Phrase-Aware Structural Transitions & Vocal Clashing Masking (completed)
+**User Story:**
+As a listener,
+I'd like transitions to trigger at natural phrasing boundaries and avoid vocal-on-vocal clashes,
+So that mixes flow musically and do not sound cluttered.
+
+**Context:** Transitions currently trigger on absolute time countdowns, often cutting off drops, starting in the middle of choruses, or overlapping vocals.
+
+**Description:** Update `audio_manager.gd` to trigger transitions at structural outro segment boundaries aligned to 8-bar loops. Detect vocal presence in the transition window and apply mid-range EQ carving or alternate transition styles.
+
+**Requirements:**
+- Translate the playback positions of both decks from seconds into bars and beats based on the beat grid.
+- Trigger transitions strictly on the first downbeat of the outro segment that lands on a standard 8-bar loop boundary.
+- Read vocal presence metadata (extracted via spectral density during analysis).
+- If both outgoing and incoming tracks have vocal presence, apply a deep mid-frequency EQ cut (e.g. -24dB) on one deck or switch to a hard-cut transition (Echo Out/Reverb Freeze).
+
+**Testing Requirements:**
+- Add unit tests to `tests/unit/test_dj_transitions.gd`.
+- Implement `test_transition_trigger_alignment()`: Mock playing a track with structural segments, and assert that the transition trigger is scheduled for the first downbeat of the outro segment on an 8-bar boundary.
+- Implement `test_vocal_clash_detection_and_masking()`: Mock a blend where both tracks contain vocals in the overlap window, and assert that a mid-range EQ attenuation of at least -20dB is dynamically applied to one of the channels.
+
+**Acceptance Criteria:**
+- Given both tracks contain vocals in the overlap zone
+- When the transition triggers at the 8-bar outro boundary
+- Then the system automatically applies mid-frequency isolation to prevent vocal clashing.
+
+---
+
+### DJ-009 : Subtractive Dynamic EQ & Real-Time Frequency RMS Compression (completed)
+**User Story:**
+As a listener,
+I'd like overlapping frequency bands to be mixed subtractively,
+So that basslines do not muddy or cause digital clipping.
+
+**Context:** Static tweens can cause loudness spikes and muddy bass overlaps.
+
+**Description:** Implement a subtractive mixing model driven by a crossfader variable ($X \in [0.0, 1.0]$). Swap low EQ bands at the midpoint while keeping total bass energy at 0dB. Implement real-time frequency RMS monitoring and compression.
+
+**Requirements:**
+- Define a crossfader progress variable $X$ driven by a transition tween.
+- Calculate low EQ gains: `Bass_out = clamp(1.0 - 2X, 0.0, 1.0)` and `Bass_in = clamp(2X - 1.0, 0.0, 1.0)`.
+- Implement real-time RMS metering on Low, Mid, and High bands.
+- If the sum of any frequency band energy exceeds `+2dB` relative to reference, compress or reduce gain on the outgoing deck to prevent digital clipping.
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_subtractive_eq.gd` extending `GutTest`.
+- Implement `test_subtractive_bass_gain_formula()`: Assert that the combined bass energy formula resolves to exactly `1.0` (0dB) across various points of the crossfade ($X = 0.0$, $X = 0.5$, $X = 1.0$).
+- Implement `test_rms_clipping_prevention()`: Feed high-amplitude audio signals into both channels during a simulated crossfade and assert that the output signal gain is dynamically attenuated/compressed to prevent clipping.
+
+**Acceptance Criteria:**
+- Given the crossfader is at 50% ($X = 0.5$)
+- When a transition is running
+- Then the total low-frequency energy remains constant at 0dB, avoiding muddy bass overload or digital clipping.
+
+---
+
+### AI-009 : A* Global Set Pathfinder & Genre Taxonomy Mapping (completed)
+**User Story:**
+As a listener,
+I'd like the AI DJ to plan a cohesive set path with smooth tempo and energy progressions,
+So that the playlist feels intentional.
+
+**Context:** The current pathfinder only looks one track ahead, causing random BPM leaps and genre jumps.
+
+**Description:** Rewrite `dj_pathfinder.gd` to perform global pathfinding using an A* algorithm over the queue. Integrate a static subgenre taxonomy tree. Implement multi-track BPM slope and energy curves (e.g. "Build Vibe", "Chill Down").
+
+**Requirements:**
+- Create a JSON genre taxonomy tree mapping subgenres.
+- Replace the greedy search with an A* algorithm calculating paths over a 10-song sequence.
+- Penalize sudden genre leaps and BPM/energy spikes.
+- Factor in target energy curves to plan gradual transitions.
+- Derive transition duration dynamically based on outro/intro segment lengths.
+
+**Testing Requirements:**
+- Add unit tests to `tests/unit/test_dj_pathfinder.gd`.
+- Implement `test_a_star_pathfinding_optimization()`: Load a mock metadata library and verify that the A* algorithm generates a path that matches the overall target slope of a chosen energy curve (e.g., "Build Vibe").
+- Implement `test_genre_taxonomy_cost()`: Assert that transition paths between related subgenres (e.g., Tech House -> Techno) are assigned lower cost penalties than unrelated ones (e.g., House -> Liquid DNB).
+- Implement `test_dynamic_duration_selection()`: Assert that transition duration adapts properly to outro and intro lengths.
+
+**Acceptance Criteria:**
+- Given a library with wide BPMs and genres
+- When a 10-track playlist path is generated
+- Then the queue displays a gradual BPM gradient and harmonic/genre compatibility across the entire sequence.
+
+---
+
+### AI-010 : Listener Preference Learning & Adaptive Transition Weighting (completed)
+**User Story:**
+As a listener,
+I'd like the AI DJ to learn my transition preferences based on my skip behavior,
+So that future suggestions align with my tastes.
+
+**Context:** Algorithms should adapt to user preferences over time.
+
+**Description:** Implement skip-metric tracking. Log successful blends and apply dynamic weight penalties to pathfinding nodes that have triggered user skips during transitions.
+
+**Requirements:**
+- Create a transaction log at `user://transition_history.json`.
+- Monitor if a user skips a track during or within 10 seconds of a transition.
+- Record the transition details (Track A, Track B, effect used, and outcome).
+- Integrate a feedback weight in `dj_pathfinder.gd`'s cost function to penalize previously skipped paths.
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_preference_learning.gd` extending `GutTest`.
+- Implement `test_skip_history_logging()`: Trigger a simulated track skip event within the transition window and verify that the event is logged in `user://transition_history.json`.
+- Implement `test_preference_cost_penalty()`: Add a history entry showing a specific transition was skipped, and verify that the pathfinder assigns a higher cost to that edge in its A* evaluation.
+
+**Acceptance Criteria:**
+- Given the user skips Track B multiple times when transitioned from Track A via Echo Out
+- When the pathfinder runs
+- Then the cost for this specific transition rises, preventing the AI from selecting it again.
+
+---
+
+### DJ-010 : Segmented Key Modulation & Waveform-Aware Transient Avoidance (completed)
+**User Story:**
+As a listener,
+I want the AI DJ to account for key changes within tracks and avoid clashing with major drops/hits,
+So that transitions sound clean.
+
+**Context:** Tracks that modulate keys are misclassified, and transitions that step on drops disrupt the energy.
+
+**Description:** Support per-segment key tracking to match the incoming track to the outro key. Perform transient peak detection to micro-shift transition start times.
+
+**Requirements:**
+- Analyze per-segment key signatures during high-fidelity analysis.
+- Match incoming tracks using the key of the outro segment.
+- Detect major transients (drums, drops, hits) in the transition window.
+- Micro-shift transition start times (by a few beats) to avoid cutting off drops or colliding peaks.
+
+**Testing Requirements:**
+- Create a new unit test suite `tests/unit/test_segmented_key_transients.gd` extending `GutTest`.
+- Implement `test_outro_key_matching()`: Mock a track modulating keys in its outro segment and assert that `dj_pathfinder.gd` matches candidates based on the outro key.
+- Implement `test_transient_peak_avoidance()`: Mock a high-amplitude transient (a drop) at the planned transition downbeat, and assert that the transition trigger is micro-shifted by a calculated beat offset.
+
+**Acceptance Criteria:**
+- Given a track that modulates to 9A in the outro
+- When matched by the pathfinder
+- Then the pathfinder selects an incoming track compatible with 9A (rather than the track's initial key of 8A).
+- And the transition start is slightly shifted to avoid overlapping a major transient peak.
+
+---
+
+### DJ-011 : Threaded Real-Time Time-Stretching & Buffer Feeding (completed)
+**User Story:**
+As a listener,
+I'd like the audio time-stretching to run in a background thread,
+So that the main UI thread never stutters and the audio stream remains completely free of pops or click artifacts during transitions.
+
+**Context:** Time-stretching two streams concurrently in the main `_process` thread via Rubber Band is extremely CPU-intensive and can cause frame drops and buffer underruns if the frame rate dips.
+
+**Description:** Implement a thread-safe ring buffer and background thread execution in `AudioDSP` or `AudioManager` to handle Rubber Band chunk processing, allowing the main thread's `_feed_deck` to immediately fetch pre-rendered samples.
+
+**Requirements:**
+- Create a background thread (using Godot's `Thread` or C++ threads) dedicated to processing Rubber Band time-stretching.
+- Implement a thread-safe circular buffer (ring buffer) in the GDExtension or GDScript.
+- `_feed_deck` should pull chunks from the buffer in O(1) time on the main thread, rather than computing them.
+
+**Testing Requirements:**
+- Add unit tests to `tests/unit/test_tempo_stretching.gd` to verify threaded feed behavior.
+- Verify that the main thread is never blocked during simultaneous time-stretching.
+
+**Acceptance Criteria:**
+- Given a transition running on two decks
+- When time-stretching is active
+- Then no frame drops or audio buffer underruns occur.
+
+---
+
+### DJ-012 : Smooth Subtractive Bass Crossfade (completed)
+**User Story:**
+As a listener,
+I'd like the bass EQ frequencies to swap smoothly over a brief crossfade window around the midpoint,
+So that the low-end transition does not feel like an abrupt binary cut.
+
+**Context:** The current bass swap instantly cuts outgoing bass and jumps incoming bass at exactly 50% crossfader progress, creating a sudden energy drop/jump.
+
+**Description:** Replace the binary midpoint swap in `_update_subtractive_eq()` with a smooth, short crossfade curve (e.g., 0.5s to 1.0s) centered at X = 0.5, while still maintaining the sum of low-frequency energy at or below 0dB to prevent clipping.
+
+**Requirements:**
+- Calculate smooth cross-fade gain levels for the low band using a power-complementary curve or linear fade over the interval X in [0.45, 0.55] (or a configurable duration).
+- Maintain total bass sum energy at 0dB.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_subtractive_eq.gd` to assert that bass gains cross smoothly and sum energy is validated.
+
+**Acceptance Criteria:**
+- Given a Bass Swap transition
+- When the crossfader passes X = 0.5
+- Then the bass frequencies blend smoothly rather than snapping instantly.
+
+---
+
+### DJ-013 : Multi-Pass Recursive Transient Peak Avoidance (completed)
+**User Story:**
+As a listener,
+I'd like the transient avoidance system to guarantee that transition start times avoid all major peaks,
+So that the mix never drops on top of consecutive drum hits or climax drops.
+
+**Context:** The current system only shifts the trigger time once by 1 bar and doesn't verify if the new time contains a collision.
+
+**Description:** Implement a recursive or looping transient check in `get_aligned_trigger_time()` to shift the trigger by successive bars until a trigger point is found that is completely free of transient peaks on both decks.
+
+**Requirements:**
+- Implement a loop/recursion in `get_aligned_trigger_time()` that checks for collisions at the candidate `t_trigger`.
+- If a collision is detected within the safety margin, shift `t_trigger` by 1 bar (4 beats) and repeat the collision check (up to a maximum of 4 attempts to prevent infinite loops).
+
+**Testing Requirements:**
+- Add tests to `tests/unit/test_segmented_key_transients.gd` verifying multi-pass avoidance when consecutive transients are present.
+
+**Acceptance Criteria:**
+- Given a track with transient peaks at bar boundaries
+- When the transition is scheduled
+- Then the final scheduled trigger time is verified to be completely free of collisions.
+
+---
+
+### DJ-014 : Cross-Correlation Auto-Sync & Phase Refinement (completed)
+**User Story:**
+As a listener,
+I'd like the playback engine to automatically correct any beat alignment errors by analyzing the audio waveforms directly,
+So that the transition beats stay perfectly locked even if the initial beatgrid analysis was slightly off.
+
+**Context:** Without manual user controls, any automated beatgrid detection error will cause a permanent, uncorrected phase clash (trainwreck) during the mix.
+
+**Description:** Implement a waveform cross-correlation phase-refinement algorithm in the `AudioDSP` C++ layer. Periodically compute the cross-correlation of down-sampled PCM signals from both decks in the transition window, locate the peak shift, and feed it into the PLL to nudge the phase into perfect alignment.
+
+**Requirements:**
+- Down-sample the active playback channels in C++ to a low sample rate (e.g., 4000 Hz) to save CPU.
+- Perform cross-correlation on a sliding 500ms window during transitions.
+- Extract the phase offset corresponding to the highest correlation coefficient.
+- Adjust the PLL's input phase error dynamically with this offset.
+
+**Testing Requirements:**
+- Create `tests/unit/test_beat_sync_pll.gd` test methods to mock drift and verify cross-correlation offset adjustments.
+
+**Acceptance Criteria:**
+- Given two decks playing out-of-sync beats due to a shifted beatgrid
+- When cross-correlation runs during the transition
+- Then the system automatically calculates the correct offset and locks the beats in phase.
+
+---
+
+### MET-005 : Low-Overhead Dynamic Streaming Audio Decoder (completed)
+**User Story:**
+As a listener,
+I want the player to have a small memory footprint and stream tracks from disk,
+So that the application never runs out of memory or crashes during long listening sessions.
+
+**Context:** Currently, the C++ GDExtension loads the entire uncompressed track audio buffer into memory (100MB+ per track), which can cause out-of-memory crashes on mobile devices.
+
+**Description:** Update `AudioDSP` to use a dynamic decoding and streaming buffer that reads blocks of frames from disk on demand, keeping only a small sliding cache window (e.g., 5 seconds of audio) in RAM.
+
+**Requirements:**
+- Modify `AudioDSP::load_file` to keep the file handle or a light decoder instance open, rather than decoding the whole file into a `std::vector<float>`.
+- Implement dynamic file reading and decoding in `get_next_chunk()` as the playhead advances.
+- Maintain a small cache of PCM frames to support smooth Rubber Band time-stretching.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_audio_dsp.gd` verifying low memory consumption during streaming playback.
+
+**Acceptance Criteria:**
+- Given a very long audio track (e.g., a 60-minute mix)
+- When loaded and played
+- Then the RAM allocated for decoded samples remains constant and low (e.g., under 15MB).
+
+---
+
+### DJ-015 : Phrase-Adaptive Dynamic Transition Durations (completed)
+**User Story:**
+As a listener,
+I'd like transitions to blend naturally based on the musical phrasing and intro/outro lengths of the tracks,
+So that the blend doesn't feel abruptly cut off or rushed on tracks with long structural intros/outros.
+
+**Context:** The current system uses hardcoded transition durations (e.g., 6.0s for Bass Swap, 4.0s for Filter Sweep) regardless of track structure. A track with a 30-second ambient outro should have a longer, smoother blend than a track with a quick 4-second outro.
+
+**Description:** Implement dynamic calculation of transition durations in `AudioManager.get_transition_duration()` based on the actual duration of the outgoing track's outro segment and the incoming track's intro segment, caching and utilizing this dynamic duration throughout the transition execution.
+
+**Requirements:**
+- Extract `outro` segment duration from the outgoing track's cached metadata (`outro[1] - outro[0]`).
+- Extract `intro` segment duration from the incoming track's cached metadata (`intro[1] - intro[0]`).
+- Set the dynamic duration as the minimum of the two segment lengths, clamped between a minimum of 3.0s and a maximum of 16.0s.
+- If segment data is missing or incomplete, fallback to the existing hardcoded transition type defaults.
+- Bind the calculated duration to `_active_transition_duration` and use it to drive all transition tweens and progress calculations.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_dj_transitions.gd` verifying dynamic duration assignment for tracks with varied intro/outro sizes.
+
+**Acceptance Criteria:**
+- Given a track A with a 12-second outro and track B with a 16-second intro
+- When a Bass Swap transition begins between them
+- Then the transition duration is dynamically set to 12.0 seconds.
+
+---
+
+### DJ-016 : Pre-Fader Gain Matching via EBU R128 Loudness (completed)
+**User Story:**
+As a listener,
+I'd like the volume of all tracks to remain perceptually consistent when a new track plays or during a transition,
+So that I don't experience sudden volume jumps or drops between tracks.
+
+**Context:** Although tracks are loudness-normalized during analysis, a track's perceived loudness can vary significantly across sections. Standardizing playback levels via pre-fader gain matching using the EBU R128 LUFS value computed during analysis ensures consistent volume delivery.
+
+**Description:** Use the EBU R128 LUFS value stored in track metadata to calculate a pre-fader volume adjustment. Apply this adjustment to the active deck's playback channel so that it matches a target loudness of -14 LUFS.
+
+**Requirements:**
+- In `AudioManager._load_and_stream_remote_file` or when preparing a player, retrieve the cached EBU R128 loudness value (`lufs`) of the track.
+- If the track has no cached LUFS value, default to a fallback gain adjustment of 1.0 (0 dB).
+- Calculate the target gain adjustment using the formula: Gain dB = -14.0 - Track LUFS.
+- Clamp the gain adjustment between -12 dB and +6 dB to prevent extreme amplification or silencing.
+- Apply this base gain offset to the deck's pre-fade volume channel so that fader/crossfader level changes operate on normalized loudness levels.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_audio_normalization.gd` verifying pre-fade volume attenuation/amplification calculations based on varied track LUFS inputs.
+
+**Acceptance Criteria:**
+- Given a track with a cached loudness of -10 LUFS
+- When it is loaded on Deck A for playback
+- Then Deck A's pre-fade volume level is automatically attenuated by -4 dB to target -14 LUFS.
+
+---
+
+### MET-006 : Dual-Track Look-Ahead WebDAV Pre-Caching (completed)
+**User Story:**
+As a listener,
+I'd like the next two planned tracks in my playlist to be cached on local disk in advance,
+So that my music never pauses or buffers due to network latency, even if the plan shifts.
+
+**Context:** The current caching system only pre-caches the single next sequential track. If a user manually overrides the next track, or if the A* pathfinder changes the next song, the player may attempt to stream a track live over WebDAV, causing buffer starvation and glitches.
+
+**Description:** Enhance `AudioAnalyzer`'s prefetching and caching logic to maintain a sliding cache window of the next two tracks planned by the pathfinder or playlist sequence.
+
+**Requirements:**
+- Extend `AudioAnalyzer.start_prefetching()` to accept a list of planned track hrefs (up to 3 tracks: now playing + next 2 tracks).
+- Prioritize downloading and analyzing these next 2 tracks on background threads.
+- Automatically trigger pre-fetching of the next track in the queue as soon as a transition completes and the active track index advances.
+- Cancel active downloads of tracks that are no longer in the immediate look-ahead window if the playlist is reordered or overridden.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_audio_analyzer.gd` verifying look-ahead queue updates and prefetch cancellations.
+
+**Acceptance Criteria:**
+- Given a playlist plan: [Track A (Playing), Track B (Next), Track C (Follow-up)]
+- When the playback of Track A starts
+- Then the system automatically triggers background download/caching for both Track B and Track C.

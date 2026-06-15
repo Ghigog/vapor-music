@@ -5,20 +5,31 @@ extends Control
 
 @onready var heading: Label = $VBox/Header/HBox/Heading
 @onready var analysis_status: Label = $VBox/Header/HBox/AnalysisStatus
-@onready var track_title: Label = $VBox/NowPlayingCard/VBox/TrackTitle
-@onready var artist_label: Label = $VBox/NowPlayingCard/VBox/ArtistLabel
+
+@onready var track_title: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/TrackTitle
+@onready var artist_label: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/ArtistLabel
 
 # Metadata labels/badges
-@onready var badge_key: Label = $VBox/NowPlayingCard/VBox/BadgesHBox/KeyBadge
-@onready var badge_bpm: Label = $VBox/NowPlayingCard/VBox/BadgesHBox/BpmBadge
-@onready var badge_energy: Label = $VBox/NowPlayingCard/VBox/BadgesHBox/EnergyBadge
-@onready var badge_genre: Label = $VBox/NowPlayingCard/VBox/BadgesHBox/GenreBadge
+@onready var badge_key: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/KeyBadge
+@onready var badge_bpm: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/BpmBadge
+@onready var badge_energy: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/EnergyBadge
+@onready var badge_genre: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/GenreBadge
+
+# Camelot Wheel
+@onready var camelot_wheel: Control = $VBox/DashboardHBox/LeftColumn/CamelotWheelCard/VBox/CamelotWheel
+
+# Mix Tuner Sliders
+@onready var crossover_slider: HSlider = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverHBox/CrossoverSlider
+@onready var crossover_value: Label = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverHBox/CrossoverValue
+@onready var energy_slider: HSlider = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyHBox/EnergySlider
+@onready var energy_value: Label = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyHBox/EnergyValue
 
 # Transition details
-@onready var transition_label: Label = $VBox/TransitionCard/VBox/TransitionLabel
+@onready var transition_timeline: Control = $VBox/DashboardHBox/RightColumn/TransitionCard/VBox/TransitionTimeline
+@onready var transition_label: Label = $VBox/DashboardHBox/RightColumn/TransitionCard/VBox/TransitionLabel
 
 # Runner-up containers
-@onready var runner_ups_list: VBoxContainer = $VBox/RunnerUpsSection/VBox/RunnerUpsList
+@onready var runner_ups_list: VBoxContainer = $VBox/DashboardHBox/RightColumn/RunnerUpsSection/VBox/RunnerUpsList
 
 # Help Modal Elements
 @onready var help_button: Button = $VBox/Header/HBox/HelpButton
@@ -29,6 +40,7 @@ extends Control
 @onready var help_modal_text: RichTextLabel = $HelpModal/Panel/VBox/Scroll/ContentText
 
 var _runner_ups: Array = []
+var _disabled_overlay: PanelContainer = null
 
 func _ready() -> void:
 	_apply_styles()
@@ -61,6 +73,29 @@ func _ready() -> void:
 	if AudioManager.has_signal("smart_mixing_toggled"):
 		AudioManager.smart_mixing_toggled.connect(func(enabled): _refresh_display())
 		
+	# Setup crossover duration slider
+	if crossover_slider:
+		crossover_slider.value = AudioManager.transition_duration
+		_update_crossover_label(crossover_slider.value)
+		crossover_slider.value_changed.connect(func(val):
+			AudioManager.transition_duration = val
+			_update_crossover_label(val)
+			_refresh_display()
+		)
+		
+	# Setup energy threshold slider
+	if energy_slider:
+		var init_energy = AudioManager.energy_threshold if "energy_threshold" in AudioManager else 0.5
+		energy_slider.value = init_energy
+		_update_energy_label(init_energy)
+		energy_slider.value_changed.connect(func(val):
+			if "energy_threshold" in AudioManager:
+				AudioManager.energy_threshold = val
+			_update_energy_label(val)
+			_refresh_display()
+		)
+		
+	_create_disabled_overlay()
 	_refresh_display()
 
 func _apply_styles() -> void:
@@ -68,6 +103,34 @@ func _apply_styles() -> void:
 		return
 	var theme = ThemeManager.current_theme
 	
+	if _disabled_overlay:
+		var overlay_style = _disabled_overlay.get_theme_stylebox("panel") as StyleBoxFlat
+		if overlay_style:
+			overlay_style.bg_color = Color(theme.BG_VOID.r, theme.BG_VOID.g, theme.BG_VOID.b, 0.75)
+			overlay_style.border_color = theme.GLASS_BORDER_SUBTLE
+			overlay_style.set_border_width_all(1)
+			overlay_style.set_corner_radius_all(theme.RADIUS_MD)
+			
+		var center = _disabled_overlay.get_child(0)
+		if center:
+			var vbox = center.get_child(0) as VBoxContainer
+			if vbox:
+				var icon_lbl = vbox.get_child(0) as Label
+				var msg_lbl = vbox.get_child(1) as Label
+				var sub_lbl = vbox.get_child(2) as Label
+				
+				icon_lbl.add_theme_font_override("font", theme.font_display)
+				icon_lbl.add_theme_font_size_override("font_size", theme.TYPE_DISPLAY)
+				icon_lbl.add_theme_color_override("font_color", theme.ACCENT_CORE)
+				
+				msg_lbl.add_theme_font_override("font", theme.font_display)
+				msg_lbl.add_theme_font_size_override("font_size", theme.TYPE_LG)
+				msg_lbl.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
+				
+				sub_lbl.add_theme_font_override("font", theme.font_ui)
+				sub_lbl.add_theme_font_size_override("font_size", theme.TYPE_SM)
+				sub_lbl.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
+
 	heading.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
 	heading.add_theme_font_override("font", theme.font_display)
 	heading.add_theme_font_size_override("font_size", theme.TYPE_LG)
@@ -101,10 +164,43 @@ func _apply_styles() -> void:
 		badge.add_theme_stylebox_override("normal", sb)
 
 	# Cards panel styles
-	for card_path in ["VBox/NowPlayingCard", "VBox/TransitionCard", "VBox/RunnerUpsSection"]:
+	for card_path in [
+		"VBox/DashboardHBox/LeftColumn/NowPlayingCard",
+		"VBox/DashboardHBox/LeftColumn/CamelotWheelCard",
+		"VBox/DashboardHBox/LeftColumn/ControlsCard",
+		"VBox/DashboardHBox/RightColumn/TransitionCard",
+		"VBox/DashboardHBox/RightColumn/RunnerUpsSection"
+	]:
 		var card = get_node_or_null(card_path)
 		if card is PanelContainer:
 			card.add_theme_stylebox_override("panel", ThemeManager.make_glass_panel(theme.RADIUS_MD))
+
+	# Style Section Titles
+	for title_path in [
+		"VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/CardTitle",
+		"VBox/DashboardHBox/LeftColumn/CamelotWheelCard/VBox/SectionTitle",
+		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/SectionTitle",
+		"VBox/DashboardHBox/RightColumn/TransitionCard/VBox/SectionTitle",
+		"VBox/DashboardHBox/RightColumn/RunnerUpsSection/VBox/SectionTitle"
+	]:
+		var lbl = get_node_or_null(title_path)
+		if lbl is Label:
+			lbl.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+			lbl.add_theme_font_override("font", theme.font_display)
+			lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
+			
+	# Style Tuner Labels
+	for lbl_path in [
+		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverLabel",
+		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverHBox/CrossoverValue",
+		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyLabel",
+		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyHBox/EnergyValue"
+	]:
+		var lbl = get_node_or_null(lbl_path)
+		if lbl is Label:
+			lbl.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
+			lbl.add_theme_font_override("font", theme.font_ui)
+			lbl.add_theme_font_size_override("font_size", theme.TYPE_SM)
 
 	# Style help button
 	if help_button:
@@ -236,6 +332,9 @@ func _refresh_display() -> void:
 	if not is_inside_tree():
 		return
 		
+	if _disabled_overlay:
+		_disabled_overlay.visible = not AudioManager.smart_mixing_enabled
+		
 	_update_analysis_status()
 		
 	var active_index = AudioManager.current_track_index
@@ -249,6 +348,11 @@ func _refresh_display() -> void:
 		badge_energy.text = "Energy: --%"
 		badge_genre.text = "Genre: --"
 		transition_label.text = "AI DJ: Standby"
+		if camelot_wheel:
+			var empty_keys: Array[String] = []
+			camelot_wheel.update_keys("", "", empty_keys)
+		if transition_timeline:
+			transition_timeline.update_transition_info("No Track", "No Track", 0.0, 0.0, 0.0, "Standard Crossfade")
 		_clear_runner_ups()
 		return
 		
@@ -287,6 +391,44 @@ func _refresh_display() -> void:
 			transition_label.text = "Intended: Blend to %s via %s" % [info_next.track, transition_type]
 		else:
 			transition_label.text = "AI DJ: Standby"
+
+	# Update Camelot Wheel and Transition Timeline custom controls
+	var curr_key = meta.get("musical_key", "")
+	var next_key = ""
+	var next_href = AudioManager.get_next_track_href()
+	var next_meta = {}
+	var next_bpm = 0.0
+	if not next_href.is_empty() and is_instance_valid(MetadataService):
+		next_meta = MetadataService.get_cached_metadata(next_href)
+		next_key = next_meta.get("musical_key", "")
+		next_bpm = next_meta.get("bpm", 0.0)
+		
+	var queued_keys: Array[String] = []
+	if active_index != -1 and is_instance_valid(MetadataService):
+		for i in range(active_index, playlist.size()):
+			var href = playlist[i]
+			var m = MetadataService.get_cached_metadata(href)
+			if not m.is_empty():
+				var k = m.get("musical_key", "")
+				if not k.is_empty() and not queued_keys.has(k):
+					queued_keys.append(k)
+					
+	if camelot_wheel:
+		camelot_wheel.update_keys(curr_key, next_key, queued_keys)
+		
+	if transition_timeline:
+		var outgoing_title = current_href.get_file()
+		var incoming_title = next_href.get_file() if not next_href.is_empty() else "End of Playlist"
+		var outgoing_bpm = meta.get("bpm", 0.0)
+		var t_duration = AudioManager.get_transition_duration(AudioManager.upcoming_transition_type, current_href, next_href)
+		transition_timeline.update_transition_info(
+			outgoing_title,
+			incoming_title,
+			outgoing_bpm,
+			next_bpm,
+			t_duration,
+			AudioManager.upcoming_transition_type
+		)
 
 func _clear_runner_ups() -> void:
 	for child in runner_ups_list.get_children():
@@ -647,3 +789,86 @@ func _format_inline_markdown(text: String) -> String:
 	res = bold_regex.sub(res, "[b]$1[/b]", true)
 	
 	return res
+
+func _update_crossover_label(val: float) -> void:
+	if crossover_value:
+		if val <= 0.1:
+			crossover_value.text = "Auto"
+		else:
+			crossover_value.text = "%.1fs" % val
+
+func _update_energy_label(val: float) -> void:
+	if energy_value:
+		energy_value.text = "%.2f" % val
+
+func _process(_delta: float) -> void:
+	if not is_inside_tree() or not transition_timeline:
+		return
+		
+	var active_player = AudioManager.active_player
+	var is_trans = AudioManager.is_transitioning
+	var fader = AudioManager.crossfader
+	var pos = 0.0
+	var length = AudioManager.current_track_length
+	var trig = 0.0
+	
+	if is_instance_valid(active_player) and active_player.playing:
+		var dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
+		if dsp:
+			pos = dsp.get_playback_position()
+			
+	# Fetch trigger time for timeline prediction
+	var active_index = AudioManager.current_track_index
+	var playlist = AudioManager.current_playlist
+	if active_index != -1 and active_index < playlist.size():
+		var current_href = playlist[active_index]
+		if is_instance_valid(MetadataService):
+			var meta = MetadataService.get_cached_metadata(current_href)
+			if not meta.is_empty():
+				var segments = meta.get("segments", {})
+				var outro = segments.get("outro", [])
+				if not outro.is_empty():
+					trig = outro[0]
+				else:
+					trig = AudioManager.current_track_length - AudioManager.get_transition_duration(AudioManager.upcoming_transition_type) - 4.0
+					
+	transition_timeline.update_playback_state(is_trans, fader, pos, length, trig)
+
+func _create_disabled_overlay() -> void:
+	_disabled_overlay = PanelContainer.new()
+	_disabled_overlay.name = "DisabledOverlay"
+	_disabled_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_disabled_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	
+	var overlay_style = StyleBoxFlat.new()
+	_disabled_overlay.add_theme_stylebox_override("panel", overlay_style)
+	
+	var center = CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_disabled_overlay.add_child(center)
+	
+	var vbox = VBoxContainer.new()
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_theme_constant_override("separation", 16)
+	center.add_child(vbox)
+	
+	var icon_lbl = Label.new()
+	icon_lbl.text = "🎛"
+	icon_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	icon_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(icon_lbl)
+	
+	var msg_lbl = Label.new()
+	msg_lbl.text = "Please Enable Smart Mixing"
+	msg_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(msg_lbl)
+	
+	var sub_lbl = Label.new()
+	sub_lbl.text = "Toggle Smart Mixing on the bottom left to activate the AI DJ Vibe Workbench."
+	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(sub_lbl)
+	
+	add_child(_disabled_overlay)
+	_apply_styles()

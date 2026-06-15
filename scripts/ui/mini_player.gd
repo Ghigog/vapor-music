@@ -71,7 +71,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if AudioManager.is_playing and !dragging:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
-			progress_bar.value = AudioManager.player.get_playback_position()
+			progress_bar.value = AudioManager.get_playback_position()
 
 
 # ---------------------------------------------------------------------------

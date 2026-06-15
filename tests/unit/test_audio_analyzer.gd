@@ -20,9 +20,13 @@ func before_each() -> void:
 	
 	analyzer = load("res://scripts/services/audio_analyzer.gd").new()
 	analyzer.cache_dir = TEST_CACHE_DIR
-	add_child_autofree(analyzer)
+	add_child(analyzer)
 
 func after_each() -> void:
+	if is_instance_valid(analyzer):
+		analyzer.queue_free()
+		await get_tree().process_frame
+		
 	if FileAccess.file_exists(TEST_CACHE_PATH):
 		DirAccess.remove_absolute(TEST_CACHE_PATH)
 		
@@ -46,69 +50,35 @@ func test_analysis_defaults_for_missing_file() -> void:
 	var results = analyzer._perform_analysis("nonexistent.mp3")
 	assert_true(results.is_empty(), "Should return empty dictionary if file does not exist")
 
-func test_analyze_mock_wav_file() -> void:
+func test_analyze_real_wav_file() -> void:
 	var href = "test_track.wav"
-	var temp_path = TEST_CACHE_DIR + href.md5_text() + ".wav"
+	var cache_path = TEST_CACHE_DIR + href.md5_text() + ".wav"
 	
-	if not DirAccess.dir_exists_absolute(TEST_CACHE_DIR):
-		DirAccess.make_dir_recursive_absolute(TEST_CACHE_DIR)
-		
-	var file = FileAccess.open(temp_path, FileAccess.WRITE)
-	if not file:
-		fail_test("Could not write test WAV file")
-		return
-		
-	# Write mock WAV header & small data chunk
-	file.store_string("RIFF")
-	file.store_32(40) # size
-	file.store_string("WAVE")
-	file.store_string("fmt ")
-	file.store_32(16) # subchunk size
-	file.store_16(1) # PCM format
-	file.store_16(1) # mono channel
-	file.store_32(44100) # sample rate
-	file.store_32(88200) # byte rate
-	file.store_16(2) # block align
-	file.store_16(16) # bits per sample
-	file.store_string("data")
-	file.store_32(2048) # data size
+	var err = DirAccess.copy_absolute("res://tests/unit/test_track.wav", cache_path)
+	assert_eq(err, OK, "Should copy test WAV file to cache")
 	
-	# Write 1024 mock silent sample bytes (mono, 16-bit)
-	for i in range(1024):
-		file.store_16(0)
-		
-	file.close()
-	
-	# Analyze enqueued track mock
+	# Analyze enqueued track
 	var results = analyzer._perform_analysis(href)
 	assert_false(results.is_empty(), "Results should not be empty")
-	assert_eq(results.bpm, 120.0, "WAV BPM should default to 120 on silent loops")
-	assert_eq(results.musical_key, "8A", "WAV key should default to 8A")
-	assert_eq(results.energy_graph.size(), 20, "Should generate a 20-point energy graph")
+	
+	print("Real WAV Analysis Results: ", results)
+	
+	assert_true(results.get("bpm", 0.0) > 0.0, "BPM should be estimated")
+	assert_true(results.get("musical_key", "") != "", "Key should be resolved")
+	assert_eq(results.get("energy_graph", []).size(), 20, "Should generate a 20-point energy graph")
+	assert_true(results.get("beat_grid", []).size() > 0, "Should extract a beat grid")
+	assert_true(results.get("downbeats", []).size() > 0, "Should extract downbeats")
+	assert_true(results.get("segments", {}).has("intro"), "Should have intro segment")
+	assert_true(results.get("segments", {}).has("outro"), "Should have outro segment")
+	assert_true(results.get("segments", {}).has("drop"), "Should have drop segment")
+	assert_almost_eq(results.get("duration", 0.0), 5.0, 0.2, "Duration should be approximately 5.0 seconds")
 
-func test_analyze_mock_mp3_file() -> void:
+func test_analyze_real_mp3_file() -> void:
 	var href = "test_track.mp3"
-	var temp_path = TEST_CACHE_DIR + href.md5_text() + ".mp3"
+	var cache_path = TEST_CACHE_DIR + href.md5_text() + ".mp3"
 	
-	if not DirAccess.dir_exists_absolute(TEST_CACHE_DIR):
-		DirAccess.make_dir_recursive_absolute(TEST_CACHE_DIR)
-		
-	var file = FileAccess.open(temp_path, FileAccess.WRITE)
-	if not file:
-		fail_test("Could not write test MP3 file")
-		return
-		
-	# Write basic ID3 header
-	file.store_string("ID3")
-	file.store_16(0x0300) # v2.3
-	file.store_8(0) # flags
-	file.store_32(0) # size (synchsafe)
-	
-	# Write some dummy bytes for payload hashing
-	for i in range(100):
-		file.store_8(i % 256)
-		
-	file.close()
+	var err = DirAccess.copy_absolute("res://tests/unit/test_track.mp3", cache_path)
+	assert_eq(err, OK, "Should copy test MP3 file to cache")
 	
 	# Mock MetadataService cache entry
 	MetadataService.cache[href] = {
@@ -122,13 +92,21 @@ func test_analyze_mock_mp3_file() -> void:
 	
 	var results = analyzer._perform_analysis(href)
 	assert_false(results.is_empty(), "Results should not be empty")
-	assert_true(results.bpm > 0.0, "Should generate a positive BPM")
-	assert_true(results.musical_key != "", "Should assign a musical key")
-	assert_eq(results.energy_graph.size(), 20, "Should generate a 20-point energy graph")
+	
+	print("Real MP3 Analysis Results: ", results)
+	
+	assert_true(results.get("bpm", 0.0) > 0.0, "BPM should be estimated")
+	assert_true(results.get("musical_key", "") != "", "Key should be resolved")
+	assert_eq(results.get("energy_graph", []).size(), 20, "Should generate a 20-point energy graph")
+	assert_true(results.get("beat_grid", []).size() > 0, "Should extract a beat grid")
+	assert_almost_eq(results.get("duration", 0.0), 5.0, 0.2, "Duration should be approximately 5.0 seconds")
 
 func test_thread_worker_signals_and_cache_update() -> void:
 	var href = "test_track.mp3"
 	var temp_path = TEST_CACHE_DIR + href.md5_text() + ".mp3"
+	
+	var err = DirAccess.copy_absolute("res://tests/unit/test_track.mp3", temp_path)
+	assert_eq(err, OK, "Should copy test MP3 file to cache")
 	
 	# Setup mock cache
 	MetadataService.cache[href] = {
@@ -139,16 +117,6 @@ func test_thread_worker_signals_and_cache_update() -> void:
 		"musical_key": ""
 	}
 	
-	# Create dummy MP3 file for thread to process
-	var file = FileAccess.open(temp_path, FileAccess.WRITE)
-	file.store_string("ID3")
-	file.store_16(0x0300)
-	file.store_8(0)
-	file.store_32(0)
-	for i in range(100):
-		file.store_8(i % 256)
-	file.close()
-	
 	watch_signals(analyzer)
 	
 	# Enqueue track and wait for thread to finish processing
@@ -157,7 +125,7 @@ func test_thread_worker_signals_and_cache_update() -> void:
 	var start_time = Time.get_ticks_msec()
 	while analyzer._queue.size() > 0 or get_signal_emit_count(analyzer, "analysis_completed") == 0:
 		await get_tree().process_frame
-		if Time.get_ticks_msec() - start_time > 2000:
+		if Time.get_ticks_msec() - start_time > 8000:
 			fail_test("Thread processing timed out")
 			return
 			
@@ -209,3 +177,72 @@ func test_prefetch_state_toggles() -> void:
 	
 	analyzer.stop_prefetching()
 	assert_false(analyzer.background_caching_active, "Should set active to false after stop")
+
+func test_prefetch_lookahead_update_and_cancellation() -> void:
+	var hrefs1 = ["track1.mp3", "track2.mp3"]
+	var hrefs2 = ["track2.mp3", "track3.mp3"]
+	
+	# Start prefetching first set
+	analyzer.start_prefetching(hrefs1)
+	assert_true(analyzer.background_caching_active, "Should be active")
+	assert_eq(analyzer.current_download_href, "track1.mp3", "Should be downloading track1.mp3")
+	assert_eq(analyzer._prefetch_queue, ["track2.mp3"], "Queue should contain track2.mp3")
+	
+	# Update prefetching with new set that doesn't contain track1.mp3 (cancelled)
+	analyzer.start_prefetching(hrefs2)
+	# Since track1.mp3 is not in hrefs2, it should be cancelled!
+	# Now, track2.mp3 and track3.mp3 are uncached.
+	# track2.mp3 is popped as the next download.
+	assert_eq(analyzer.current_download_href, "track2.mp3", "Should start downloading track2.mp3 after cancelling track1.mp3")
+	assert_eq(analyzer._prefetch_queue, ["track3.mp3"], "Queue should contain track3.mp3")
+	
+	# Stop prefetching to clean up
+	analyzer.stop_prefetching()
+
+func test_prefetch_lookahead_update_keeps_active() -> void:
+	var hrefs1 = ["track1.mp3", "track2.mp3"]
+	var hrefs2 = ["track1.mp3", "track3.mp3"]
+	
+	# Start prefetching first set
+	analyzer.start_prefetching(hrefs1)
+	assert_true(analyzer.background_caching_active, "Should be active")
+	assert_eq(analyzer.current_download_href, "track1.mp3", "Should be downloading track1.mp3")
+	assert_eq(analyzer._prefetch_queue, ["track2.mp3"], "Queue should contain track2.mp3")
+	
+	# Update prefetching with new set that still contains track1.mp3 (kept)
+	analyzer.start_prefetching(hrefs2)
+	assert_eq(analyzer.current_download_href, "track1.mp3", "Should keep downloading track1.mp3")
+	assert_eq(analyzer._prefetch_queue, ["track3.mp3"], "Queue should now contain track3.mp3 instead of track2.mp3")
+	
+	# Stop prefetching to clean up
+	analyzer.stop_prefetching()
+
+func test_prefetch_does_not_prune_cache() -> void:
+	var valid_href = "track1.mp3"
+	var other_href = "track2.mp3"
+	
+	var valid_path = analyzer.cache_dir + valid_href.md5_text() + ".mp3"
+	var other_path = analyzer.cache_dir + other_href.md5_text() + ".mp3"
+	
+	var f1 = FileAccess.open(valid_path, FileAccess.WRITE)
+	f1.store_string("dummy")
+	f1.close()
+	
+	var f2 = FileAccess.open(other_path, FileAccess.WRITE)
+	f2.store_string("dummy")
+	f2.close()
+	
+	assert_true(FileAccess.file_exists(valid_path))
+	assert_true(FileAccess.file_exists(other_path))
+	
+	# Start prefetching only valid_href. If prefetching pruned, it would delete other_href.
+	analyzer.start_prefetching([valid_href])
+	
+	assert_true(FileAccess.file_exists(valid_path), "Prefetched track should remain cached")
+	assert_true(FileAccess.file_exists(other_path), "Other track should NOT be pruned during prefetching")
+	
+	# Clean up
+	DirAccess.remove_absolute(valid_path)
+	DirAccess.remove_absolute(other_path)
+	analyzer.stop_prefetching()
+

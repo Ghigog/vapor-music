@@ -10,6 +10,7 @@ signal connection_tested(success: bool, error_message: String)
 
 var scanned_files: Array = []
 var had_scan_errors: bool = false
+var is_scanning: bool = false
 
 const LIBRARY_CACHE_FILE = "user://library_cache.json"
 
@@ -388,6 +389,11 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 	if not SettingsManager.has_credentials():
 		return
 
+	if is_scanning:
+		print("WebDAVService: Scan already in progress. Ignoring request.")
+		return
+	is_scanning = true
+
 	had_scan_errors = false
 	var scan_start_time := Time.get_ticks_usec()
 
@@ -446,6 +452,8 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 	disconnect_active_connection()
 	var duration := (Time.get_ticks_usec() - scan_start_time) / 1000000.0
 	print("WebDAVService: Deep traversal finished in %.3fs. Found %d total tracks." % [duration, all_discovered_tracks.size()])
+
+	is_scanning = false
 
 	if had_scan_errors:
 		print("WebDAVService: Scan encountered errors. Keeping current cached library list to avoid data loss.")

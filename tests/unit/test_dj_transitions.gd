@@ -2,18 +2,40 @@
 ## GUT unit and integration tests for AudioManager transition functionality (Deck A/B, EQ, Filters).
 extends GutTest
 
+var _original_smart_mixing = false
+
 func before_each() -> void:
+	_original_smart_mixing = AudioManager.smart_mixing_enabled
+	AudioManager.smart_mixing_enabled = true
+	AudioManager._block_finished_signal = true
 	AudioManager.current_playlist = ["song1.mp3", "song2.mp3", "song3.mp3"]
 	AudioManager.current_track_index = 0
 	AudioManager.is_transitioning = false
 	AudioManager.upcoming_track_override = ""
+	if AudioManager.player_a:
+		AudioManager.player_a.stop()
+	if AudioManager.player_b:
+		AudioManager.player_b.stop()
+	if AudioManager.dsp_a:
+		AudioManager.dsp_a.clear_stream()
+	if AudioManager.dsp_b:
+		AudioManager.dsp_b.clear_stream()
 	AudioManager.active_player = AudioManager.player_a
 	AudioManager.player = AudioManager.active_player
+	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
+		AudioManager.active_tween.kill()
+	if AudioManager._pitch_ramp_tween and AudioManager._pitch_ramp_tween.is_valid():
+		AudioManager._pitch_ramp_tween.kill()
+	AudioManager.is_playing = true
 	AudioManager.transition_duration = 0.1
 	
 	# Reset bus volumes and effects to clear state
 	AudioManager._reset_bus_effects(AudioServer.get_bus_index("DeckA"))
 	AudioManager._reset_bus_effects(AudioServer.get_bus_index("DeckB"))
+
+func after_each() -> void:
+	AudioManager._block_finished_signal = false
+	AudioManager.smart_mixing_enabled = _original_smart_mixing
 
 func test_deck_audio_buses_configured() -> void:
 	var bus_a = AudioServer.get_bus_index("DeckA")
@@ -81,7 +103,7 @@ func test_upcoming_track_override_used_in_transition() -> void:
 	assert_signal_emitted(AudioManager, "transition_started", "Should emit transition_started signal")
 	var signal_args = get_signal_parameters(AudioManager, "transition_started", 0)
 	assert_eq(signal_args[0], "song3.mp3", "Transition track should be the override 'song3.mp3'")
-	assert_true(signal_args[1] in ["Standard Crossfade", "Bass Swap", "Filter Sweep"], "Transition type should be valid")
+	assert_true(signal_args[1] in ["Standard Crossfade", "Bass Swap", "Filter Sweep", "Echo Out", "Reverb Freeze", "Tempo Morph"], "Transition type should be valid")
 
 func test_transition_switches_active_players() -> void:
 	# We want to test that _run_deck_transition switches active_player at the end.
@@ -154,13 +176,15 @@ func test_bass_swap_volume_envelope() -> void:
 	
 	# Start a Bass Swap transition
 	AudioManager._run_deck_transition(deck_a, deck_b, "Bass Swap")
+	assert_not_null(AudioManager.active_tween, "Tween should be created")
+	AudioManager.active_tween.pause()
 	
 	# Verify initial state
 	assert_eq(AudioServer.get_bus_volume_db(bus_a), 0.0, "Outgoing volume starts at 0dB")
 	assert_eq(AudioServer.get_bus_volume_db(bus_b), -60.0, "Incoming volume starts at -60dB")
 	
-	# Wait 0.03s (less than the 0.05s midpoint of 0.1s transition)
-	await wait_seconds(0.03)
+	# Step 0.03s (less than the 0.05s midpoint of 0.1s transition)
+	AudioManager.active_tween.custom_step(0.03)
 	
 	# Outgoing should still be at 0.0dB because fade starts at 0.05s
 	assert_eq(AudioServer.get_bus_volume_db(bus_a), 0.0, "Outgoing volume should stay at 0dB before midpoint")
@@ -182,13 +206,15 @@ func test_filter_sweep_volume_envelope() -> void:
 	
 	# Start a Filter Sweep transition
 	AudioManager._run_deck_transition(deck_a, deck_b, "Filter Sweep")
+	assert_not_null(AudioManager.active_tween, "Tween should be created")
+	AudioManager.active_tween.pause()
 	
 	# Verify initial state
 	assert_eq(AudioServer.get_bus_volume_db(bus_a), 0.0, "Outgoing volume starts at 0dB")
 	assert_eq(AudioServer.get_bus_volume_db(bus_b), -60.0, "Incoming volume starts at -60dB")
 	
-	# Wait 0.03s (less than the 0.0625s delay of 0.1s transition)
-	await wait_seconds(0.03)
+	# Step 0.03s (less than the 0.0625s delay of 0.1s transition)
+	AudioManager.active_tween.custom_step(0.03)
 	
 	# Outgoing should still be at 0.0dB because fade starts at 0.0625s
 	assert_eq(AudioServer.get_bus_volume_db(bus_a), 0.0, "Outgoing volume should stay at 0dB before delay")
@@ -250,18 +276,20 @@ func test_echo_out_envelope() -> void:
 	
 	# Start an Echo Out transition
 	AudioManager._run_deck_transition(deck_a, deck_b, "Echo Out")
+	assert_not_null(AudioManager.active_tween, "Tween should be created")
+	AudioManager.active_tween.pause()
 	
 	var delay_a = AudioServer.get_bus_effect(bus_a, 3) as AudioEffectDelay
 	assert_not_null(delay_a, "Delay effect should be configured at index 3")
 	assert_eq(delay_a.dry, 1.0, "Outgoing delay dry should start at 1.0")
 	assert_eq(delay_a.feedback_level_db, -10.0, "Feedback level should be high")
 	
-	# Wait 0.03s (less than the 0.05s midpoint of 0.1s transition)
-	await wait_seconds(0.03)
+	# Step 0.03s (less than the 0.05s midpoint of 0.1s transition)
+	AudioManager.active_tween.custom_step(0.03)
 	assert_eq(delay_a.dry, 1.0, "Outgoing delay dry should remain 1.0 before midpoint")
 	
-	# Wait until after midpoint (at 0.05s)
-	await wait_seconds(0.04)
+	# Step 0.04s (total 0.07s, which is after midpoint at 0.05s)
+	AudioManager.active_tween.custom_step(0.04)
 	assert_lt(delay_a.dry, 0.5, "Outgoing delay dry should be tweened toward 0.0 after midpoint")
 	
 	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
@@ -277,19 +305,21 @@ func test_reverb_freeze_envelope() -> void:
 	
 	# Start a Reverb Freeze transition
 	AudioManager._run_deck_transition(deck_a, deck_b, "Reverb Freeze")
+	assert_not_null(AudioManager.active_tween, "Tween should be created")
+	AudioManager.active_tween.pause()
 	
 	var reverb_a = AudioServer.get_bus_effect(bus_a, 4) as AudioEffectReverb
 	assert_not_null(reverb_a, "Reverb effect should be configured at index 4")
 	assert_eq(reverb_a.wet, 0.0, "Outgoing reverb wet should start at 0.0")
 	assert_eq(reverb_a.dry, 1.0, "Outgoing reverb dry should start at 1.0")
 	
-	# Wait 0.03s (less than 0.05s midpoint)
-	await wait_seconds(0.03)
+	# Step 0.03s (less than 0.05s midpoint)
+	AudioManager.active_tween.custom_step(0.03)
 	assert_gt(reverb_a.wet, 0.0, "Outgoing reverb wet should ramp up")
 	assert_eq(reverb_a.dry, 1.0, "Outgoing reverb dry should remain 1.0 before midpoint")
 	
-	# Wait until after midpoint
-	await wait_seconds(0.04)
+	# Step 0.04s (total 0.07s)
+	AudioManager.active_tween.custom_step(0.04)
 	assert_lt(reverb_a.dry, 0.5, "Outgoing reverb dry should cut toward 0.0 after midpoint")
 	
 	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
@@ -312,25 +342,29 @@ func test_tempo_morph_envelope() -> void:
 	
 	# Start a Tempo Morph transition
 	AudioManager._run_deck_transition(deck_a, deck_b, "Tempo Morph")
+	assert_not_null(AudioManager.active_tween, "Tween should be created")
+	AudioManager.active_tween.pause()
 	
-	# Midpoint BPM target = (128 + 120) / 2 = 124
-	# Outgoing pitch_scale target = 124 / 128 = 0.96875
-	# Incoming pitch_scale target = 124 / 120 = 1.0333
+	# Step 0.03s for speed scale tween to progress (duration is 0.1s, ramp time is 0.025s)
+	AudioManager.active_tween.custom_step(0.03)
 	
-	# Wait 0.03s for pitch tween to progress (duration is 0.1s, ramp time is 0.025s)
-	await wait_seconds(0.03)
+	assert_lt(AudioManager._speed_scale_a, 0.99, "Outgoing deck speed scale should scale down")
+	assert_gt(AudioManager._speed_scale_b, 1.01, "Incoming deck speed scale should scale up")
+	assert_eq(deck_a.pitch_scale, 1.0, "Outgoing deck pitch scale should remain locked at 1.0")
+	assert_eq(deck_b.pitch_scale, 1.0, "Incoming deck pitch scale should remain locked at 1.0")
 	
-	assert_lt(deck_a.pitch_scale, 0.99, "Outgoing deck pitch scale should scale down")
-	assert_gt(deck_b.pitch_scale, 1.01, "Incoming deck pitch scale should scale up")
-	
-	# Let the transition finish (takes 0.1s total, so wait another 0.1s)
-	await wait_seconds(0.15)
+	# Finish transition by stepping another 0.1s
+	AudioManager.active_tween.custom_step(0.1)
 	
 	assert_eq(AudioManager.active_player, deck_b, "Deck B should now be active player")
 	
-	# In tests, post-transition pitch ramp tween takes 0.1s to restore pitch scale back to 1.0
-	await wait_seconds(0.15)
-	assert_eq(deck_b.pitch_scale, 1.0, "Active player pitch scale should be restored to 1.0")
+	# Pause and step post-transition pitch ramp tween
+	if AudioManager._pitch_ramp_tween and AudioManager._pitch_ramp_tween.is_valid():
+		AudioManager._pitch_ramp_tween.pause()
+		AudioManager._pitch_ramp_tween.custom_step(0.15)
+		
+	assert_eq(AudioManager._speed_scale_b, 1.0, "Active player speed scale should be restored to 1.0")
+	assert_eq(deck_b.pitch_scale, 1.0, "Active player pitch scale should remain locked at 1.0")
 	
 	# Clean up cache
 	MetadataService.cache.erase(AudioManager.current_playlist[0])
@@ -385,7 +419,7 @@ func test_manual_skip_triggers_immediate_transition() -> void:
 	AudioManager.current_playlist = ["song1.mp3", "song2.mp3", "song3.mp3"]
 	AudioManager.current_track_index = 0
 	var original_is_playing = AudioManager.is_playing
-	AudioManager.is_playing = true
+	AudioManager.is_playing = false
 	
 	# Ensure the player has stream so get_playback_position and remaining works
 	var deck_a = AudioManager.player_a
@@ -455,6 +489,8 @@ func test_incoming_player_not_playing_during_loading() -> void:
 	AudioManager.is_playing = original_is_playing
 
 func test_transition_key_clash_override() -> void:
+	var original_sm = AudioManager.smart_mixing_enabled
+	AudioManager.smart_mixing_enabled = true
 	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
 	AudioManager.current_track_index = 0
 	
@@ -472,6 +508,314 @@ func test_transition_key_clash_override() -> void:
 	# Clean up cache
 	MetadataService.cache.erase(AudioManager.current_playlist[0])
 	MetadataService.cache.erase(AudioManager.current_playlist[1])
+	AudioManager.smart_mixing_enabled = original_sm
+
+func test_transition_trigger_alignment() -> void:
+	# Mock metadata cache for track 1 and track 2
+	var href_a = "song1.mp3"
+	var href_b = "song2.mp3"
+	
+	var downbeats_a = []
+	var beat_grid_a = []
+	# Create a mock beat grid with 120 BPM (0.5s per beat, 2.0s per bar)
+	# 8-bar loop is 16.0 seconds (8 * 2.0s)
+	# We populate 100 beats
+	for i in range(100):
+		beat_grid_a.append(i * 0.5)
+		if i % 4 == 0:
+			downbeats_a.append(i * 0.5)
+			
+	var downbeats_b = [0.0, 2.0, 4.0]
+	
+	var meta_a = {
+		"bpm": 120.0,
+		"beat_grid": beat_grid_a,
+		"downbeats": downbeats_a,
+		"segments": {
+			"outro": [30.0, 50.0] # Outro starts at 30.0s
+		}
+	}
+	var meta_b = {
+		"bpm": 120.0,
+		"beat_grid": [0.0, 0.5, 1.0],
+		"downbeats": downbeats_b,
+		"cue_in": 0.0
+	}
+	
+	MetadataService.cache[href_a] = meta_a
+	MetadataService.cache[href_b] = meta_b
+	
+	# Target 8-bar boundary downbeat >= 30.0s:
+	# Downbeat indices are multiples of 4 (e.g. 0, 4, 8, 12... in beats).
+	# 8-bar loop boundaries are multiples of 32 (e.g. 0, 32, 64 in beats).
+	# beat_grid_a[32] = 16.0s (Bar 9 downbeat)
+	# beat_grid_a[64] = 32.0s (Bar 17 downbeat) -> lands >= outro_start (30.0s)!
+	# So the first 8-bar boundary downbeat >= 30.0s is at 32.0s (beat index 64).
+	#
+	# Since first_downbeat_in = 0.0, cue_in = 0.0, time_to_beat = 0.0.
+	# The trigger time should be exactly 32.0 - 0.0 = 32.0s.
+	
+	var trigger_time = AudioManager.get_aligned_trigger_time(10.0, 120.0, downbeats_a, 0.0, downbeats_b, 30.0)
+	assert_eq(trigger_time, 32.0, "Trigger time should align to the 8-bar loop boundary at 32.0s")
+	
+	# Clean up cache
+	MetadataService.cache.erase(href_a)
+	MetadataService.cache.erase(href_b)
+
+func test_vocal_clash_detection_and_masking() -> void:
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
+	AudioManager.current_track_index = 1
+	
+	# Both outgoing and incoming tracks have vocals
+	var meta_a = {
+		"bpm": 120.0,
+		"vocal_presence": true,
+		"genre": "House",
+		"downbeats": [0.0, 2.0],
+		"beat_grid": [0.0, 0.5, 1.0, 1.5]
+	}
+	var meta_b = {
+		"bpm": 120.0,
+		"vocal_presence": true,
+		"genre": "House",
+		"downbeats": [0.0, 2.0],
+		"beat_grid": [0.0, 0.5, 1.0, 1.5]
+	}
+	MetadataService.cache[AudioManager.current_playlist[0]] = meta_a
+	MetadataService.cache[AudioManager.current_playlist[1]] = meta_b
+	
+	var deck_a = AudioManager.player_a
+	var deck_b = AudioManager.player_b
+	var bus_a = AudioServer.get_bus_index("DeckA")
+	
+	# Start standard transition
+	AudioManager.is_transitioning = true
+	AudioManager._run_deck_transition(deck_a, deck_b, "Standard Crossfade")
+	
+	# Assert that a mid-range EQ attenuation is applied
+	var eq = AudioServer.get_bus_effect(bus_a, 0) as AudioEffectEQ
+	assert_not_null(eq, "EQ effect should exist")
+	
+	# Mid-range bands are band 2 and band 3
+	# Let's pause tween to examine the start/mid-step values
+	assert_not_null(AudioManager.active_tween, "Tween should be created")
+	AudioManager.active_tween.pause()
+	
+	# Step mid-way to see EQ attenuation applied
+	AudioManager.active_tween.custom_step(0.05) # half of 0.1s duration
+	
+	var gain_band_2 = eq.get_band_gain_db(2)
+	var gain_band_3 = eq.get_band_gain_db(3)
+	
+	# We expect the attenuation to be at least -20dB (e.g. -24dB is applied)
+	assert_lt(gain_band_2, -20.0, "Band 2 attenuation should be at least -20dB")
+	assert_lt(gain_band_3, -20.0, "Band 3 attenuation should be at least -20dB")
+	
+	# Clean up
+	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
+		AudioManager.active_tween.kill()
+	AudioManager.is_transitioning = false
+	
+	MetadataService.cache.erase(AudioManager.current_playlist[0])
+	MetadataService.cache.erase(AudioManager.current_playlist[1])
+
+func test_phrase_adaptive_transition_durations() -> void:
+	var original_smart_mixing = AudioManager.smart_mixing_enabled
+	AudioManager.smart_mixing_enabled = true
+	var original_td = AudioManager.transition_duration
+	AudioManager.transition_duration = 0.0
+
+	var track_out = "res://tests/unit/song_out.mp3"
+	var track_in = "res://tests/unit/song_in.mp3"
+	
+	# 1. Normal case: outro duration = 12s, intro duration = 16s -> dynamic duration = 12s
+	MetadataService.cache[track_out] = {
+		"segments": {
+			"outro": [180.0, 192.0]
+		}
+	}
+	MetadataService.cache[track_in] = {
+		"segments": {
+			"intro": [0.0, 16.0]
+		}
+	}
+	
+	var duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
+	assert_eq(duration, 12.0, "Duration should be set to 12.0s (min of 12 and 16)")
+	
+	# 2. Clamped minimum case: outro = 2s, intro = 10s -> dynamic duration = 3.0s (clamped min)
+	MetadataService.cache[track_out] = {
+		"segments": {
+			"outro": [180.0, 182.0]
+		}
+	}
+	duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
+	assert_eq(duration, 3.0, "Duration should be clamped to minimum 3.0s")
+	
+	# 3. Clamped maximum case: outro = 20s, intro = 18s -> dynamic duration = 16.0s (clamped max)
+	MetadataService.cache[track_out] = {
+		"segments": {
+			"outro": [180.0, 200.0]
+		}
+	}
+	MetadataService.cache[track_in] = {
+		"segments": {
+			"intro": [0.0, 18.0]
+		}
+	}
+	duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
+	assert_eq(duration, 16.0, "Duration should be clamped to maximum 16.0s")
+	
+	# 4. Incomplete/Missing metadata fallback case:
+	# Outgoing track has no segments -> should fallback to default "Bass Swap" duration (6.0s)
+	MetadataService.cache[track_out] = {}
+	duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
+	assert_eq(duration, 6.0, "Duration should fallback to Bass Swap default (6.0s) if outgoing segments are missing")
+	
+	# 5. Integration test: start transition and verify _active_transition_duration is bound
+	MetadataService.cache[track_out] = {
+		"segments": {
+			"outro": [180.0, 192.0]
+		}
+	}
+	MetadataService.cache[track_in] = {
+		"segments": {
+			"intro": [0.0, 16.0]
+		}
+	}
+	
+	AudioManager.current_playlist = [track_out, track_in]
+	AudioManager.current_track_index = 1
+	AudioManager._outgoing_href = track_out
+	AudioManager._incoming_href = track_in
+	
+	AudioManager._run_deck_transition(AudioManager.player_a, AudioManager.player_b, "Bass Swap")
+	assert_eq(AudioManager._active_transition_duration, 12.0, "_active_transition_duration should be bound to 12.0s")
+	
+	# Clean up
+	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
+		AudioManager.active_tween.kill()
+	AudioManager.is_transitioning = false
+	AudioManager.transition_duration = original_td
+	AudioManager.smart_mixing_enabled = original_smart_mixing
+	MetadataService.cache.erase(track_out)
+	MetadataService.cache.erase(track_in)
+
+func test_transition_loop_exits_on_finished_dsp() -> void:
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
+	AudioManager.current_track_index = 0
+	var original_is_playing = AudioManager.is_playing
+	AudioManager.is_playing = true
+	
+	var deck_a = AudioManager.player_a
+	deck_a.stop()
+	deck_a.stream = AudioStreamGenerator.new()
+	deck_a.play()
+	AudioManager.active_player = deck_a
+	
+	var path = ProjectSettings.globalize_path("res://tests/unit/test_track.wav")
+	AudioManager.dsp_a.load_file(path)
+	
+	# Seek past the end to trigger is_finished()
+	AudioManager.dsp_a.seek_pos(6.0)
+	
+	var original_td = AudioManager.transition_duration
+	AudioManager.transition_duration = 5.0
+	
+	# Start transition.
+	AudioManager.start_transition(false)
+	
+	await wait_seconds(0.05)
+	
+	# It should have exited wait loop and started transition immediately because DSP finished
+	assert_true(AudioManager.is_transitioning, "Should be transitioning")
+	assert_not_null(AudioManager.active_tween, "Should have created active tween immediately")
+	
+	# Clean up
+	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
+		AudioManager.active_tween.kill()
+	AudioManager.is_transitioning = false
+	AudioManager.transition_duration = original_td
+	AudioManager.is_playing = original_is_playing
+
+func test_transition_loop_exits_on_stall() -> void:
+	MetadataService.cache.erase("song1.mp3")
+	MetadataService.cache.erase("song2.mp3")
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
+	AudioManager.current_track_index = 0
+	var original_is_playing = AudioManager.is_playing
+	AudioManager.is_playing = true
+	
+	var deck_a = AudioManager.player_a
+	deck_a.stop()
+	deck_a.stream = AudioStreamGenerator.new()
+	deck_a.play()
+	AudioManager.active_player = deck_a
+	
+	AudioManager.dsp_a.clear_stream()
+	
+	var original_track_length = AudioManager.current_track_length
+	AudioManager.current_track_length = 30.0
+	
+	var original_td = AudioManager.transition_duration
+	AudioManager.transition_duration = 5.0
+	
+	# Start transition.
+	AudioManager.start_transition(false)
+	
+	await wait_seconds(0.1)
+	assert_true(AudioManager.is_transitioning)
+	assert_true(AudioManager.active_tween == null or not AudioManager.active_tween.is_valid(), "Should be waiting and not have active tween yet")
+	
+	# Wait for stall detector to trigger (3.0s threshold)
+	await wait_seconds(3.2)
+	
+	assert_true(AudioManager.is_transitioning, "Should be transitioning")
+	assert_true(AudioManager.active_tween != null and AudioManager.active_tween.is_valid(), "Active tween should be created and valid after stall detection breaks the loop")
+	
+	# Clean up
+	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
+		AudioManager.active_tween.kill()
+	AudioManager.is_transitioning = false
+	AudioManager.transition_duration = original_td
+	AudioManager.is_playing = original_is_playing
+	AudioManager.current_track_length = original_track_length
+
+func test_transition_with_smart_mixing_disabled_cuts_immediately() -> void:
+	var deck_a = AudioManager.player_a
+	
+	assert_eq(AudioManager.active_player, deck_a, "Deck A should start as active")
+	
+	var original_smart_mixing = AudioManager.smart_mixing_enabled
+	var original_transition_duration = AudioManager.transition_duration
+	var original_is_playing = AudioManager.is_playing
+	
+	AudioManager.smart_mixing_enabled = false
+	AudioManager.transition_duration = 0.0
+	AudioManager.is_playing = false
+	
+	# Test start_transition(true) with smart mixing disabled
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
+	AudioManager.current_track_index = 0
+	AudioManager.active_player = deck_a
+	
+	# Start transition with force_immediate = true
+	AudioManager.start_transition(true)
+	
+	# Wait for mock loading yield
+	await wait_seconds(0.05)
+	
+	# It should have run immediately and not be transitioning
+	assert_eq(AudioManager.is_transitioning, false, "Should not be transitioning after start_transition when smart mixing is disabled")
+	assert_eq(AudioManager.current_track_index, 1, "Should have immediately switched to the next track index")
+	assert_true(AudioManager.active_player.stream != null, "Active player should have a stream loaded")
+	
+	# Restore everything at the end
+	AudioManager.smart_mixing_enabled = original_smart_mixing
+	AudioManager.transition_duration = original_transition_duration
+	AudioManager.is_playing = original_is_playing
+
+
 
 
 

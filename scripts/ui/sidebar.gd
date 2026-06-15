@@ -17,7 +17,7 @@ extends PanelContainer
 @onready var play_pause_btn: Button = $VBox/PlayerTiles/PlayPauseBtn
 @onready var backward_btn: Button = $VBox/PlayerTiles/ControlsHBox/BackwardBtn
 @onready var forward_btn: Button = $VBox/PlayerTiles/ControlsHBox/ForwardBtn
-@onready var shuffle_btn: CheckBox = $VBox/PlayerTiles/ShuffleBtn
+@onready var shuffle_btn: Button = $VBox/PlayerTiles/ShuffleBtn
 
 
 @onready var preview_square: AspectRatioContainer = $VBox/Scroll/ScrollVBox/PreviewSquare
@@ -232,18 +232,30 @@ func _style_player_buttons() -> void:
 	tile_normal.border_color = border_color
 	tile_normal.set_border_width_all(1)
 	tile_normal.set_corner_radius_all(0)
+	tile_normal.content_margin_left = 4
+	tile_normal.content_margin_right = 4
+	tile_normal.content_margin_top = 4
+	tile_normal.content_margin_bottom = 4
 	
 	var tile_hover = StyleBoxFlat.new()
 	tile_hover.bg_color = theme.GLASS_TINT
 	tile_hover.border_color = theme.ACCENT_CORE
 	tile_hover.set_border_width_all(1)
 	tile_hover.set_corner_radius_all(0)
+	tile_hover.content_margin_left = 4
+	tile_hover.content_margin_right = 4
+	tile_hover.content_margin_top = 4
+	tile_hover.content_margin_bottom = 4
 	
 	var tile_pressed = StyleBoxFlat.new()
 	tile_pressed.bg_color = theme.ACCENT_SURFACE
 	tile_pressed.border_color = theme.ACCENT_BRIGHT
 	tile_pressed.set_border_width_all(1)
 	tile_pressed.set_corner_radius_all(0)
+	tile_pressed.content_margin_left = 4
+	tile_pressed.content_margin_right = 4
+	tile_pressed.content_margin_top = 4
+	tile_pressed.content_margin_bottom = 4
 	
 	for btn in [play_pause_btn, backward_btn, forward_btn, shuffle_btn]:
 		var normal_style = tile_normal.duplicate()
@@ -392,7 +404,7 @@ func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: 
 func _process(_delta: float) -> void:
 	if is_synced_lyrics and lyrics_scroll.visible and AudioManager.is_playing:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
-			var song_time = AudioManager.player.get_playback_position()
+			var song_time = AudioManager.get_playback_position()
 			_update_lyrics_scroller(song_time)
 
 func _update_lyrics_scroller(song_time: float) -> void:

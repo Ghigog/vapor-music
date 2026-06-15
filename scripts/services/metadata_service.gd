@@ -576,6 +576,7 @@ func lookup_metadata(href: String, artist: String, album: String, title: String)
 	var dynamic_range: float = existing.get("dynamic_range", 0.0)
 	var harmony_map: Dictionary = existing.get("harmony_map", {})
 	var listening_history: Array = existing.get("listening_history", [])
+	var vocal_presence: bool = existing.get("vocal_presence", false)
 	
 	# Try to parse local ID3v2 tags if the file is cached locally
 	if bpm == 0.0 or musical_key.is_empty() or genre == "Unknown":
@@ -646,7 +647,8 @@ func lookup_metadata(href: String, artist: String, album: String, title: String)
 		"energy_graph": energy_graph,
 		"dynamic_range": dynamic_range,
 		"harmony_map": harmony_map,
-		"listening_history": listening_history
+		"listening_history": listening_history,
+		"vocal_presence": vocal_presence
 	}
 	
 	if updated:

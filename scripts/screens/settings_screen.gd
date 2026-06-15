@@ -1,13 +1,17 @@
 ## settings_screen.gd
 ## App settings screen.
-## MVP: placeholder. Full settings UI (EQ, themes, cloud) is phase-2.
+## Includes theme, font size, library syncing, pre-caching, and headphone AutoEQ calibration.
 extends Control
 
-@onready var icon_label: Label = $Center/Placeholder/IconLabel
-@onready var heading:    Label = $Center/Placeholder/HeadingLabel
-@onready var body:       Label = $Center/Placeholder/BodyLabel
-@onready var select_a_theme: Label = $"Center/Placeholder/Select a theme"
-@onready var theme_selector: OptionButton = $Center/Placeholder/ThemeSelector
+# App Window Containers
+@onready var settings_panel: PanelContainer = %SettingsPanel
+
+# Basic Settings Controls
+@onready var icon_label: Label = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/IconLabel
+@onready var heading:    Label = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/HeadingLabel
+@onready var body:       Label = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/BodyLabel
+@onready var select_a_theme: Label = $"ScrollContainer/Center/SettingsPanel/MarginContainer/Content/Select a theme"
+@onready var theme_selector: OptionButton = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/ThemeSelector
 
 @onready var font_size_label: Label = %FontSizeLabel
 @onready var font_size_spinbox: SpinBox = %FontSizeSpinBox
@@ -17,16 +21,33 @@ extends Control
 @onready var prefetch_progress: ProgressBar = %PrefetchProgress
 @onready var prefetch_status: Label = %PrefetchStatus
 
+# AutoEQ Controls
+@onready var auto_eq_separator: HSeparator = %AutoEQSeparator
+@onready var auto_eq_section: VBoxContainer = %AutoEQSection
+@onready var auto_eq_title: Label = %AutoEQTitle
+@onready var auto_eq_toggle_label: Label = %AutoEQToggleLabel
+@onready var auto_eq_toggle: CheckButton = %AutoEQToggle
+@onready var auto_eq_search_label: Label = %AutoEQSearchLabel
+@onready var auto_eq_search: LineEdit = %AutoEQSearch
+@onready var auto_eq_selector: OptionButton = %AutoEQSelector
+@onready var calibration_graph: CalibrationGraph = %CalibrationGraph
+
 const THEME_MAP = {
 	"Vapor Dark" : "res://assets/themes/default_dark.tres",
 	"Vapor Light" : "res://assets/themes/default_light.tres"
 }
 
+# AutoEQ Presets Storage
+var all_presets: Dictionary = {}
+var all_models: Array = []
+var filtered_models: Array = []
+
 func _ready() -> void:
+	_load_headphone_presets()
 	_apply_styles()
 	ThemeManager.theme_changed.connect(_apply_styles)
 	
-	# Populate the OptionButton
+	# Populate the Theme OptionButton
 	theme_selector.clear()
 	for theme_name in THEME_MAP.keys():
 		theme_selector.add_item(theme_name)
@@ -63,7 +84,90 @@ func _ready() -> void:
 			
 	prefetch_button.pressed.connect(_on_prefetch_pressed)
 
+	# Initialize AutoEQ settings
+	auto_eq_toggle.button_pressed = SettingsManager.headphone_calibration_enabled
+	auto_eq_toggle.toggled.connect(_on_auto_eq_toggle_toggled)
+	
+	_populate_auto_eq_selector("")
+	auto_eq_selector.item_selected.connect(_on_auto_eq_selector_selected)
+	auto_eq_search.text_changed.connect(_on_auto_eq_search_text_changed)
+	
+	_update_calibration_audio_and_graph()
+
+func _load_headphone_presets() -> void:
+	var presets_path = "res://assets/settings/headphone_presets.json"
+	if FileAccess.file_exists(presets_path):
+		var file = FileAccess.open(presets_path, FileAccess.READ)
+		if file:
+			var json_text = file.get_as_text()
+			file.close()
+			var json = JSON.new()
+			var error = json.parse(json_text)
+			if error == OK and json.data is Dictionary:
+				all_presets = json.data
+				all_models = all_presets.keys()
+				all_models.sort()
+			else:
+				push_error("SettingsScreen: Failed to parse headphone presets JSON")
+		else:
+			push_error("SettingsScreen: Failed to open headphone presets file")
+	else:
+		push_error("SettingsScreen: Headphone presets file not found")
+
+func _populate_auto_eq_selector(filter_text: String = "") -> void:
+	auto_eq_selector.clear()
+	filtered_models.clear()
+	
+	var search_query = filter_text.strip_edges().to_lower()
+	for model in all_models:
+		if search_query.is_empty() or search_query in model.to_lower():
+			filtered_models.append(model)
+			
+	for model in filtered_models:
+		auto_eq_selector.add_item(model)
+		
+	# Reselect active profile if present in filtered list
+	var active_profile = SettingsManager.headphone_profile
+	var select_idx = filtered_models.find(active_profile)
+	if select_idx != -1:
+		auto_eq_selector.selected = select_idx
+	elif not filtered_models.is_empty():
+		# Fallback to first filtered option but don't save until confirmed
+		auto_eq_selector.selected = 0
+
+func _on_auto_eq_search_text_changed(new_text: String) -> void:
+	_populate_auto_eq_selector(new_text)
+
+func _on_auto_eq_selector_selected(index: int) -> void:
+	if index >= 0 and index < filtered_models.size():
+		var selected_model = filtered_models[index]
+		SettingsManager.save_headphone_profile(selected_model)
+		_update_calibration_audio_and_graph()
+
+func _on_auto_eq_toggle_toggled(button_pressed: bool) -> void:
+	SettingsManager.save_headphone_calibration_enabled(button_pressed)
+	_update_calibration_audio_and_graph()
+
+func _update_calibration_audio_and_graph() -> void:
+	if is_instance_valid(AudioManager):
+		AudioManager.update_calibration_state()
+		
+	var enabled = SettingsManager.headphone_calibration_enabled
+	calibration_graph.set_active(enabled)
+	
+	var active_profile = SettingsManager.headphone_profile
+	var raw_profile = all_presets.get(active_profile, "")
+	if not raw_profile.is_empty():
+		var parsed = AutoEQParser.parse_profile_text(raw_profile)
+		calibration_graph.set_profile(parsed)
+	else:
+		calibration_graph.clear_profile()
+
 func _apply_styles() -> void:
+	# Skin the Settings frosted glass card container
+	if is_instance_valid(settings_panel):
+		settings_panel.add_theme_stylebox_override("panel", ThemeManager.make_glass_panel())
+
 	icon_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
 	icon_label.add_theme_font_size_override("font_size", 80)
 
@@ -75,10 +179,6 @@ func _apply_styles() -> void:
 	select_a_theme.add_theme_font_override("font", ThemeManager.current_theme.font_display)
 	select_a_theme.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_LG)
 
-	theme_selector.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
-	theme_selector.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	theme_selector.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-	
 	var opt_style = StyleBoxFlat.new()
 	opt_style.bg_color = ThemeManager.current_theme.BG_ELEVATED
 	opt_style.border_color = ThemeManager.current_theme.GLASS_BORDER
@@ -88,6 +188,10 @@ func _apply_styles() -> void:
 	opt_style.content_margin_right = 10
 	opt_style.content_margin_top = 6
 	opt_style.content_margin_bottom = 6
+	
+	theme_selector.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+	theme_selector.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	theme_selector.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 	theme_selector.add_theme_stylebox_override("normal", opt_style)
 	theme_selector.add_theme_stylebox_override("hover", opt_style)
 	theme_selector.add_theme_stylebox_override("pressed", opt_style)
@@ -164,6 +268,42 @@ func _apply_styles() -> void:
 	prefetch_status.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
 	prefetch_status.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	prefetch_status.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+
+	# Skin new AutoEQ elements
+	auto_eq_title.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	auto_eq_title.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+	auto_eq_title.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_MD)
+
+	auto_eq_toggle_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	auto_eq_toggle_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	auto_eq_toggle_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+
+	auto_eq_search_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	auto_eq_search_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	auto_eq_search_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+
+	# Search LineEdit style
+	auto_eq_search.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	auto_eq_search.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	auto_eq_search.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	var search_style = StyleBoxFlat.new()
+	search_style.bg_color = ThemeManager.current_theme.BG_ELEVATED
+	search_style.border_color = ThemeManager.current_theme.GLASS_BORDER
+	search_style.set_border_width_all(1)
+	search_style.set_corner_radius_all(ThemeManager.current_theme.RADIUS_XS)
+	search_style.content_margin_left = 8
+	search_style.content_margin_right = 8
+	auto_eq_search.add_theme_stylebox_override("normal", search_style)
+	auto_eq_search.add_theme_stylebox_override("focus", search_style)
+
+	# Selector OptionButton style
+	auto_eq_selector.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+	auto_eq_selector.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	auto_eq_selector.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	auto_eq_selector.add_theme_stylebox_override("normal", opt_style)
+	auto_eq_selector.add_theme_stylebox_override("hover", opt_style)
+	auto_eq_selector.add_theme_stylebox_override("pressed", opt_style)
+	auto_eq_selector.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 
 func _on_theme_selected(index: int) -> void:
 	# Get the name (key) based on the index

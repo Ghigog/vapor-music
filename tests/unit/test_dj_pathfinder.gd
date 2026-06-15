@@ -102,3 +102,70 @@ func test_harmonic_relation_costs() -> void:
 	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "3A"), 3.0, "Subdominant Mix (+5 steps) should be 3.0")
 	assert_eq(DJPathfinder.get_harmonic_relation_cost("10A", "2A"), 8.0, "Incompatible keys should be 8.0")
 
+func test_a_star_pathfinding_optimization() -> void:
+	var tracks_meta = {
+		"track_low": {"bpm": 110.0, "musical_key": "8A", "energy_level": 0.2, "genre": "Tech House"},
+		"track_mid_1": {"bpm": 115.0, "musical_key": "8A", "energy_level": 0.4, "genre": "Tech House"},
+		"track_mid_2": {"bpm": 120.0, "musical_key": "8A", "energy_level": 0.6, "genre": "Tech House"},
+		"track_high": {"bpm": 125.0, "musical_key": "8A", "energy_level": 0.8, "genre": "Tech House"},
+	}
+	
+	var path = DJPathfinder.generate_mood_path(tracks_meta, "track_low", "build")
+	assert_eq(path.size(), 4, "Path should contain all 4 tracks")
+	assert_eq(path[0], "track_low", "Path should start with track_low")
+	var energy_0 = tracks_meta[path[0]]["energy_level"]
+	var energy_3 = tracks_meta[path[3]]["energy_level"]
+	assert_true(energy_3 > energy_0, "Energy at the end of build curve should be greater than the start")
+	
+	var path_chill = DJPathfinder.generate_mood_path(tracks_meta, "track_high", "chill")
+	var energy_c0 = tracks_meta[path_chill[0]]["energy_level"]
+	var energy_c3 = tracks_meta[path_chill[3]]["energy_level"]
+	assert_true(energy_c3 < energy_c0, "Energy at the end of chill curve should be less than the start")
+
+func test_genre_taxonomy_cost() -> void:
+	var track_a = {"bpm": 120.0, "musical_key": "8A", "energy_level": 0.5, "genre": "Tech House"}
+	var track_b = {"bpm": 120.0, "musical_key": "8A", "energy_level": 0.5, "genre": "Techno"}
+	var track_c = {"bpm": 120.0, "musical_key": "8A", "energy_level": 0.5, "genre": "Liquid DNB"}
+	var track_d = {"bpm": 120.0, "musical_key": "8A", "energy_level": 0.5, "genre": "House"}
+	
+	var cost_ab = DJPathfinder.calculate_transition_cost(track_a, track_b)
+	var cost_db = DJPathfinder.calculate_transition_cost(track_d, track_b)
+	var cost_dc = DJPathfinder.calculate_transition_cost(track_d, track_c)
+	
+	assert_true(cost_ab < cost_dc, "Tech House -> Techno cost should be lower than House -> Liquid DNB cost")
+	assert_true(cost_db < cost_dc, "House -> Techno cost should be lower than House -> Liquid DNB cost")
+	
+	assert_eq(DJPathfinder.get_genre_distance("Tech House", "Techno"), 3.0, "Tech House and Techno should have distance 3")
+	assert_eq(DJPathfinder.get_genre_distance("House", "Liquid DNB"), 5.0, "House and Liquid DNB should be unrelated (dist 5)")
+
+func test_dynamic_duration_selection() -> void:
+	var meta_out = {
+		"segments": {
+			"outro": [180.0, 200.0]
+		}
+	}
+	var meta_in = {
+		"segments": {
+			"intro": [0.0, 12.0]
+		}
+	}
+	
+	var duration = DJPathfinder.calculate_transition_duration(meta_out, meta_in)
+	assert_eq(duration, 12.0, "Transition duration should be 12.0 seconds")
+	
+	var meta_out_short = {
+		"segments": {
+			"outro": [180.0, 182.0]
+		}
+	}
+	var duration_short = DJPathfinder.calculate_transition_duration(meta_out_short, meta_in)
+	assert_eq(duration_short, 3.0, "Transition duration should be clamped to a minimum of 3.0 seconds")
+	
+	var meta_in_long = {
+		"segments": {
+			"intro": [0.0, 30.0]
+		}
+	}
+	var duration_long = DJPathfinder.calculate_transition_duration(meta_out, meta_in_long)
+	assert_eq(duration_long, 15.0, "Transition duration should be clamped to a maximum of 15.0 seconds")
+

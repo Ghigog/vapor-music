@@ -180,6 +180,37 @@ vapor-music/
 
 ---
 
+## C++ DSP GDExtension Layer
+
+Vapor Music utilizes a native C++ GDExtension (`AudioDSP`) to handle digital signal processing (DSP) operations such as high-performance analysis (via **Essentia**) and pitch-independent time-stretching (via the **Rubber Band Library**).
+
+### Compilation Instructions
+
+To compile the C++ extension on macOS:
+1. Ensure SCons and dependencies are installed via Homebrew:
+   ```bash
+   brew install scons rubberband eigen libyaml fftw ffmpeg libsamplerate taglib chromaprint pkg-config
+   ```
+2. Clone the `godot-cpp` bindings library (we use the `master` branch for Godot 4.6 compatibility):
+   ```bash
+   git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git
+   ```
+3. Run the local Essentia compilation script to build and install Essentia locally to `external/build`:
+   ```bash
+   bash external/build_essentia.sh
+   ```
+4. Compile the root GDExtension dynamic library:
+   ```bash
+   scons platform=macos target=template_debug
+   ```
+
+> [!WARNING]
+> **Exporting / Bundling Tech Debt Note**
+> For local development and unit tests, the compiled dynamic library (`bin/libaudio_dsp.macos.debug.dylib`) links dynamically to Homebrew's paths (via `-Wl,-rpath,/opt/homebrew/lib` and RPATH `@loader_path/../external/build/lib`).
+> Before exporting a production app bundle (`.app`), these external `.dylib` dependencies (specifically `libessentia.dylib` and `librubberband.dylib`) must be copied directly into the app bundle's `Frameworks` directory and re-linked using `install_name_tool`, and then code-signed, to make the exported application self-contained.
+
+---
+
 ## Design Principles
 
 1. **Local-First** — Every feature must work with zero internet connectivity.
@@ -193,6 +224,46 @@ vapor-music/
 ## Status
 
 > 🚧 Early development — Godot project scaffolding in progress.
+>
+> **v1.46 (2026-06-13):** Resolved playback glitches, transition hiccups, and concurrent WebDAV scans. Optimized time-stretching by fully loading audio files under 15 minutes into memory on the background thread inside `AudioDSP::load_cache_at` (using `MonoLoader`), eliminating real-time disk reads and incremental EasyLoader decoding overhead during playback. Implemented a thread-safe `is_transitioning_active` flag set on the main thread in `AudioManager` to suspend background analysis inside `AudioAnalyzer` during active transitions, freeing CPU resources. Protected `WebDAVService.scan_music_directory` against concurrent executions with an `is_scanning` flag, preventing conflicting scans and UI refreshes. All 162 unit tests passing.
+>
+> **v1.45 (2026-06-13):** Fixed GDExtension threading and synchronization bottlenecks in `AudioDSP` to eliminate track transition and startup stutters. Moved cache loading and decoding out of the mutex critical section, released the lock during background loading, and removed the synchronous cache load from the main thread. Integrated metadata duration hints in `AudioManager` to avoid main thread metadata parsing. Optimized the normalized cross-correlation algorithm using a sliding-window sum-of-squares precomputation at 4000 Hz, reducing execution to <1ms while maintaining phase-matching accuracy. Restored default transition fallbacks when smart mixing is disabled. All 162 tests passing.
+>
+> **v1.44 (2026-06-13):** Resolved currently playing track hiccups and transition freezes. Prevented look-ahead pre-fetching from executing destructive cache folder pruning, keeping the active and general library tracks safely cached. Added `is_finished` checks and a 3.0-second playback stall detector to the `AudioManager`'s transition wait loop, ensuring transitions execute seamlessly even if a track finishes early or stalls. Bound smart transition effects directly to the Smart Mixing toggle so that sequential playback uses standard crossfades. All 161 tests passing.
+>
+> **v1.43 (2026-06-13):** Resolved WebDAV caching download write collisions and layout overlaps in the Vibe Workbench. Separated temporary download file suffixes for background pre-fetching (`.analyzer.tmp`) and player streaming (`.manager.tmp`) to prevent concurrent write collisions, and implemented target cache file existence checks before renaming. Added dynamic label truncation in the crossover timeline to prevent spilling into the transition curves. Converted the sidebar's smart mixing checkbox to a space-efficient toggle button and enabled text label shrinking in the now playing display to keep the sidebar within its 240px boundaries. All 158 tests passing.
+>
+> **v1.42 (2026-06-13):** Implemented Settings Headphone Calibration Selection UI (EQ-003). Redesigned the settings screen using a scrollable container and a frosted glass panel container. Added a master calibration bypass switch, a search bar LineEdit that dynamically filters headphone models, and an OptionButton selector populated from a local JSON database of popular AutoEQ profiles. Designed a custom vector drawing control `CalibrationGraph` to plot the corrective frequency response curve computed from biquad filter transfer functions. Integrated headphone settings persistence in `SettingsManager` and automatic startup/runtime application in `AudioManager`. Added integration unit tests in `tests/unit/test_headphone_settings.gd` verifying settings storage, profile updates, and EQ clearing. All 158 tests passing.
+>
+> **v1.41 (2026-06-13):** Implemented AutoEQ Calibration Profile Parser (EQ-002). Created a static helper class `AutoEQParser` to read and parse standard parametric AutoEQ profile text files (Equalizer APO syntax), extracting preamp gain and up to 10 filter bands (frequency, gain, Q-factor, and type). Implemented automatic clipping prevention by comparing the parsed preamp against the maximum active boost gain, adjusting the preamp dynamically to guarantee safe headroom. Integrated the parser into `AudioManager` via a new `apply_eq_profile` method. Added unit tests in `tests/unit/test_autoeq_parser.gd` covering parsing, validation, clamping, clipping prevention, formatting variations, and integration. All 154 tests passing.
+>
+> **v1.40 (2026-06-12):** Implemented Godot AudioServer Multiband Parametric EQ Layout (EQ-001). Programmatically configured the Master audio bus effects layout, featuring an `AudioEffectAmplify` effect at index 0 for preamp gain control, and 10 bands of `AudioEffectFilter` (specifically `AudioEffectBandLimitFilter` by default) at indices 1 to 10. Exposed public API methods in `AudioManager` including `set_eq_band` (with dynamic filter subclass swapping and 0.0 dB gain bypass optimization), `set_preamp_gain`, and `clear_eq_bands`. Added unit tests in `tests/unit/test_master_eq.gd` verifying layout initialization, preamp adjustments, subclass replacement, bypass logic, and resets. All 148 tests passing.
+>
+> **v1.39 (2026-06-12):** Implemented Dual-Track Look-Ahead WebDAV Pre-Caching (MET-006). Extended `AudioAnalyzer` to support sliding window pre-fetching of up to 3 tracks (playing + next 2 tracks), prioritizing background analysis of look-ahead tracks, and cancelling downloads of tracks no longer in the window. Integrated caching updates into `AudioManager` property setters, overrides, and transition completion signals. Added comprehensive look-ahead and cancellation unit tests. All 142 tests passing.
+>
+> **v1.38 (2026-06-12):** Implemented Phrase-Adaptive Dynamic Transition Durations (DJ-015). Modified `AudioManager.get_transition_duration()` to dynamically extract `outro` and `intro` segment lengths from cached track metadata and set transition duration to their minimum, clamped between 3.0s and 16.0s, falling back to transition type defaults. Bound calculated duration to `_active_transition_duration` to drive transition progress and tweens. Added unit and integration tests in `test_dj_transitions.gd`. All 140 tests passing.
+>
+> **v1.37 (2026-06-12):** Implemented Pre-Fader Gain Matching via EBU R128 Loudness (DJ-016). Added calculation of pre-fader volume offsets based on track LUFS values to target -14.0 LUFS, clamping adjustments between -12 dB and +6 dB, and defaulting to a fallback of 1.0 (0 dB) when metadata is missing. Added unit tests for clamping and fallbacks in test_audio_normalization.gd. All 139 tests passing.
+>
+> **v1.36 (2026-06-12):** Implemented Waveform Cross-Correlation Auto-Sync & Phase Refinement (DJ-014). Added a 4000 Hz down-sampled normalized cross-correlation (NCC) algorithm in C++ `AudioDSP` to find the exact phase offset (lag) between playing decks in a sliding 500ms window. Integrated the offset into the GDScript PLL loop in `AudioManager` to correct beatgrid alignment errors. Added unit tests for cross-correlation and PLL adjustments, and fixed a flaky test timeout. All 139 tests passing.
+>
+> **v1.35 (2026-06-12):** Implemented Multi-Pass Recursive Transient Peak Avoidance (DJ-013). Upgraded `get_aligned_trigger_time` in `AudioManager` to recursively check for transient collisions up to 4 attempts. Added tracking of shift direction to prevent back-and-forth oscillation, fallback-shifting later when shifting earlier goes below the playback position. Added unit tests in `test_segmented_key_transients.gd` covering multi-pass earlier/later shifts and safety limits. All 136 tests passing.
+>
+> **v1.34 (2026-06-12):** Implemented Low-Overhead Dynamic Streaming Audio Decoder (MET-005). Modified C++ AudioDSP to use a 5-second sliding cache window in RAM, decoding blocks from disk on demand using Essentia's EasyLoader. Added fast header-based duration parsing for WAV files and MetadataReader for compressed formats. Updated playback tracking, seeking, and finishing logic to work with the dynamic cache window, and added unit tests verifying bounded memory consumption. All 135 tests passing.
+>
+> **v1.33 (2026-06-12):** Implemented Threaded Real-Time Time-Stretching & Buffer Feeding (DJ-011). Created a C++ background thread dedicated to Rubber Band processing inside AudioDSP. Implemented a thread-safe circular RingBuffer to cache processed output frames. Modified get_next_chunk to retrieve samples from the buffer in O(1) time on the main thread, eliminating UI stuttering. Optimized playback position tracking and added unit tests in test_tempo_stretching.gd. All 134 tests passing.
+>
+> **v1.32 (2026-06-12):** Implemented Segmented Key Modulation & Waveform-Aware Transient Avoidance (DJ-010). Added segment key signature extraction and 50ms energy flux transient peak detection in C++ AudioDSP. Updated DJPathfinder to match compatible outro/intro keys during pathfinding. Integrated transient avoidance in AudioManager to micro-shift transition triggers by 4 beats (1 bar) when a peak lands on the downbeat. All 133 tests passing.
+>
+> **v1.31 (2026-06-12):** Implemented Listener Preference Learning & Adaptive Transition Weighting (AI-010). Added a transition history log at `user://transition_history.json` that records skipped and completed transitions. Skip events are detected when the user presses "Next" during a transition or within 10 seconds of completion. Integrated a feedback cost penalty of 15.0 per skip into the A* pathfinder cost function, causing repeatedly skipped transitions to be deprioritized. All 131 tests passing.
+>
+> **v1.30 (2026-06-12):** Implemented A* Global Set Pathfinder & Genre Taxonomy Mapping (AI-009). Replaced the greedy one-track-ahead selector with an A* global search over a 10-song sequence. Factored target energy and BPM curves ("build", "chill", "wave") into A* heuristic cost penalties. Integrated a static subgenre taxonomy tree (grouped into "Club Music" and "Bass Music") using BFS to calculate genre distance. Derived transition durations dynamically based on the overlap between track outro/intro segment lengths, clamping results between 3.0s and 15.0s. All 125 tests passing.
+>
+> **v1.29 (2026-06-12):** Implemented subtractive Dynamic EQ mixing and real-time frequency RMS compression. Introduced fader progress variables $X$ and $x$ driven by transition tweens. Implemented a crossover low-frequency EQ gain formula ($1 - 2X$ outgoing, $2X - 1$ incoming) with a midpoint swap to keep total bass energy constant at exactly 0dB (1.0). Added time-domain 3-band frequency splitting (Low: <250Hz, Mid: 250Hz-4kHz, High: >4kHz) and dynamic RMS clipping prevention to compress outgoing channels when combined energy exceeds $+2$ dB. All 122 tests passing.
+>
+> **v1.28 (2026-06-12):** Implemented phrase-aware structural transitions and vocal clashing masking. Added bar and beat translation to map playback seconds to musical grids. Configured transitions to align to 8-bar loop boundaries within track outro segments. Added dynamic vocal presence checks using energy metrics, applying a $-24$ dB mid-frequency EQ cut to prevent vocal-on-vocal clashing during blends. All 120 tests passing.
+>
+> **v1.27 (2026-06-11):** Implemented automated silence trimming and EBU R128 loudness normalization. Added amplitude sweeping in C++ `AudioDSP` to determine `cue_in` and `cue_out` points at a $-40$ dB threshold, and implemented full K-weighting and relative/absolute gating for integrated loudness calculations. Integrated these properties in `AudioManager` to start track playback at `cue_in`, trigger transitions at `cue_out`, and apply pre-fade gain normalization targeting $-14$ LUFS. All 112 tests passing.
 >
 > **v1.26 (2026-06-10):** Smoothed the Tempo Morph DJ transition effect. Increased the pitch scale morph ramp duration to 50% of the transition duration (max 3.0s) for a gentler tempo match, and fixed a bug where the incoming player's pitch_scale was prematurely reset to 1.0 at the end of the transition, causing abrupt post-transition tempo jumps. All 105 tests passing.
 >

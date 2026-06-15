@@ -35,9 +35,11 @@ When Smart Mixing is active, the AI DJ automatically cycles through a repeating 
 ---
 
 ## 5. Transition Effects
-The AI DJ automatically selects from 6 transition types based on the BPM difference and the key relationship (harmonic, modulated, or clashing) to mimic how a real DJ plays. Transition loading is triggered `duration + 4.0` seconds before the track ends, and begins exactly at `duration` seconds remaining:
+The AI DJ automatically selects from 6 transition types based on the BPM difference and the key relationship (harmonic, modulated, or clashing) to mimic how a real DJ plays. Transition durations are phrase-adaptive: if outro/intro segment metadata is available for both tracks, the duration is dynamically set as the minimum of the two segment lengths, clamped between `3.0s` and `16.0s`. Otherwise, it falls back to the transition type's default duration.
 
-- **Bass Swap** (BPM diff < 3.0, Harmonic or Modulated): 6.0s blend. Low EQ frequency swap at midpoint.
+Transition loading is triggered `duration + 4.0` seconds before the track ends, and begins exactly at `duration` seconds remaining:
+
+- **Bass Swap** (BPM diff < 3.0, Harmonic or Modulated): 6.0s blend. Low EQ frequencies crossfade smoothly around the midpoint to prevent abrupt energy cuts.
 - **Filter Sweep** (BPM diff 3.0–8.0, Harmonic): 4.0s blend. Outgoing lowpass and incoming highpass sweeps.
 - **Tempo Morph** (BPM diff 3.0–8.0, Modulated/Clashing): 6.0s blend. Syncs tempos during crossfade, then ramps to native tempo.
 - **Reverb Freeze** (BPM diff < 8.0, Clashing / Switch): 5.0s blend. Outgoing reverb freezes at midpoint to wash out the clashing frequencies and mask the transition.

@@ -175,3 +175,58 @@ static func generate_mood_path(tracks_meta: Dictionary, start_href: String = "",
     # 3. Run global A* search matching the target_curve energy profile.
     # 4. Return sorted playlist array.
 ```
+
+---
+
+## 5. Reviewer's Notes & Critical Extensions
+
+> [!NOTE]
+> *Added on 2026-06-11 by Antigravity (AI Coding Assistant)*
+>
+> While the proposed refactor plan correctly diagnoses all 7 core architectural limitations, it is recommended to expand the blueprint. To build a truly modern, premium "robot DJ," we should leverage the unique advantages that computers have over human DJs, rather than solely trying to match traditional DJ software setups.
+
+### 🚀 Recommended Extensions to the Refactor
+
+1. **Integrated Gain Matching & Loudness Normalization (P1)**
+   * *The Problem*: Auditory fatigue and volume spikes between older, dynamic recordings and modern, heavily-compressed tracks.
+   * *Proposed Solution*: Calculate **EBU R128 integrated loudness (LUFS)** during analysis. Apply auto-gain adjustments on the active deck's pre-fade channel to normalize output levels (targeting a reference like -14 LUFS) prior to transition blending.
+
+2. **Silence Trimming & Start/End Cueing (P0)**
+   * *The Problem*: Dead air and ambient noise tails interrupting the blend flow.
+   * *Proposed Solution*: Run amplitude threshold sweeps to locate first and last frames of meaningful audio. Cache `cue_in` and `cue_out` timestamps, ensuring playback of Deck B starts exactly at `cue_in` and Deck A's transition triggers before hitting absolute silence.
+
+3. **Dynamic Transition Durations (P2)**
+   * *The Problem*: Hardcoded transition lengths (e.g., 3s, 4s, 5s) do not fit different genres or track arrangements.
+   * *Proposed Solution*: Derive transition duration dynamically from structural segment boundaries (matching the outgoing track's outro and incoming track's intro length).
+
+4. **Multi-Track Tempo Ramp Planning (P2)**
+   * *The Problem*: Large, abrupt BPM jumps between adjacent candidate tracks.
+   * *Proposed Solution*: Inject tempo slope tracking into the A* pathfinder. It should plan a gradual tempo transition curve across a sequence of 5-10 songs (e.g., building a set from 90 BPM to 140 BPM through harmonically compatible increments).
+
+5. **First-Class Vocal Detection & Masking (P3)**
+   * *The Problem*: Multi-vocal clashes during long transition blends.
+   * *Proposed Solution*: Perform spectral density analyses to mark segments as either vocal-heavy or instrumental-only. Adjust crossfading types automatically (e.g., forcing a Reverb Freeze or Echo Out rather than a Bass Swap if vocal sections clash).
+
+6. **Listener Preference Learning (P4)**
+   * *The Problem*: Algorithms fail to adapt to individual listening environments or user behavior.
+   * *Proposed Solution*: Track and log skip metrics during transition boundaries. Log successful mixes, and apply dynamic weight penalties to pathfinding nodes that have triggered user skips.
+
+7. **Harmonic Mixing with Key Changes Within a Track (P3)**
+   * *The Problem*: Many tracks modulate keys partway through, but the system only assigns one overall key per track.
+   * *Proposed Solution*: Track keys per segment, and match incoming tracks using the key of the outro segment rather than the primary track key.
+
+8. **Waveform-Aware Drop/Hit Avoidance (P3)**
+   * *The Problem*: Blending out of or into a major transient climax (drops/hits) can disrupt the energy flow.
+   * *Proposed Solution*: Scan for transient peaks in the transition window, micro-shifting start times slightly to prevent cutting off or stepping on peaks.
+
+### 🛠️ Feasibility & Implementation Roadmap
+
+| Priority | Feature / Subsystem | Direct Benefit | Estimated Complexity |
+|---|---|---|---|
+| **P0** | **Real MP3 Analysis / Silence Trimming** | Accurate metadata cache, zero dead air | Medium |
+| **P1** | **Gain Normalization (LUFS) / Key Detection** | Balanced volume, authentic harmonic matching | Medium |
+| **P2** | **A* Pathfinder / Dynamic Durations** | Seamless structural mixes, mood progression arcs | Medium-High |
+| **P3** | **Beat Sync & PLL / Vocal Masking / Key Changes / Transient Avoidance** | Professional-grade locked beats, clean vocals, smart transitions | High (GDExtension) |
+| **P4** | **True Time-Stretching (Rubber Band) / History Log** | Zero pitch-distortion, personalization | High (GDExtension) |
+
+*By focusing first on P0 and P1 systems, the AI DJ can achieve ~80% of its target quality improvement entirely within GDScript, before tackling the GDExtension complexity of C++ DSP libraries.*
