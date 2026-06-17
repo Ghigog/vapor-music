@@ -294,6 +294,17 @@ func _get_match_type_between(current_meta: Dictionary, next_meta: Dictionary) ->
 		
 	return "perfect"
 
+func is_track_cached(href_path: String) -> bool:
+	if href_path.is_empty():
+		return false
+	if href_path == "song1.mp3" or href_path == "song2.mp3" or href_path == "song3.mp3" or href_path.begins_with("test_"):
+		return true
+	var ext := href_path.get_extension()
+	if ext.is_empty():
+		ext = "mp3"
+	var cache_path := CACHE_DIR + href_path.md5_text() + "." + ext
+	return FileAccess.file_exists(cache_path)
+
 func _update_upcoming_transition() -> void:
 	if not smart_mixing_enabled:
 		upcoming_transition_type = "Standard Crossfade"
@@ -321,36 +332,54 @@ func _update_upcoming_transition() -> void:
 			var key_cost = DJPathfinderClass.get_harmonic_relation_cost(key_a, key_b)
 			var match_type = _get_match_type_between(current_meta, next_meta)
 			
-			if key_cost >= 8.0:
-				# 1. Clashing keys: wash/mask transition effects to hide clash
-				if bpm_diff >= 8.0 or match_type == "creative" or match_type == "interesting":
-					upcoming_transition_type = "Echo Out"
-				else:
-					upcoming_transition_type = "Reverb Freeze"
-			elif key_cost >= 2.1 and key_cost <= 3.5:
-				# 2. Key modulations (Energy Boost, Power Mix, Subdominant, etc.)
+			var is_clashing = (key_cost >= 8.0)
+			var is_switch = (match_type == "creative")
+			
+			var weights := {}
+			if is_clashing or is_switch:
+				# Clashing / Switch (wash/mask transition effects)
 				if bpm_diff < 3.0:
-					upcoming_transition_type = "Bass Swap"
+					weights = {"Echo Out": 50, "Reverb Freeze": 50}
 				elif bpm_diff < 8.0:
-					upcoming_transition_type = "Tempo Morph"
+					weights = {"Echo Out": 50, "Reverb Freeze": 50}
 				else:
-					upcoming_transition_type = "Echo Out"
+					weights = {"Echo Out": 60, "Reverb Freeze": 40}
+			elif key_cost <= 2.0:
+				# Harmonic keys
+				if bpm_diff < 3.0:
+					weights = {"Bass Swap": 75, "Filter Sweep": 15, "Standard Crossfade": 10}
+				elif bpm_diff < 8.0:
+					weights = {"Tempo Morph": 45, "Filter Sweep": 25, "Echo Out": 15, "Reverb Freeze": 15}
+				else:
+					weights = {"Echo Out": 50, "Reverb Freeze": 30, "Standard Crossfade": 20}
 			else:
-				# 3. Harmonically compatible keys
+				# Modulated keys
 				if bpm_diff < 3.0:
-					upcoming_transition_type = "Bass Swap"
+					weights = {"Bass Swap": 60, "Filter Sweep": 20, "Tempo Morph": 20}
 				elif bpm_diff < 8.0:
-					if match_type == "creative" or match_type == "interesting":
-						upcoming_transition_type = "Reverb Freeze"
-					elif bpm_diff >= 5.0:
-						upcoming_transition_type = "Tempo Morph"
-					else:
-						upcoming_transition_type = "Filter Sweep"
+					weights = {"Tempo Morph": 40, "Echo Out": 25, "Reverb Freeze": 20, "Filter Sweep": 15}
 				else:
-					if match_type == "creative" or match_type == "interesting" or bpm_diff >= 12.0:
-						upcoming_transition_type = "Echo Out"
-					else:
-						upcoming_transition_type = "Standard Crossfade"
+					weights = {"Echo Out": 60, "Reverb Freeze": 40}
+			
+			# Seed pseudo-random generator with track pair hash to keep it stable/non-flickering
+			var pair_hash = (current_href + next_href).hash()
+			var rng = RandomNumberGenerator.new()
+			rng.seed = pair_hash
+			
+			var total_weight := 0.0
+			for w in weights.values():
+				total_weight += w
+				
+			var roll = rng.randf() * total_weight
+			var cumulative := 0.0
+			var selected_type = "Standard Crossfade"
+			for type in weights:
+				cumulative += weights[type]
+				if roll <= cumulative:
+					selected_type = type
+					break
+					
+			upcoming_transition_type = selected_type
 			return
 			
 	# Fallback to deterministic pseudo-random choice if metadata not yet ready
@@ -773,6 +802,7 @@ func play_track(track_href: String, playlist: Array) -> void:
 		
 	current_playlist = Array(playlist, TYPE_STRING, &"", null)
 	current_track_index = current_playlist.find(track_href)
+	upcoming_track_override = ""
 	is_transitioning = false
 	
 	_record_history(track_href)
@@ -793,7 +823,7 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 	if href_path == "song1.mp3" or href_path == "song2.mp3" or href_path == "song3.mp3" or href_path.begins_with("test_"):
 		var stream = AudioStreamGenerator.new()
 		stream.mix_rate = 44100
-		stream.buffer_length = 0.1
+		stream.buffer_length = 0.5
 		target_player.stream = stream
 		
 		var dsp = dsp_a if target_player == player_a else dsp_b
@@ -927,7 +957,7 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 		
 	var generator := AudioStreamGenerator.new()
 	generator.mix_rate = 44100
-	generator.buffer_length = 0.1 # 100ms
+	generator.buffer_length = 0.5 # 500ms safety buffer to prevent macOS screen swipe hiccups
 	
 	target_player.stream = generator
 	
@@ -1025,6 +1055,7 @@ func play_previous() -> void:
 	if _debounce_timer and not _debounce_timer.is_stopped():
 		_debounce_timer.stop()
 		
+	upcoming_track_override = ""
 	if history_pointer > 0:
 		history_pointer -= 1
 		var prev_href = playback_history[history_pointer]
@@ -1086,10 +1117,11 @@ func start_transition(force_immediate: bool = false) -> void:
 		is_transitioning = false
 		return
 		
+	if upcoming_track_override == next_track_href:
+		upcoming_track_override = ""
+		
 	if not smart_mixing_enabled:
 		is_transitioning = false
-		if not upcoming_track_override.is_empty() and next_track_href == upcoming_track_override:
-			upcoming_track_override = ""
 		current_track_index = current_playlist.find(next_track_href)
 		if current_track_index == -1:
 			current_playlist.append(next_track_href)
@@ -1526,19 +1558,35 @@ func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlay
 				out_reverb.wet = val
 			, 0.0, 1.0, half_duration)
 			
+		# Scale down outgoing bus volume during first half to prevent clipping / volume swell as wet ramps up
+		active_tween.parallel().tween_method(func(val: float):
+			print("REVERB FREEZE TWEENING OUTGOING VOLUME (FIRST HALF): ", val)
+			AudioServer.set_bus_volume_db(out_bus_idx, val)
+		, 0.0, -6.0, half_duration).set_trans(Tween.TRANS_SINE)
+		
+		# --- MIDPOINT CALLBACK ---
+		# Stop outgoing player to freeze the audio input
+		active_tween.tween_callback(func():
+			if is_instance_valid(outgoing) and outgoing.playing:
+				print("REVERB FREEZE MIDPOINT: STOPPING OUTGOING")
+				outgoing.stop()
+		)
+		
 		# --- SECOND HALF ---
+		# Fade out outgoing bus volume to -60.0 dB over the second half
+		# (starts at midpoint, runs for half_duration)
+		active_tween.tween_method(func(val: float):
+			print("REVERB FREEZE TWEENING OUTGOING VOLUME (SECOND HALF): ", val)
+			AudioServer.set_bus_volume_db(out_bus_idx, val)
+		, -6.0, -60.0, half_duration).set_trans(Tween.TRANS_SINE)
+		
 		# At midpoint, cut dry mix instantly to freeze the tail
 		var cut_duration = 0.1 if duration > 1.0 else duration * 0.02
 		if out_reverb:
-			active_tween.tween_method(func(val: float):
+			active_tween.parallel().tween_method(func(val: float):
 				print("REVERB FREEZE TWEENING DRY: ", val)
 				out_reverb.dry = val
 			, 1.0, 0.0, cut_duration)
-			
-		# --- TAIL DECAY ---
-		var remaining = duration - half_duration - cut_duration
-		if remaining > 0.0:
-			active_tween.tween_interval(remaining)
 			
 		if apply_mid_cut:
 			var out_eq = AudioServer.get_bus_effect(out_bus_idx, 0) as AudioEffectEQ

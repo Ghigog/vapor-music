@@ -174,6 +174,38 @@ func prune_orphaned_cache_files(hrefs: Array) -> void:
 		dir.list_dir_end()
 
 func start_prefetching(hrefs: Array) -> void:
+	# Prioritize upcoming track override download if uncached
+	var next_track = ""
+	var audio_manager = get_node_or_null("/root/AudioManager")
+	if is_instance_valid(audio_manager):
+		next_track = audio_manager.get_next_track_href()
+		
+	var next_track_uncached = false
+	if not next_track.is_empty():
+		var ext: String = next_track.get_extension()
+		if ext.is_empty():
+			ext = "mp3"
+		var cache_path: String = cache_dir + next_track.md5_text() + "." + ext
+		if not FileAccess.file_exists(cache_path):
+			next_track_uncached = true
+			
+	if next_track_uncached and current_download_href != next_track:
+		if not current_download_href.is_empty():
+			if is_instance_valid(download_http_request):
+				download_http_request.cancel_request()
+				download_http_request.queue_free()
+				download_http_request = null
+			
+			var ext: String = current_download_href.get_extension()
+			if ext.is_empty():
+				ext = "mp3"
+			var temp_path = cache_dir + current_download_href.md5_text() + "." + ext + ".analyzer.tmp"
+			if FileAccess.file_exists(temp_path):
+				DirAccess.remove_absolute(temp_path)
+				
+			print("AudioAnalyzer: Cancelled download of ", current_download_href, " to prioritize next track: ", next_track)
+			current_download_href = ""
+
 	# Ensure all cached files are scanned and queued for background analysis
 	scan_library_cache(hrefs)
 	
@@ -186,6 +218,11 @@ func start_prefetching(hrefs: Array) -> void:
 		var cache_path: String = cache_dir + href.md5_text() + "." + ext
 		if not FileAccess.file_exists(cache_path):
 			new_queue.append(href)
+			
+	# Move next_track to the front of the queue to prioritize it
+	if not next_track.is_empty() and new_queue.has(next_track):
+		new_queue.erase(next_track)
+		new_queue.push_front(next_track)
 			
 	var ready_count = get_ready_tracks_count(hrefs)
 			

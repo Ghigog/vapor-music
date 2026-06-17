@@ -851,6 +851,11 @@ Add an `AudioEffectReverb` to the audio server decks. When "Reverb Freeze" is tr
 - When the midpoint is reached
 - Then the outgoing song's dry signal cuts, and its reverb tail rings out like an ambient cloud while the incoming song starts playing.
 
+**Refinement (2026-06-17):**
+- Prevented digital clipping and ripping artifacts by adding a parallel outgoing bus volume tween in the first half (ramping from 0.0 dB to -6.0 dB) to compensate for the combined dry (1.0) and wet (ramping to 1.0) signals.
+- Stopped the outgoing player at the transition midpoint via a tween callback to freeze the audio input. This prevents any post-midpoint audio from feeding into and overloading the reverb processor.
+- Faded out the outgoing bus volume from -6.0 dB to -60.0 dB over the second half of the transition to let the frozen reverb tail decay naturally and disappear smoothly without abrupt cutoffs.
+
 ---
 
 ### DJ-003 : Implement Tempo Morph (Tempo-Sync'd) Transition (done)

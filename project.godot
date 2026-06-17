@@ -32,8 +32,8 @@ PlaylistService="*res://scripts/services/playlist_service.gd"
 
 [display]
 
-window/size/viewport_width=1280
-window/size/viewport_height=720
+window/size/viewport_width=1600
+window/size/viewport_height=900
 window/size/borderless=true
 window/size/transparent=true
 window/stretch/aspect="expand"
@@ -62,3 +62,8 @@ ai_assistant_hub/preferences/audio_hints=true
 rendering_device/driver.windows="d3d12"
 textures/vram_compression/import_etc2_astc=true
 viewport/transparent_background=true
+
+[audio]
+
+driver/output_latency=30
+

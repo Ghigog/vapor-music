@@ -503,7 +503,7 @@ func test_transition_key_clash_override() -> void:
 	
 	AudioManager._update_upcoming_transition()
 	
-	assert_eq(AudioManager.upcoming_transition_type, "Reverb Freeze", "Should override to Reverb Freeze to mask key clash")
+	assert_true(AudioManager.upcoming_transition_type in ["Reverb Freeze", "Echo Out"], "Should override to Reverb Freeze or Echo Out to mask key clash")
 	
 	# Clean up cache
 	MetadataService.cache.erase(AudioManager.current_playlist[0])
@@ -814,6 +814,82 @@ func test_transition_with_smart_mixing_disabled_cuts_immediately() -> void:
 	AudioManager.smart_mixing_enabled = original_smart_mixing
 	AudioManager.transition_duration = original_transition_duration
 	AudioManager.is_playing = original_is_playing
+
+func test_switch_track_transition_selection() -> void:
+	var original_sm = AudioManager.smart_mixing_enabled
+	AudioManager.smart_mixing_enabled = true
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
+	AudioManager.current_track_index = 0
+	
+	# Test Switch match (different genre) with BPM diff < 8.0 (should select Reverb Freeze)
+	var meta_a = {"bpm": 120.0, "musical_key": "10B", "genre": "R&B"}
+	var meta_b = {"bpm": 120.0, "musical_key": "11B", "genre": "Indie"} # Different genres
+	MetadataService.cache[AudioManager.current_playlist[0]] = meta_a
+	MetadataService.cache[AudioManager.current_playlist[1]] = meta_b
+	
+	AudioManager._update_upcoming_transition()
+	assert_true(AudioManager.upcoming_transition_type in ["Reverb Freeze", "Echo Out"], "Switch track with BPM diff < 8.0 should select Reverb Freeze or Echo Out")
+	
+	# Test Switch match (different genre) with BPM diff >= 8.0 (should select Echo Out or Reverb Freeze)
+	meta_b.bpm = 130.0
+	MetadataService.cache[AudioManager.current_playlist[1]] = meta_b
+	
+	AudioManager._update_upcoming_transition()
+	assert_true(AudioManager.upcoming_transition_type in ["Echo Out", "Reverb Freeze"], "Switch track with BPM diff >= 8.0 should select Echo Out or Reverb Freeze")
+	
+	# Clean up cache
+	MetadataService.cache.erase(AudioManager.current_playlist[0])
+	MetadataService.cache.erase(AudioManager.current_playlist[1])
+	AudioManager.smart_mixing_enabled = original_sm
+
+func test_probabilistic_transition_selection_and_stability() -> void:
+	var original_sm = AudioManager.smart_mixing_enabled
+	AudioManager.smart_mixing_enabled = true
+	AudioManager.current_playlist = ["songA.mp3", "songB.mp3"]
+	AudioManager.current_track_index = 0
+	
+	# Harmonic + Low BPM Difference (120 vs 121)
+	var meta_a = {"bpm": 120.0, "musical_key": "1A", "genre": "Techno"}
+	var meta_b = {"bpm": 121.0, "musical_key": "1A", "genre": "Techno"}
+	MetadataService.cache[AudioManager.current_playlist[0]] = meta_a
+	MetadataService.cache[AudioManager.current_playlist[1]] = meta_b
+	
+	# 1. Verify stability (calling multiple times gives the exact same result)
+	var pair_hash = ("songA.mp3" + "songB.mp3").hash()
+	AudioManager._update_upcoming_transition()
+	var choice1 = AudioManager.upcoming_transition_type
+	assert_true(choice1 in ["Bass Swap", "Filter Sweep", "Standard Crossfade"], "Initial choice should be valid for harmonic low BPM diff")
+	
+	for i in range(10):
+		AudioManager._update_upcoming_transition()
+		assert_eq(AudioManager.upcoming_transition_type, choice1, "Transition choice must be completely stable for the same track pair")
+		
+	# 2. Verify probability spread: different track pairs (different seeds) can yield other allowed choices
+	var chosen_types = {}
+	for i in range(100):
+		var track_a = "track_a_%d.mp3" % i
+		var track_b = "track_b_%d.mp3" % i
+		AudioManager.current_playlist = [track_a, track_b]
+		MetadataService.cache[track_a] = meta_a
+		MetadataService.cache[track_b] = meta_b
+		
+		AudioManager._update_upcoming_transition()
+		var type = AudioManager.upcoming_transition_type
+		chosen_types[type] = true
+		
+		# Disallowed transitions must have 0% chance
+		assert_false(type in ["Tempo Morph", "Echo Out", "Reverb Freeze"], "Disallowed transitions should never be selected")
+		MetadataService.cache.erase(track_a)
+		MetadataService.cache.erase(track_b)
+		
+	# At least two different valid types should show up in 100 runs (due to random spreads on different seeds)
+	assert_true(chosen_types.keys().size() >= 2, "Probabilistic selection should generate variety over different track pairs")
+	
+	# Clean up
+	MetadataService.cache.erase("songA.mp3")
+	MetadataService.cache.erase("songB.mp3")
+	AudioManager.smart_mixing_enabled = original_sm
+
 
 
 

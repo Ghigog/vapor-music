@@ -49,4 +49,32 @@ func test_mini_player_responsive_squeeze() -> void:
 	mini_player._on_resized()
 	assert_eq(mini_player.nav_library.text, "♪", "Should show icon-only at narrow width")
 
+func test_sidebar_preview_square_visibility() -> void:
+	var sidebar_node = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/Sidebar")
+	assert_not_null(sidebar_node, "Sidebar must exist under LayoutRoot")
+	
+	# Verify initial state
+	assert_false(sidebar_node.preview_square.visible, "PreviewSquare should be hidden initially")
+	
+	# Simulating track focus
+	sidebar_node._on_track_focused("Artist", "Album", "Title", {}, "")
+	assert_true(sidebar_node.preview_square.visible, "PreviewSquare should be visible when track is focused")
+	
+	# Simulating artist focus with no image path (empty)
+	sidebar_node._on_artist_focused("Artist", "")
+	assert_false(sidebar_node.preview_square.visible, "PreviewSquare should be hidden when artist focused has no image path")
+	
+	# Simulating artist focus with an image path
+	sidebar_node._on_artist_focused("Artist", "user://dummy_image.png")
+	assert_true(sidebar_node.preview_square.visible, "PreviewSquare should be visible when artist focused has an image path")
+	
+	# Simulating album focus with no image path (empty)
+	sidebar_node._on_album_focused("Artist", "Album", "")
+	assert_false(sidebar_node.preview_square.visible, "PreviewSquare should be hidden when album focused has no image path")
+	
+	# Simulating album focus with an image path
+	sidebar_node._on_album_focused("Artist", "Album", "user://dummy_image.png")
+	assert_true(sidebar_node.preview_square.visible, "PreviewSquare should be visible when album focused has an image path")
+
+
 

@@ -246,3 +246,33 @@ func test_prefetch_does_not_prune_cache() -> void:
 	DirAccess.remove_absolute(other_path)
 	analyzer.stop_prefetching()
 
+func test_prefetch_priority_override() -> void:
+	var original_override = AudioManager.upcoming_track_override
+	var original_playlist = AudioManager.current_playlist
+	var original_index = AudioManager.current_track_index
+	
+	AudioManager.current_playlist = ["track1.mp3", "track2.mp3", "track3.mp3"]
+	AudioManager.current_track_index = 0
+	AudioManager.upcoming_track_override = ""
+	
+	var hrefs = ["track1.mp3", "track2.mp3", "track3.mp3"]
+	
+	# Start prefetching. It starts downloading track2.mp3 (the next track in the playlist).
+	analyzer.start_prefetching(hrefs)
+	assert_eq(analyzer.current_download_href, "track2.mp3", "Should start downloading track2.mp3")
+	
+	# Now, if we trigger prefetching again, but the next track (track3.mp3) is not cached,
+	# it should immediately cancel track2.mp3 and prioritize track3.mp3!
+	AudioManager.upcoming_track_override = "track3.mp3"
+	analyzer.start_prefetching(hrefs)
+	
+	assert_eq(analyzer.current_download_href, "track3.mp3", "Should cancel current download and prioritize track3.mp3")
+	assert_eq(analyzer._prefetch_queue, ["track1.mp3", "track2.mp3"], "Queue should contain the remaining tracks")
+	
+	# Clean up
+	analyzer.stop_prefetching()
+	AudioManager.upcoming_track_override = original_override
+	AudioManager.current_playlist = original_playlist
+	AudioManager.current_track_index = original_index
+
+

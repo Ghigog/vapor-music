@@ -349,15 +349,16 @@ func _on_artist_focused(_artist: String, image_path: String) -> void:
 	_load_image_to_texture(image_path)
 	blur_overlay.visible = false
 	lyrics_scroll.visible = false
+	preview_square.visible = not image_path.is_empty()
 
 func _on_album_focused(_artist: String, _album: String, image_path: String) -> void:
 	_load_image_to_texture(image_path)
 	blur_overlay.visible = false
 	lyrics_scroll.visible = false
+	preview_square.visible = not image_path.is_empty()
 
 func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: Dictionary, image_path: String) -> void:
-	if not image_path.is_empty():
-		_load_image_to_texture(image_path)
+	_load_image_to_texture(image_path)
 	
 	# Clear previous lyrics
 	for child in lyrics_container.get_children():
@@ -400,6 +401,7 @@ func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: 
 		
 	blur_overlay.visible = true
 	lyrics_scroll.visible = true
+	preview_square.visible = true
 
 func _process(_delta: float) -> void:
 	if is_synced_lyrics and lyrics_scroll.visible and AudioManager.is_playing:

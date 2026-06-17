@@ -63,6 +63,10 @@ func _ready() -> void:
 	var audio_analyzer = get_node_or_null("/root/AudioAnalyzer")
 	if is_instance_valid(audio_analyzer):
 		audio_analyzer.analysis_completed.connect(_on_analysis_completed)
+		if audio_analyzer.has_signal("prefetch_progress"):
+			audio_analyzer.prefetch_progress.connect(func(d, t): _refresh_display())
+		if audio_analyzer.has_signal("prefetch_completed"):
+			audio_analyzer.prefetch_completed.connect(func(): _refresh_display())
 		
 	if is_instance_valid(MetadataService):
 		MetadataService.metadata_updated.connect(_on_metadata_updated)
@@ -570,6 +574,17 @@ func _create_runner_up_card(href: String, meta: Dictionary, cost: float, type: S
 		
 	# Apply visual styles to labels inside the card
 	var theme = ThemeManager.current_theme
+	
+	# If the track is not cached, add a warning indicator
+	if not AudioManager.is_track_cached(href):
+		var warning_lbl := Label.new()
+		warning_lbl.text = " ! "
+		warning_lbl.tooltip_text = "Pending download. Starting this transition may cause a playback delay."
+		warning_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+		warning_lbl.add_theme_color_override("font_color", theme.SEMANTIC_WARNING)
+		warning_lbl.add_theme_font_override("font", theme.font_ui)
+		warning_lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
+		details_hbox.add_child(warning_lbl)
 	title_lbl.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
 	title_lbl.add_theme_font_override("font", theme.font_ui)
 	title_lbl.add_theme_font_size_override("font_size", theme.TYPE_SM)
