@@ -4,6 +4,9 @@
 ## success, or an empty state CTA if no audio files are found.
 extends Control
 
+const LIBRARY_ROW_SCENE = preload("res://scenes/screens/library/library_row.tscn")
+
+
 @onready var icon_label:    Label           = $Center/EmptyState/IconLabel
 @onready var heading:       Label           = $Center/EmptyState/HeadingLabel
 @onready var body:          Label           = $Center/EmptyState/BodyLabel
@@ -229,51 +232,34 @@ func _make_row_button(
 	track_href: String = "",
 	track_title: String = ""
 ) -> Dictionary:
-	# MarginContainer provides indentation for the row.
-	var row := MarginContainer.new()
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var row = LIBRARY_ROW_SCENE.instantiate()
 	row.add_theme_constant_override("margin_left", left_padding * 4)
 	row.add_theme_constant_override("margin_top", 2)
 	row.add_theme_constant_override("margin_right", 8)
 	row.add_theme_constant_override("margin_bottom", 2)
-
-	# Inner Control stacks Button (hitbox) and Label (display) using PRESET_FULL_RECT
-	# so both fill the same area. The Label sits on top of the invisible Button.
-	var stack := Control.new()
-	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stack.custom_minimum_size   = Vector2(0, 28)
-
-	var btn: Button
+	
+	var btn = row.get_node("Stack/Button") as Button
+	var lbl = row.get_node("Stack/Label") as Label
+	
 	if is_track:
-		var drag_btn = TrackDragButton.new()
-		drag_btn.href = track_href
-		drag_btn.track_title = track_title
-		btn = drag_btn
-	else:
-		btn = Button.new()
+		btn.set_script(preload("res://scripts/screens/track_drag_button.gd"))
+		btn.href = track_href
+		btn.track_title = track_title
+		
 	btn.flat = true
-	btn.text = ""  # Text is on the Label, not the Button.
+	btn.text = ""
 	btn.add_theme_stylebox_override("normal",   ThemeManager.make_transparent())
 	btn.add_theme_stylebox_override("hover",    ThemeManager.make_transparent())
 	btn.add_theme_stylebox_override("pressed",  ThemeManager.make_transparent())
 	btn.add_theme_stylebox_override("focus",    ThemeManager.make_transparent())
 	btn.add_theme_stylebox_override("disabled", ThemeManager.make_transparent())
-	btn.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-
-	var lbl := Label.new()
+	
 	lbl.text = text
 	lbl.vertical_alignment    = VERTICAL_ALIGNMENT_CENTER
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.mouse_filter          = Control.MOUSE_FILTER_IGNORE  # Pass clicks through to Button
 	lbl.add_theme_font_override("font", font)
 	lbl.add_theme_font_size_override("font_size", font_size)
 	lbl.add_theme_color_override("font_color", color)
-	lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-
-	stack.add_child(btn)
-	stack.add_child(lbl)
-	row.add_child(stack)
-
+	
 	return {"container": row, "button": btn, "label": lbl}
 
 ## Helper to identify numeric/alphanumeric track number prefixes (e.g., "01", "1", "A1", "1-01")
@@ -306,27 +292,3 @@ func _on_add_music_pressed() -> void:
 		WebDAVService.scan_music_directory(active_folder)
 	else:
 		body.text = "Please open the connection menu or main configuration wizard to link a WebDAV provider."
-
-
-class TrackDragButton extends Button:
-	var href: String = ""
-	var track_title: String = ""
-	
-	func _get_drag_data(_at_position: Vector2) -> Variant:
-		var data = {
-			"type": "track",
-			"href": href
-		}
-		
-		var preview = Label.new()
-		preview.text = "♫  " + track_title
-		preview.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-		preview.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-		preview.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
-		
-		var container = PanelContainer.new()
-		container.add_theme_stylebox_override("panel", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.85))
-		container.add_child(preview)
-		set_drag_preview(container)
-		
-		return data

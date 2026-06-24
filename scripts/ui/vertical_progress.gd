@@ -33,6 +33,11 @@ var _dragging := false
 var _hovered := false
 var _loading_time := 0.0
 
+var peaks: PackedFloat32Array = PackedFloat32Array()
+var _current_track_href: String = ""
+var _fetched_peaks_for_track: bool = false
+var max_amplitude: float = 20.0
+
 
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -42,6 +47,10 @@ func _ready() -> void:
 	
 	AudioManager.loading_track.connect(func(loading):
 		_track_loading = loading
+		if loading:
+			peaks = PackedFloat32Array()
+			_current_track_href = ""
+			_fetched_peaks_for_track = false
 		_update_loading_state()
 	)
 	if AudioManager.has_signal("transition_started"):
@@ -54,6 +63,12 @@ func _ready() -> void:
 			_transitioning = false
 			_update_loading_state()
 		)
+	AudioManager.track_changed.connect(func(_name):
+		peaks = PackedFloat32Array()
+		_current_track_href = ""
+		_fetched_peaks_for_track = false
+		queue_redraw()
+	)
 	set_process(false)
 
 
@@ -67,14 +82,109 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 
+func _smooth_peaks(raw: PackedFloat32Array) -> PackedFloat32Array:
+	if raw.is_empty():
+		return raw
+	var smoothed = PackedFloat32Array()
+	var size_raw = raw.size()
+	smoothed.resize(size_raw)
+	
+	# Moving average window of 5 for nice curves with visible peaks/valleys
+	var window = 5
+	var half_win = window / 2
+	for i in range(size_raw):
+		var sum = 0.0
+		var count = 0
+		for j in range(i - half_win, i + half_win + 1):
+			if j >= 0 and j < size_raw:
+				sum += raw[j]
+				count += 1
+		smoothed[i] = sum / float(count)
+	return smoothed
+
+
+func _check_and_fetch_peaks() -> void:
+	var active_player = AudioManager.active_player
+	var has_track = is_instance_valid(active_player) and active_player.stream != null
+	
+	if not has_track:
+		if not peaks.is_empty():
+			peaks = PackedFloat32Array()
+			_fetched_peaks_for_track = false
+			queue_redraw()
+		return
+		
+	if peaks.is_empty() and not is_loading and not _fetched_peaks_for_track:
+		var dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
+		if dsp and dsp.get_cache_sample_count() > 0:
+			_fetched_peaks_for_track = true
+			var raw_peaks = dsp.get_waveform_peaks(150)
+			if not raw_peaks.is_empty():
+				peaks = _smooth_peaks(raw_peaks)
+				queue_redraw()
+
+
+
 func _draw() -> void:
 	var theme = ThemeManager.current_theme
 	var w = size.x
 	var h = size.y
 	
+	# Check and fetch peaks for background waveform
+	_check_and_fetch_peaks()
+	
+	# Draw waveform in background if present (very subtle, simplified nice curves)
+	if not peaks.is_empty():
+		var x_mid = w / 2.0
+		var num_bins = peaks.size()
+		
+		# Low-opacity color themes: 22% fill opacity, 30% outline opacity
+		var wave_color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.22)
+		var outline_color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.30)
+		
+		# 1. Build polygon for filled wave
+		var poly_pts = PackedVector2Array()
+		poly_pts.append(Vector2(x_mid, 0))
+		for i in range(num_bins):
+			var y = float(i) / float(num_bins - 1) * h
+			var offset = maxf(1.0, peaks[i] * max_amplitude)
+			poly_pts.append(Vector2(x_mid + offset, y))
+		poly_pts.append(Vector2(x_mid, h))
+		for i in range(num_bins - 1, -1, -1):
+			var y = float(i) / float(num_bins - 1) * h
+			var offset = maxf(1.0, peaks[i] * max_amplitude)
+			poly_pts.append(Vector2(x_mid - offset, y))
+			
+		draw_polygon(poly_pts, PackedColorArray([wave_color]))
+		
+		# 2. Draw left and right outlines using polyline for curves
+		var left_pts = PackedVector2Array()
+		var right_pts = PackedVector2Array()
+		for i in range(num_bins):
+			var y = float(i) / float(num_bins - 1) * h
+			var offset = maxf(1.0, peaks[i] * max_amplitude)
+			left_pts.append(Vector2(x_mid - offset, y))
+			right_pts.append(Vector2(x_mid + offset, y))
+			
+		draw_polyline(left_pts, outline_color, 1.0, true)
+		draw_polyline(right_pts, outline_color, 1.0, true)
+	
 	# Draw the track line (very subtle)
 	var track_color = Color(theme.GLASS_BORDER_SUBTLE.r, theme.GLASS_BORDER_SUBTLE.g, theme.GLASS_BORDER_SUBTLE.b, 0.25)
 	draw_line(Vector2(w / 2.0, 0), Vector2(w / 2.0, h), track_color, 1.0)
+	
+	# Draw the transition pin/dot if smart mixing is enabled
+	if AudioManager.smart_mixing_enabled and AudioManager.has_method("get_transition_trigger_time"):
+		var trigger_time = AudioManager.get_transition_trigger_time()
+		if trigger_time > 0.0 and max_value > 0.0:
+			var trigger_ratio = trigger_time / max_value
+			if trigger_ratio < 1.0:
+				var trigger_y = trigger_ratio * h
+				var pin_color = theme.ACCENT_CORE
+				# Draw a line from seeker into the timeline/content
+				draw_line(Vector2(w / 2.0, trigger_y), Vector2(w + 4.0, trigger_y), pin_color, 2.0)
+				# Draw a small dot
+				draw_circle(Vector2(w / 2.0, trigger_y), 3.0, pin_color)
 	
 	if is_loading:
 		# Draw the loading spot (ball/pill) moving up and down

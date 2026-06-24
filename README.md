@@ -186,27 +186,42 @@ Vapor Music utilizes a native C++ GDExtension (`AudioDSP`) to handle digital sig
 
 ### Compilation Instructions
 
-To compile the C++ extension on macOS:
-1. Ensure SCons and dependencies are installed via Homebrew:
+To compile the C++ GDExtension on macOS:
+1. Ensure SCons, Essentia tap, and dependencies are installed via Homebrew:
    ```bash
    brew install scons rubberband eigen libyaml fftw ffmpeg libsamplerate taglib chromaprint pkg-config
+   brew tap mtg/essentia
    ```
-2. Clone the `godot-cpp` bindings library (we use the `master` branch for Godot 4.6 compatibility):
+2. Initialize and check out the `godot-cpp` bindings library:
    ```bash
-   git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git
+   git submodule update --init --recursive
    ```
-3. Run the local Essentia compilation script to build and install Essentia locally to `external/build`:
+3. Install Essentia from the tap:
    ```bash
-   bash external/build_essentia.sh
+   brew install --HEAD mtg/essentia/essentia
    ```
 4. Compile the root GDExtension dynamic library:
    ```bash
    scons platform=macos target=template_debug
    ```
 
+### Troubleshooting
+
+#### Godot Crashes immediately on Startup with `nil URL argument`
+If the Godot editor or headless runner crashes immediately on startup with the following error:
+`*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '*** -[NSBundle initWithURL:]: nil URL argument'`
+This means the compiled `.dylib` library is missing from the [bin/](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/bin) directory, triggering a known macOS Godot engine bug. Compile the GDExtension library using the steps above to resolve this.
+
+#### Essentia Installation fails on macOS (Homebrew)
+- **`Failed to execute: .../python3`**: The tap's formula expects a generic `python3` executable in the python 3.9 opt bin, which may be missing. Fix it by symlinking `python3` to `python3.9`:
+  ```bash
+  ln -s python3.9 /opt/homebrew/opt/python@3.9/bin/python3
+  ```
+- **`avcodec_receive_frame` or `ch_layout` compilation errors**: The tap's formula by default uses the deprecated `ffmpeg@2.8` package, which is incompatible with modern Essentia source code. Run `brew edit essentia` and change `depends_on "ffmpeg@2.8"` to `depends_on "ffmpeg"`.
+
 > [!WARNING]
 > **Exporting / Bundling Tech Debt Note**
-> For local development and unit tests, the compiled dynamic library (`bin/libaudio_dsp.macos.debug.dylib`) links dynamically to Homebrew's paths (via `-Wl,-rpath,/opt/homebrew/lib` and RPATH `@loader_path/../external/build/lib`).
+> For local development and unit tests, the compiled dynamic library (`bin/libaudio_dsp.macos.debug.dylib`) links dynamically to Homebrew's paths (via `-Wl,-rpath,/opt/homebrew/lib`).
 > Before exporting a production app bundle (`.app`), these external `.dylib` dependencies (specifically `libessentia.dylib` and `librubberband.dylib`) must be copied directly into the app bundle's `Frameworks` directory and re-linked using `install_name_tool`, and then code-signed, to make the exported application self-contained.
 
 ---
@@ -224,6 +239,37 @@ To compile the C++ extension on macOS:
 ## Status
 
 > 🚧 Early development — Godot project scaffolding in progress.
+> **v1.66 (2026-06-23):** Resolved transition recovery state discrepancy on track loading failures. Updated `start_transition()` in `audio_manager.gd` to revert `current_track_index` to its original value, revert `smart_mixing_step_index`, and emit `transition_completed` with the active track's href when a remote file load fails, ensuring the player stays synced and the UI loading seeker bar does not animate indefinitely. Added new unit test `test_transition_failure_reverts_state` in `test_dj_transitions.gd`. All 176 unit tests passing.
+>
+> **v1.65 (2026-06-23):** Added support for scanning and discovering `.m4a` (AAC) audio files on WebDAV servers. Updated `_parse_webdav_xml` in `WebDAVService` to recognize `.m4a` file paths alongside `.mp3`, `.flac`, `.ogg`, and `.wav`. Updated `test_parse_webdav_xml_files` in `test_webdav_service.gd` to assert correct parsing of `.m4a` formats. All 175 unit tests passing.
+>
+> **v1.64 (2026-06-23):** Implemented global UI Scaling support. Introduced a "UI Scale" setting (0.5 to 2.5) in the Settings screen, saved and persisted under `SettingsManager`, and dynamically applied to the window's `content_scale_factor`. Added comprehensive unit testing to verify state persistence and window scale application. Isolated testing configurations in unit tests to `user://test_settings.cfg` to prevent live configuration file overwriting. All 175 unit tests passing.
+>
+> **v1.63 (2026-06-23):** Implemented security, thread-safety, performance, and testing improvements from the codebase systems audit. Upgraded `SettingsManager` to encrypt connection credentials using `ConfigFile.save_encrypted_pass()`, with a backward-compatible, plain-text migration pathway that guards against decryption failures on empty/missing files. Locked concurrent async PROPFIND queries in `WebDAVService` using an asynchronous serialization lock. Synchronized the `is_transitioning_active` flag in `AudioAnalyzer` using a Mutex, and isolated the `AudioDSP` node from the active SceneTree. Optimized `AudioManager` by caching `MetadataService` and beat grid arrays to eliminate frame-by-frame queries. Optimized `MetadataService` to stream image downloads directly to disk. Added URL scheme validations in `AudioAnalyzer`, `AudioManager`, and `MetadataService` to prevent engine-level URL parsing warnings during tests. All 173 unit tests passing.
+>
+> **v1.62 (2026-06-23):** Fixed library scanning target folder fallback. Changed `WebDAVService.scan_music_directory` to default to an empty string and dynamically load the user's configured `SettingsManager.webdav_folder` when no folder is passed. This prevents startup scans from defaulting to `"Music"`, which would scan an incorrect directory, clear the local cache, prune cached audio files, and lock out the user's manual scan requests during startup. All 173 unit tests passing.
+>
+> **v1.61 (2026-06-23):** Resolved null dereference crashes in `WebDAVService._send_propfind`. Captured a local reference to the active TLS socket inside the PROPFIND request send/read phases to prevent race conditions from concurrent WebDAV operations (e.g. testing connection and scanning directories simultaneously) setting `_active_tls` to null while a read loop is yielding. Added null safety guards before calling `poll()` on the TLS stream. All 173 unit tests passing.
+>
+> **v1.60 (2026-06-22):** Centered and sized Vibe DJ cards proportionally to their width. Added horizontal centering to the cards via `alignment = 1` in `vibe_screen.tscn` and `BoxContainer.ALIGNMENT_CENTER` in `vibe_screen.gd`. Rewrote `_update_cards_layout()` in `vibe_screen.gd` to size cards vertically using a dynamic proportional formula (`card_w + 110.0`) and center them using the `SIZE_SHRINK_CENTER` vertical size flag. This removes the empty vertical gaps between the album art and metadata text, keeping all information neatly aligned inside the cards at any viewport width. Updated unit tests in `test_window_playback_ui.gd` to verify the new proportional heights. All 173 tests passing.
+>
+> **v1.59 (2026-06-22):** Implemented Responsive Vibe DJ Card List & Layout Wrapping. Wrapped the recommendation list `RunnerUpsList` in a `ScrollContainer` and converted its node type to `BoxContainer` in `vibe_screen.tscn`. Added dynamic layout logic in `vibe_screen.gd` that listens to window resizing and responsive breakpoint updates via `PlatformManager.layout_changed`, toggling the container between a desktop horizontal row and a mobile vertical stack. Enforced custom min and max card width/height constraints programmatically to prevent visual stretching. Added unit tests in `test_window_playback_ui.gd` to verify responsive vertical/horizontal switching. All 173 unit tests passing.
+>
+> **v1.58 (2026-06-22):** Fixed Vibe DJ Screen runner-up cards layout scaling. Changed the AspectRatioContainer stretch mode from STRETCH_WIDTH_CONTROLS_HEIGHT to STRETCH_FIT, and removed manual preset anchors on nested controls in favor of correct container size flags. This ensures all card elements remain fully visible and scale correctly on window resizing. All 172 tests passing.
+>
+> **v1.57 (2026-06-22):** Implemented Subtle Smoothed Vertical Seeker Waveform (UI-007) and Refined Vibe DJ Layout. Updated `vertical_progress.gd` to fetch active track peaks from memory playlist-agnostically and apply a 5-sample moving average filter. Rendered double-sided waveform curves (up to 40px wide) at 22% fill / 30% outline opacity to preserve track structural details. Visually collapsed the active transition timeline panel (`TransitionCard`) in the Vibe DJ Screen to simplify the layout. All 172 tests passing.
+>
+> **v1.56 (2026-06-22):** Implemented Transition Timeline Waveform Visualization (UI-005). Updated the `TransitionTimeline` custom control to draw overlapping, time-aligned waveforms of both outgoing and incoming tracks. Configured `vibe_screen.gd` to load the cached next track in the background onto the idle DSP to extract and cache its peaks. Aligned the running playback cursor with the timeline's mathematical time-mapping. All 172 unit tests passing.
+>
+> **v1.55 (2026-06-22):** Implemented Dynamic Prefetch Queue Cancellation & Prioritization (MET-007). Refined the prefetch engine in `audio_analyzer.gd` to check if `current_download_href` is still present in the updated look-ahead window. If not, the active download request is immediately aborted, its temporary file (`.analyzer.tmp`) is deleted, and the new upcoming track is queued. All 171 tests passing.
+>
+> **v1.54 (2026-06-21):** Implemented Automated Phrase-Adaptive Mix Length & Selection (DJ-019). Removed the manual transition duration crossover sliders and labels from the Vibe Workbench UI. Updated the `AudioManager.get_transition_duration` function to dynamically calculate overlap durations and quantize them to standard phrase boundaries (16, 8, or 4 bars) based on the outgoing track's BPM, clamped between 4.0s and 16.0s (falling back to 4.0s minimum if no standard phrase fits). Added a new unit test verifying various BPM boundaries and updated existing dynamic transition assertions. All 171 tests passing.
+>
+> **v1.53 (2026-06-21):** Implemented Audacity-Style Waveform Downsampler & Visualizer (UI-004). Added a C++ downsampling function `get_waveform_peaks` to `AudioDSP` to process in-memory PCM samples using 256-sample sub-window peak averaging and normalize values to `[0.0, 1.0]`. Built a custom `WaveformVisualizer` control node in GDScript to draw frosted, double-sided vector waveforms using `AQUA_CORE` for the active section, a transparent glass wash for the remaining track, and `ACCENT_CORE` for the playhead. Integrated the visualizer into the Now Playing card in the Vibe Screen and updated it in the real-time playback loop. All 170 tests passing.
+>
+> **v1.52 (2026-06-21):** Implemented Real-Time Phase Lock Visual Sync Meter (UI-003). Created a custom vector-drawn control `PhaseSyncMeter` inside `scenes/screens/vibe/vibe_screen.tscn` to display phase alignment state during active transitions. Added polling for `AudioManager.current_pll_phase_error_ms` in `vibe_screen.gd`. Implemented a tolerance zone (±5ms) that snaps the indicator to the exact center and glows green using theme semantic success color. Added unit tests in `test_window_playback_ui.gd` to verify existence and mapping logic. All 169 unit tests passing.
+>
+> **v1.51 (2026-06-21):** Implemented Quantized Manual Playback Crossover Alignment (DJ-017). Modified `start_transition` in `audio_manager.gd` so that manual track transitions triggered with `force_immediate = true` are quantized to the beat grid of the active playing track. Calculates the next downbeat boundary and awaits that point before executing `_run_deck_transition`. Updated `_run_deck_transition` to align the incoming track's playback start position (`cue_in`) to its first downbeat (`first_downbeat_in`) when `force_immediate` is true, ensuring seamless phase lock. Added unit test `test_quantized_manual_transition` in `tests/unit/test_dj_transitions.gd`. All 167 unit tests passing.
 >
 > **v1.50 (2026-06-17):** Refined the Reverb Freeze transition to eliminate digital clipping, ripping artifacts, and volume swells. Added a parallel volume attenuation tween for the outgoing bus during the first half (ramping to -6.0 dB) to keep combined dry/wet levels balanced. Configured a midpoint callback to stop the outgoing player instantly, preventing post-midpoint audio from continuing to feed the reverb buffer. Added a smooth volume fade-out (from -6.0 dB to -60.0 dB) over the second half of the transition to let the frozen tail decay naturally and seamlessly fade away. All 165 unit tests passing.
 >

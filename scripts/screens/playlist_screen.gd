@@ -1,5 +1,8 @@
 extends Control
 
+const PLAYLIST_TRACK_ROW = preload("res://scenes/screens/playlist/playlist_track_row.tscn")
+
+
 @onready var CoverContainer: PanelContainer = $Margin/VBox/HeaderHBox/CoverContainer
 @onready var CoverTexture: TextureRect = $Margin/VBox/HeaderHBox/CoverContainer/CoverTexture
 @onready var PencilBtn: Button = $Margin/VBox/HeaderHBox/CoverContainer/PencilBtn
@@ -199,8 +202,7 @@ func _refresh_playlist() -> void:
 				else:
 					title = file_name
 					
-			var row = PanelContainer.new()
-			row.set_script(preload("res://scripts/screens/playlist_track_row.gd"))
+			var row = PLAYLIST_TRACK_ROW.instantiate()
 			TrackList.add_child(row)
 			row.setup(i, href, title, artist)
 			

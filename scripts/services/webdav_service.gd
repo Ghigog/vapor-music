@@ -11,6 +11,7 @@ signal connection_tested(success: bool, error_message: String)
 var scanned_files: Array = []
 var had_scan_errors: bool = false
 var is_scanning: bool = false
+var _propfind_lock: bool = false
 
 const LIBRARY_CACHE_FILE = "user://library_cache.json"
 
@@ -163,22 +164,39 @@ func disconnect_active_connection() -> void:
 	_current_connected_host = ""
 	_current_connected_port = -1
 
-## Sends a raw PROPFIND request over TLS and returns [response_code, header_string, body_string].
 func _send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
+	while _propfind_lock:
+		await Engine.get_main_loop().process_frame
+	_propfind_lock = true
+	
+	var result = await _do_send_propfind(host, port, path, auth_header, depth)
+	
+	_propfind_lock = false
+	return result
+
+## Sends a raw PROPFIND request over TLS and returns [response_code, header_string, body_string].
+func _do_send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
 	var err = await _ensure_connection(host, port)
 	if err != OK:
 		return [-1, "", "Connection establishment failed: %d" % err]
 
+	var tls := _active_tls
+	if not tls:
+		return [-1, "", "No active TLS connection"]
+
 	# --- Send PROPFIND ---
 	var request_str := _build_propfind_request(host, path, auth_header, depth)
-	err = _active_tls.put_data(request_str.to_utf8_buffer())
+	err = tls.put_data(request_str.to_utf8_buffer())
 	if err != OK:
 		print("WebDAVService: Send failed, retrying connection...")
 		disconnect_active_connection()
 		err = await _ensure_connection(host, port)
 		if err != OK:
 			return [-1, "", "Reconnection failed: %d" % err]
-		err = _active_tls.put_data(request_str.to_utf8_buffer())
+		tls = _active_tls
+		if not tls:
+			return [-1, "", "No active TLS connection after reconnection"]
+		err = tls.put_data(request_str.to_utf8_buffer())
 		if err != OK:
 			return [-1, "", "Failed to send request after retry: %d" % err]
 
@@ -192,13 +210,15 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 	var header_end_idx := -1
 
 	while true:
-		_active_tls.poll()
-		var status := _active_tls.get_status()
-		var available := _active_tls.get_available_bytes()
+		if not tls:
+			break
+		tls.poll()
+		var status := tls.get_status()
+		var available := tls.get_available_bytes()
 		
 		# 1. ALWAYS consume bytes if they are waiting in the TLS buffer
 		if available > 0:
-			var chunk := _active_tls.get_data(available)
+			var chunk := tls.get_data(available)
 			if chunk[0] == OK:
 				response_bytes.append_array(chunk[1])
 				start = Time.get_ticks_msec() # Reset timeout window on fresh data
@@ -236,7 +256,10 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 		disconnect_active_connection()
 		err = await _ensure_connection(host, port)
 		if err == OK:
-			err = _active_tls.put_data(request_str.to_utf8_buffer())
+			tls = _active_tls
+			if not tls:
+				return [-1, "", "No active TLS connection after reconnect retry"]
+			err = tls.put_data(request_str.to_utf8_buffer())
 			if err == OK:
 				response_bytes.clear()
 				start = Time.get_ticks_msec()
@@ -245,11 +268,13 @@ func _send_propfind(host: String, port: int, path: String, auth_header: String, 
 				content_length = -1
 				header_end_idx = -1
 				while true:
-					_active_tls.poll()
-					var status := _active_tls.get_status()
-					var available := _active_tls.get_available_bytes()
+					if not tls:
+						break
+					tls.poll()
+					var status := tls.get_status()
+					var available := tls.get_available_bytes()
 					if available > 0:
-						var chunk := _active_tls.get_data(available)
+						var chunk := tls.get_data(available)
 						if chunk[0] == OK:
 							response_bytes.append_array(chunk[1])
 							start = Time.get_ticks_msec()
@@ -385,7 +410,7 @@ func test_connection(url: String, username: String, app_password: String) -> voi
 	else:
 		connection_tested.emit(false, "Server responded with code: %d" % result[0])
 
-func scan_music_directory(target_folder: String = "Music") -> void:
+func scan_music_directory(target_folder: String = "") -> void:
 	if not SettingsManager.has_credentials():
 		return
 
@@ -405,9 +430,13 @@ func scan_music_directory(target_folder: String = "Music") -> void:
 	if not base_path.ends_with("/"):
 		base_path += "/"
 		
+	var actual_folder := target_folder
+	if actual_folder.is_empty():
+		actual_folder = SettingsManager.webdav_folder
+
 	var initial_path: String = base_path
-	if not target_folder.is_empty() and target_folder != "/":
-		initial_path = base_path + target_folder.strip_edges().uri_encode()
+	if not actual_folder.is_empty() and actual_folder != "/":
+		initial_path = base_path + actual_folder.strip_edges().uri_encode()
 		if not initial_path.ends_with("/"):
 			initial_path += "/"
 			
@@ -525,7 +554,8 @@ func _parse_webdav_xml(xml_content: String) -> Array:
 					var raw_href := parser.get_node_data().strip_edges()
 					var lower_href := raw_href.to_lower()
 					if lower_href.ends_with(".mp3") or lower_href.ends_with(".flac") \
-							or lower_href.ends_with(".ogg") or lower_href.ends_with(".wav"):
+							or lower_href.ends_with(".ogg") or lower_href.ends_with(".wav") \
+							or lower_href.ends_with(".m4a"):
 						var clean_path = raw_href
 						if "://" in clean_path:
 							var path_parts = clean_path.split("://", true, 1)[1]

@@ -4,27 +4,28 @@
 ## and keeps active-item highlights in sync with NavManager signals.
 extends PanelContainer
 
-@onready var app_name:     Label  = $VBox/Header/LogoContainer/AppName
-@onready var nav_library:  Button = $VBox/Scroll/ScrollVBox/NavItems/NavLibrary
-@onready var nav_vibe:   Button = $VBox/Scroll/ScrollVBox/NavItems/NavVibe
-@onready var nav_settings: Button = $VBox/Scroll/ScrollVBox/NavItems/NavSettings
-@onready var toggle_playlists_btn: Button = $VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader/TogglePlaylistsBtn
-@onready var add_playlist_btn: Button = $VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader/AddPlaylistBtn
-@onready var playlists_container: VBoxContainer = $VBox/Scroll/ScrollVBox/NavItems/PlaylistsContainer
+@onready var app_name:     Label  = $VBox/Header/HeaderHBox/LogoContainer/AppName
+@onready var nav_library:  Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavLibrary
+@onready var nav_vibe:   Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavVibe
+@onready var nav_settings: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavSettings
+@onready var toggle_playlists_btn: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader/TogglePlaylistsBtn
+@onready var add_playlist_btn: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader/AddPlaylistBtn
+@onready var playlists_container: VBoxContainer = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsContainer
 
-@onready var track_title_label: Label = $VBox/NowPlaying/HBox/Info/TrackTitle
-@onready var artist_label: Label = $VBox/NowPlaying/HBox/Info/ArtistLabel
-@onready var play_pause_btn: Button = $VBox/PlayerTiles/PlayPauseBtn
-@onready var backward_btn: Button = $VBox/PlayerTiles/ControlsHBox/BackwardBtn
-@onready var forward_btn: Button = $VBox/PlayerTiles/ControlsHBox/ForwardBtn
-@onready var shuffle_btn: Button = $VBox/PlayerTiles/ShuffleBtn
+@onready var track_title_label: Label = $VBox/NowPlayingMargin/NowPlaying/HBox/Info/TrackTitle
+@onready var artist_label: Label = $VBox/NowPlayingMargin/NowPlaying/HBox/Info/ArtistLabel
+@onready var play_pause_btn: Button = $VBox/PlayerTilesMargin/PlayerTiles/PlayPauseBtn
+@onready var backward_btn: Button = $VBox/PlayerTilesMargin/PlayerTiles/BackwardBtn
+@onready var forward_btn: Button = $VBox/PlayerTilesMargin/PlayerTiles/ForwardBtn
+@onready var shuffle_btn: Button = $VBox/PlayerTilesMargin/PlayerTiles/ShuffleBtn
 
 
-@onready var preview_square: AspectRatioContainer = $VBox/Scroll/ScrollVBox/PreviewSquare
-@onready var preview_texture: TextureRect = $VBox/Scroll/ScrollVBox/PreviewSquare/PreviewTexture
-@onready var blur_overlay: Panel = $VBox/Scroll/ScrollVBox/PreviewSquare/BlurOverlay
-@onready var lyrics_scroll: ScrollContainer = $VBox/Scroll/ScrollVBox/PreviewSquare/LyricsScroll
-@onready var lyrics_container: VBoxContainer = $VBox/Scroll/ScrollVBox/PreviewSquare/LyricsScroll/LyricsContainer
+@onready var preview_margin: MarginContainer = $VBox/PreviewMargin
+@onready var preview_square: AspectRatioContainer = $VBox/PreviewMargin/PreviewSquare
+@onready var preview_texture: TextureRect = $VBox/PreviewMargin/PreviewSquare/PreviewTexture
+@onready var blur_overlay: Panel = $VBox/PreviewMargin/PreviewSquare/BlurOverlay
+@onready var lyrics_scroll: ScrollContainer = $VBox/PreviewMargin/PreviewSquare/LyricsScroll
+@onready var lyrics_container: VBoxContainer = $VBox/PreviewMargin/PreviewSquare/LyricsScroll/LyricsContainer
 
 var lyrics_list: Array = []
 var active_line_index: int = -1
@@ -51,17 +52,17 @@ func _ready() -> void:
 	# Enable drag clicks to pass through to the PanelContainer background
 	$VBox.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/Header.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/Header/LogoContainer.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/Header/HeaderHBox/LogoContainer.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/Scroll.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/Scroll/ScrollVBox.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/Scroll/ScrollVBox/NavItems.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/NowPlaying.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/NowPlaying/HBox.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/NowPlaying/HBox/Info.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/PlayerTiles.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/PlayerTiles/ControlsHBox.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/Scroll/ScrollMargin/ScrollVBox.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/Scroll/ScrollMargin/ScrollVBox/NavItems.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/NowPlayingMargin/NowPlaying.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/NowPlayingMargin/NowPlaying/HBox.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/NowPlayingMargin/NowPlaying/HBox/Info.mouse_filter = Control.MOUSE_FILTER_PASS
+	$VBox/PlayerTilesMargin/PlayerTiles.mouse_filter = Control.MOUSE_FILTER_PASS
 
-	preview_square.visible = false
+	if preview_margin:
+		preview_margin.visible = false
 
 	_apply_panel_style()
 	_apply_logo_style()
@@ -93,9 +94,6 @@ func _apply_panel_style() -> void:
 		add_theme_stylebox_override("panel", ThemeManager.make_nav_panel())
 	var sw = ThemeManager.current_theme.SIDEBAR_WIDTH
 	custom_minimum_size.x = sw
-	if preview_square:
-		var sq_size = float(sw) - 32.0
-		preview_square.custom_minimum_size = Vector2(sq_size, sq_size)
 
 
 func _apply_logo_style() -> void:
@@ -128,7 +126,7 @@ func _refresh_nav_button_styles() -> void:
 
 func _style_nav_button(btn: Button, active: bool) -> void:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.custom_minimum_size.y = ThemeManager.current_theme.TOUCH_TARGET_MIN
+	btn.custom_minimum_size.y = int(ThemeManager.current_theme.TOUCH_TARGET_MIN * 0.5)
 	btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 	if active:
@@ -262,14 +260,6 @@ func _style_player_buttons() -> void:
 		var hover_style = tile_hover.duplicate()
 		var pressed_style = tile_pressed.duplicate()
 		
-		if btn == shuffle_btn:
-			normal_style.set_corner_radius(3, theme.RADIUS_LG) # CORNER_BOTTOM_LEFT
-			normal_style.set_corner_radius(2, theme.RADIUS_LG) # CORNER_BOTTOM_RIGHT
-			hover_style.set_corner_radius(3, theme.RADIUS_LG)
-			hover_style.set_corner_radius(2, theme.RADIUS_LG)
-			pressed_style.set_corner_radius(3, theme.RADIUS_LG)
-			pressed_style.set_corner_radius(2, theme.RADIUS_LG)
-			
 		btn.add_theme_stylebox_override("normal", normal_style)
 		btn.add_theme_stylebox_override("hover", hover_style)
 		btn.add_theme_stylebox_override("pressed", pressed_style)
@@ -303,9 +293,9 @@ func _on_track_changed(track_name: String) -> void:
 
 func _on_playback_toggled(is_playing: bool) -> void:
 	if is_playing:
-		play_pause_btn.text = "⏸ Pause"
+		play_pause_btn.text = "⏸"
 	else:
-		play_pause_btn.text = "▶ Play"
+		play_pause_btn.text = "▶"
 
 func _connect_metadata_signals() -> void:
 	var ms = get_node_or_null("/root/MetadataService")
@@ -349,13 +339,13 @@ func _on_artist_focused(_artist: String, image_path: String) -> void:
 	_load_image_to_texture(image_path)
 	blur_overlay.visible = false
 	lyrics_scroll.visible = false
-	preview_square.visible = not image_path.is_empty()
+	preview_margin.visible = not image_path.is_empty()
 
 func _on_album_focused(_artist: String, _album: String, image_path: String) -> void:
 	_load_image_to_texture(image_path)
 	blur_overlay.visible = false
 	lyrics_scroll.visible = false
-	preview_square.visible = not image_path.is_empty()
+	preview_margin.visible = not image_path.is_empty()
 
 func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: Dictionary, image_path: String) -> void:
 	_load_image_to_texture(image_path)
@@ -401,7 +391,7 @@ func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: 
 		
 	blur_overlay.visible = true
 	lyrics_scroll.visible = true
-	preview_square.visible = true
+	preview_margin.visible = true
 
 func _process(_delta: float) -> void:
 	if is_synced_lyrics and lyrics_scroll.visible and AudioManager.is_playing:
@@ -469,7 +459,7 @@ func _style_playlists_header_buttons() -> void:
 	var theme = ThemeManager.current_theme
 	
 	toggle_playlists_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	toggle_playlists_btn.custom_minimum_size.y = theme.TOUCH_TARGET_MIN
+	toggle_playlists_btn.custom_minimum_size.y = int(theme.TOUCH_TARGET_MIN * 0.5)
 	toggle_playlists_btn.add_theme_font_override("font", theme.font_ui)
 	toggle_playlists_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	toggle_playlists_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
@@ -480,7 +470,7 @@ func _style_playlists_header_buttons() -> void:
 	toggle_playlists_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 	
 	add_playlist_btn.flat = true
-	add_playlist_btn.custom_minimum_size.y = theme.TOUCH_TARGET_MIN
+	add_playlist_btn.custom_minimum_size.y = int(theme.TOUCH_TARGET_MIN * 0.5)
 	add_playlist_btn.add_theme_font_override("font", theme.font_ui)
 	add_playlist_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	add_playlist_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)

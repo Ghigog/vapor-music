@@ -1406,3 +1406,303 @@ So that my music never pauses or buffers due to network latency, even if the pla
 - Given a playlist plan: [Track A (Playing), Track B (Next), Track C (Follow-up)]
 - When the playback of Track A starts
 - Then the system automatically triggers background download/caching for both Track B and Track C.
+
+---
+
+### DJ-017 : Quantized Manual Playback Crossover Alignment (completed)
+**User Story:**
+As a listener,
+I'd like manual track transitions (such as pressing next or double-clicking a track) to be quantized to the beat grid of the active track,
+So that manual mix triggers do not create temporary phase clashes or beat overlap trainwrecks.
+
+**Context:** Currently, manual track triggers (pressing next, double-clicking, etc.) bypass the transition timeline wait loop if `force_immediate` is true, immediately calling `_run_deck_transition` and playing the incoming track at `cue_in`. Because the player is started instantly on a random sub-beat, a phase clash occurs until the PLL adjusts.
+
+**Description:** Modify `start_transition` in `audio_manager.gd`. If a manual transition is triggered with `force_immediate = true`, do not start immediately. Instead, calculate the sample offset/time remaining until the next downbeat or bar boundary (Beat 1 of the next bar) of the active playing track. Schedule `_run_deck_transition` to be called exactly at that next downbeat.
+
+**Requirements:**
+- In `start_transition(force_immediate: bool = false)`, if `force_immediate` is true, calculate the current playback position.
+- Determine the next closest downbeat timestamp in the outgoing track's `downbeats` array.
+- Set a timer or check in `_process` until the playhead crosses that downbeat.
+- Call `_run_deck_transition` exactly on that quantized boundary.
+- Ensure the incoming track's playback is triggered at the aligned beat phase of the incoming grid.
+
+**Testing Requirements:**
+- Create a test `test_quantized_manual_transition` in `tests/unit/test_dj_transitions.gd`. Verify that triggering a manual next action schedules the transition to start on the next downbeat rather than instantly.
+
+**Acceptance Criteria:**
+- Given the player is playing Track A at 120 BPM
+- When the user presses "Next" at Bar 12, Beat 2.5
+- Then the incoming track does not play instantly
+- And the transition is scheduled to execute exactly at Bar 13, Beat 1.0 (the next downbeat).
+
+---
+
+### UI-003 : Real-Time Phase Lock Visual Sync Meter (resolved)
+**User Story:**
+As a listener,
+I'd like a clear visual representation of the beat phase lock state during a transition,
+So that I can visually verify that the two tracks are in perfect phase lock.
+
+**Context:** `AudioManager._apply_pll_sync()` calculates `current_pll_phase_error_ms` at 100ms intervals, but this accuracy is hidden from the UI.
+
+**Description:** Add a Phase Lock Sync Meter to the Vibe card in `vibe_screen.gd`. It will consist of a horizontal bar with a center marker. During a transition, an indicator will move left or right based on the phase error (in milliseconds). If the phase error is within $\pm5\text{ms}$, it centers and glows green.
+
+**Requirements:**
+- Add a progress/slider-like UI control `PhaseSyncMeter` inside `scenes/screens/vibe/vibe_screen.tscn`.
+- In `vibe_screen.gd`, connect to the process loop or poll `AudioManager.current_pll_phase_error_ms`.
+- Map the error range ($\pm50\text{ms}$) onto the sync meter's range.
+- Apply styling: center range ($\pm5\text{ms}$) draws with `current_theme.SEMANTIC_SUCCESS` (green), wider range draws with `current_theme.SEMANTIC_WARNING` (amber) or `current_theme.SEMANTIC_ERROR` (red).
+
+**Testing Requirements:**
+- Add unit tests in `tests/unit/test_window_playback_ui.gd` to verify that `PhaseSyncMeter` exists and correctly maps positive/negative phase error inputs to the UI range.
+
+**Acceptance Criteria:**
+- Given a transition is running between Track A and Track B with a phase error of 2ms
+- When the vibe screen processes the frame
+- Then the Phase Sync Meter displays a centered indicator glowing green.
+
+---
+
+### DJ-018 : Self-Healing Segment Boundaries via Spectral Centroid (completed)
+**User Story:**
+As a listener,
+I want the player to automatically detect the exact musical intro and outro boundaries of a track even if it has an ambient pad or silent tail,
+So that transitions occur exactly where the rhythm starts and ends without manual adjustments.
+
+**Context:** Currently, C++ `AudioDSP::analyze_file` calculates intro and outro boundaries strictly using an RMS amplitude threshold. Ambient hums, fading synth pads, or vinyl noise can exceed the threshold, leading to incorrect transitions.
+
+**Description:** Refine the C++ analysis method `AudioDSP::analyze_file` under `src/audio_dsp.cpp` to incorporate **Spectral Centroid** and high-frequency energy checks. This will distinguish rhythmic sections (drums, transients) from non-rhythmic ambient sections, placing segment boundaries at the true start/end of the musical rhythm.
+
+**Requirements:**
+- Implement a simple Spectral Centroid calculator inside `AudioDSP::analyze_file`.
+- Calculate high-frequency content (HFC) for onset/transient checks.
+- Define `intro_end` as the first frame where both the RMS exceeds the threshold AND the spectral centroid/transient density indicates a rhythmic drum beat.
+- Define `outro_start` as the frame where rhythmic transient density drops, ignoring fading ambient synth tails or hiss.
+
+**Testing Requirements:**
+- Add a unit test in `tests/unit/test_audio_dsp.gd` verifying segment boundary accuracy for tracks with quiet, noisy, or ambient intros.
+
+**Acceptance Criteria:**
+- Given an audio file with a 15-second quiet ambient synth pad followed by a heavy kick drum intro
+- When the file analysis is run
+- Then `intro_end` is detected at approximately 15.0 seconds (where the rhythmic transients begin), rather than 0.0 seconds.
+
+---
+
+### UI-004 : Audacity-Style Waveform Downsampler & Visualizer (completed)
+**User Story:**
+As a listener,
+I'd like to see a detailed, full-track horizontal waveform (similar to Audacity) for the now-playing track,
+So that I can visually inspect the track structure, transients, and playback position at a glance.
+
+**Context:** The `vibe_screen.gd` and `mini_player.gd` display basic progress indicators but lack detailed waveform displays. Because the C++ GDExtension `AudioDSP` loads the entire track's PCM samples into memory (`m_samples`), we can generate high-fidelity waveform images/vectors without reading from disk.
+
+**Description:** Implement a C++ downsampling function in `AudioDSP` that processes `m_samples` to generate a compressed array of max peak values (e.g., 500 or 1000 points representing the track). Expose this array to GDScript, and build a custom Control node `WaveformVisualizer` that draws these peaks as a beautiful, frosted vector waveform.
+
+**Requirements:**
+- Create `AudioDSP::get_waveform_peaks(int num_bins)` returning a `PackedFloat32Array` of averaged peak amplitudes.
+- Build `WaveformVisualizer.gd` extending `Control` in `scripts/ui`.
+- Implement vector drawing inside `WaveformVisualizer._draw()`, rendering vertical lines for peaks with a glass tint and highlight bar for the playhead.
+- Integrate this visualizer into the deck details section of `vibe_screen.tscn`.
+
+**Testing Requirements:**
+- Add a test `test_get_waveform_peaks` in `tests/unit/test_audio_dsp.gd` verifying that downsampled array size matches the requested bin count and has values between 0.0 and 1.0.
+
+**Acceptance Criteria:**
+- Given a track is loaded in `AudioDSP`
+- When `get_waveform_peaks(1000)` is called
+- Then the system returns exactly 1000 peak points, and the UI control draws them as a balanced double-sided waveform.
+
+---
+
+### DJ-019 : Automated Phrase-Adaptive Mix Length & Selection (completed)
+**User Story:**
+As a listener,
+I'd like the system to automatically determine the most musical transition type and duration for my tracks without manual selection,
+So that I can enjoy a hands-off, professionally mixed listening session.
+
+**Context:** The app currently features crossover and duration sliders. In a premium Apple-style player, these manual settings should be removed; the AI DJ should automatically match transition properties to the track structure.
+
+**Description:** Remove manual transition duration and style controls from `vibe_screen.gd` and `settings_screen.gd`. Update the `AudioManager.get_transition_duration()` and selection logic to automatically match the phrasing of the track segments, clamping the crossover time between 4.0s and 16.0s depending on the outro/intro overlap.
+
+**Requirements:**
+- Remove `CrossoverSlider`, `CrossoverValue`, and related elements from `vibe_screen.tscn` and `settings_screen.tscn`.
+- Update `AudioManager.get_transition_duration` to calculate the overlap of the actual segments: `transition_duration = min(outro_duration, intro_duration)`.
+- Quantize the transition length to standard musical phrase boundaries (e.g., 4 bars, 8 bars, 16 bars) calculated based on track BPM, rather than arbitrary fractions of seconds.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_dj_transitions.gd` to verify that transition length matches phrase intervals (e.g., 8 bars) for different BPM tracks.
+
+**Acceptance Criteria:**
+- Given a track playing at 120 BPM (1 bar = 2.0 seconds) with an outro segment of 18 seconds
+- When the transition is prepared
+- Then the transition length is automatically set to exactly 16.0 seconds (8 bars) rather than a raw, non-phrase aligned value.
+
+---
+
+### MET-007 : Dynamic Prefetch Queue Cancellation & Prioritization (completed)
+**User Story:**
+As a listener,
+I'd like the player to immediately cancel pending cloud downloads if I skip tracks or reorder the playlist,
+So that network bandwidth is immediately freed up to fetch the new upcoming tracks.
+
+**Context:** If a user double-clicks several songs down the playlist, `AudioAnalyzer` may keep downloading files in the background that are no longer scheduled to play, causing latency and playback stuttering for the new selection.
+
+**Description:** Refine the prefetch engine in `audio_analyzer.gd` to synchronize the prefetch queue with the active playback queue. Cancel running HTTP requests and delete temporary download files (`.analyzer.tmp`) for any tracks that exit the next-two-track look-ahead window.
+
+**Requirements:**
+- In `AudioAnalyzer.start_prefetching()`, check if `current_download_href` is still present in the updated look-ahead window.
+- If not, cancel the active `download_http_request`, delete the corresponding `.tmp` download file, and reset `current_download_href`.
+- Immediately queue the new upcoming track for download/analysis.
+
+**Testing Requirements:**
+- Add unit tests in `tests/unit/test_audio_analyzer.gd` simulating track skips and verifying that active downloads are canceled and replaced.
+
+**Acceptance Criteria:**
+- Given the prefetcher is downloading Track B
+- When the user manually skips to Track F
+- Then the download of Track B is immediately aborted, its temporary file is deleted, and the download of Track G (new follow-up) begins.
+
+---
+
+### SYNC-006 : WebDAV Metadata Sync & Remote Cache Merging (active)
+**User Story:**
+As a listener,
+I'd like my playlists, headphone EQ selections, and analyzed track cues to sync between my devices automatically,
+So that I can switch from listening on my desktop to my mobile device seamlessly.
+
+**Context:** Playlists and track configurations are currently cached in the local user directory (`metadata_cache.json`, `playlists/`), which isolated devices cannot share.
+
+**Description:** Implement a background synchronization task in `webdav_service.gd`. Periodically, write local metadata and playlist changes to a file named `vapor_metadata.json` on the remote WebDAV server. When the app scans the WebDAV directory, it will pull this file and merge it with the local database.
+
+**Requirements:**
+- Implement `WebDAVService.upload_metadata_cache(data: Dictionary)` using raw HTTP PUT requests.
+- Save unified metadata, playlist names, and configuration choices to `user://remote_sync.json` and upload to WebDAV.
+- On library scan, fetch `vapor_metadata.json` from the WebDAV server and merge it into `MetadataService` and `PlaylistService`.
+
+**Testing Requirements:**
+- Add tests in `tests/unit/test_webdav_service.gd` verifying cache merging and payload formatting.
+
+**Acceptance Criteria:**
+- Given a playlist created on the desktop client
+- When the mobile client scans the WebDAV folder
+- Then the playlist is downloaded, parsed, and rendered in the mobile UI.
+
+---
+
+### UI-005 : Transition Timeline Waveform Visualization (completed)
+**User Story:**
+As a DJ,
+I'd like to see the waveforms of both the outgoing and incoming tracks inside the transition widget,
+So that I can visually verify where the transition/mix trigger points and crossovers align.
+
+**Context:**
+The previous transition card displayed basic title labels and crossfader lines but did not show the physical waveform peaks of the tracks, leaving the DJ blind to structural beats and hits during transition.
+
+**Description:**
+Update the `TransitionTimeline` control to support drawing the outgoing and incoming tracks' waveform peaks. Map the horizontal time domain of both boxes to align precisely with the crossover range and playhead, and load the cached next track asynchronously on the idle deck to pre-populate its peaks.
+
+**Requirements:**
+- Store and manage peaks (`outgoing_peaks`, `incoming_peaks`) and durations inside `TransitionTimeline`.
+- Draw balanced, double-sided vector waveforms using the theme's core colors inside both track boxes.
+- Dynamically load the next track in the background onto the idle DSP for peak extraction.
+- Coordinate playhead cursor positioning mathematically with the waveform timeline.
+
+**Testing Requirements:**
+- Added `test_transition_timeline_waveforms` in `tests/unit/test_window_playback_ui.gd` to check property configurations.
+
+**Acceptance Criteria:**
+- Given a cached upcoming track is scheduled in the playlist
+- When the Vibe Screen updates
+- Then the transition card displays both track waveforms, aligning the outro transition trigger and intro cue-in points with the central crossover zone.
+
+---
+
+### UI-006 : Vibe Workbench Visual Simplification & Refactoring (completed)
+**User Story:**
+As a listener,
+I'd like a simplified, visually clean AI DJ Vibe Workbench screen that removes flavor-text panels, the Camelot wheel, manual sliders, and phase meters, and instead shows the full outgoing track's waveform and upcoming suggestion cards laid out horizontally,
+So that I can relax, see transition details clearly, and enjoy a high-quality listening experience.
+
+**Context:** The old vibe workbench had several redundant elements (such as the now playing card, Camelot wheel, phase sync meter, and manual vibe limit slider) that cluttered the workspace and distracted from the core listening interface.
+
+**Description:**
+Remove redundant columns and meters from the layout of `vibe_screen.tscn`. Convert the runner-up suggestion cards into horizontal layouts showing album art, key, BPM offset, compatibility badge, and transition type. Draw the full outgoing track duration in `TransitionTimeline` along with a blue horizontal pin/dot on the sidebar progress track at the automated transition trigger point.
+
+**Requirements:**
+- Remove Now Playing card, Camelot wheel, Phase Sync Meter, and Vibe Limit tuner slider.
+- Render runner-ups as horizontal cards inside an `HBoxContainer`.
+- Map the horizontal space of `TransitionTimeline` to the entire outgoing track's duration.
+- Add a transition progress pin/dot to the vertical progress bar at the transition trigger point.
+- Scale energy distance threshold dynamically based on the match cycle step (Match: 0.15, Fresh: 0.35, Switch: 0.60).
+
+**Testing Requirements:**
+- Remove outdated phase sync meter tests from `test_window_playback_ui.gd`.
+- Update `test_transition_timeline_waveforms` in `test_window_playback_ui.gd` to point to the new full-width transition card layout.
+
+**Acceptance Criteria:**
+- Given the vibe screen is loaded
+- When suggestions are populated
+- Then they are displayed as clean horizontal cards.
+- Given Smart Mixing is active
+- When viewing the vertical progress bar
+- Then a blue pin is drawn at the transition trigger point.
+
+---
+
+### UI-007 : Subtle Smoothed Vertical Seeker Waveform (completed)
+**User Story:**
+As a listener,
+I'd like to see a subtle, low-opacity, smoothed waveform curve along the vertical progress seeker in the sidebar separator line,
+So that I can visually preview the current track's energy layout in an unobtrusive and aesthetically pleasing way.
+
+**Context:** The vertical progress bar displays the playhead and transition pin but does not show track waveform structure, leaving the user with a blank progress line.
+
+**Description:**
+Update the vertical progress bar (`vertical_progress.gd`) to dynamically query peak values from `AudioDSP` once a track is loaded. Apply a moving average low-pass filter to smooth the peak values into nice curves. Render them double-sided as a subtle background wash (22% fill, 30% outline) extending up to 20 pixels on each side, preserving macro peak and valley structures.
+
+**Requirements:**
+- Reset peaks and caching when tracks change or start loading.
+- Fetch 150 peak points from the active deck's DSP using `get_waveform_peaks`.
+- Apply a 5-sample moving average filter to smooth peaks.
+- Draw a double-sided polygon at 22% opacity with `theme.AQUA_CORE` (extending up to 20px).
+- Draw outlines at 30% opacity using `draw_polyline`.
+
+**Testing Requirements:**
+- Added `test_vertical_progress_waveform_properties` in `tests/unit/test_window_playback_ui.gd` to check properties and smoothing behavior.
+
+**Acceptance Criteria:**
+- Given a track is loaded and playing/paused
+- When viewing the vertical progress bar in the sidebar separator
+- Then a subtle, double-sided, smoothed blue waveform is drawn as the background of the progress bar.
+
+---
+
+### UI-008 : Refactor Procedural UI to Scene Files (completed)
+**User Story:**
+As a developer and maintainer,
+I'd like to use Godot's native `.tscn` scene files instead of procedurally injecting UI nodes through GDScript,
+So that UI layouts are easier to design visually, maintain, and constrain responsively.
+
+**Context:** The codebase previously generated several UI sub-components (such as track cards, playlist rows, library rows, and the disabled overlay) dynamically via script. This made layout adjustments difficult and prone to sizing/bleeding errors.
+
+**Description:**
+Extract procedurally generated UI components into dedicated scene files (`.tscn`) and matching GDScript controllers. Set up proper container controls to support responsive layouts, text truncation (clip/ellipsis), and constraints to prevent elements from bleeding out.
+
+**Requirements:**
+- Created `vibe_card.tscn` and `vibe_card.gd` for Vibe DJ screen track suggestion cards.
+- Integrated the `DisabledOverlay` node statically in `vibe_screen.tscn`.
+- Created `playlist_track_row.tscn` for the playlist screen track list.
+- Created `library_row.tscn` and `library_row.gd` for library screen list trees.
+- Extracted dynamic drag button behavior to `track_drag_button.gd`.
+- Conformed to workspace agent rules regarding `.tscn` preference.
+
+**Testing Requirements:**
+- Ran the suite of GUT unit tests to verify no regressions in screens or navigation functionality.
+
+**Acceptance Criteria:**
+- Given a list of suggestion cards or track rows
+- When instantiating the components
+- Then they are loaded from `.tscn` files and configured dynamically without programmatic node construction.
+- When resizing the window to narrow/mobile boundaries
+- Then the layouts resize responsively without layout bleeding.

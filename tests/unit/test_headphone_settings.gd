@@ -2,6 +2,20 @@
 ## GUT unit tests for SettingsManager and AudioManager headphone calibration integration.
 extends GutTest
 
+var _original_settings_path: String = ""
+
+func before_all() -> void:
+	_original_settings_path = SettingsManager.settings_file_path
+	SettingsManager.settings_file_path = "user://test_settings.cfg"
+	SettingsManager.save_settings()
+
+func after_all() -> void:
+	var dir = DirAccess.open("user://")
+	if dir and dir.file_exists("test_settings.cfg"):
+		dir.remove("test_settings.cfg")
+	SettingsManager.settings_file_path = _original_settings_path
+	SettingsManager.load_settings()
+
 func before_each() -> void:
 	AudioManager._setup_audio_buses()
 	AudioManager.clear_eq_bands()

@@ -6,30 +6,12 @@ extends Control
 @onready var heading: Label = $VBox/Header/HBox/Heading
 @onready var analysis_status: Label = $VBox/Header/HBox/AnalysisStatus
 
-@onready var track_title: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/TrackTitle
-@onready var artist_label: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/ArtistLabel
-
-# Metadata labels/badges
-@onready var badge_key: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/KeyBadge
-@onready var badge_bpm: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/BpmBadge
-@onready var badge_energy: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/EnergyBadge
-@onready var badge_genre: Label = $VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/BadgesHBox/GenreBadge
-
-# Camelot Wheel
-@onready var camelot_wheel: Control = $VBox/DashboardHBox/LeftColumn/CamelotWheelCard/VBox/CamelotWheel
-
-# Mix Tuner Sliders
-@onready var crossover_slider: HSlider = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverHBox/CrossoverSlider
-@onready var crossover_value: Label = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverHBox/CrossoverValue
-@onready var energy_slider: HSlider = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyHBox/EnergySlider
-@onready var energy_value: Label = $VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyHBox/EnergyValue
-
 # Transition details
-@onready var transition_timeline: Control = $VBox/DashboardHBox/RightColumn/TransitionCard/VBox/TransitionTimeline
-@onready var transition_label: Label = $VBox/DashboardHBox/RightColumn/TransitionCard/VBox/TransitionLabel
+@onready var transition_timeline: Control = $VBox/TransitionCard/VBox/TransitionTimeline
+@onready var transition_label: Label = $VBox/TransitionCard/VBox/TransitionLabel
 
 # Runner-up containers
-@onready var runner_ups_list: VBoxContainer = $VBox/DashboardHBox/RightColumn/RunnerUpsSection/VBox/RunnerUpsList
+@onready var runner_ups_list: BoxContainer = $VBox/RunnerUpsSection/VBox/RunnerUpsScroll/RunnerUpsList
 
 # Help Modal Elements
 @onready var help_button: Button = $VBox/Header/HBox/HelpButton
@@ -39,8 +21,16 @@ extends Control
 @onready var help_modal_close: Button = $HelpModal/Panel/VBox/Header/CloseIcon
 @onready var help_modal_text: RichTextLabel = $HelpModal/Panel/VBox/Scroll/ContentText
 
+var CARD_MIN_WIDTH: float = 200.0
+var CARD_MAX_WIDTH: float = 260.0
+var CARD_HEIGHT_OFFSET: float = 110.0
+
+const VIBE_CARD_SCENE = preload("res://scenes/screens/vibe/vibe_card.tscn")
+
 var _runner_ups: Array = []
-var _disabled_overlay: PanelContainer = null
+@onready var _disabled_overlay: PanelContainer = $DisabledOverlay
+var _current_waveform_href: String = ""
+var _triggered_incoming_load_href: String = ""
 
 func _ready() -> void:
 	_apply_styles()
@@ -77,29 +67,18 @@ func _ready() -> void:
 	if AudioManager.has_signal("smart_mixing_toggled"):
 		AudioManager.smart_mixing_toggled.connect(func(enabled): _refresh_display())
 		
-	# Setup crossover duration slider
-	if crossover_slider:
-		crossover_slider.value = AudioManager.transition_duration
-		_update_crossover_label(crossover_slider.value)
-		crossover_slider.value_changed.connect(func(val):
-			AudioManager.transition_duration = val
-			_update_crossover_label(val)
-			_refresh_display()
-		)
+	# Disabled overlay is static in the scene
+	
+	var trans_card = get_node_or_null("VBox/TransitionCard")
+	if trans_card:
+		trans_card.visible = false
 		
-	# Setup energy threshold slider
-	if energy_slider:
-		var init_energy = AudioManager.energy_threshold if "energy_threshold" in AudioManager else 0.5
-		energy_slider.value = init_energy
-		_update_energy_label(init_energy)
-		energy_slider.value_changed.connect(func(val):
-			if "energy_threshold" in AudioManager:
-				AudioManager.energy_threshold = val
-			_update_energy_label(val)
-			_refresh_display()
-		)
+	if runner_ups_list:
+		runner_ups_list.alignment = BoxContainer.ALIGNMENT_CENTER
+		runner_ups_list.resized.connect(_update_cards_layout)
+	if is_instance_valid(PlatformManager):
+		PlatformManager.layout_changed.connect(func(_bp): _update_cards_layout())
 		
-	_create_disabled_overlay()
 	_refresh_display()
 
 func _apply_styles() -> void:
@@ -143,37 +122,10 @@ func _apply_styles() -> void:
 	analysis_status.add_theme_font_override("font", theme.font_ui)
 	analysis_status.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	
-	track_title.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
-	track_title.add_theme_font_override("font", theme.font_display)
-	track_title.add_theme_font_size_override("font_size", theme.TYPE_MD)
-	
-	artist_label.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
-	artist_label.add_theme_font_override("font", theme.font_ui)
-	artist_label.add_theme_font_size_override("font_size", theme.TYPE_SM)
-	
-	# Style badges
-	for badge in [badge_key, badge_bpm, badge_energy, badge_genre]:
-		badge.add_theme_color_override("font_color", theme.ACCENT_CORE)
-		badge.add_theme_font_override("font", theme.font_ui)
-		badge.add_theme_font_size_override("font_size", theme.TYPE_XS)
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = theme.GLASS_TINT
-		sb.border_color = theme.GLASS_BORDER_SUBTLE
-		sb.set_border_width_all(1)
-		sb.set_corner_radius_all(theme.RADIUS_SM)
-		sb.content_margin_left = 8
-		sb.content_margin_right = 8
-		sb.content_margin_top = 4
-		sb.content_margin_bottom = 4
-		badge.add_theme_stylebox_override("normal", sb)
-
 	# Cards panel styles
 	for card_path in [
-		"VBox/DashboardHBox/LeftColumn/NowPlayingCard",
-		"VBox/DashboardHBox/LeftColumn/CamelotWheelCard",
-		"VBox/DashboardHBox/LeftColumn/ControlsCard",
-		"VBox/DashboardHBox/RightColumn/TransitionCard",
-		"VBox/DashboardHBox/RightColumn/RunnerUpsSection"
+		"VBox/TransitionCard",
+		"VBox/RunnerUpsSection"
 	]:
 		var card = get_node_or_null(card_path)
 		if card is PanelContainer:
@@ -181,30 +133,14 @@ func _apply_styles() -> void:
 
 	# Style Section Titles
 	for title_path in [
-		"VBox/DashboardHBox/LeftColumn/NowPlayingCard/VBox/CardTitle",
-		"VBox/DashboardHBox/LeftColumn/CamelotWheelCard/VBox/SectionTitle",
-		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/SectionTitle",
-		"VBox/DashboardHBox/RightColumn/TransitionCard/VBox/SectionTitle",
-		"VBox/DashboardHBox/RightColumn/RunnerUpsSection/VBox/SectionTitle"
+		"VBox/TransitionCard/VBox/SectionTitle",
+		"VBox/RunnerUpsSection/VBox/SectionTitle"
 	]:
 		var lbl = get_node_or_null(title_path)
 		if lbl is Label:
 			lbl.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 			lbl.add_theme_font_override("font", theme.font_display)
 			lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
-			
-	# Style Tuner Labels
-	for lbl_path in [
-		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverLabel",
-		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/CrossoverHBox/CrossoverValue",
-		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyLabel",
-		"VBox/DashboardHBox/LeftColumn/ControlsCard/VBox/Grid/EnergyHBox/EnergyValue"
-	]:
-		var lbl = get_node_or_null(lbl_path)
-		if lbl is Label:
-			lbl.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
-			lbl.add_theme_font_override("font", theme.font_ui)
-			lbl.add_theme_font_size_override("font_size", theme.TYPE_SM)
 
 	# Style help button
 	if help_button:
@@ -345,18 +281,10 @@ func _refresh_display() -> void:
 	var playlist = AudioManager.current_playlist
 	
 	if active_index == -1 or playlist.is_empty() or active_index >= playlist.size():
-		track_title.text = "DJ Standby"
-		artist_label.text = "Queue a track to begin the vibe session."
-		badge_key.text = "--"
-		badge_bpm.text = "-- BPM"
-		badge_energy.text = "Energy: --%"
-		badge_genre.text = "Genre: --"
 		transition_label.text = "AI DJ: Standby"
-		if camelot_wheel:
-			var empty_keys: Array[String] = []
-			camelot_wheel.update_keys("", "", empty_keys)
 		if transition_timeline:
 			transition_timeline.update_transition_info("No Track", "No Track", 0.0, 0.0, 0.0, "Standard Crossfade")
+		_current_waveform_href = ""
 		_clear_runner_ups()
 		return
 		
@@ -365,25 +293,6 @@ func _refresh_display() -> void:
 	if is_instance_valid(MetadataService):
 		meta = MetadataService.get_cached_metadata(current_href)
 		
-	var info = MetadataService.parse_track_info(current_href)
-	track_title.text = info.track
-	artist_label.text = info.artist
-	
-	var analyzed = not meta.is_empty() and meta.get("bpm", 0.0) > 0.0
-	
-	if analyzed:
-		var key = meta.get("musical_key", "")
-		badge_key.text = key if not key.is_empty() else "??"
-		badge_bpm.text = "%d BPM" % int(meta.get("bpm", 0.0))
-		badge_energy.text = "Energy: %d%%" % int(meta.get("energy_level", 0.0) * 100.0)
-		var genre = meta.get("genre", "Unknown")
-		badge_genre.text = genre if genre != "Unknown" else "--"
-	else:
-		badge_key.text = "..."
-		badge_bpm.text = "... BPM"
-		badge_energy.text = "Energy: ..."
-		badge_genre.text = "--"
-	
 	# Recalculate runner-ups (will show analyzing state if current track not ready)
 	_calculate_runner_ups(current_href)
 	
@@ -396,29 +305,13 @@ func _refresh_display() -> void:
 		else:
 			transition_label.text = "AI DJ: Standby"
 
-	# Update Camelot Wheel and Transition Timeline custom controls
-	var curr_key = meta.get("musical_key", "")
-	var next_key = ""
+	# Update Transition Timeline custom control
 	var next_href = AudioManager.get_next_track_href()
 	var next_meta = {}
 	var next_bpm = 0.0
 	if not next_href.is_empty() and is_instance_valid(MetadataService):
 		next_meta = MetadataService.get_cached_metadata(next_href)
-		next_key = next_meta.get("musical_key", "")
 		next_bpm = next_meta.get("bpm", 0.0)
-		
-	var queued_keys: Array[String] = []
-	if active_index != -1 and is_instance_valid(MetadataService):
-		for i in range(active_index, playlist.size()):
-			var href = playlist[i]
-			var m = MetadataService.get_cached_metadata(href)
-			if not m.is_empty():
-				var k = m.get("musical_key", "")
-				if not k.is_empty() and not queued_keys.has(k):
-					queued_keys.append(k)
-					
-	if camelot_wheel:
-		camelot_wheel.update_keys(curr_key, next_key, queued_keys)
 		
 	if transition_timeline:
 		var outgoing_title = current_href.get_file()
@@ -506,163 +399,94 @@ func _calculate_runner_ups(current_href: String) -> void:
 		var is_selected = (match_data.href == target_selected_href)
 		var is_ai_preferred = (type == ai_preferred_type)
 		_create_runner_up_card(match_data.href, match_data.meta, match_data.cost, type, is_selected, is_ai_preferred)
+		
+	_update_cards_layout()
 
 func _create_runner_up_card(href: String, meta: Dictionary, cost: float, type: String, is_selected: bool = false, is_ai_preferred: bool = false) -> void:
-	var info = MetadataService.parse_track_info(href)
+	var card_btn = VIBE_CARD_SCENE.instantiate()
 	
-	var btn := Button.new()
-	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.custom_minimum_size.y = 52
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var current_bpm = 0.0
+	var active_index = AudioManager.current_track_index
+	if active_index != -1 and active_index < AudioManager.current_playlist.size() and is_instance_valid(MetadataService):
+		var curr_meta = MetadataService.get_cached_metadata(AudioManager.current_playlist[active_index])
+		if not curr_meta.is_empty():
+			current_bpm = curr_meta.get("bpm", 0.0)
+			
+	var curr_href = ""
+	if active_index != -1 and active_index < AudioManager.current_playlist.size():
+		curr_href = AudioManager.current_playlist[active_index]
+	var curr_meta = {}
+	if not curr_href.is_empty():
+		curr_meta = MetadataService.get_cached_metadata(curr_href)
 	
-	var container := MarginContainer.new()
-	container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	container.add_theme_constant_override("margin_left", 12)
-	container.add_theme_constant_override("margin_right", 12)
-	btn.add_child(container)
+	var predicted_transition = AudioManager.get_transition_type_between(curr_meta, meta, curr_href, href)
 	
-	var hbox := HBoxContainer.new()
-	container.add_child(hbox)
-	
-	var vbox := VBoxContainer.new()
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.alignment = VBoxContainer.ALIGNMENT_CENTER
-	hbox.add_child(vbox)
-	
-	var title_lbl := Label.new()
-	title_lbl.text = info.track
-	title_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	vbox.add_child(title_lbl)
-	
-	var artist_lbl := Label.new()
-	artist_lbl.text = info.artist
-	artist_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	vbox.add_child(artist_lbl)
-	
-	var details_hbox := HBoxContainer.new()
-	details_hbox.alignment = HBoxContainer.ALIGNMENT_END
-	hbox.add_child(details_hbox)
-	
-	var key = meta.get("musical_key", "8A")
-	if key.is_empty(): key = "8A"
-	
-	var bpm = meta.get("bpm", 120.0)
-	
-	var key_bpm_lbl := Label.new()
-	key_bpm_lbl.text = "%s  •  %d BPM" % [key, int(bpm)]
-	details_hbox.add_child(key_bpm_lbl)
-	
-	# Determine match label and color based on type
-	var type_lbl := Label.new()
-	if type == "perfect":
-		type_lbl.text = "  Match  "
-		type_lbl.add_theme_color_override("font_color", ThemeManager.current_theme.SEMANTIC_SUCCESS)
-	elif type == "interesting":
-		type_lbl.text = "  Fresh  "
-		type_lbl.add_theme_color_override("font_color", ThemeManager.current_theme.AQUA_CORE)
-	elif type == "creative":
-		type_lbl.text = "  Switch  "
-		type_lbl.add_theme_color_override("font_color", ThemeManager.current_theme.SEMANTIC_WARNING)
-	details_hbox.add_child(type_lbl)
-	
-	# If this is the AI preferred choice, add an AI Choice badge!
-	if is_ai_preferred:
-		var ai_lbl := Label.new()
-		ai_lbl.text = "  🤖 AI Choice  "
-		ai_lbl.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
-		details_hbox.add_child(ai_lbl)
-		
-	# Apply visual styles to labels inside the card
-	var theme = ThemeManager.current_theme
-	
-	# If the track is not cached, add a warning indicator
-	if not AudioManager.is_track_cached(href):
-		var warning_lbl := Label.new()
-		warning_lbl.text = " ! "
-		warning_lbl.tooltip_text = "Pending download. Starting this transition may cause a playback delay."
-		warning_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
-		warning_lbl.add_theme_color_override("font_color", theme.SEMANTIC_WARNING)
-		warning_lbl.add_theme_font_override("font", theme.font_ui)
-		warning_lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
-		details_hbox.add_child(warning_lbl)
-	title_lbl.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
-	title_lbl.add_theme_font_override("font", theme.font_ui)
-	title_lbl.add_theme_font_size_override("font_size", theme.TYPE_SM)
-	
-	artist_lbl.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
-	artist_lbl.add_theme_font_override("font", theme.font_ui)
-	artist_lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
-	
-	key_bpm_lbl.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
-	key_bpm_lbl.add_theme_font_override("font", theme.font_ui)
-	key_bpm_lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
-	
-	type_lbl.add_theme_font_override("font", theme.font_ui)
-	type_lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
-	
-	if is_ai_preferred:
-		var ai_lbl = details_hbox.get_child(details_hbox.get_child_count() - 1) as Label
-		ai_lbl.add_theme_font_override("font", theme.font_ui)
-		ai_lbl.add_theme_font_size_override("font_size", theme.TYPE_XS)
+	runner_ups_list.add_child(card_btn)
+	card_btn.setup(href, meta, cost, type, is_selected, is_ai_preferred, current_bpm, predicted_transition)
 	
 	# Click handler: locks track as next override
-	btn.pressed.connect(func():
+	var info = MetadataService.parse_track_info(href)
+	card_btn.pressed.connect(func():
 		AudioManager.set("upcoming_track_override", href)
 		_refresh_display()
 		print("VibeScreen: Selected next track override: ", info.track)
 	)
-	
-	if is_selected:
-		var highlight = StyleBoxFlat.new()
-		highlight.bg_color = theme.ACCENT_SURFACE
-		highlight.border_color = theme.ACCENT_BRIGHT
-		highlight.set_border_width_all(1)
-		highlight.set_corner_radius_all(theme.RADIUS_SM)
-		btn.add_theme_stylebox_override("normal", highlight)
-		btn.add_theme_stylebox_override("hover", highlight)
-	else:
-		_apply_card_button_style(btn, theme)
-		
-	runner_ups_list.add_child(btn)
- 
-func _apply_card_button_style(btn: Button, theme) -> void:
-	var sb_normal = StyleBoxFlat.new()
-	sb_normal.bg_color = theme.BG_ELEVATED
-	sb_normal.border_color = theme.GLASS_BORDER_SUBTLE
-	sb_normal.set_border_width_all(1)
-	sb_normal.set_corner_radius_all(theme.RADIUS_SM)
-	
-	var sb_hover = StyleBoxFlat.new()
-	sb_hover.bg_color = theme.GLASS_TINT
-	sb_hover.border_color = theme.ACCENT_CORE
-	sb_hover.set_border_width_all(1)
-	sb_hover.set_corner_radius_all(theme.RADIUS_SM)
-	
-	btn.add_theme_stylebox_override("normal", sb_normal)
-	btn.add_theme_stylebox_override("hover", sb_hover)
-	btn.add_theme_stylebox_override("pressed", sb_hover)
-	btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+
  
 func _style_runner_ups() -> void:
-	var theme = ThemeManager.current_theme
-	var target_selected_href = AudioManager.get_next_track_href()
-			
-	for idx in range(runner_ups_list.get_child_count()):
-		var child = runner_ups_list.get_child(idx)
+	pass
+
+func _update_cards_layout() -> void:
+	if not is_inside_tree() or not runner_ups_list:
+		return
+		
+	var is_mobile = PlatformManager.is_mobile_layout()
+	runner_ups_list.vertical = is_mobile
+	
+	var children: Array[Control] = []
+	for child in runner_ups_list.get_children():
 		if child is Button:
-			var is_selected = false
-			if idx < _runner_ups.size() and _runner_ups[idx] == target_selected_href:
-				is_selected = true
-			if is_selected:
-				var highlight = StyleBoxFlat.new()
-				highlight.bg_color = theme.ACCENT_SURFACE
-				highlight.border_color = theme.ACCENT_BRIGHT
-				highlight.set_border_width_all(1)
-				highlight.set_corner_radius_all(theme.RADIUS_SM)
-				child.add_theme_stylebox_override("normal", highlight)
-				child.add_theme_stylebox_override("hover", highlight)
+			children.append(child)
+			
+	var count = children.size()
+	if count == 0:
+		return
+		
+	var parent_width = runner_ups_list.size.x
+	var parent_height = runner_ups_list.size.y
+	
+	if is_mobile:
+		# Vertical list: cards stacked vertically
+		var target_w = clamp(parent_width, CARD_MIN_WIDTH, CARD_MAX_WIDTH)
+		var target_h = target_w + CARD_HEIGHT_OFFSET
+		for card in children:
+			card.custom_minimum_size = Vector2(target_w, target_h)
+			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			card.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	else:
+		# Horizontal row
+		var separation = 16.0
+		if runner_ups_list.has_theme_constant_override("separation"):
+			separation = runner_ups_list.get_theme_constant("separation")
+		elif runner_ups_list.has_theme_constant("separation"):
+			separation = runner_ups_list.get_theme_constant("separation")
+			
+		var total_separation = separation * (count - 1)
+		var available_w = parent_width - total_separation
+		var w_per_card = available_w / count
+		
+		for card in children:
+			var card_w = clamp(w_per_card, CARD_MIN_WIDTH, CARD_MAX_WIDTH)
+			var card_h = card_w + CARD_HEIGHT_OFFSET
+			card.custom_minimum_size = Vector2(card_w, card_h)
+			
+			if w_per_card > CARD_MAX_WIDTH:
+				card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			else:
-				_apply_card_button_style(child, theme)
+				card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				
+			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
 
 func _on_help_button_pressed() -> void:
 	if not help_modal:
@@ -805,16 +629,15 @@ func _format_inline_markdown(text: String) -> String:
 	
 	return res
 
-func _update_crossover_label(val: float) -> void:
-	if crossover_value:
-		if val <= 0.1:
-			crossover_value.text = "Auto"
-		else:
-			crossover_value.text = "%.1fs" % val
-
-func _update_energy_label(val: float) -> void:
-	if energy_value:
-		energy_value.text = "%.2f" % val
+func _get_track_cache_path(href_path: String) -> String:
+	if href_path.is_empty():
+		return ""
+	if href_path == "song1.mp3" or href_path == "song2.mp3" or href_path == "song3.mp3" or href_path.begins_with("test_"):
+		return "res://tests/unit/test_track.wav"
+	var ext := href_path.get_extension()
+	if ext.is_empty():
+		ext = "mp3"
+	return "user://audio_cache/" + href_path.md5_text() + "." + ext
 
 func _process(_delta: float) -> void:
 	if not is_inside_tree() or not transition_timeline:
@@ -827,16 +650,19 @@ func _process(_delta: float) -> void:
 	var length = AudioManager.current_track_length
 	var trig = 0.0
 	
+	var dsp = null
 	if is_instance_valid(active_player) and active_player.playing:
-		var dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
+		dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
 		if dsp:
 			pos = dsp.get_playback_position()
 			
-	# Fetch trigger time for timeline prediction
+	# Fetch trigger time for timeline prediction and manage waveform peaks
 	var active_index = AudioManager.current_track_index
 	var playlist = AudioManager.current_playlist
+	var current_href = ""
+	
 	if active_index != -1 and active_index < playlist.size():
-		var current_href = playlist[active_index]
+		current_href = playlist[active_index]
 		if is_instance_valid(MetadataService):
 			var meta = MetadataService.get_cached_metadata(current_href)
 			if not meta.is_empty():
@@ -847,43 +673,73 @@ func _process(_delta: float) -> void:
 				else:
 					trig = AudioManager.current_track_length - AudioManager.get_transition_duration(AudioManager.upcoming_transition_type) - 4.0
 					
+	# Manage _current_waveform_href cache
+	if _current_waveform_href != current_href:
+		_current_waveform_href = current_href
+		
+	# Handle waveforms for transition timeline
+	var out_peaks = PackedFloat32Array()
+	var in_peaks = PackedFloat32Array()
+	var out_dur = 0.0
+	var in_dur = 0.0
+	
+	# Determine outgoing and incoming DSPs
+	var outgoing_dsp = null
+	var incoming_dsp = null
+	var out_track_href = ""
+	var in_track_href = ""
+	
+	if is_trans:
+		out_track_href = AudioManager._outgoing_href
+		in_track_href = AudioManager._incoming_href
+		outgoing_dsp = AudioManager.dsp_a if AudioManager._outgoing_player == AudioManager.player_a else AudioManager.dsp_b
+		incoming_dsp = AudioManager.dsp_a if AudioManager._incoming_player == AudioManager.player_a else AudioManager.dsp_b
+	else:
+		out_track_href = current_href
+		in_track_href = AudioManager.get_next_track_href()
+		outgoing_dsp = AudioManager.dsp_a if AudioManager.active_player == AudioManager.player_a else AudioManager.dsp_b
+		incoming_dsp = AudioManager.dsp_b if AudioManager.active_player == AudioManager.player_a else AudioManager.dsp_a
+		
+	# 1. Fetch outgoing peaks
+	if outgoing_dsp and not out_track_href.is_empty():
+		if outgoing_dsp.get_cache_sample_count() > 0:
+			out_peaks = outgoing_dsp.get_waveform_peaks(1000)
+			out_dur = outgoing_dsp.get_duration()
+			
+	# 2. Fetch incoming peaks (load in background if not transitioning)
+	if not in_track_href.is_empty():
+		if not is_trans and transition_timeline.incoming_peaks.is_empty() and AudioManager.is_track_cached(in_track_href):
+			if _triggered_incoming_load_href != in_track_href:
+				_triggered_incoming_load_href = in_track_href
+				var path = _get_track_cache_path(in_track_href)
+				if not path.is_empty():
+					var duration_hint = 0.0
+					if is_instance_valid(MetadataService):
+						var next_meta = MetadataService.get_cached_metadata(in_track_href)
+						duration_hint = next_meta.get("duration", 0.0)
+					if incoming_dsp:
+						incoming_dsp.load_file(ProjectSettings.globalize_path(path), duration_hint)
+						
+		if incoming_dsp:
+			if incoming_dsp.get_cache_sample_count() > 0:
+				in_peaks = incoming_dsp.get_waveform_peaks(1000)
+				in_dur = incoming_dsp.get_duration()
+	else:
+		_triggered_incoming_load_href = ""
+		
+	# Pass peaks and durations to transition_timeline
+	transition_timeline.outgoing_peaks = out_peaks
+	transition_timeline.incoming_peaks = in_peaks
+	transition_timeline.outgoing_duration = out_dur
+	transition_timeline.incoming_duration = in_dur
+	
+	# Determine incoming cue_in
+	var in_cue_in = 0.0
+	if not in_track_href.is_empty() and is_instance_valid(MetadataService):
+		var meta_in = MetadataService.get_cached_metadata(in_track_href)
+		in_cue_in = meta_in.get("cue_in", 0.0)
+	transition_timeline.incoming_cue_in = in_cue_in
+
 	transition_timeline.update_playback_state(is_trans, fader, pos, length, trig)
 
-func _create_disabled_overlay() -> void:
-	_disabled_overlay = PanelContainer.new()
-	_disabled_overlay.name = "DisabledOverlay"
-	_disabled_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_disabled_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	
-	var overlay_style = StyleBoxFlat.new()
-	_disabled_overlay.add_theme_stylebox_override("panel", overlay_style)
-	
-	var center = CenterContainer.new()
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_disabled_overlay.add_child(center)
-	
-	var vbox = VBoxContainer.new()
-	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_theme_constant_override("separation", 16)
-	center.add_child(vbox)
-	
-	var icon_lbl = Label.new()
-	icon_lbl.text = "🎛"
-	icon_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	icon_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(icon_lbl)
-	
-	var msg_lbl = Label.new()
-	msg_lbl.text = "Please Enable Smart Mixing"
-	msg_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	msg_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(msg_lbl)
-	
-	var sub_lbl = Label.new()
-	sub_lbl.text = "Toggle Smart Mixing on the bottom left to activate the AI DJ Vibe Workbench."
-	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(sub_lbl)
-	
-	add_child(_disabled_overlay)
-	_apply_styles()
+

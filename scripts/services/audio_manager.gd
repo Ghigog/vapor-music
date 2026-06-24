@@ -129,6 +129,10 @@ var deck_a_beat: int = 1
 var deck_b_bar: int = 1
 var deck_b_beat: int = 1
 
+# Tracks whether we have already kicked off the background load for the upcoming
+# track during the outro window. Reset whenever a new track becomes active.
+var _outro_load_triggered := false
+
 func get_transition_duration(type: String, outgoing_href: String = "", incoming_href: String = "") -> float:
 	if not smart_mixing_enabled:
 		if not Engine.is_editor_hint() and transition_duration > 0.0:
@@ -179,7 +183,26 @@ func get_transition_duration(type: String, outgoing_href: String = "", incoming_
 				var outro_len = outro[1] - outro[0]
 				var intro_len = intro[1] - intro[0]
 				if outro_len > 0.0 and intro_len > 0.0:
-					return clampf(minf(outro_len, intro_len), 3.0, 16.0)
+					var overlap = minf(outro_len, intro_len)
+					var clamped_overlap = clampf(overlap, 4.0, 16.0)
+					
+					var bpm_out = meta_out.get("bpm", 120.0)
+					if bpm_out <= 0.0:
+						bpm_out = 120.0
+					var bar_duration = 240.0 / bpm_out
+					
+					# Standard phrase boundaries (16, 8, 4 bars)
+					var candidates = [16.0 * bar_duration, 8.0 * bar_duration, 4.0 * bar_duration]
+					var selected_duration = -1.0
+					for c in candidates:
+						if c <= clamped_overlap:
+							selected_duration = c
+							break
+							
+					if selected_duration < 0.0:
+						selected_duration = 4.0
+						
+					return clampf(selected_duration, 4.0, 16.0)
 			
 	match type:
 		"Bass Swap":
@@ -305,7 +328,100 @@ func is_track_cached(href_path: String) -> bool:
 	var cache_path := CACHE_DIR + href_path.md5_text() + "." + ext
 	return FileAccess.file_exists(cache_path)
 
+func get_transition_trigger_time() -> float:
+	var metadata_service = get_node_or_null("/root/MetadataService")
+	if not smart_mixing_enabled or current_playlist.is_empty() or current_track_index < 0 or current_track_index >= current_playlist.size():
+		return -1.0
+	var out_href = current_playlist[current_track_index]
+	var in_href = get_next_track_href()
+	if in_href.is_empty():
+		return -1.0
+	
+	var length = current_track_length
+	var cue_out = length
+	cue_out = _get_track_cue_out(out_href, length)
+	
+	var duration = get_transition_duration(upcoming_transition_type, out_href, in_href)
+	
+	var outro_start = cue_out - 30.0
+	if is_instance_valid(metadata_service):
+		var meta = metadata_service.get_cached_metadata(out_href)
+		var segments = meta.get("segments", {})
+		var outro = segments.get("outro", [])
+		if not outro.is_empty():
+			outro_start = outro[0]
+			
+	var trigger_threshold = min(outro_start, cue_out - (duration + 4.0))
+	return trigger_threshold - 5.0
+
+func get_transition_type_between(current_meta: Dictionary, next_meta: Dictionary, current_href: String, next_href: String) -> String:
+	if current_meta.is_empty() or next_meta.is_empty():
+		var pair_hash = (current_href + next_href).hash()
+		var rng = abs(pair_hash) % 6
+		match rng:
+			0: return "Standard Crossfade"
+			1: return "Bass Swap"
+			2: return "Filter Sweep"
+			3: return "Echo Out"
+			4: return "Reverb Freeze"
+			5: return "Tempo Morph"
+		return "Standard Crossfade"
+		
+	var bpm_diff = abs(current_meta.get("bpm", 120.0) - next_meta.get("bpm", 120.0))
+	var key_a = current_meta.get("musical_key", "")
+	var key_b = next_meta.get("musical_key", "")
+	
+	var DJPathfinderClass = load("res://scripts/services/dj_pathfinder.gd")
+	var key_cost = DJPathfinderClass.get_harmonic_relation_cost(key_a, key_b)
+	var match_type = _get_match_type_between(current_meta, next_meta)
+	
+	var is_clashing = (key_cost >= 8.0)
+	var is_switch = (match_type == "creative")
+	
+	var weights := {}
+	if is_clashing or is_switch:
+		if bpm_diff < 3.0:
+			weights = {"Echo Out": 50, "Reverb Freeze": 50}
+		elif bpm_diff < 8.0:
+			weights = {"Echo Out": 50, "Reverb Freeze": 50}
+		else:
+			weights = {"Echo Out": 60, "Reverb Freeze": 40}
+	elif key_cost <= 2.0:
+		if bpm_diff < 3.0:
+			weights = {"Bass Swap": 75, "Filter Sweep": 15, "Standard Crossfade": 10}
+		elif bpm_diff < 8.0:
+			weights = {"Tempo Morph": 45, "Filter Sweep": 25, "Echo Out": 15, "Reverb Freeze": 15}
+		else:
+			weights = {"Echo Out": 50, "Reverb Freeze": 30, "Standard Crossfade": 20}
+	else:
+		if bpm_diff < 3.0:
+			weights = {"Bass Swap": 60, "Filter Sweep": 20, "Tempo Morph": 20}
+		elif bpm_diff < 8.0:
+			weights = {"Tempo Morph": 40, "Echo Out": 25, "Reverb Freeze": 20, "Filter Sweep": 15}
+		else:
+			weights = {"Echo Out": 60, "Reverb Freeze": 40}
+	
+	var pair_hash = (current_href + next_href).hash()
+	var rng = RandomNumberGenerator.new()
+	rng.seed = pair_hash
+	
+	var total_weight := 0.0
+	for w in weights.values():
+		total_weight += w
+		
+	var roll = rng.randf() * total_weight
+	var cumulative := 0.0
+	var selected_type = "Standard Crossfade"
+	for type in weights:
+		cumulative += weights[type]
+		if roll <= cumulative:
+			selected_type = type
+			break
+			
+	return selected_type
+
 func _update_upcoming_transition() -> void:
+	var metadata_service = get_node_or_null("/root/MetadataService")
 	if not smart_mixing_enabled:
 		upcoming_transition_type = "Standard Crossfade"
 		return
@@ -319,89 +435,20 @@ func _update_upcoming_transition() -> void:
 	if current_track_index != -1 and current_track_index < current_playlist.size():
 		current_href = current_playlist[current_track_index]
 		
-	var metadata_service = get_node_or_null("/root/MetadataService")
 	if is_instance_valid(metadata_service) and not current_href.is_empty():
 		var current_meta = metadata_service.get_cached_metadata(current_href)
 		var next_meta = metadata_service.get_cached_metadata(next_href)
-		if not current_meta.is_empty() and not next_meta.is_empty():
-			var bpm_diff = abs(current_meta.get("bpm", 120.0) - next_meta.get("bpm", 120.0))
-			var key_a = current_meta.get("musical_key", "")
-			var key_b = next_meta.get("musical_key", "")
-			
-			var DJPathfinderClass = load("res://scripts/services/dj_pathfinder.gd")
-			var key_cost = DJPathfinderClass.get_harmonic_relation_cost(key_a, key_b)
-			var match_type = _get_match_type_between(current_meta, next_meta)
-			
-			var is_clashing = (key_cost >= 8.0)
-			var is_switch = (match_type == "creative")
-			
-			var weights := {}
-			if is_clashing or is_switch:
-				# Clashing / Switch (wash/mask transition effects)
-				if bpm_diff < 3.0:
-					weights = {"Echo Out": 50, "Reverb Freeze": 50}
-				elif bpm_diff < 8.0:
-					weights = {"Echo Out": 50, "Reverb Freeze": 50}
-				else:
-					weights = {"Echo Out": 60, "Reverb Freeze": 40}
-			elif key_cost <= 2.0:
-				# Harmonic keys
-				if bpm_diff < 3.0:
-					weights = {"Bass Swap": 75, "Filter Sweep": 15, "Standard Crossfade": 10}
-				elif bpm_diff < 8.0:
-					weights = {"Tempo Morph": 45, "Filter Sweep": 25, "Echo Out": 15, "Reverb Freeze": 15}
-				else:
-					weights = {"Echo Out": 50, "Reverb Freeze": 30, "Standard Crossfade": 20}
-			else:
-				# Modulated keys
-				if bpm_diff < 3.0:
-					weights = {"Bass Swap": 60, "Filter Sweep": 20, "Tempo Morph": 20}
-				elif bpm_diff < 8.0:
-					weights = {"Tempo Morph": 40, "Echo Out": 25, "Reverb Freeze": 20, "Filter Sweep": 15}
-				else:
-					weights = {"Echo Out": 60, "Reverb Freeze": 40}
-			
-			# Seed pseudo-random generator with track pair hash to keep it stable/non-flickering
-			var pair_hash = (current_href + next_href).hash()
-			var rng = RandomNumberGenerator.new()
-			rng.seed = pair_hash
-			
-			var total_weight := 0.0
-			for w in weights.values():
-				total_weight += w
-				
-			var roll = rng.randf() * total_weight
-			var cumulative := 0.0
-			var selected_type = "Standard Crossfade"
-			for type in weights:
-				cumulative += weights[type]
-				if roll <= cumulative:
-					selected_type = type
-					break
-					
-			upcoming_transition_type = selected_type
-			return
-			
-	# Fallback to deterministic pseudo-random choice if metadata not yet ready
-	var pair_hash = (current_href + next_href).hash()
-	var rng = abs(pair_hash) % 6
-	match rng:
-		0:
-			upcoming_transition_type = "Standard Crossfade"
-		1:
-			upcoming_transition_type = "Bass Swap"
-		2:
-			upcoming_transition_type = "Filter Sweep"
-		3:
-			upcoming_transition_type = "Echo Out"
-		4:
-			upcoming_transition_type = "Reverb Freeze"
-		5:
-			upcoming_transition_type = "Tempo Morph"
+		upcoming_transition_type = get_transition_type_between(current_meta, next_meta, current_href, next_href)
+	else:
+		upcoming_transition_type = get_transition_type_between({}, {}, current_href, next_href)
 
 var _debounce_timer: Timer
 
 const CACHE_DIR = "user://audio_cache/"
+
+var _metadata_service: Node = null
+var _beat_grid_a: Array = []
+var _beat_grid_b: Array = []
 
 func _ready() -> void:
 	# Programmatically setup DeckA and DeckB audio buses with EQ and Filter effects
@@ -434,6 +481,32 @@ func _ready() -> void:
 	
 	# Apply headphone calibration if enabled
 	update_calibration_state()
+	
+	_metadata_service = get_node_or_null("/root/MetadataService")
+	if is_instance_valid(_metadata_service):
+		_metadata_service.metadata_updated.connect(_on_metadata_updated)
+
+func _on_metadata_updated(href: String, new_metadata: Dictionary) -> void:
+	if current_playlist.size() > current_track_index and current_track_index >= 0:
+		if current_playlist[current_track_index] == href:
+			var grid = new_metadata.get("beat_grid", [])
+			if active_player == player_a:
+				_beat_grid_a = grid
+			else:
+				_beat_grid_b = grid
+	if is_transitioning:
+		if _outgoing_href == href:
+			var grid = new_metadata.get("beat_grid", [])
+			if _outgoing_player == player_a:
+				_beat_grid_a = grid
+			else:
+				_beat_grid_b = grid
+		if _incoming_href == href:
+			var grid = new_metadata.get("beat_grid", [])
+			if _incoming_player == player_a:
+				_beat_grid_a = grid
+			else:
+				_beat_grid_b = grid
 
 func _process(delta: float) -> void:
 	# Feed audio buffers
@@ -441,47 +514,13 @@ func _process(delta: float) -> void:
 	_feed_deck(player_b, dsp_b, _speed_scale_b, _incoming_player == player_b)
 
 	# Update bars and beats for both decks
-	var metadata_service = get_node_or_null("/root/MetadataService")
-	if is_instance_valid(metadata_service):
-		# Deck A
-		var href_a = ""
-		if active_player == player_a:
-			if current_track_index >= 0 and current_track_index < current_playlist.size():
-				href_a = current_playlist[current_track_index]
-		elif is_transitioning and _outgoing_player == player_a:
-			href_a = _outgoing_href
-		elif is_transitioning and _incoming_player == player_a:
-			href_a = _incoming_href
-			
-		if not href_a.is_empty():
-			var meta = metadata_service.get_cached_metadata(href_a)
-			var grid = meta.get("beat_grid", [])
-			var bab = get_bars_and_beats(dsp_a.get_playback_position(), grid)
-			deck_a_bar = bab["bar"]
-			deck_a_beat = bab["beat"]
-		else:
-			deck_a_bar = 1
-			deck_a_beat = 1
-			
-		# Deck B
-		var href_b = ""
-		if active_player == player_b:
-			if current_track_index >= 0 and current_track_index < current_playlist.size():
-				href_b = current_playlist[current_track_index]
-		elif is_transitioning and _outgoing_player == player_b:
-			href_b = _outgoing_href
-		elif is_transitioning and _incoming_player == player_b:
-			href_b = _incoming_href
-			
-		if not href_b.is_empty():
-			var meta = metadata_service.get_cached_metadata(href_b)
-			var grid = meta.get("beat_grid", [])
-			var bab = get_bars_and_beats(dsp_b.get_playback_position(), grid)
-			deck_b_bar = bab["bar"]
-			deck_b_beat = bab["beat"]
-		else:
-			deck_b_bar = 1
-			deck_b_beat = 1
+	var bab_a = get_bars_and_beats(dsp_a.get_playback_position(), _beat_grid_a)
+	deck_a_bar = bab_a["bar"]
+	deck_a_beat = bab_a["beat"]
+		
+	var bab_b = get_bars_and_beats(dsp_b.get_playback_position(), _beat_grid_b)
+	deck_b_bar = bab_b["bar"]
+	deck_b_beat = bab_b["beat"]
 
 	# Monitor playback position to trigger smooth transitions before outro ends
 	if is_playing and not is_transitioning and active_player and active_player.playing:
@@ -500,15 +539,32 @@ func _process(delta: float) -> void:
 			var duration = get_transition_duration(upcoming_transition_type, out_href, in_href)
 			
 			var outro_start = cue_out - 30.0
-			if is_instance_valid(metadata_service) and current_track_index >= 0 and current_track_index < current_playlist.size():
-				var meta = metadata_service.get_cached_metadata(current_playlist[current_track_index])
+			if is_instance_valid(_metadata_service) and current_track_index >= 0 and current_track_index < current_playlist.size():
+				var meta = _metadata_service.get_cached_metadata(current_playlist[current_track_index])
 				var segments = meta.get("segments", {})
 				var outro = segments.get("outro", [])
 				if not outro.is_empty():
 					outro_start = outro[0]
-					
-			var trigger_threshold = min(outro_start, cue_out - (duration + 4.0))
-			if pos >= trigger_threshold - 5.0:
+			
+			# Guarantee the outgoing track stays alive through at least the first half of
+			# the effect. Add a fixed load-headroom buffer (6s) on top of the full
+			# duration so that WebDAV streaming has time to complete before the effect
+			# fires. The trigger fires exactly at this threshold — no early-fire window.
+			var load_headroom := 6.0
+			var trigger_threshold = min(outro_start, cue_out - (duration + load_headroom))
+			
+			# Pre-load the incoming track in the background as soon as we enter the
+			# outro window. This decouples loading latency from the transition trigger.
+			if not _outro_load_triggered and not in_href.is_empty() and pos >= outro_start:
+				_outro_load_triggered = true
+				var incoming_player = player_b if active_player == player_a else player_a
+				var in_bus_idx = AudioServer.get_bus_index(incoming_player.bus)
+				_reset_bus_effects(in_bus_idx)
+				AudioServer.set_bus_volume_db(in_bus_idx, -60.0)
+				print("AudioManager: Outro zone entered. Pre-loading incoming track: ", in_href)
+				_load_and_stream_remote_file(in_href, incoming_player, false)
+			
+			if pos >= trigger_threshold:
 				print("AudioManager: Approaching outro zone. Triggering start_transition. pos=", pos, ", threshold=", trigger_threshold)
 				start_transition()
 			
@@ -807,6 +863,7 @@ func play_track(track_href: String, playlist: Array) -> void:
 	
 	_record_history(track_href)
 	_navigating_history = false
+	_outro_load_triggered = false
 	
 	# Stop secondary player if active
 	var secondary = player_b if active_player == player_a else player_a
@@ -828,12 +885,19 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 		
 		var dsp = dsp_a if target_player == player_a else dsp_b
 		var duration_hint = 0.0
-		var metadata_service = get_node_or_null("/root/MetadataService")
+		var grid = []
+		var metadata_service = _metadata_service
 		if is_instance_valid(metadata_service):
 			var meta = metadata_service.get_cached_metadata(href_path)
 			if not meta.is_empty():
 				duration_hint = meta.get("duration", 0.0)
+				grid = meta.get("beat_grid", [])
 		dsp.load_file(ProjectSettings.globalize_path("res://tests/unit/test_track.wav"), duration_hint)
+		
+		if target_player == player_a:
+			_beat_grid_a = grid
+		else:
+			_beat_grid_b = grid
 		
 		if target_player == player_a:
 			_speed_scale_a = 1.0
@@ -883,6 +947,10 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 	
 	if not cached_on_disk:
 		var base_url: String = SettingsManager.webdav_url
+		if not base_url.begins_with("http://") and not base_url.begins_with("https://"):
+			print("AudioManager: Invalid or empty WebDAV URL, cannot stream: ", base_url)
+			loading_track.emit(false)
+			return false
 		var username := SettingsManager.webdav_username
 		var password := SettingsManager.webdav_password
 		
@@ -945,12 +1013,19 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 	
 	var dsp = dsp_a if target_player == player_a else dsp_b
 	var duration_hint = 0.0
-	var metadata_service = get_node_or_null("/root/MetadataService")
+	var grid = []
+	var metadata_service = _metadata_service
 	if is_instance_valid(metadata_service):
 		var meta = metadata_service.get_cached_metadata(href_path)
 		if not meta.is_empty():
 			duration_hint = meta.get("duration", 0.0)
+			grid = meta.get("beat_grid", [])
 	var load_ok = dsp.load_file(ProjectSettings.globalize_path(cache_path), duration_hint)
+	
+	if target_player == player_a:
+		_beat_grid_a = grid
+	else:
+		_beat_grid_b = grid
 	if not load_ok:
 		print("AudioManager: Failed to load file into C++ AudioDSP: ", cache_path)
 		return false
@@ -1074,10 +1149,16 @@ func update_preferred_type() -> void:
 	match step:
 		0, 2:
 			preferred_type_for_current_track = "perfect"
+			energy_threshold = 0.15
 		1:
 			preferred_type_for_current_track = "interesting"
+			energy_threshold = 0.35
 		3:
 			preferred_type_for_current_track = "creative" if randf() < 0.5 else "interesting"
+			if preferred_type_for_current_track == "creative":
+				energy_threshold = 0.60
+			else:
+				energy_threshold = 0.35
 
 func get_preferred_smart_match() -> String:
 	if current_playlist.is_empty() or current_track_index == -1 or current_track_index >= current_playlist.size():
@@ -1154,6 +1235,13 @@ func start_transition(force_immediate: bool = false) -> void:
 	var load_success = await _load_and_stream_remote_file(next_track_href, incoming_player, false)
 	if not load_success:
 		is_transitioning = false
+		current_track_index = prev_index
+		if smart_mixing_enabled:
+			smart_mixing_step_index = (smart_mixing_step_index - 1 + 4) % 4
+		var active_href = ""
+		if current_track_index >= 0 and current_track_index < current_playlist.size():
+			active_href = current_playlist[current_track_index]
+		transition_completed.emit(active_href)
 		return
 	
 	# Calculate target trigger time based on outro segment and 8-bar loop boundaries
@@ -1179,25 +1267,51 @@ func start_transition(force_immediate: bool = false) -> void:
 				var active_dsp = dsp_a if active_player == player_a else dsp_b
 				var transients_out = meta_out.get("transients", [])
 				var transients_in = meta_in.get("transients", [])
-				t_trigger = get_aligned_trigger_time(active_dsp.get_playback_position(), bpm_out, downbeats_out, cue_in, downbeats_in, outro_start, transients_out, transients_in)
-				has_beat_metadata = true
+				if force_immediate:
+					var pos = active_dsp.get_playback_position()
+					var next_downbeat = -1.0
+					for db in downbeats_out:
+						if db > pos:
+							next_downbeat = db
+							break
+					if next_downbeat == -1.0:
+						var last_db = downbeats_out[-1]
+						var bar_duration = 240.0 / (bpm_out if bpm_out > 0.0 else 120.0)
+						var diff = pos - last_db
+						var bars_passed = ceil(diff / bar_duration)
+						if bars_passed <= 0:
+							bars_passed = 1
+						next_downbeat = last_db + (bars_passed * bar_duration)
+					t_trigger = next_downbeat
+					has_beat_metadata = true
+				else:
+					t_trigger = get_aligned_trigger_time(active_dsp.get_playback_position(), bpm_out, downbeats_out, cue_in, downbeats_in, outro_start, transients_out, transients_in)
+					has_beat_metadata = true
 
-	# Wait until outgoing track has duration or less remaining (skip if force_immediate is true)
+	# Wait until outgoing track has duration or less remaining (skip if force_immediate is true, unless we have beat metadata to quantize)
 	var duration = get_transition_duration(transition_type, current_href, next_track_href)
-	if not force_immediate:
+	if not force_immediate or (force_immediate and has_beat_metadata):
 		var last_pos := -1.0
 		var stall_accumulated := 0.0
-		while active_player and active_player.playing and is_transitioning:
+		# Use is_playing (app-level intent) as the loop authority — not active_player.playing
+		# (a Godot node property that goes false the moment the stream ends). During a
+		# seamless DJ session the music is always conceptually playing; node state is
+		# only checked inside the loop as a signal to break early.
+		while is_playing and is_transitioning:
+			if not active_player:
+				break
 			var active_dsp = dsp_a if active_player == player_a else dsp_b
-			if active_dsp.get_playback_position() > 0.0 and active_dsp.is_finished():
+			# Stream finished naturally — fire the transition now rather than waiting
+			if not active_player.playing or active_dsp.is_finished():
+				print("AudioManager: Outgoing stream ended during transition wait. Firing immediately.")
 				break
 			var pos = active_dsp.get_playback_position()
 			
-			# Stall detection: if we are supposed to be playing but position isn't changing
-			if is_playing and not active_player.stream_paused:
+			# Stall detection: position genuinely frozen (e.g. WebDAV buffer stall)
+			if not active_player.stream_paused:
 				if pos == last_pos:
 					stall_accumulated += get_process_delta_time()
-					if stall_accumulated >= 3.0:
+					if stall_accumulated >= 1.5:
 						print("AudioManager: Playback stall detected in transition loop. Breaking.")
 						break
 				else:
@@ -1219,10 +1333,10 @@ func start_transition(force_immediate: bool = false) -> void:
 		return
 	
 	# Start crossfading
-	_run_deck_transition(active_player, incoming_player, transition_type, t_trigger)
+	_run_deck_transition(active_player, incoming_player, transition_type, t_trigger, force_immediate)
 
 
-func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlayer, transition_type: String, target_trigger_time: float = -1.0) -> void:
+func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlayer, transition_type: String, target_trigger_time: float = -1.0, force_immediate: bool = false) -> void:
 	if _pitch_ramp_tween and _pitch_ramp_tween.is_valid():
 		_pitch_ramp_tween.kill()
 		
@@ -1287,8 +1401,26 @@ func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlay
 				var outro = segments.get("outro", [])
 				var outro_start = outro[0] if not outro.is_empty() else _get_track_cue_out(current_href, current_track_length) - 30.0
 				
-				t_trigger = get_aligned_trigger_time(outgoing_dsp.get_playback_position(), bpm_out, downbeats_out, cue_in, downbeats_in, outro_start)
-				has_beat_metadata = true
+				if force_immediate:
+					var pos = outgoing_dsp.get_playback_position()
+					var next_downbeat = -1.0
+					for db in downbeats_out:
+						if db > pos:
+							next_downbeat = db
+							break
+					if next_downbeat == -1.0:
+						var last_db = downbeats_out[-1]
+						var bar_duration = 240.0 / (bpm_out if bpm_out > 0.0 else 120.0)
+						var diff = pos - last_db
+						var bars_passed = ceil(diff / bar_duration)
+						if bars_passed <= 0:
+							bars_passed = 1
+						next_downbeat = last_db + (bars_passed * bar_duration)
+					t_trigger = next_downbeat
+					has_beat_metadata = true
+				else:
+					t_trigger = get_aligned_trigger_time(outgoing_dsp.get_playback_position(), bpm_out, downbeats_out, cue_in, downbeats_in, outro_start)
+					has_beat_metadata = true
 				
 	if t_trigger < 0.0:
 		t_trigger = outgoing_dsp.get_playback_position()
@@ -1305,6 +1437,9 @@ func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlay
 			if db >= cue_in:
 				first_downbeat_in = db
 				break
+				
+		if force_immediate:
+			cue_in = first_downbeat_in
 				
 		var target_db_out = t_trigger + (first_downbeat_in - cue_in)
 		var beat_grid_out = meta_out.get("beat_grid", []) if not meta_out.is_empty() else []
@@ -1371,6 +1506,7 @@ func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlay
 			
 		var dsp_final = dsp_a if incoming == player_a else dsp_b
 		current_track_length = dsp_final.get_duration()
+		_outro_load_triggered = false
 		transition_completed.emit(current_playlist[current_track_index])
 		_update_prefetching()
 		update_preferred_type()
@@ -1565,11 +1701,22 @@ func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlay
 		, 0.0, -6.0, half_duration).set_trans(Tween.TRANS_SINE)
 		
 		# --- MIDPOINT CALLBACK ---
-		# Stop outgoing player to freeze the audio input
+		# Stop outgoing player to freeze the audio input into the reverb tail.
+		# If the outgoing player has already stopped naturally (stream ended before
+		# the midpoint), abort the second-half gracefully — there is no signal to
+		# freeze, so continuing the fade-out serves no purpose.
 		active_tween.tween_callback(func():
 			if is_instance_valid(outgoing) and outgoing.playing:
 				print("REVERB FREEZE MIDPOINT: STOPPING OUTGOING")
 				outgoing.stop()
+			else:
+				print("REVERB FREEZE MIDPOINT: Outgoing already silent — aborting second half.")
+				if active_tween and active_tween.is_valid():
+					active_tween.kill()
+				AudioServer.set_bus_volume_db(out_bus_idx, -60.0)
+				if out_reverb:
+					out_reverb.wet = 0.0
+					out_reverb.dry = 1.0
 		)
 		
 		# --- SECOND HALF ---
@@ -1715,6 +1862,7 @@ func _run_deck_transition(outgoing: AudioStreamPlayer, incoming: AudioStreamPlay
 	
 	var dsp_final = dsp_a if incoming == player_a else dsp_b
 	current_track_length = dsp_final.get_duration()
+	_outro_load_triggered = false
 	transition_completed.emit(current_playlist[current_track_index])
 	_update_prefetching()
 	update_preferred_type()

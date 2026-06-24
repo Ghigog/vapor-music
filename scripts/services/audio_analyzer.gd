@@ -25,7 +25,16 @@ var download_http_request: HTTPRequest = null
 var _prefetch_queue: Array[String] = []
 var _prefetch_total := 0
 var _prefetch_downloaded := 0
-var is_transitioning_active := false
+var is_transitioning_active := false:
+	set(val):
+		_mutex.lock()
+		is_transitioning_active = val
+		_mutex.unlock()
+	get:
+		_mutex.lock()
+		var val = is_transitioning_active
+		_mutex.unlock()
+		return val
 
 func _ready() -> void:
 	_mutex = Mutex.new()
@@ -36,7 +45,6 @@ func _ready() -> void:
 	
 	if ClassDB.class_exists("AudioDSP"):
 		dsp = ClassDB.instantiate("AudioDSP")
-		add_child(dsp)
 	else:
 		print("AudioAnalyzer: AudioDSP class not registered in ClassDB yet.")
 	
@@ -206,6 +214,24 @@ func start_prefetching(hrefs: Array) -> void:
 			print("AudioAnalyzer: Cancelled download of ", current_download_href, " to prioritize next track: ", next_track)
 			current_download_href = ""
 
+	# Check if the active download is still in the look-ahead window.
+	# If not, cancel the active download request, delete its temp file, and reset current_download_href.
+	if not current_download_href.is_empty() and not hrefs.has(current_download_href):
+		if is_instance_valid(download_http_request):
+			download_http_request.cancel_request()
+			download_http_request.queue_free()
+			download_http_request = null
+		
+		var ext: String = current_download_href.get_extension()
+		if ext.is_empty():
+			ext = "mp3"
+		var temp_path = cache_dir + current_download_href.md5_text() + "." + ext + ".analyzer.tmp"
+		if FileAccess.file_exists(temp_path):
+			DirAccess.remove_absolute(temp_path)
+			
+		print("AudioAnalyzer: Cancelled download of ", current_download_href, " (no longer in look-ahead)")
+		current_download_href = ""
+
 	# Ensure all cached files are scanned and queued for background analysis
 	scan_library_cache(hrefs)
 	
@@ -227,28 +253,10 @@ func start_prefetching(hrefs: Array) -> void:
 	var ready_count = get_ready_tracks_count(hrefs)
 			
 	if background_caching_active:
-		# If a download is active, check if it is still in the new look-ahead window
+		# If a download is active, since it's already verified to be in the look-ahead window,
+		# just remove it from the new queue to avoid re-prefetching.
 		if not current_download_href.is_empty():
-			if not hrefs.has(current_download_href):
-				# Cancel current download request
-				if is_instance_valid(download_http_request):
-					download_http_request.cancel_request()
-					download_http_request.queue_free()
-					download_http_request = null
-				
-				# Remove temp file
-				var ext: String = current_download_href.get_extension()
-				if ext.is_empty():
-					ext = "mp3"
-				var temp_path = cache_dir + current_download_href.md5_text() + "." + ext + ".analyzer.tmp"
-				if FileAccess.file_exists(temp_path):
-					DirAccess.remove_absolute(temp_path)
-					
-				print("AudioAnalyzer: Cancelled download of ", current_download_href, " (no longer in look-ahead)")
-				current_download_href = ""
-			else:
-				# Keep current download, but erase from new queue
-				new_queue.erase(current_download_href)
+			new_queue.erase(current_download_href)
 				
 		_prefetch_queue = new_queue
 		_prefetch_total = hrefs.size()
@@ -331,6 +339,10 @@ func _download_next_prefetch() -> void:
 		DirAccess.make_dir_recursive_absolute(cache_dir)
 		
 	var base_url: String = SettingsManager.webdav_url
+	if not base_url.begins_with("http://") and not base_url.begins_with("https://"):
+		print("AudioAnalyzer prefetch: Invalid or empty WebDAV URL, skipping prefetch for: ", href)
+		call_deferred("_download_next_prefetch")
+		return
 	var username := SettingsManager.webdav_username
 	var password := SettingsManager.webdav_password
 	

@@ -18,6 +18,10 @@ boot_splash/stretch_mode=0
 boot_splash/image="uid://d0k2oxtxkwd2c"
 config/icon="uid://d0k2oxtxkwd2c"
 
+[audio]
+
+driver/output_latency=30
+
 [autoload]
 
 ThemeManager="*res://autoloads/ThemeManager.gd"
@@ -62,8 +66,3 @@ ai_assistant_hub/preferences/audio_hints=true
 rendering_device/driver.windows="d3d12"
 textures/vram_compression/import_etc2_astc=true
 viewport/transparent_background=true
-
-[audio]
-
-driver/output_latency=30
-

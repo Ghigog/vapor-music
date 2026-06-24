@@ -86,6 +86,25 @@ value = 16.0
 rounded = true
 alignment = 1
 
+[node name="UIScaleContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="UIScaleLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/UIScaleContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "UI Scale"
+
+[node name="UIScaleSpinBox" type="SpinBox" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/UIScaleContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 0.5
+max_value = 2.5
+step = 0.05
+value = 1.0
+alignment = 1
+
 [node name="ConnectLibraryButton" type="Button" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
 unique_name_in_owner = true
 layout_mode = 2

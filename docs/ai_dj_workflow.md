@@ -35,7 +35,7 @@ When Smart Mixing is active, the AI DJ automatically cycles through a repeating 
 ---
 
 ## 5. Transition Effects
-The AI DJ automatically selects from 6 transition types based on the BPM difference and the key relationship (harmonic, modulated, or clashing) to mimic how a real DJ plays. Transition durations are phrase-adaptive: if outro/intro segment metadata is available for both tracks, the duration is dynamically set as the minimum of the two segment lengths, clamped between `3.0s` and `16.0s`. Otherwise, it falls back to the transition type's default duration.
+The AI DJ automatically selects from 6 transition types based on the BPM difference and the key relationship (harmonic, modulated, or clashing) to mimic how a real DJ plays. Transition durations are phrase-adaptive: if outro/intro segment metadata is available for both tracks, the duration is dynamically set as the overlap of the segments, quantized to standard musical phrase boundaries (16, 8, or 4 bars) based on the outgoing track's BPM, and clamped between `4.0s` and `16.0s` (falling back to `4.0s` if no standard phrase fits). Otherwise, it falls back to the transition type's default duration.
 
 Transition loading is triggered `duration + 4.0` seconds before the track ends, and begins exactly at `duration` seconds remaining:
 
@@ -45,3 +45,10 @@ Transition loading is triggered `duration + 4.0` seconds before the track ends, 
 - **Reverb Freeze** (BPM diff < 8.0, Clashing / Switch): 5.0s blend. Outgoing reverb freezes at midpoint to wash out the clashing frequencies and mask the transition.
 - **Echo Out** (BPM diff >= 8.0, Clashing/Modulated or Fresh/Switch): 5.0s blend. Outgoing delay rings out from midpoint to mask key clashes and major BPM jumps.
 - **Standard Crossfade** (BPM diff >= 8.0, Harmonic): 3.0s blend. Fast linear volume crossfade.
+
+---
+
+## 6. Mix Tuner & Vibe Limit
+- **Vibe Limit**: Sets the maximum energy difference allowed between consecutive tracks.
+- **Strict (Low Value)**: Restricts the AI DJ to very smooth transitions with consistent energy, keeping the overall vibe stable.
+- **Loose (High Value)**: Permits larger energy shifts between tracks, allowing for dramatic drops and climbs in set intensity.

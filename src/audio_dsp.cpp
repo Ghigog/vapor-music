@@ -6,6 +6,7 @@
 #include <essentia/pool.h>
 #include <rubberband/RubberBandStretcher.h>
 #include <cmath>
+#include <complex>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -28,6 +29,7 @@ void AudioDSP::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("clear_stream"), &AudioDSP::clear_stream);
 	ClassDB::bind_method(D_METHOD("get_cache_sample_count"), &AudioDSP::get_cache_sample_count);
 	ClassDB::bind_method(D_METHOD("get_cross_correlation_offset", "other_dsp", "self_time", "other_time", "window_size_sec"), &AudioDSP::get_cross_correlation_offset);
+	ClassDB::bind_method(D_METHOD("get_waveform_peaks", "num_bins"), &AudioDSP::get_waveform_peaks);
 }
 
 AudioDSP::AudioDSP() {
@@ -48,6 +50,36 @@ AudioDSP::~AudioDSP() {
 
 String AudioDSP::get_library_version() const {
 	return "Essentia v2.1 / Rubber Band v3.3";
+}
+
+namespace {
+const double PI = 3.14159265358979323846;
+typedef std::complex<double> Complex;
+
+// In-place Cooley-Tukey FFT
+void fft(std::vector<Complex>& a) {
+	int n = a.size();
+	for (int i = 1, j = 0; i < n; i++) {
+		int bit = n >> 1;
+		for (; j & bit; bit >>= 1) j ^= bit;
+		j ^= bit;
+		if (i < j) std::swap(a[i], a[j]);
+	}
+	for (int len = 2; len <= n; len <<= 1) {
+		double angle = -2 * PI / len;
+		Complex wlen(std::cos(angle), std::sin(angle));
+		for (int i = 0; i < n; i += len) {
+			Complex w(1);
+			for (int j = 0; j < len / 2; j++) {
+				Complex u = a[i + j];
+				Complex v = a[i + j + len / 2] * w;
+				a[i + j] = u + v;
+				a[i + j + len / 2] = u - v;
+				w *= wlen;
+			}
+		}
+	}
+}
 }
 
 static std::string extract_key_from_segment(const std::vector<float>& audio, float start_sec, float end_sec, const Dictionary& camelot_map) {
@@ -236,31 +268,130 @@ Dictionary AudioDSP::analyze_file(String file_path) {
 			}
 		}
 		
-		// Determine boundaries for intro, outro
+		// Determine boundaries for intro, outro using Spectral Centroid and transient density
 		float intro_end = 30.0f; // Default 30 seconds
 		float outro_start = duration - 30.0f; // Default last 30 seconds
-		
-		// Intro end: first window where RMS exceeds 40% of max_rms and holds for at least 3 seconds
-		for (int i = 0; i < num_windows - 3; ++i) {
-			if (rms_envelope[i] > max_rms * 0.40f &&
-				rms_envelope[i+1] > max_rms * 0.40f &&
-				rms_envelope[i+2] > max_rms * 0.40f) {
-				intro_end = static_cast<float>(i);
-				break;
+
+		if (num_windows >= 3 && audio.size() >= 1024) {
+			// Precompute Hanning window
+			std::vector<double> hanning(1024);
+			for (int n = 0; n < 1024; ++n) {
+				hanning[n] = 0.5 * (1.0 - std::cos(2.0 * PI * n / 1023.0));
+			}
+
+			// Frame-by-frame analysis
+			int fft_size = 1024;
+			int hop_size = 512;
+			int num_frames = (audio.size() - fft_size) / hop_size + 1;
+
+			std::vector<float> frame_sc(num_frames, 0.0f);
+			std::vector<float> frame_hfc(num_frames, 0.0f);
+			std::vector<Complex> fft_buffer(fft_size);
+
+			for (int f = 0; f < num_frames; ++f) {
+				int start_idx = f * hop_size;
+				for (int n = 0; n < fft_size; ++n) {
+					fft_buffer[n] = audio[start_idx + n] * hanning[n];
+				}
+
+				fft(fft_buffer);
+
+				double sc_numerator = 0.0;
+				double sc_denominator = 0.0;
+				double hfc_sum = 0.0;
+
+				for (int k = 0; k <= fft_size / 2; ++k) {
+					double mag = std::abs(fft_buffer[k]);
+					double freq = k * 44100.0 / fft_size;
+
+					sc_numerator += freq * mag;
+					sc_denominator += mag;
+					hfc_sum += k * mag;
+				}
+
+				frame_sc[f] = (sc_denominator > 1e-6) ? static_cast<float>(sc_numerator / sc_denominator) : 0.0f;
+				frame_hfc[f] = static_cast<float>(hfc_sum);
+			}
+
+			// Onset detection function (first-order difference of HFC)
+			std::vector<float> onset_strength(num_frames, 0.0f);
+			float max_os = 0.0f;
+			for (int f = 1; f < num_frames; ++f) {
+				onset_strength[f] = std::max(0.0f, frame_hfc[f] - frame_hfc[f-1]);
+				if (onset_strength[f] > max_os) {
+					max_os = onset_strength[f];
+				}
+			}
+
+			// Detect transient frames
+			std::vector<bool> is_transient(num_frames, false);
+			float os_threshold = max_os * 0.05f;
+			if (os_threshold < 10.0f) os_threshold = 10.0f;
+
+			for (int f = 1; f < num_frames - 1; ++f) {
+				if (onset_strength[f] > os_threshold &&
+					onset_strength[f] > onset_strength[f-1] &&
+					onset_strength[f] > onset_strength[f+1]) {
+					is_transient[f] = true;
+				}
+			}
+
+			// Aggregate to 1-second windows
+			std::vector<float> window_sc(num_windows, 0.0f);
+			std::vector<int> window_sc_count(num_windows, 0);
+			std::vector<int> window_transients(num_windows, 0);
+
+			for (int f = 0; f < num_frames; ++f) {
+				int win_idx = static_cast<int>((f * hop_size) / 44100.0);
+				if (win_idx >= 0 && win_idx < num_windows) {
+					window_sc[win_idx] += frame_sc[f];
+					window_sc_count[win_idx]++;
+					if (is_transient[f]) {
+						window_transients[win_idx]++;
+					}
+				}
+			}
+
+			for (int i = 0; i < num_windows; ++i) {
+				if (window_sc_count[i] > 0) {
+					window_sc[i] /= window_sc_count[i];
+				}
+			}
+
+			// Intro end detection: first window where RMS exceeds 15%, Spectral Centroid > 800 Hz, and transient density (sum of 3s) >= 3
+			for (int i = 0; i < num_windows - 2; ++i) {
+				int transient_sum = window_transients[i] + window_transients[i+1] + window_transients[i+2];
+				if (rms_envelope[i] > max_rms * 0.15f &&
+					window_sc[i] > 800.0f &&
+					transient_sum >= 3) {
+					intro_end = static_cast<float>(i);
+					break;
+				}
+			}
+
+			// Outro start detection: last window from end where rhythmic activity is still present
+			for (int i = num_windows - 3; i >= 0; --i) {
+				int transient_sum = window_transients[i] + window_transients[i+1] + window_transients[i+2];
+				if (transient_sum >= 3 &&
+					rms_envelope[i] > max_rms * 0.15f &&
+					window_sc[i] > 800.0f) {
+					outro_start = static_cast<float>(i + 3);
+					break;
+				}
 			}
 		}
-		intro_end = std::clamp(intro_end, 5.0f, std::min(60.0f, duration * 0.25f));
-		
-		// Outro start: last window from the end where RMS falls and stays below 30% of max_rms
-		for (int i = num_windows - 1; i >= 3; --i) {
-			if (rms_envelope[i] > max_rms * 0.30f &&
-				rms_envelope[i-1] > max_rms * 0.30f &&
-				rms_envelope[i-2] > max_rms * 0.30f) {
-				outro_start = static_cast<float>(i + 1);
-				break;
-			}
+
+		// Clamp boundaries safely
+		float intro_high_bound = std::min(60.0f, duration * 0.25f);
+		float intro_low_bound = 0.0f;
+		if (intro_high_bound < intro_low_bound) {
+			intro_high_bound = intro_low_bound;
 		}
-		outro_start = std::clamp(outro_start, duration * 0.75f, duration - 10.0f);
+		intro_end = std::clamp(intro_end, intro_low_bound, intro_high_bound);
+
+		float outro_low_bound = duration * 0.70f;
+		float outro_high_bound = std::max(outro_low_bound, duration - 5.0f);
+		outro_start = std::clamp(outro_start, outro_low_bound, outro_high_bound);
 		
 		Dictionary segments;
 		PackedFloat32Array intro_seg;
@@ -1124,4 +1255,68 @@ float AudioDSP::get_cross_correlation_offset(AudioDSP* other_dsp, float self_tim
 
 	float offset_sec = static_cast<float>(best_lag) / 4000.0f;
 	return offset_sec;
+}
+
+PackedFloat32Array AudioDSP::get_waveform_peaks(int num_bins) {
+	PackedFloat32Array peaks;
+	peaks.resize(num_bins);
+	for (int i = 0; i < num_bins; i++) {
+		peaks[i] = 0.0f;
+	}
+
+	std::vector<float> samples_copy;
+	{
+		std::unique_lock<std::mutex> lock(m_mutex);
+		if (m_samples.empty() || num_bins <= 0) {
+			return peaks;
+		}
+		samples_copy = m_samples;
+	}
+
+	size_t total_samples = samples_copy.size();
+	double samples_per_bin = static_cast<double>(total_samples) / num_bins;
+
+	float max_overall = 0.0f;
+	for (int i = 0; i < num_bins; i++) {
+		size_t start_idx = static_cast<size_t>(i * samples_per_bin);
+		size_t end_idx = static_cast<size_t>((i + 1) * samples_per_bin);
+		if (end_idx > total_samples) {
+			end_idx = total_samples;
+		}
+		if (start_idx >= end_idx) {
+			peaks[i] = 0.0f;
+			continue;
+		}
+
+		// Calculate "averaged peak amplitudes" using 256-sample sub-windows
+		float sum_peaks = 0.0f;
+		int count = 0;
+		size_t sub_window = 256;
+		for (size_t k = start_idx; k < end_idx; k += sub_window) {
+			float sub_peak = 0.0f;
+			size_t limit = std::min(k + sub_window, end_idx);
+			for (size_t m = k; m < limit; m++) {
+				float abs_val = std::abs(samples_copy[m]);
+				if (abs_val > sub_peak) {
+					sub_peak = abs_val;
+				}
+			}
+			sum_peaks += sub_peak;
+			count++;
+		}
+		float peak = (count > 0) ? (sum_peaks / count) : 0.0f;
+		peaks[i] = peak;
+		if (peak > max_overall) {
+			max_overall = peak;
+		}
+	}
+
+	// Normalize to 0.0 - 1.0
+	if (max_overall > 0.0f) {
+		for (int i = 0; i < num_bins; i++) {
+			peaks[i] /= max_overall;
+		}
+	}
+
+	return peaks;
 }

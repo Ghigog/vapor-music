@@ -1,12 +1,12 @@
 - Step 1: [x]
-	- Implement window border/corner resizing in main.gd
+	- Remove manual transition controls (CrossoverLabel, CrossoverHBox, CrossoverSlider, CrossoverValue) from vibe_screen.tscn
 - Step 2: [x]
-	- Implement sidebar dragging in sidebar.gd
+	- Remove CrossoverSlider references, layout styling, and label updater from vibe_screen.gd
 - Step 3: [x]
-	- Add vertical progress bar on separator line
+	- Update AudioManager.get_transition_duration() to calculate, quantize, and clamp phrase-adaptive durations
 - Step 4: [x]
-	- Add playback tiles to sidebar footer
+	- Update existing dynamic duration unit tests in test_dj_transitions.gd to match new phrase boundaries
 - Step 5: [x]
-	- Reposition mobile progress bar to top line of mini player
+	- Add test_phrase_adaptive_transition_various_bpms unit test in test_dj_transitions.gd
 - Step 6: [x]
-	- Run gut tests and verify
+	- Run gut tests and verify everything compiles and passes

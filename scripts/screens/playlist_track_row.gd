@@ -10,9 +10,10 @@ var track_href: String = ""
 var track_title: String = ""
 var track_artist: String = ""
 
-var remove_btn: Button
-var title_label: Label
-var artist_label: Label
+@onready var title_label: Label = $Margin/HBox/InfoVBox/TitleLabel
+@onready var artist_label: Label = $Margin/HBox/InfoVBox/ArtistLabel
+@onready var remove_btn: Button = $Margin/HBox/RemoveBtn
+
 
 func setup(p_index: int, p_href: String, p_title: String, p_artist: String) -> void:
 	index = p_index
@@ -28,60 +29,38 @@ func setup(p_index: int, p_href: String, p_title: String, p_artist: String) -> v
 func _ready() -> void:
 	var theme = ThemeManager.current_theme
 	
-	var margin = MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_top", 6)
-	margin.add_theme_constant_override("margin_bottom", 6)
-	margin.mouse_filter = Control.MOUSE_FILTER_PASS
-	add_child(margin)
-	
-	var hbox = HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 16)
-	hbox.mouse_filter = Control.MOUSE_FILTER_PASS
-	margin.add_child(hbox)
-	
-	# Title / Artist info area
-	var info_vbox = VBoxContainer.new()
-	info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	info_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
-	hbox.add_child(info_vbox)
-	
-	title_label = Label.new()
 	title_label.text = track_title
 	title_label.add_theme_font_override("font", theme.font_ui)
 	title_label.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	title_label.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
-	info_vbox.add_child(title_label)
 	
-	artist_label = Label.new()
 	artist_label.text = track_artist
 	artist_label.add_theme_font_override("font", theme.font_ui)
 	artist_label.add_theme_font_size_override("font_size", theme.TYPE_XS)
 	artist_label.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
-	info_vbox.add_child(artist_label)
 	
-	# Remove button (shows on hover)
-	remove_btn = Button.new()
-	remove_btn.text = "✕"
-	remove_btn.flat = true
 	remove_btn.visible = false
-	remove_btn.custom_minimum_size = Vector2(24, 24)
 	remove_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 	remove_btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
 	remove_btn.add_theme_font_override("font", theme.font_ui)
 	remove_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
 	remove_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
-	remove_btn.pressed.connect(func(): remove_requested.emit(index))
-	hbox.add_child(remove_btn)
+	
+	if not remove_btn.pressed.is_connected(_on_remove_btn_pressed):
+		remove_btn.pressed.connect(_on_remove_btn_pressed)
 	
 	# Connect hover signals
-	mouse_entered.connect(_on_mouse_entered)
-	mouse_exited.connect(_on_mouse_exited)
+	if not mouse_entered.is_connected(_on_mouse_entered):
+		mouse_entered.connect(_on_mouse_entered)
+	if not mouse_exited.is_connected(_on_mouse_exited):
+		mouse_exited.connect(_on_mouse_exited)
 	
 	# Style normal panel
 	add_theme_stylebox_override("panel", ThemeManager.make_transparent())
 	mouse_filter = Control.MOUSE_FILTER_PASS
+
+func _on_remove_btn_pressed() -> void:
+	remove_requested.emit(index)
 
 func _on_mouse_entered() -> void:
 	add_theme_stylebox_override("panel", ThemeManager.make_nav_item_hover())

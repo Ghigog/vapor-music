@@ -82,7 +82,7 @@ func make_nav_panel() -> StyleBoxFlat:
 	
 	s.content_margin_left = 16
 	s.content_margin_top = 16
-	s.content_margin_right = 16
+	s.content_margin_right = 0
 	s.content_margin_bottom = 16
 	return s
 

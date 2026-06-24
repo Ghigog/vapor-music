@@ -15,6 +15,8 @@ extends Control
 
 @onready var font_size_label: Label = %FontSizeLabel
 @onready var font_size_spinbox: SpinBox = %FontSizeSpinBox
+@onready var ui_scale_label: Label = %UIScaleLabel
+@onready var ui_scale_spinbox: SpinBox = %UIScaleSpinBox
 @onready var connect_library_button: Button = %ConnectLibraryButton
 @onready var cache_title: Label = %CacheTitle
 @onready var prefetch_button: Button = %PrefetchButton
@@ -64,6 +66,10 @@ func _ready() -> void:
 	# Initialize font size spinbox
 	font_size_spinbox.value = SettingsManager.base_font_size
 	font_size_spinbox.value_changed.connect(_on_font_size_changed)
+	
+	# Initialize UI Scale spinbox
+	ui_scale_spinbox.value = SettingsManager.ui_scale
+	ui_scale_spinbox.value_changed.connect(_on_ui_scale_changed)
 	
 	# Connect library connection trigger button
 	connect_library_button.pressed.connect(_on_connect_library_pressed)
@@ -221,6 +227,27 @@ func _apply_styles() -> void:
 		spinbox_style.content_margin_right = 8
 		spinbox_line_edit.add_theme_stylebox_override("normal", spinbox_style)
 		spinbox_line_edit.add_theme_stylebox_override("focus", spinbox_style)
+
+	# UI scale label style
+	ui_scale_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	ui_scale_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	ui_scale_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	
+	# Set custom SpinBox line edit font and color for UI scale
+	var ui_spinbox_line_edit = ui_scale_spinbox.get_line_edit()
+	if ui_spinbox_line_edit:
+		ui_spinbox_line_edit.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		ui_spinbox_line_edit.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		ui_spinbox_line_edit.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+		var spinbox_style = StyleBoxFlat.new()
+		spinbox_style.bg_color = ThemeManager.current_theme.BG_ELEVATED
+		spinbox_style.border_color = ThemeManager.current_theme.GLASS_BORDER
+		spinbox_style.set_border_width_all(1)
+		spinbox_style.set_corner_radius_all(ThemeManager.current_theme.RADIUS_XS)
+		spinbox_style.content_margin_left = 8
+		spinbox_style.content_margin_right = 8
+		ui_spinbox_line_edit.add_theme_stylebox_override("normal", spinbox_style)
+		ui_spinbox_line_edit.add_theme_stylebox_override("focus", spinbox_style)
 		
 	# Connect Library Button styles
 	connect_library_button.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
@@ -315,6 +342,9 @@ func _on_theme_selected(index: int) -> void:
 
 func _on_font_size_changed(value: float) -> void:
 	SettingsManager.save_base_font_size(int(value))
+
+func _on_ui_scale_changed(value: float) -> void:
+	SettingsManager.save_ui_scale(value)
 
 func _on_connect_library_pressed() -> void:
 	NavManager.show_setup_wizard()

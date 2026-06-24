@@ -68,9 +68,13 @@ func test_parse_webdav_xml_files() -> void:
   <d:response>
     <d:href>/dav/Koofr/Music/song2.FLAC</d:href>
   </d:response>
+  <d:response>
+    <d:href>/dav/Koofr/Music/song3.m4a</d:href>
+  </d:response>
 </d:multistatus>"""
 
 	var tracks: Array = service._parse_webdav_xml(xml)
-	assert_eq(tracks.size(), 2)
+	assert_eq(tracks.size(), 3)
 	assert_true(tracks.has("/dav/Koofr/Music/song1.mp3"))
 	assert_true(tracks.has("/dav/Koofr/Music/song2.FLAC"))
+	assert_true(tracks.has("/dav/Koofr/Music/song3.m4a"))

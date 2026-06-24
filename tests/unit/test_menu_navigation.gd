@@ -17,7 +17,7 @@ func before_each() -> void:
 	add_child_autofree(main_node)
 	sidebar = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/Sidebar")
 	if sidebar:
-		playlists_container = sidebar.get_node_or_null("VBox/Scroll/ScrollVBox/NavItems/PlaylistsContainer")
+		playlists_container = sidebar.get_node_or_null("VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsContainer")
 
 func after_each() -> void:
 	if FileAccess.file_exists("user://test_menu_playlists.json"):
@@ -28,9 +28,9 @@ func after_each() -> void:
 func test_navigation_buttons_accessible_and_functional() -> void:
 	assert_not_null(sidebar, "Sidebar node must exist in main scene layout")
 	
-	var nav_library = sidebar.get_node_or_null("VBox/Scroll/ScrollVBox/NavItems/NavLibrary") as Button
-	var nav_vibe = sidebar.get_node_or_null("VBox/Scroll/ScrollVBox/NavItems/NavVibe") as Button
-	var nav_settings = sidebar.get_node_or_null("VBox/Scroll/ScrollVBox/NavItems/NavSettings") as Button
+	var nav_library = sidebar.get_node_or_null("VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavLibrary") as Button
+	var nav_vibe = sidebar.get_node_or_null("VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavVibe") as Button
+	var nav_settings = sidebar.get_node_or_null("VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavSettings") as Button
 	
 	assert_not_null(nav_library, "NavLibrary button must exist in Sidebar")
 	assert_not_null(nav_vibe, "NavVibe button must exist in Sidebar")

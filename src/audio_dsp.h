@@ -96,6 +96,7 @@ public:
 	int get_cache_sample_count() const;
 	float get_cross_correlation_offset(AudioDSP* other_dsp, float self_time, float other_time, float window_size_sec);
 	std::vector<float> get_samples_in_range(float start_time, float duration_sec);
+	PackedFloat32Array get_waveform_peaks(int num_bins);
 
 private:
 	Dictionary _analyze_samples_impl(const std::vector<float>& samples, float sample_rate);

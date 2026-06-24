@@ -9,24 +9,33 @@ script = ExtResource("1_sid")
 [node name="VBox" type="VBoxContainer" parent="." unique_id=93778840]
 layout_mode = 2
 
-[node name="Header" type="HBoxContainer" parent="VBox" unique_id=701100102]
-custom_minimum_size = Vector2(0, 64)
+[node name="Header" type="MarginContainer" parent="VBox" unique_id=701100102]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_override_constants/margin_right = 16
+
+[node name="HeaderHBox" type="HBoxContainer" parent="VBox/Header" unique_id=86516821]
 layout_mode = 2
 
-[node name="LogoContainer" type="HBoxContainer" parent="VBox/Header" unique_id=86516821]
+[node name="LogoContainer" type="HBoxContainer" parent="VBox/Header/HeaderHBox" unique_id=86516822]
 layout_mode = 2
 
-[node name="LogoControl" type="TextureRect" parent="VBox/Header/LogoContainer" unique_id=334224450]
-clip_contents = true
+[node name="LogoControl" type="TextureRect" parent="VBox/Header/HeaderHBox/LogoContainer" unique_id=334224450]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 texture = ExtResource("2_48v00")
-expand_mode = 2
+expand_mode = 3
+stretch_mode = 6
 
-[node name="AppName" type="Label" parent="VBox/Header/LogoContainer" unique_id=282413385]
+[node name="AppName" type="Label" parent="VBox/Header/HeaderHBox/LogoContainer" unique_id=282413385]
 layout_mode = 2
 text = "vapor"
 
-[node name="Sep" type="HSeparator" parent="VBox" unique_id=2072507393]
+[node name="SepMargin" type="MarginContainer" parent="VBox" unique_id=2072507393]
+layout_mode = 2
+theme_override_constants/margin_right = 16
+
+[node name="Sep" type="HSeparator" parent="VBox/SepMargin" unique_id=2072507394]
 layout_mode = 2
 
 [node name="Scroll" type="ScrollContainer" parent="VBox" unique_id=93778841]
@@ -34,119 +43,138 @@ layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 
-[node name="ScrollVBox" type="VBoxContainer" parent="VBox/Scroll" unique_id=93778842]
+[node name="ScrollMargin" type="MarginContainer" parent="VBox/Scroll" unique_id=93778843]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/margin_right = 16
+
+[node name="ScrollVBox" type="VBoxContainer" parent="VBox/Scroll/ScrollMargin" unique_id=93778842]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="NavItems" type="VBoxContainer" parent="VBox/Scroll/ScrollVBox" unique_id=753665606]
+[node name="NavItems" type="VBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox" unique_id=753665606]
 layout_mode = 2
 
-[node name="NavLibrary" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=1158763471]
+[node name="NavLibrary" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=1158763471]
 layout_mode = 2
 text = "  ♫  Library"
 
-[node name="NavVibe" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=1701566622]
+[node name="NavVibe" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=1701566622]
 layout_mode = 2
 text = "  ✦  Vibe"
 
-[node name="PlaylistsHeader" type="HBoxContainer" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=999001]
+[node name="PlaylistsHeader" type="HBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=999001]
 layout_mode = 2
 
-[node name="TogglePlaylistsBtn" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999002]
+[node name="TogglePlaylistsBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999002]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "  ▤  Playlists"
 
-[node name="AddPlaylistBtn" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999003]
+[node name="AddPlaylistBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999003]
 layout_mode = 2
 text = " + "
 
-[node name="PlaylistsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=999004]
+[node name="PlaylistsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=999004]
 layout_mode = 2
 
-[node name="NavSettings" type="Button" parent="VBox/Scroll/ScrollVBox/NavItems" unique_id=356337049]
+[node name="NavSettings" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=356337049]
 layout_mode = 2
 text = "  ⛭  Settings"
 
-[node name="PreviewSquare" type="AspectRatioContainer" parent="VBox/Scroll/ScrollVBox" unique_id=555555551]
+[node name="PreviewMargin" type="MarginContainer" parent="VBox" unique_id=555555550]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_right = 16
+
+[node name="PreviewSquare" type="AspectRatioContainer" parent="VBox/PreviewMargin" unique_id=555555551]
 layout_mode = 2
 
-[node name="PreviewTexture" type="TextureRect" parent="VBox/Scroll/ScrollVBox/PreviewSquare" unique_id=555555552]
+[node name="PreviewTexture" type="TextureRect" parent="VBox/PreviewMargin/PreviewSquare" unique_id=555555552]
 layout_mode = 2
 expand_mode = 1
 stretch_mode = 6
 
-[node name="BlurOverlay" type="Panel" parent="VBox/Scroll/ScrollVBox/PreviewSquare" unique_id=555555553]
+[node name="BlurOverlay" type="Panel" parent="VBox/PreviewMargin/PreviewSquare" unique_id=555555553]
 visible = false
 layout_mode = 2
 
-[node name="LyricsScroll" type="ScrollContainer" parent="VBox/Scroll/ScrollVBox/PreviewSquare" unique_id=555555554]
+[node name="LyricsScroll" type="ScrollContainer" parent="VBox/PreviewMargin/PreviewSquare" unique_id=555555554]
 visible = false
 layout_mode = 2
 horizontal_scroll_mode = 0
 
-[node name="LyricsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollVBox/PreviewSquare/LyricsScroll" unique_id=555555555]
+[node name="LyricsContainer" type="VBoxContainer" parent="VBox/PreviewMargin/PreviewSquare/LyricsScroll" unique_id=555555555]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 8
 
-[node name="NowPlaying" type="VBoxContainer" parent="VBox" unique_id=111111111]
+[node name="NowPlayingMargin" type="MarginContainer" parent="VBox" unique_id=111111118]
+layout_mode = 2
+theme_override_constants/margin_right = 16
+
+[node name="NowPlaying" type="VBoxContainer" parent="VBox/NowPlayingMargin" unique_id=111111111]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="Separator" type="HSeparator" parent="VBox/NowPlaying" unique_id=111111112]
+[node name="Separator" type="HSeparator" parent="VBox/NowPlayingMargin/NowPlaying" unique_id=111111112]
 layout_mode = 2
 
-[node name="HBox" type="HBoxContainer" parent="VBox/NowPlaying" unique_id=111111113]
+[node name="HBox" type="HBoxContainer" parent="VBox/NowPlayingMargin/NowPlaying" unique_id=111111113]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="Info" type="VBoxContainer" parent="VBox/NowPlaying/HBox" unique_id=111111115]
+[node name="Info" type="VBoxContainer" parent="VBox/NowPlayingMargin/NowPlaying/HBox" unique_id=111111115]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="TrackTitle" type="Label" parent="VBox/NowPlaying/HBox/Info" unique_id=111111116]
+[node name="TrackTitle" type="Label" parent="VBox/NowPlayingMargin/NowPlaying/HBox/Info" unique_id=111111116]
 custom_minimum_size = Vector2(10, 0)
 layout_mode = 2
 text = "Not Playing"
 text_overrun_behavior = 3
 
-[node name="ArtistLabel" type="Label" parent="VBox/NowPlaying/HBox/Info" unique_id=111111117]
+[node name="ArtistLabel" type="Label" parent="VBox/NowPlayingMargin/NowPlaying/HBox/Info" unique_id=111111117]
 custom_minimum_size = Vector2(10, 0)
 layout_mode = 2
 text = "No Artist"
 text_overrun_behavior = 3
 
-[node name="PlayerTiles" type="VBoxContainer" parent="VBox" unique_id=222222221]
+[node name="PlayerTilesMargin" type="MarginContainer" parent="VBox" unique_id=222222227]
+layout_mode = 2
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 8
+
+[node name="PlayerTiles" type="HBoxContainer" parent="VBox/PlayerTilesMargin" unique_id=222222221]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="PlayPauseBtn" type="Button" parent="VBox/PlayerTiles" unique_id=222222222]
-custom_minimum_size = Vector2(0, 48)
-layout_mode = 2
-text = "▶ Play"
-
-[node name="ControlsHBox" type="HBoxContainer" parent="VBox/PlayerTiles" unique_id=222222223]
-layout_mode = 2
-theme_override_constants/separation = 2
-
-[node name="BackwardBtn" type="Button" parent="VBox/PlayerTiles/ControlsHBox" unique_id=222222224]
-custom_minimum_size = Vector2(0, 40)
+[node name="BackwardBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222224]
+custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "⏮ Back"
+text = "⏮"
 
-[node name="ForwardBtn" type="Button" parent="VBox/PlayerTiles/ControlsHBox" unique_id=222222225]
-custom_minimum_size = Vector2(0, 40)
+[node name="PlayPauseBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222222]
+custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Next ⏭"
+text = "▶"
 
-[node name="ShuffleBtn" type="Button" parent="VBox/PlayerTiles" unique_id=222222226]
-custom_minimum_size = Vector2(0, 40)
+[node name="ForwardBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222225]
+custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
+size_flags_horizontal = 3
+text = "⏭"
+
+[node name="ShuffleBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222226]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
 toggle_mode = true
-text = "Smart Mixing"
+text = "✦"
 alignment = 1

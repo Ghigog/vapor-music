@@ -54,6 +54,10 @@ This file provides context and best practices for Gemini CLI agents working on t
     ```bash
     /Applications/Godot.app/Contents/MacOS/Godot --headless --path . -s addons/gut/gut_cmdln.gd -gdir=res://tests/unit
     ```
+- **CRITICAL TROUBLESHOOTING**:
+  - If running Godot (headless or GUI) crashes immediately with:
+	`*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '*** -[NSBundle initWithURL:]: nil URL argument'`
+    it means the compiled GDExtension library `bin/libaudio_dsp.macos.debug.dylib` is missing. See [README.md](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/README.md) for compilation instructions to resolve this crash before attempting to run tests or open the project.
 - Make sure your findings are documented in a dedicated "walkthrough" document, taking the walkthrough template file as a basis.
 - Announce that the implementation is complete.
 

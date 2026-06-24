@@ -105,6 +105,26 @@ func test_upcoming_track_override_used_in_transition() -> void:
 	assert_eq(signal_args[0], "song3.mp3", "Transition track should be the override 'song3.mp3'")
 	assert_true(signal_args[1] in ["Standard Crossfade", "Bass Swap", "Filter Sweep", "Echo Out", "Reverb Freeze", "Tempo Morph"], "Transition type should be valid")
 
+func test_transition_failure_reverts_state() -> void:
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3", "song3.mp3"]
+	AudioManager.current_track_index = 0
+	AudioManager.upcoming_track_override = "invalid_song.mp3"
+	
+	# Append to playlist so it's a valid candidate but will fail loading
+	AudioManager.current_playlist.append("invalid_song.mp3")
+	
+	var original_step_index = AudioManager.smart_mixing_step_index
+	var signal_watcher = watch_signals(AudioManager)
+	
+	await AudioManager.start_transition()
+	
+	assert_eq(AudioManager.current_track_index, 0, "current_track_index should be reverted to 0")
+	assert_eq(AudioManager.is_transitioning, false, "is_transitioning should be set to false")
+	assert_eq(AudioManager.smart_mixing_step_index, original_step_index, "smart_mixing_step_index should be reverted")
+	assert_signal_emitted(AudioManager, "transition_completed", "Should emit transition_completed signal on failure")
+	var signal_args = get_signal_parameters(AudioManager, "transition_completed", 0)
+	assert_eq(signal_args[0], "song1.mp3", "Completed transition track should be the reverted current track 'song1.mp3'")
+
 func test_transition_switches_active_players() -> void:
 	# We want to test that _run_deck_transition switches active_player at the end.
 	var deck_a = AudioManager.player_a
@@ -628,7 +648,7 @@ func test_phrase_adaptive_transition_durations() -> void:
 	var track_out = "res://tests/unit/song_out.mp3"
 	var track_in = "res://tests/unit/song_in.mp3"
 	
-	# 1. Normal case: outro duration = 12s, intro duration = 16s -> dynamic duration = 12s
+	# 1. Normal case: outro duration = 12s, intro duration = 16s -> dynamic duration = 8s (4 bars at 120 BPM)
 	MetadataService.cache[track_out] = {
 		"segments": {
 			"outro": [180.0, 192.0]
@@ -641,16 +661,16 @@ func test_phrase_adaptive_transition_durations() -> void:
 	}
 	
 	var duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
-	assert_eq(duration, 12.0, "Duration should be set to 12.0s (min of 12 and 16)")
+	assert_eq(duration, 8.0, "Duration should be set to 8.0s (4 bars) at 120 BPM")
 	
-	# 2. Clamped minimum case: outro = 2s, intro = 10s -> dynamic duration = 3.0s (clamped min)
+	# 2. Clamped minimum case: outro = 2s, intro = 10s -> dynamic duration = 4.0s (clamped min)
 	MetadataService.cache[track_out] = {
 		"segments": {
 			"outro": [180.0, 182.0]
 		}
 	}
 	duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
-	assert_eq(duration, 3.0, "Duration should be clamped to minimum 3.0s")
+	assert_eq(duration, 4.0, "Duration should be clamped to minimum 4.0s")
 	
 	# 3. Clamped maximum case: outro = 20s, intro = 18s -> dynamic duration = 16.0s (clamped max)
 	MetadataService.cache[track_out] = {
@@ -664,7 +684,7 @@ func test_phrase_adaptive_transition_durations() -> void:
 		}
 	}
 	duration = AudioManager.get_transition_duration("Bass Swap", track_out, track_in)
-	assert_eq(duration, 16.0, "Duration should be clamped to maximum 16.0s")
+	assert_eq(duration, 16.0, "Duration should be clamped to maximum 16.0s (8 bars at 120 BPM)")
 	
 	# 4. Incomplete/Missing metadata fallback case:
 	# Outgoing track has no segments -> should fallback to default "Bass Swap" duration (6.0s)
@@ -690,12 +710,82 @@ func test_phrase_adaptive_transition_durations() -> void:
 	AudioManager._incoming_href = track_in
 	
 	AudioManager._run_deck_transition(AudioManager.player_a, AudioManager.player_b, "Bass Swap")
-	assert_eq(AudioManager._active_transition_duration, 12.0, "_active_transition_duration should be bound to 12.0s")
+	assert_eq(AudioManager._active_transition_duration, 8.0, "_active_transition_duration should be bound to 8.0s")
 	
 	# Clean up
 	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
 		AudioManager.active_tween.kill()
 	AudioManager.is_transitioning = false
+	AudioManager.transition_duration = original_td
+	AudioManager.smart_mixing_enabled = original_smart_mixing
+	MetadataService.cache.erase(track_out)
+	MetadataService.cache.erase(track_in)
+
+func test_phrase_adaptive_transition_various_bpms() -> void:
+	var original_smart_mixing = AudioManager.smart_mixing_enabled
+	AudioManager.smart_mixing_enabled = true
+	var original_td = AudioManager.transition_duration
+	AudioManager.transition_duration = 0.0
+
+	var track_out = "res://tests/unit/song_out.mp3"
+	var track_in = "res://tests/unit/song_in.mp3"
+
+	# Test 120 BPM: 1 bar = 2.0s. 8 bars = 16.0s.
+	# Outro = 18s -> overlap = 18s -> clamped_overlap = 16s -> 8 bars fits -> 16.0s
+	MetadataService.cache[track_out] = {
+		"bpm": 120.0,
+		"segments": {
+			"outro": [100.0, 118.0]
+		}
+	}
+	MetadataService.cache[track_in] = {
+		"bpm": 120.0,
+		"segments": {
+			"intro": [0.0, 20.0]
+		}
+	}
+	var duration = AudioManager.get_transition_duration("Standard Crossfade", track_out, track_in)
+	assert_eq(duration, 16.0, "At 120 BPM with 18s overlap, duration should be 16.0s (8 bars)")
+
+	# Test 150 BPM: 1 bar = 1.6s.
+	# Outro = 15s -> overlap = 15s -> clamped_overlap = 15s.
+	# Candidates: 16 bars (25.6s), 8 bars (12.8s), 4 bars (6.4s).
+	# Largest <= 15.0s is 8 bars (12.8s).
+	MetadataService.cache[track_out] = {
+		"bpm": 150.0,
+		"segments": {
+			"outro": [100.0, 115.0]
+		}
+	}
+	MetadataService.cache[track_in] = {
+		"bpm": 150.0,
+		"segments": {
+			"intro": [0.0, 20.0]
+		}
+	}
+	duration = AudioManager.get_transition_duration("Standard Crossfade", track_out, track_in)
+	assert_eq(duration, 12.8, "At 150 BPM with 15s overlap, duration should be 12.8s (8 bars)")
+
+	# Test 90 BPM: 1 bar = 2.667s.
+	# Outro = 12s -> overlap = 12s -> clamped_overlap = 12s.
+	# Candidates: 16 bars (42.67s), 8 bars (21.33s), 4 bars (10.67s).
+	# Largest <= 12.0s is 4 bars (10.67s).
+	MetadataService.cache[track_out] = {
+		"bpm": 90.0,
+		"segments": {
+			"outro": [100.0, 112.0]
+		}
+	}
+	MetadataService.cache[track_in] = {
+		"bpm": 90.0,
+		"segments": {
+			"intro": [0.0, 20.0]
+		}
+	}
+	duration = AudioManager.get_transition_duration("Standard Crossfade", track_out, track_in)
+	assert_almost_eq(duration, 10.67, 0.05, "At 90 BPM with 12s overlap, duration should be ~10.67s (4 bars)")
+
+	# Cleanup
 	AudioManager.transition_duration = original_td
 	AudioManager.smart_mixing_enabled = original_smart_mixing
 	MetadataService.cache.erase(track_out)
@@ -889,6 +979,87 @@ func test_probabilistic_transition_selection_and_stability() -> void:
 	MetadataService.cache.erase("songA.mp3")
 	MetadataService.cache.erase("songB.mp3")
 	AudioManager.smart_mixing_enabled = original_sm
+
+
+func test_quantized_manual_transition() -> void:
+	var deck_a = AudioManager.player_a
+	var deck_b = AudioManager.player_b
+	
+	assert_eq(AudioManager.active_player, deck_a, "Deck A should start as active")
+	
+	var original_sm = AudioManager.smart_mixing_enabled
+	var original_td = AudioManager.transition_duration
+	var original_is_playing = AudioManager.is_playing
+	
+	AudioManager.smart_mixing_enabled = true
+	AudioManager.transition_duration = 0.1
+	AudioManager.is_playing = true
+	
+	# Configure playlists and cache metadata
+	AudioManager.current_playlist = ["song1.mp3", "song2.mp3"]
+	AudioManager.current_track_index = 0
+	AudioManager.active_player = deck_a
+	
+	var meta_a = {
+		"bpm": 120.0,
+		"musical_key": "1A",
+		"genre": "Techno",
+		"duration": 300.0,
+		"downbeats": [2.0, 4.0, 6.0, 8.0],
+		"beat_grid": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0]
+	}
+	var meta_b = {
+		"bpm": 120.0,
+		"musical_key": "1A",
+		"genre": "Techno",
+		"duration": 300.0,
+		"downbeats": [1.0, 3.0, 5.0],
+		"beat_grid": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+	}
+	
+	MetadataService.cache["song1.mp3"] = meta_a
+	MetadataService.cache["song2.mp3"] = meta_b
+	
+	# Load song1.mp3 on deck_a and start playing
+	await AudioManager._load_and_stream_remote_file("song1.mp3", deck_a, true)
+	
+	# Seek outgoing track to 3.1s (so next downbeat is at 4.0s)
+	AudioManager.dsp_a.seek_pos(3.1)
+	
+	# Trigger manual transition with force_immediate = true
+	AudioManager.start_transition(true)
+	
+	# Wait for mock file loading and initial loop check
+	await wait_seconds(0.05)
+	
+	assert_true(AudioManager.is_transitioning, "Should be in transitioning state")
+	assert_true(AudioManager.active_tween == null or not AudioManager.active_tween.is_valid(), "Transition should be waiting for the downbeat boundary")
+	
+	# Seek past the scheduled downbeat (4.0s) to 4.1s
+	AudioManager.dsp_a.seek_pos(4.1)
+	
+	# Wait for loop to detect crossing of downbeat
+	await get_tree().process_frame
+	await get_tree().process_frame
+	
+	assert_true(AudioManager.active_tween != null and AudioManager.active_tween.is_valid(), "Transition should have started after crossing the downbeat boundary")
+	
+	# Wait for the transition tween to finish
+	await wait_seconds(0.15)
+	
+	assert_eq(AudioManager.active_player, deck_b, "Active player should switch to Deck B after transition finishes")
+	assert_eq(AudioManager.is_transitioning, false, "Should no longer be transitioning")
+	
+	# Clean up cache and restore settings
+	MetadataService.cache.erase("song1.mp3")
+	MetadataService.cache.erase("song2.mp3")
+	AudioManager.smart_mixing_enabled = original_sm
+	AudioManager.transition_duration = original_td
+	AudioManager.is_playing = original_is_playing
+	if AudioManager.active_tween and AudioManager.active_tween.is_valid():
+		AudioManager.active_tween.kill()
+	AudioManager.is_transitioning = false
+
 
 
 

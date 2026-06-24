@@ -94,6 +94,10 @@ func get_cached_metadata(href: String) -> Dictionary:
 
 ## Helper to make a standard HTTP GET request and return the body as string or null.
 func _make_http_request(url: String) -> String:
+	if not url.begins_with("http://") and not url.begins_with("https://"):
+		print("MetadataService HTTP Error: Invalid or empty URL: ", url)
+		return ""
+		
 	var http := HTTPRequest.new()
 	add_child(http)
 	http.set_tls_options(TLSOptions.client())
@@ -140,6 +144,8 @@ func _download_image(url: String) -> String:
 	add_child(http)
 	http.set_tls_options(TLSOptions.client())
 	
+	http.download_file = local_path
+	
 	var err := http.request(url, ["User-Agent: VaporMusicPlayer/1.0 (Godot)"], HTTPClient.METHOD_GET)
 	if err != OK:
 		http.queue_free()
@@ -147,15 +153,13 @@ func _download_image(url: String) -> String:
 		
 	var response = await http.request_completed
 	var response_code: int = response[1]
-	var response_body: PackedByteArray = response[3]
 	http.queue_free()
 	
-	if response_code == 200 and response_body.size() > 0:
-		var file := FileAccess.open(local_path, FileAccess.WRITE)
-		if file:
-			file.store_buffer(response_body)
-			file.close()
-			return local_path
+	if response_code == 200:
+		return local_path
+	else:
+		if FileAccess.file_exists(local_path):
+			DirAccess.remove_absolute(local_path)
 			
 	return ""
 
