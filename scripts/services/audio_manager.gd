@@ -80,8 +80,8 @@ var current_pll_phase_error_ms: float = 0.0
 var _pll_cc_timer: float = 0.0
 var _last_cc_offset: float = 0.0
 
-var dsp_a: AudioDSP
-var dsp_b: AudioDSP
+var dsp_a: Node = null
+var dsp_b: Node = null
 var _speed_scale_a: float = 1.0
 var _speed_scale_b: float = 1.0
 
@@ -458,12 +458,6 @@ func _ready() -> void:
 	# Programmatically setup DeckA and DeckB audio buses with EQ and Filter effects
 	_setup_audio_buses()
 	
-	dsp_a = AudioDSP.new()
-	add_child(dsp_a)
-	
-	dsp_b = AudioDSP.new()
-	add_child(dsp_b)
-	
 	# Build out runtime child container component dynamically
 	player_a = AudioStreamPlayer.new()
 	player_a.bus = "DeckA"
@@ -474,6 +468,20 @@ func _ready() -> void:
 	player_b.bus = "DeckB"
 	add_child(player_b)
 	player_b.finished.connect(func(): _on_deck_finished(player_b))
+	
+	if ClassDB.class_exists("AudioDSP"):
+		dsp_a = ClassDB.instantiate("AudioDSP")
+	else:
+		dsp_a = load("res://scripts/services/audio_dsp_stub.gd").new()
+		dsp_a.player = player_a
+	add_child(dsp_a)
+	
+	if ClassDB.class_exists("AudioDSP"):
+		dsp_b = ClassDB.instantiate("AudioDSP")
+	else:
+		dsp_b = load("res://scripts/services/audio_dsp_stub.gd").new()
+		dsp_b.player = player_b
+	add_child(dsp_b)
 	
 	active_player = player_a
 	player = active_player
@@ -848,7 +856,7 @@ func play_track(track_href: String, playlist: Array) -> void:
 	_load_and_stream_remote_file(track_href, active_player)
 
 ## Utility to load a file on a DSP instance, skipping loading if it's already cached.
-func load_dsp_file(dsp: AudioDSP, href_path: String, local_path: String, duration_hint: float) -> bool:
+func load_dsp_file(dsp: Node, href_path: String, local_path: String, duration_hint: float) -> bool:
 	if dsp == dsp_a:
 		if _dsp_a_href == href_path and dsp.get_cache_sample_count() > 0:
 			print("AudioManager: File already loaded on dsp_a: ", href_path)
@@ -1042,14 +1050,21 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 	else:
 		_beat_grid_b = grid
 	if not load_ok:
-		print("AudioManager: Failed to load file into C++ AudioDSP: ", cache_path)
+		print("AudioManager: Failed to load file into AudioDSP: ", cache_path)
 		return false
 		
-	var generator := AudioStreamGenerator.new()
-	generator.mix_rate = 44100
-	generator.buffer_length = 0.5 # 500ms safety buffer to prevent macOS screen swipe hiccups
-	
-	target_player.stream = generator
+	var is_native_dsp = ClassDB.class_exists("AudioDSP")
+	if is_native_dsp:
+		var generator := AudioStreamGenerator.new()
+		generator.mix_rate = 44100
+		generator.buffer_length = 0.5 # 500ms safety buffer to prevent macOS screen swipe hiccups
+		target_player.stream = generator
+	else:
+		var stream = _load_standard_audio_stream(ProjectSettings.globalize_path(cache_path))
+		if stream == null:
+			print("AudioManager: Failed to load standard audio stream fallback for cache path: ", cache_path)
+			return false
+		target_player.stream = stream
 	
 	if target_player == player_a:
 		_speed_scale_a = 1.0
@@ -1065,7 +1080,10 @@ func _load_and_stream_remote_file(href_path: String, target_player: AudioStreamP
 	dsp.seek_pos(cue_in)
 	
 	if play_immediately:
-		target_player.play()
+		if is_native_dsp:
+			target_player.play()
+		else:
+			target_player.play(cue_in)
 		target_player.stream_paused = false
 	else:
 		target_player.stop()
@@ -2428,7 +2446,7 @@ func _apply_pll_sync(delta: float) -> void:
 	current_pll_phase_error_ms = pll_data["phase_error_ms"]
 
 
-func _feed_deck(p: AudioStreamPlayer, dsp: AudioDSP, base_speed_scale: float, is_incoming: bool) -> void:
+func _feed_deck(p: AudioStreamPlayer, dsp: Node, base_speed_scale: float, is_incoming: bool) -> void:
 	if not p or not p.playing or p.stream_paused:
 		return
 	var playback: AudioStreamGeneratorPlayback = p.get_stream_playback()
@@ -2509,3 +2527,54 @@ func _check_and_log_skip() -> void:
 			_last_transition_info["transition_type"],
 			"skipped"
 		)
+
+
+func _load_standard_audio_stream(path: String) -> AudioStream:
+	var ext = path.get_extension().to_lower()
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return null
+	var bytes = file.get_buffer(file.get_length())
+	file.close()
+	
+	if ext == "mp3":
+		var stream = AudioStreamMP3.new()
+		stream.data = bytes
+		return stream
+	elif ext == "wav":
+		var stream = AudioStreamWAV.new()
+		_parse_wav_header(stream, bytes)
+		return stream
+	elif ext == "ogg":
+		var stream = AudioStreamOggVorbis.load_from_file(path)
+		return stream
+	return null
+
+func _parse_wav_header(stream: AudioStreamWAV, bytes: PackedByteArray) -> void:
+	if bytes.size() < 44:
+		return
+	var mix_rate = bytes.decode_u32(24)
+	var channels = bytes.decode_u16(22)
+	var bits = bytes.decode_u16(34)
+	
+	stream.mix_rate = mix_rate
+	if channels == 2:
+		stream.stereo = true
+	else:
+		stream.stereo = false
+		
+	if bits == 8:
+		stream.format = AudioStreamWAV.FORMAT_8_BITS
+	elif bits == 16:
+		stream.format = AudioStreamWAV.FORMAT_16_BITS
+	else:
+		stream.format = AudioStreamWAV.FORMAT_16_BITS
+		
+	var data_idx = 36
+	while data_idx < bytes.size() - 8:
+		var chunk_header = bytes.slice(data_idx, data_idx + 4).get_string_from_ascii()
+		var chunk_size = bytes.decode_u32(data_idx + 4)
+		if chunk_header == "data":
+			stream.data = bytes.slice(data_idx + 8, data_idx + 8 + chunk_size)
+			break
+		data_idx += 8 + chunk_size

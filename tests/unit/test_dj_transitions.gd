@@ -323,6 +323,9 @@ func test_reverb_freeze_envelope() -> void:
 	var bus_a = AudioServer.get_bus_index("DeckA")
 	var bus_b = AudioServer.get_bus_index("DeckB")
 	
+	# Make outgoing deck play so midpoint callback doesn't abort
+	deck_a.play()
+	
 	# Start a Reverb Freeze transition
 	AudioManager._run_deck_transition(deck_a, deck_b, "Reverb Freeze")
 	assert_not_null(AudioManager.active_tween, "Tween should be created")
@@ -487,6 +490,10 @@ func test_incoming_player_not_playing_during_loading() -> void:
 	deck_a.play()
 	AudioManager.active_player = deck_a
 	AudioManager.current_track_length = 30.0 # Set track length to prevent wait loop from breaking immediately
+	
+	# Make outgoing deck play and load a file so is_finished() is false, which keeps the wait loop active
+	deck_a.play()
+	AudioManager.dsp_a.load_file(ProjectSettings.globalize_path("res://tests/unit/test_track.wav"), 30.0)
 	
 	var original_duration = AudioManager.transition_duration
 	AudioManager.transition_duration = 5.0 # Set long duration so wait loop runs
@@ -842,7 +849,11 @@ func test_transition_loop_exits_on_stall() -> void:
 	deck_a.play()
 	AudioManager.active_player = deck_a
 	
-	AudioManager.dsp_a.clear_stream()
+	# Replace dsp_a with a stub to simulate a stalled playback position (constant 0.0)
+	var original_dsp = AudioManager.dsp_a
+	var stub_dsp = load("res://scripts/services/audio_dsp_stub.gd").new()
+	AudioManager.dsp_a = stub_dsp
+	AudioManager.add_child(stub_dsp)
 	
 	var original_track_length = AudioManager.current_track_length
 	AudioManager.current_track_length = 30.0
@@ -870,6 +881,10 @@ func test_transition_loop_exits_on_stall() -> void:
 	AudioManager.transition_duration = original_td
 	AudioManager.is_playing = original_is_playing
 	AudioManager.current_track_length = original_track_length
+	
+	# Restore original dsp_a
+	AudioManager.dsp_a = original_dsp
+	stub_dsp.queue_free()
 
 func test_transition_with_smart_mixing_disabled_cuts_immediately() -> void:
 	var deck_a = AudioManager.player_a
