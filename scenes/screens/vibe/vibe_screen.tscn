@@ -67,24 +67,14 @@ script = ExtResource("3_timeline")
 layout_mode = 2
 text = "AI DJ: Monitoring Vibe..."
 
-[node name="RunnerUpsSection" type="PanelContainer" parent="VBox"]
+[node name="RunnerUpsScroll" type="ScrollContainer" parent="VBox"]
 layout_mode = 2
 size_flags_vertical = 3
 size_flags_stretch_ratio = 1.3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 1
 
-[node name="VBox" type="VBoxContainer" parent="VBox/RunnerUpsSection"]
-layout_mode = 2
-theme_override_constants/separation = 12
-
-[node name="SectionTitle" type="Label" parent="VBox/RunnerUpsSection/VBox"]
-layout_mode = 2
-text = "NEXT COMPATIBLE BLENDS"
-
-[node name="RunnerUpsScroll" type="ScrollContainer" parent="VBox/RunnerUpsSection/VBox"]
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="RunnerUpsList" type="BoxContainer" parent="VBox/RunnerUpsSection/VBox/RunnerUpsScroll"]
+[node name="RunnerUpsList" type="BoxContainer" parent="VBox/RunnerUpsScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
@@ -110,7 +100,7 @@ grow_vertical = 2
 color = Color(0, 0, 0, 0.4)
 
 [node name="Panel" type="PanelContainer" parent="HelpModal"]
-custom_minimum_size = Vector2(650, 450)
+custom_minimum_size = Vector2(320, 400)
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5

@@ -18,7 +18,7 @@ var webdav_folder: String = "Music"
 
 # UI Settings
 var base_font_size: int = 16
-var ui_scale: float = 1.5
+var ui_scale: float = 1.2
 
 # Headphone Calibration Settings
 var headphone_profile: String = ""
@@ -70,7 +70,7 @@ func load_settings() -> void:
 		webdav_password = config.get_value(SECTION_WEBDAV, "password", "")
 		webdav_folder = config.get_value(SECTION_WEBDAV, "folder", "Music")
 		base_font_size = config.get_value(SECTION_SYSTEM, "base_font_size", 16)
-		ui_scale = config.get_value(SECTION_SYSTEM, "ui_scale", 1.5)
+		ui_scale = config.get_value(SECTION_SYSTEM, "ui_scale", 1.2)
 		headphone_profile = config.get_value(SECTION_SYSTEM, "headphone_profile", "")
 		headphone_calibration_enabled = config.get_value(SECTION_SYSTEM, "headphone_calibration_enabled", false)
 		credentials_loaded.emit()

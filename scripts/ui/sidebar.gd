@@ -37,7 +37,6 @@ var active_drag_source_item: Control = null
 
 ## Maps screen-name strings to their corresponding Button nodes.
 var _nav_buttons: Dictionary = {}
-var _dragging := false
 var _custom_stylebox: StyleBoxFlat = null
 var _playlists_visible := true
 
@@ -173,17 +172,8 @@ func _gui_input(event: InputEvent) -> void:
 	if not PlatformManager.is_desktop():
 		return
 		
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				_dragging = true
-				get_viewport().set_input_as_handled()
-			else:
-				if _dragging:
-					_dragging = false
-					get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and _dragging:
-		get_window().position += Vector2i(event.relative)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		get_window().start_drag()
 		get_viewport().set_input_as_handled()
 
 
@@ -328,9 +318,11 @@ func _load_image_to_texture(path: String) -> void:
 		preview_texture.texture = null
 		return
 		
-	var img = Image.load_from_file(path)
+	var img: Image = Image.load_from_file(path)
 	if img:
-		var tex = ImageTexture.create_from_image(img)
+		if img.get_width() > 512 or img.get_height() > 512:
+			img.resize(512, 512, Image.INTERPOLATE_LANCZOS)
+		var tex: ImageTexture = ImageTexture.create_from_image(img)
 		preview_texture.texture = tex
 	else:
 		preview_texture.texture = null

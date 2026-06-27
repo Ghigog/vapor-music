@@ -1,7 +1,6 @@
-[gd_scene load_steps=3 format=3 uid="uid://dmyajuekdcds"]
+[gd_scene load_steps=2 format=3 uid="uid://dmyajuekdcds"]
 
 [ext_resource type="Script" path="res://scripts/screens/settings_screen.gd" id="1_set"]
-[ext_resource type="Script" path="res://scripts/ui/calibration_graph.gd" id="2_graph"]
 
 [node name="SettingsScreen" type="Control" unique_id=1189031825]
 layout_mode = 3
@@ -28,7 +27,7 @@ size_flags_vertical = 3
 
 [node name="SettingsPanel" type="PanelContainer" parent="ScrollContainer/Center"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(500, 0)
+custom_minimum_size = Vector2(280, 0)
 layout_mode = 2
 
 [node name="MarginContainer" type="MarginContainer" parent="ScrollContainer/Center/SettingsPanel"]
@@ -141,55 +140,129 @@ layout_mode = 2
 text = "Idle"
 horizontal_alignment = 1
 
-[node name="AutoEQSeparator" type="HSeparator" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
+
+[node name="PerformanceSeparator" type="HSeparator" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="AutoEQSection" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
+[node name="PerformanceSection" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="AutoEQTitle" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+[node name="PerformanceTitle" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Headphone EQ Calibration"
+text = "System Diagnostics"
 horizontal_alignment = 1
 
-[node name="AutoEQToggleContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+[node name="FPSContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection"]
 layout_mode = 2
 alignment = 1
 
-[node name="AutoEQToggleLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQToggleContainer"]
+[node name="FPSLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection/FPSContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Enable Calibration"
+text = "Frame Rate (FPS)"
 
-[node name="AutoEQToggle" type="CheckButton" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQToggleContainer"]
+[node name="FPSValue" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection/FPSContainer"]
 unique_name_in_owner = true
 layout_mode = 2
+text = "0 FPS"
+horizontal_alignment = 2
 
-[node name="AutoEQSearchContainer" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+[node name="RAMContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection"]
 layout_mode = 2
-theme_override_constants/separation = 6
+alignment = 1
 
-[node name="AutoEQSearchLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQSearchContainer"]
+[node name="RAMLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection/RAMContainer"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Search Headphone Model"
+size_flags_horizontal = 3
+text = "Memory Usage (RAM)"
 
-[node name="AutoEQSearch" type="LineEdit" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQSearchContainer"]
+[node name="RAMValue" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection/RAMContainer"]
 unique_name_in_owner = true
 layout_mode = 2
-placeholder_text = "Type model name... (e.g. Sennheiser)"
-clear_button_enabled = true
+text = "0.0 MB"
+horizontal_alignment = 2
 
-[node name="AutoEQSelector" type="OptionButton" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection/AutoEQSearchContainer"]
+[node name="AudioLatencyContainer" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection"]
+layout_mode = 2
+alignment = 1
+
+[node name="AudioLatencyLabel" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection/AudioLatencyContainer"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
+text = "Audio Output Latency"
 
-[node name="CalibrationGraph" type="Control" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/AutoEQSection"]
+[node name="AudioLatencyValue" type="Label" parent="ScrollContainer/Center/SettingsPanel/MarginContainer/Content/PerformanceSection/AudioLatencyContainer"]
 unique_name_in_owner = true
 layout_mode = 2
-script = ExtResource("2_graph")
+text = "0.0 ms"
+horizontal_alignment = 2
+
+[node name="CacheOverlay" type="PanelContainer" parent="ScrollContainer/Center/SettingsPanel"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="OverlayMargin" type="MarginContainer" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="OverlayContent" type="VBoxContainer" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="OverlaySpinner" type="Label" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "⚙"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="OverlayTitle" type="Label" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Caching & Analyzing Library..."
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="OverlayProgress" type="Label" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Caching... 0 / 0 (0%)"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="OverlayWarning" type="Label" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Songs may not play until local caching is complete."
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+
+[node name="OverlayBtnRow" type="HBoxContainer" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="MinimizeCacheBtn" type="Button" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent/OverlayBtnRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Run in Background"
+
+[node name="StopCacheBtn" type="Button" parent="ScrollContainer/Center/SettingsPanel/CacheOverlay/OverlayMargin/OverlayContent/OverlayBtnRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Stop Caching"
+
+

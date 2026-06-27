@@ -11,9 +11,14 @@ var playhead_ratio: float = 0.0:
 		playhead_ratio = clampf(val, 0.0, 1.0)
 		queue_redraw()
 
+var _cached_bg_sb: StyleBoxFlat = null
+
 func _ready() -> void:
 	resized.connect(queue_redraw)
-	ThemeManager.theme_changed.connect(queue_redraw)
+	ThemeManager.theme_changed.connect(func():
+		_cached_bg_sb = null
+		queue_redraw()
+	)
 
 func set_peaks(new_peaks: PackedFloat32Array) -> void:
 	peaks = new_peaks
@@ -44,8 +49,9 @@ func _draw() -> void:
 	var center_y = H / 2.0
 	
 	# Draw glass panel background
-	var bg_sb = ThemeManager.make_glass_panel(theme.RADIUS_SM, 0.15)
-	draw_style_box(bg_sb, Rect2(0, 0, W, H))
+	if not _cached_bg_sb:
+		_cached_bg_sb = ThemeManager.make_glass_panel(theme.RADIUS_SM, 0.15)
+	draw_style_box(_cached_bg_sb, Rect2(0, 0, W, H))
 
 	if peaks.is_empty():
 		# Draw simple horizontal line indicating standby

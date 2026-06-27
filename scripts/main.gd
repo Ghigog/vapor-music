@@ -36,14 +36,8 @@ var _screens: Dictionary = {}
 
 # Window resizing variables
 const RESIZE_BORDER = 12
-const MIN_WINDOW_SIZE = Vector2i(380, 400)
+const MIN_WINDOW_SIZE = Vector2i(340, 380)
 
-
-var _is_resizing := false
-var _resize_mode := ""
-var _start_mouse_pos := Vector2i()
-var _start_window_position := Vector2i()
-var _start_window_size := Vector2i()
 
 @onready var vertical_progress: Control = $AppWindowFrame/LayoutRoot/VerticalProgress
 
@@ -57,6 +51,9 @@ var _vp_dragging := false
 var _custom_window_stylebox: StyleBoxFlat = null
 
 func _ready() -> void:
+	# Initialize low processor mode based on default focused state.
+	_update_low_processor_mode(true)
+
 	get_window().min_size = MIN_WINDOW_SIZE
 	if app_window_frame.has_theme_stylebox_override("panel"):
 		var sb = app_window_frame.get_theme_stylebox("panel")
@@ -85,6 +82,20 @@ func _ready() -> void:
 	_show_screen(NavManager.current_screen)
 	_check_setup()
 
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_APPLICATION_FOCUS_IN:
+			_update_low_processor_mode(true)
+		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			_update_low_processor_mode(false)
+
+func _update_low_processor_mode(focused: bool) -> void:
+	if focused:
+		OS.low_processor_usage_mode = false
+	else:
+		OS.low_processor_usage_mode = true
+		OS.low_processor_usage_mode_sleep_usec = 6900
+
 func _connect_vp_signals() -> void:
 	if not vertical_progress:
 		return
@@ -109,10 +120,12 @@ func _connect_vp_signals() -> void:
 		vertical_progress.max_value = length
 	)
 func _process(_delta: float) -> void:
-	if PlatformManager.is_desktop() and vertical_progress and vertical_progress.visible and AudioManager.is_playing and not _vp_dragging:
+	# Update vertical_progress in both desktop (vertical) and mobile (horizontal)
+	# orientations \u2014 the is_desktop() guard is intentionally removed so the portrait
+	# waveform bar also tracks playback position.
+	if vertical_progress and vertical_progress.visible and AudioManager.is_playing and not _vp_dragging:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
 			vertical_progress.value = AudioManager.get_playback_position()
-
 
 
 func _check_setup() -> void:
@@ -214,8 +227,15 @@ func _update_layout() -> void:
 
 
 ## Desktop layout: sidebar pinned to the left, content fills the remainder.
+## Restores the 24 px glass-inset margin that is zeroed in the mobile layout.
 func _apply_desktop_layout() -> void:
 	var sw  := float(ThemeManager.current_theme.SIDEBAR_WIDTH)
+
+	# Restore the 24 px glass-inset margins for the desktop windowed experience.
+	app_window_frame.offset_left   = 24.0
+	app_window_frame.offset_top    = 24.0
+	app_window_frame.offset_right  = -24.0
+	app_window_frame.offset_bottom = -24.0
 
 	sidebar.visible   = true
 	# Sidebar: anchored to left, width = sw
@@ -242,6 +262,7 @@ func _apply_desktop_layout() -> void:
 
 	# Vertical progress bar: centered along the separator boundary (x = sw)
 	if vertical_progress:
+		vertical_progress.set("horizontal", false)
 		vertical_progress.visible = true
 		vertical_progress.anchor_left = 0.0
 		vertical_progress.anchor_top = 0.0
@@ -252,14 +273,40 @@ func _apply_desktop_layout() -> void:
 		vertical_progress.offset_right = sw + 8.0
 		vertical_progress.offset_bottom = 0.0
 
+	# (Removed dynamic min_size to prevent feedback loops)
+
 
 ## Mobile layout: full-width content; bottom bar flush.
+## On mobile/Android the glass inset margins are zeroed so the app is full-bleed.
 func _apply_mobile_layout() -> void:
 	var mph := float(ThemeManager.current_theme.MINI_PLAYER_HEIGHT)
+	# Thickness of the horizontal progress bar (straddling the border).
+	const HP_HALF := 8.0  # half of the 16px strip height, same as VerticalProgress width
 
 	sidebar.visible = false
+
+	# Show VerticalProgress in horizontal mode straddling the mini-player top
+	# border — same visual idiom as the desktop sidebar separator.
 	if vertical_progress:
-		vertical_progress.visible = false
+		vertical_progress.visible = true
+		vertical_progress.set("horizontal", true)
+		# Anchor full-width, positioned at the top edge of the mini-player.
+		# offset_top = -(mph + HP_HALF) pulls the strip up so its centre sits
+		# exactly on the border line (same as sidebar: offset_left = sw - 8).
+		vertical_progress.anchor_left   = 0.0
+		vertical_progress.anchor_top    = 1.0
+		vertical_progress.anchor_right  = 1.0
+		vertical_progress.anchor_bottom = 1.0
+		vertical_progress.offset_left   = 0.0
+		vertical_progress.offset_top    = -(mph + HP_HALF)
+		vertical_progress.offset_right  = 0.0
+		vertical_progress.offset_bottom = -(mph - HP_HALF)
+
+	# Zero out AppWindowFrame margins for a full-bleed mobile experience.
+	app_window_frame.offset_left   = 0.0
+	app_window_frame.offset_top    = 0.0
+	app_window_frame.offset_right  = 0.0
+	app_window_frame.offset_bottom = 0.0
 
 	# Content fills full width, stops above mini-player.
 	content_frame.anchor_left   = 0.0
@@ -282,8 +329,7 @@ func _apply_mobile_layout() -> void:
 	mini_player.offset_right  = 0.0
 	mini_player.offset_bottom = 0.0
 
-
-
+	# (Removed dynamic min_size to prevent feedback loops)
 
 # ---------------------------------------------------------------------------
 # Screen Switching
@@ -373,58 +419,23 @@ func _create_resize_handles() -> void:
 		ctrl.offset_right = cfg.offset_right
 		ctrl.offset_bottom = cfg.offset_bottom
 		
+		var edge_const: int = -1
+		match dir:
+			"top_left": edge_const = DisplayServer.WINDOW_EDGE_TOP_LEFT
+			"top_right": edge_const = DisplayServer.WINDOW_EDGE_TOP_RIGHT
+			"bottom_left": edge_const = DisplayServer.WINDOW_EDGE_BOTTOM_LEFT
+			"bottom_right": edge_const = DisplayServer.WINDOW_EDGE_BOTTOM_RIGHT
+			"left": edge_const = DisplayServer.WINDOW_EDGE_LEFT
+			"right": edge_const = DisplayServer.WINDOW_EDGE_RIGHT
+			"top": edge_const = DisplayServer.WINDOW_EDGE_TOP
+			"bottom": edge_const = DisplayServer.WINDOW_EDGE_BOTTOM
+
 		# Wire up click drag
 		ctrl.gui_input.connect(func(event: InputEvent):
 			if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-				if event.pressed:
-					_is_resizing = true
-					_resize_mode = dir
-					_start_mouse_pos = DisplayServer.mouse_get_position()
-					_start_window_position = get_window().position
-					_start_window_size = get_window().size
+				if event.pressed and edge_const != -1:
+					get_window().start_resize(edge_const)
 					ctrl.accept_event()
 		)
 		
 		layout_root.add_child(ctrl)
-
-
-func _input(event: InputEvent) -> void:
-	if not PlatformManager.is_desktop():
-		return
-		
-	if _is_resizing:
-		if event is InputEventMouseMotion:
-			_handle_resize(event)
-		elif event is InputEventMouseButton:
-			if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-				_is_resizing = false
-				_resize_mode = ""
-
-
-func _handle_resize(_event: InputEventMouseMotion) -> void:
-	var curr_mouse_pos = DisplayServer.mouse_get_position()
-	var diff = curr_mouse_pos - _start_mouse_pos
-	
-	var new_size = _start_window_size
-	var new_pos = _start_window_position
-	
-	# Handle X axis
-	if "left" in _resize_mode:
-		var target_w = _start_window_size.x - diff.x
-		if target_w >= MIN_WINDOW_SIZE.x:
-			new_size.x = target_w
-			new_pos.x = _start_window_position.x + diff.x
-	elif "right" in _resize_mode:
-		new_size.x = max(_start_window_size.x + diff.x, MIN_WINDOW_SIZE.x)
-		
-	# Handle Y axis
-	if "top" in _resize_mode:
-		var target_h = _start_window_size.y - diff.y
-		if target_h >= MIN_WINDOW_SIZE.y:
-			new_size.y = target_h
-			new_pos.y = _start_window_position.y + diff.y
-	elif "bottom" in _resize_mode:
-		new_size.y = max(_start_window_size.y + diff.y, MIN_WINDOW_SIZE.y)
-		
-	get_window().size = new_size
-	get_window().position = new_pos

@@ -11,7 +11,7 @@ extends Control
 @onready var transition_label: Label = $VBox/TransitionCard/VBox/TransitionLabel
 
 # Runner-up containers
-@onready var runner_ups_list: BoxContainer = $VBox/RunnerUpsSection/VBox/RunnerUpsScroll/RunnerUpsList
+@onready var runner_ups_list: BoxContainer = $VBox/RunnerUpsScroll/RunnerUpsList
 
 # Help Modal Elements
 @onready var help_button: Button = $VBox/Header/HBox/HelpButton
@@ -24,6 +24,11 @@ extends Control
 var CARD_MIN_WIDTH: float = 200.0
 var CARD_MAX_WIDTH: float = 260.0
 var CARD_HEIGHT_OFFSET: float = 110.0
+
+# Reference to the runner-ups scroll container — used to switch scroll axes.
+@onready var runner_ups_scroll: ScrollContainer = $VBox/RunnerUpsScroll
+# Reference for adjusting stretch ratios per layout.
+@onready var transition_card_panel: PanelContainer = $VBox/TransitionCard
 
 const VIBE_CARD_SCENE = preload("res://scenes/screens/vibe/vibe_card.tscn")
 
@@ -76,6 +81,8 @@ func _ready() -> void:
 	if runner_ups_list:
 		runner_ups_list.alignment = BoxContainer.ALIGNMENT_CENTER
 		runner_ups_list.resized.connect(_update_cards_layout)
+	if runner_ups_scroll:
+		runner_ups_scroll.resized.connect(_update_cards_layout)
 	if is_instance_valid(PlatformManager):
 		PlatformManager.layout_changed.connect(func(_bp): _update_cards_layout())
 		
@@ -124,8 +131,7 @@ func _apply_styles() -> void:
 	
 	# Cards panel styles
 	for card_path in [
-		"VBox/TransitionCard",
-		"VBox/RunnerUpsSection"
+		"VBox/TransitionCard"
 	]:
 		var card = get_node_or_null(card_path)
 		if card is PanelContainer:
@@ -133,8 +139,7 @@ func _apply_styles() -> void:
 
 	# Style Section Titles
 	for title_path in [
-		"VBox/TransitionCard/VBox/SectionTitle",
-		"VBox/RunnerUpsSection/VBox/SectionTitle"
+		"VBox/TransitionCard/VBox/SectionTitle"
 	]:
 		var lbl = get_node_or_null(title_path)
 		if lbl is Label:
@@ -439,61 +444,104 @@ func _style_runner_ups() -> void:
 func _update_cards_layout() -> void:
 	if not is_inside_tree() or not runner_ups_list:
 		return
-		
+
 	var is_mobile = PlatformManager.is_mobile_layout()
+
+	# Hide the heading label on narrow layouts to prevent overflow into the sidebar.
+	if heading:
+		heading.visible = not is_mobile
+
+	# Switch BoxContainer orientation: vertical list on mobile, horizontal row on desktop.
 	runner_ups_list.vertical = is_mobile
-	
+
+	# Adjust scroll container axes to match the layout direction.
+	if runner_ups_scroll:
+		if is_mobile:
+			# Mobile: scroll up/down through the card list; no horizontal scroll.
+			runner_ups_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+			runner_ups_scroll.vertical_scroll_mode   = ScrollContainer.SCROLL_MODE_AUTO
+		else:
+			# Desktop: horizontal scrolling row; no vertical scroll.
+			runner_ups_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+			runner_ups_scroll.vertical_scroll_mode   = ScrollContainer.SCROLL_MODE_DISABLED
+
+	# Adjust transition card stretch ratio: give it less space on mobile so cards get more room.
+	if transition_card_panel:
+		transition_card_panel.size_flags_stretch_ratio = 0.6 if is_mobile else 1.0
+	if runner_ups_scroll:
+		runner_ups_scroll.size_flags_stretch_ratio = 2.0 if is_mobile else 1.3
+
 	var children: Array[Control] = []
 	for child in runner_ups_list.get_children():
 		if child is Button:
 			children.append(child)
-			
+
 	var count = children.size()
 	if count == 0:
 		return
-		
-	var parent_width = runner_ups_list.size.x
-	var parent_height = runner_ups_list.size.y
-	
+
+	var parent_width = runner_ups_list.get_parent_control().size.x
+
 	if is_mobile:
-		# Vertical list: cards stacked vertically
-		var target_w = clamp(parent_width, CARD_MIN_WIDTH, CARD_MAX_WIDTH)
-		var target_h = target_w + CARD_HEIGHT_OFFSET
+		# Vertical list: cards fill the full available width minus a small gutter.
+		var gutter := 16.0
+		var target_w: float = max(CARD_MIN_WIDTH, parent_width - gutter)
+		var target_h: float = min(target_w, CARD_MAX_WIDTH) + CARD_HEIGHT_OFFSET
 		for card in children:
 			card.custom_minimum_size = Vector2(target_w, target_h)
-			card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-			card.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+			card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			card.size_flags_vertical   = Control.SIZE_SHRINK_BEGIN
 	else:
-		# Horizontal row
-		var separation = 16.0
+		# Horizontal row: divide available width evenly, clamped to card bounds.
+		var separation := 16.0
 		if runner_ups_list.has_theme_constant_override("separation"):
 			separation = runner_ups_list.get_theme_constant("separation")
 		elif runner_ups_list.has_theme_constant("separation"):
 			separation = runner_ups_list.get_theme_constant("separation")
-			
-		var total_separation = separation * (count - 1)
-		var available_w = parent_width - total_separation
-		var w_per_card = available_w / count
-		
+
+		var total_separation: float = separation * (count - 1)
+		var available_w: float = parent_width - total_separation
+		var w_per_card: float = available_w / count
+
+		if w_per_card < CARD_MIN_WIDTH:
+			runner_ups_list.alignment = BoxContainer.ALIGNMENT_BEGIN
+		else:
+			runner_ups_list.alignment = BoxContainer.ALIGNMENT_CENTER
+
 		for card in children:
-			var card_w = clamp(w_per_card, CARD_MIN_WIDTH, CARD_MAX_WIDTH)
-			var card_h = card_w + CARD_HEIGHT_OFFSET
+			var card_w: float = clamp(w_per_card, CARD_MIN_WIDTH, CARD_MAX_WIDTH)
+			var card_h: float = card_w + CARD_HEIGHT_OFFSET
 			card.custom_minimum_size = Vector2(card_w, card_h)
-			
+
 			if w_per_card > CARD_MAX_WIDTH:
 				card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			else:
 				card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				
+
 			card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
+
+## Clamps the help modal panel to fit within the current viewport size.
+func _size_help_modal_to_viewport() -> void:
+	if not help_modal_panel:
+		return
+	var vp_size := get_viewport_rect().size
+	# Leave at least 48 px margin on each side.
+	var max_w: float = vp_size.x - 96.0
+	var max_h: float = vp_size.y - 96.0
+	help_modal_panel.custom_minimum_size = Vector2(
+		clamp(max_w, 280.0, 650.0),
+		clamp(max_h, 360.0, 600.0)
+	)
 
 func _on_help_button_pressed() -> void:
 	if not help_modal:
 		return
-	
+
+	# Resize the modal to fit the current viewport before showing it.
+	_size_help_modal_to_viewport()
 	help_modal.visible = true
-	
+
 	# Load docs/ai_dj_workflow.md dynamically
 	var workflow_file_path = "res://docs/ai_dj_workflow.md"
 	if FileAccess.file_exists(workflow_file_path):
@@ -718,7 +766,7 @@ func _process(_delta: float) -> void:
 						var next_meta = MetadataService.get_cached_metadata(in_track_href)
 						duration_hint = next_meta.get("duration", 0.0)
 					if incoming_dsp:
-						incoming_dsp.load_file(ProjectSettings.globalize_path(path), duration_hint)
+						AudioManager.load_dsp_file(incoming_dsp, in_track_href, ProjectSettings.globalize_path(path), duration_hint)
 						
 		if incoming_dsp:
 			if incoming_dsp.get_cache_sample_count() > 0:
@@ -741,5 +789,3 @@ func _process(_delta: float) -> void:
 	transition_timeline.incoming_cue_in = in_cue_in
 
 	transition_timeline.update_playback_state(is_trans, fader, pos, length, trig)
-
-

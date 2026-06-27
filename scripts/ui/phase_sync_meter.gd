@@ -7,9 +7,14 @@ var phase_error: float = 0.0:
 		phase_error = val
 		queue_redraw()
 
+var _cached_bg_sb: StyleBoxFlat = null
+
 func _ready() -> void:
 	resized.connect(queue_redraw)
-	ThemeManager.theme_changed.connect(queue_redraw)
+	ThemeManager.theme_changed.connect(func():
+		_cached_bg_sb = null
+		queue_redraw()
+	)
 
 func get_indicator_ratio() -> float:
 	if abs(phase_error) <= 5.0:
@@ -30,8 +35,9 @@ func _draw() -> void:
 	var H = size.y
 	
 	# Draw background box
-	var bg_sb = ThemeManager.make_glass_panel(theme.RADIUS_SM, 0.25)
-	draw_style_box(bg_sb, Rect2(0, 0, W, H))
+	if not _cached_bg_sb:
+		_cached_bg_sb = ThemeManager.make_glass_panel(theme.RADIUS_SM, 0.25)
+	draw_style_box(_cached_bg_sb, Rect2(0, 0, W, H))
 	
 	# Draw horizontal track line
 	var track_color = Color(theme.GLASS_BORDER_SUBTLE.r, theme.GLASS_BORDER_SUBTLE.g, theme.GLASS_BORDER_SUBTLE.b, 0.5)

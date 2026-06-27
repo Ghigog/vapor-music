@@ -4,8 +4,6 @@
 
 [node name="LibraryRow" type="MarginContainer"]
 anchors_preset = 0
-offset_right = 300.0
-offset_bottom = 32.0
 size_flags_horizontal = 3
 script = ExtResource("1_row")
 
@@ -33,3 +31,4 @@ grow_vertical = 2
 size_flags_horizontal = 3
 mouse_filter = 2
 vertical_alignment = 1
+clip_text = true

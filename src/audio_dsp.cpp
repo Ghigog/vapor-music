@@ -11,6 +11,9 @@
 #include <string>
 #include <algorithm>
 #include <fstream>
+#include <cstdio>
+#include <cstdint>
+#include <unistd.h>
 
 using namespace godot;
 
@@ -43,6 +46,7 @@ AudioDSP::AudioDSP() {
 	m_seek_pending = false;
 	m_seek_target_idx = 0;
 	m_ratio.store(1.0f);
+	m_temp_mono_path = "";
 }
 AudioDSP::~AudioDSP() {
 	clear_stream();
@@ -123,11 +127,39 @@ Dictionary AudioDSP::analyze_file(String file_path) {
 	Dictionary results;
 	
 	std::string path_std = file_path.utf8().get_data();
+	std::string target_path = path_std;
+	std::string temp_mono_path = "";
+	bool is_temp = false;
+
+	int channels = get_audio_channels(path_std);
+	if (channels > 2) {
+		std::string filename = path_std;
+		size_t last_slash = filename.find_last_of("/\\");
+		if (last_slash != std::string::npos) {
+			filename = filename.substr(last_slash + 1);
+		}
+		temp_mono_path = "/tmp/" + filename + ".mono.wav";
+		bool downmix_ok = false;
+		
+		std::string path_lower = path_std;
+		std::transform(path_lower.begin(), path_lower.end(), path_lower.begin(), ::tolower);
+		if (path_lower.size() >= 4 && path_lower.substr(path_lower.size() - 4) == ".wav") {
+			downmix_ok = downmix_wav_to_mono(path_std, temp_mono_path);
+		}
+		if (!downmix_ok) {
+			downmix_ok = downmix_via_ffmpeg(path_std, temp_mono_path);
+		}
+		
+		if (downmix_ok) {
+			target_path = temp_mono_path;
+			is_temp = true;
+		}
+	}
 	
 	try {
 		// 1. Load audio using MonoLoader
 		essentia::standard::Algorithm* loader = essentia::standard::AlgorithmFactory::create("MonoLoader");
-		loader->configure("filename", path_std);
+		loader->configure("filename", target_path);
 		loader->configure("sampleRate", 44100.0f);
 		
 		std::vector<float> audio;
@@ -138,6 +170,9 @@ Dictionary AudioDSP::analyze_file(String file_path) {
 		
 		if (audio.empty()) {
 			UtilityFunctions::printerr("AudioDSP: Failed to load audio or file is empty: ", file_path);
+			if (is_temp) {
+				std::remove(temp_mono_path.c_str());
+			}
 			return results;
 		}
 		
@@ -472,6 +507,10 @@ Dictionary AudioDSP::analyze_file(String file_path) {
 		
 	} catch (const std::exception& e) {
 		UtilityFunctions::printerr("AudioDSP: Exception during Essentia analysis: ", e.what());
+	}
+	
+	if (is_temp) {
+		std::remove(temp_mono_path.c_str());
 	}
 	
 	return results;
@@ -841,22 +880,50 @@ bool AudioDSP::load_file(String file_path, float duration_hint) {
 	clear_stream();
 
 	std::string path_std = file_path.utf8().get_data();
+	std::string target_path = path_std;
+
+	int channels = get_audio_channels(path_std);
+	if (channels > 2) {
+		std::string filename = path_std;
+		size_t last_slash = filename.find_last_of("/\\");
+		if (last_slash != std::string::npos) {
+			filename = filename.substr(last_slash + 1);
+		}
+		m_temp_mono_path = "/tmp/" + filename + ".mono.wav";
+		bool downmix_ok = false;
+		
+		std::string path_lower = path_std;
+		std::transform(path_lower.begin(), path_lower.end(), path_lower.begin(), ::tolower);
+		if (path_lower.size() >= 4 && path_lower.substr(path_lower.size() - 4) == ".wav") {
+			downmix_ok = downmix_wav_to_mono(path_std, m_temp_mono_path);
+		}
+		if (!downmix_ok) {
+			downmix_ok = downmix_via_ffmpeg(path_std, m_temp_mono_path);
+		}
+		
+		if (downmix_ok) {
+			target_path = m_temp_mono_path;
+		} else {
+			m_temp_mono_path = "";
+		}
+	}
+
 	try {
 		// 1. Get the duration using fast duration extractors
 		float duration = duration_hint;
 		if (duration <= 0.0f) {
-			std::string path_lower = path_std;
+			std::string path_lower = target_path;
 			std::transform(path_lower.begin(), path_lower.end(), path_lower.begin(), ::tolower);
 			if (path_lower.size() >= 4 && path_lower.substr(path_lower.size() - 4) == ".wav") {
-				duration = get_wav_duration(path_std);
+				duration = get_wav_duration(target_path);
 			} else {
-				duration = get_metadata_duration(path_std);
+				duration = get_metadata_duration(target_path);
 			}
 
 			// Fallback to full MonoLoader if metadata/wav parsing fails
 			if (duration <= 0.0f) {
 				essentia::standard::Algorithm* loader = essentia::standard::AlgorithmFactory::create("MonoLoader");
-				loader->configure("filename", path_std);
+				loader->configure("filename", target_path);
 				loader->configure("sampleRate", 44100.0f);
 				std::vector<float> temp_samples;
 				loader->output("audio").set(temp_samples);
@@ -868,10 +935,11 @@ bool AudioDSP::load_file(String file_path, float duration_hint) {
 
 		if (duration <= 0.0f) {
 			UtilityFunctions::printerr("AudioDSP: Failed to get duration or file is invalid: ", file_path);
+			clear_stream();
 			return false;
 		}
 
-		m_file_path = path_std;
+		m_file_path = target_path;
 		m_duration = duration;
 		m_total_samples = static_cast<size_t>(m_duration * 44100.0f);
 
@@ -1003,6 +1071,11 @@ void AudioDSP::clear_stream() {
 	m_playback_sec = 0.0f;
 	m_ring_buffer.clear();
 	m_file_path.clear();
+
+	if (!m_temp_mono_path.empty()) {
+		std::remove(m_temp_mono_path.c_str());
+		m_temp_mono_path.clear();
+	}
 }
 
 void AudioDSP::start_thread() {
@@ -1319,4 +1392,302 @@ PackedFloat32Array AudioDSP::get_waveform_peaks(int num_bins) {
 	}
 
 	return peaks;
+}
+
+#pragma pack(push, 1)
+struct WavHeader {
+	char riff[4] = {'R', 'I', 'F', 'F'};
+	uint32_t riff_size = 0;
+	char wave[4] = {'W', 'A', 'V', 'E'};
+	char fmt[4] = {'f', 'm', 't', ' '};
+	uint32_t fmt_size = 16;
+	uint16_t audio_format = 1; // PCM
+	uint16_t num_channels = 1; // Mono
+	uint32_t sample_rate = 0;
+	uint32_t byte_rate = 0;
+	uint16_t block_align = 2;
+	uint16_t bits_per_sample = 16;
+	char data[4] = {'d', 'a', 't', 'a'};
+	uint32_t data_size = 0;
+};
+#pragma pack(pop)
+
+int AudioDSP::get_wav_channels(const std::string& filepath) {
+	std::ifstream file(filepath, std::ios::binary);
+	if (!file) return 0;
+
+	char chunk_id[4];
+	uint32_t chunk_size = 0;
+	char format[4];
+
+	if (!file.read(chunk_id, 4) || !file.read(reinterpret_cast<char*>(&chunk_size), 4) || !file.read(format, 4)) {
+		return 0;
+	}
+
+	if (std::string(chunk_id, 4) != "RIFF" || std::string(format, 4) != "WAVE") {
+		return 0;
+	}
+
+	uint32_t sample_rate = 0;
+	uint32_t byte_rate = 0;
+
+	while (file.read(chunk_id, 4) && file.read(reinterpret_cast<char*>(&chunk_size), 4)) {
+		std::string id(chunk_id, 4);
+
+		if (id == "fmt ") {
+			uint16_t audio_format = 0;
+			uint16_t num_channels = 0;
+			uint16_t block_align = 0;
+			uint16_t bits_per_sample = 0;
+
+			if (file.read(reinterpret_cast<char*>(&audio_format), 2) &&
+				file.read(reinterpret_cast<char*>(&num_channels), 2) &&
+				file.read(reinterpret_cast<char*>(&sample_rate), 4) &&
+				file.read(reinterpret_cast<char*>(&byte_rate), 4) &&
+				file.read(reinterpret_cast<char*>(&block_align), 2) &&
+				file.read(reinterpret_cast<char*>(&bits_per_sample), 2)) {
+				return num_channels;
+			}
+			break;
+		} else {
+			file.seekg(chunk_size, std::ios::cur);
+		}
+	}
+	return 0;
+}
+
+bool AudioDSP::downmix_wav_to_mono(const std::string& input_path, const std::string& output_path) {
+	std::ifstream infile(input_path, std::ios::binary);
+	if (!infile) return false;
+
+	char chunk_id[4];
+	uint32_t chunk_size = 0;
+	char format[4];
+
+	if (!infile.read(chunk_id, 4) || !infile.read(reinterpret_cast<char*>(&chunk_size), 4) || !infile.read(format, 4)) {
+		return false;
+	}
+
+	if (std::string(chunk_id, 4) != "RIFF" || std::string(format, 4) != "WAVE") {
+		return false;
+	}
+
+	uint16_t audio_format = 0;
+	uint16_t num_channels = 0;
+	uint32_t sample_rate = 0;
+	uint32_t byte_rate = 0;
+	uint16_t block_align = 0;
+	uint16_t bits_per_sample = 0;
+	uint32_t data_size = 0;
+	std::streampos data_pos;
+
+	while (infile.read(chunk_id, 4) && infile.read(reinterpret_cast<char*>(&chunk_size), 4)) {
+		std::string id(chunk_id, 4);
+
+		if (id == "fmt ") {
+			std::streampos next_chunk = infile.tellg() + std::streamoff(chunk_size);
+			if (infile.read(reinterpret_cast<char*>(&audio_format), 2) &&
+				infile.read(reinterpret_cast<char*>(&num_channels), 2) &&
+				infile.read(reinterpret_cast<char*>(&sample_rate), 4) &&
+				infile.read(reinterpret_cast<char*>(&byte_rate), 4) &&
+				infile.read(reinterpret_cast<char*>(&block_align), 2) &&
+				infile.read(reinterpret_cast<char*>(&bits_per_sample), 2)) {
+				
+				// Handle WAVE_FORMAT_EXTENSIBLE
+				if (audio_format == 0xFFFE && chunk_size >= 40) {
+					uint16_t cbSize = 0;
+					infile.read(reinterpret_cast<char*>(&cbSize), 2);
+					uint16_t validBits = 0;
+					infile.read(reinterpret_cast<char*>(&validBits), 2);
+					uint32_t mask = 0;
+					infile.read(reinterpret_cast<char*>(&mask), 4);
+					
+					char subformat_guid[16];
+					infile.read(subformat_guid, 16);
+					// Subformat GUID: first 2 bytes are the format code
+					uint16_t sub_format = *reinterpret_cast<uint16_t*>(subformat_guid);
+					audio_format = sub_format;
+				}
+			}
+			infile.seekg(next_chunk);
+		} else if (id == "data") {
+			data_size = chunk_size;
+			data_pos = infile.tellg();
+			break;
+		} else {
+			infile.seekg(chunk_size, std::ios::cur);
+		}
+	}
+
+	if (num_channels == 0 || sample_rate == 0 || bits_per_sample == 0 || data_size == 0) {
+		return false;
+	}
+
+	infile.seekg(data_pos);
+
+	std::ofstream outfile(output_path, std::ios::binary);
+	if (!outfile) return false;
+
+	// Write placeholder header
+	WavHeader out_hdr;
+	out_hdr.sample_rate = sample_rate;
+	out_hdr.byte_rate = sample_rate * 2;
+	outfile.write(reinterpret_cast<const char*>(&out_hdr), sizeof(out_hdr));
+
+	size_t bytes_per_sample = bits_per_sample / 8;
+	size_t frame_size = num_channels * bytes_per_sample;
+	size_t num_frames = data_size / frame_size;
+
+	std::vector<char> frame_buf(frame_size);
+	uint32_t written_data_size = 0;
+
+	for (size_t f = 0; f < num_frames; ++f) {
+		if (!infile.read(frame_buf.data(), frame_size)) {
+			break;
+		}
+
+		double sum = 0.0;
+		for (size_t ch = 0; ch < num_channels; ++ch) {
+			const char* sample_ptr = &frame_buf[ch * bytes_per_sample];
+			double val = 0.0;
+
+			if (audio_format == 1) { // PCM
+				if (bits_per_sample == 8) {
+					uint8_t u8 = *reinterpret_cast<const uint8_t*>(sample_ptr);
+					val = (static_cast<double>(u8) - 128.0) / 128.0;
+				} else if (bits_per_sample == 16) {
+					int16_t s16 = *reinterpret_cast<const int16_t*>(sample_ptr);
+					val = static_cast<double>(s16) / 32768.0;
+				} else if (bits_per_sample == 24) {
+					// 24-bit signed int (3 bytes, little endian)
+					int32_t s24 = (static_cast<uint8_t>(sample_ptr[0])) |
+					              (static_cast<uint8_t>(sample_ptr[1]) << 8) |
+					              (static_cast<uint8_t>(sample_ptr[2]) << 16);
+					if (s24 & 0x800000) {
+						s24 |= 0xFF000000;
+					}
+					val = static_cast<double>(s24) / 8388608.0;
+				} else if (bits_per_sample == 32) {
+					int32_t s32 = *reinterpret_cast<const int32_t*>(sample_ptr);
+					val = static_cast<double>(s32) / 2147483648.0;
+				}
+			} else if (audio_format == 3) { // IEEE Float
+				if (bits_per_sample == 32) {
+					float f32 = *reinterpret_cast<const float*>(sample_ptr);
+					val = static_cast<double>(f32);
+				} else if (bits_per_sample == 64) {
+					double f64 = *reinterpret_cast<const double*>(sample_ptr);
+					val = f64;
+				}
+			}
+			sum += val;
+		}
+
+		double avg = sum / num_channels;
+		if (avg > 1.0) avg = 1.0;
+		if (avg < -1.0) avg = -1.0;
+
+		int16_t out_sample = static_cast<int16_t>(avg * 32767.0);
+		outfile.write(reinterpret_cast<const char*>(&out_sample), 2);
+		written_data_size += 2;
+	}
+
+	// Update WAV header with correct sizes
+	outfile.seekp(0);
+	out_hdr.data_size = written_data_size;
+	out_hdr.riff_size = written_data_size + 36;
+	outfile.write(reinterpret_cast<const char*>(&out_hdr), sizeof(out_hdr));
+
+	return true;
+}
+
+int AudioDSP::get_audio_channels(const std::string& filepath) {
+	// Try ffprobe first as it is the most reliable for all formats
+	int ch_ffprobe = get_channels_via_ffprobe(filepath);
+	if (ch_ffprobe > 0) {
+		return ch_ffprobe;
+	}
+
+	// First, check if WAV to avoid MetadataReader overhead for WAV
+	std::string path_lower = filepath;
+	std::transform(path_lower.begin(), path_lower.end(), path_lower.begin(), ::tolower);
+	if (path_lower.size() >= 4 && path_lower.substr(path_lower.size() - 4) == ".wav") {
+		int ch = get_wav_channels(filepath);
+		if (ch > 0) return ch;
+	}
+
+	try {
+		essentia::standard::Algorithm* reader = essentia::standard::AlgorithmFactory::create("MetadataReader");
+		reader->configure("filename", filepath);
+		reader->configure("failOnError", false);
+
+		std::string title, artist, album, comment, genre, tracknumber, date;
+		double duration = 0.0;
+		int bitrate = 0, sampleRate = 0, channels = 0;
+		essentia::Pool tagPool;
+
+		reader->output("title").set(title);
+		reader->output("artist").set(artist);
+		reader->output("album").set(album);
+		reader->output("comment").set(comment);
+		reader->output("genre").set(genre);
+		reader->output("tracknumber").set(tracknumber);
+		reader->output("date").set(date);
+		reader->output("duration").set(duration);
+		reader->output("bitrate").set(bitrate);
+		reader->output("sampleRate").set(sampleRate);
+		reader->output("channels").set(channels);
+		reader->output("tagPool").set(tagPool);
+
+		reader->compute();
+		delete reader;
+		return channels;
+	} catch (...) {
+		return 0;
+	}
+}
+
+int AudioDSP::get_channels_via_ffprobe(const std::string& filepath) {
+	std::string ffprobe_bin = "ffprobe";
+	
+	// Check standard macOS Homebrew paths first using access()
+	if (access("/opt/homebrew/bin/ffprobe", F_OK) == 0) {
+		ffprobe_bin = "/opt/homebrew/bin/ffprobe";
+	} else if (access("/usr/local/bin/ffprobe", F_OK) == 0) {
+		ffprobe_bin = "/usr/local/bin/ffprobe";
+	}
+
+	std::string cmd = "\"" + ffprobe_bin + "\" -v error -select_streams a:0 -show_entries stream=channels -of default=noprint_wrappers=1:nokey=1 \"" + filepath + "\"";
+	FILE* pipe = popen(cmd.c_str(), "r");
+	if (!pipe) return 0;
+
+	char buffer[128];
+	std::string result = "";
+	while (!feof(pipe)) {
+		if (fgets(buffer, 128, pipe) != nullptr) {
+			result += buffer;
+		}
+	}
+	pclose(pipe);
+
+	try {
+		return std::stoi(result);
+	} catch (...) {
+		return 0;
+	}
+}
+
+bool AudioDSP::downmix_via_ffmpeg(const std::string& input_path, const std::string& output_path) {
+	std::string ffmpeg_bin = "ffmpeg";
+	
+	// Check standard macOS Homebrew paths first using access()
+	if (access("/opt/homebrew/bin/ffmpeg", F_OK) == 0) {
+		ffmpeg_bin = "/opt/homebrew/bin/ffmpeg";
+	} else if (access("/usr/local/bin/ffmpeg", F_OK) == 0) {
+		ffmpeg_bin = "/usr/local/bin/ffmpeg";
+	}
+	
+	std::string cmd = "\"" + ffmpeg_bin + "\" -y -i \"" + input_path + "\" -ac 1 -ar 44100 \"" + output_path + "\" > /dev/null 2>&1";
+	int ret = std::system(cmd.c_str());
+	return ret == 0;
 }

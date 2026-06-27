@@ -80,7 +80,9 @@ func is_editor() -> bool:
 
 ## Returns the current viewport dimensions in physical pixels.
 func get_viewport_size() -> Vector2:
-	return get_tree().root.size
+	var root = get_tree().root
+	var scale = root.content_scale_factor if "content_scale_factor" in root else 1.0
+	return Vector2(root.size) / scale
 
 
 ## Returns the active breakpoint string: "xs" | "sm" | "md" | "lg" | "xl".

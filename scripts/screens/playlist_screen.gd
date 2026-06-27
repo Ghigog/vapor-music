@@ -216,9 +216,11 @@ func _load_cover_image(path: String) -> void:
 		CoverTexture.texture = null
 		return
 		
-	var img = Image.load_from_file(path)
+	var img: Image = Image.load_from_file(path)
 	if img:
-		var tex = ImageTexture.create_from_image(img)
+		if img.get_width() > 512 or img.get_height() > 512:
+			img.resize(512, 512, Image.INTERPOLATE_LANCZOS)
+		var tex: ImageTexture = ImageTexture.create_from_image(img)
 		CoverTexture.texture = tex
 	else:
 		CoverTexture.texture = null

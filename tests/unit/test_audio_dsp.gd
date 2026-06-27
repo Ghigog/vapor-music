@@ -246,3 +246,75 @@ func test_get_waveform_peaks() -> void:
 	
 	dsp.free()
 
+func _generate_multichannel_test_wav(path: String, duration: float, num_channels: int) -> void:
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		return
+	
+	var sample_rate: int = 44100
+	var bits_per_sample: int = 16
+	
+	var total_samples: int = int(sample_rate * duration)
+	var data_size: int = total_samples * num_channels * (bits_per_sample / 8)
+	var file_size: int = 36 + data_size
+	
+	# WAV header
+	file.store_string("RIFF")
+	file.store_32(file_size)
+	file.store_string("WAVE")
+	file.store_string("fmt ")
+	file.store_32(16) # Chunk size
+	file.store_16(1) # Audio format (PCM)
+	file.store_16(num_channels)
+	file.store_32(sample_rate)
+	file.store_32(sample_rate * num_channels * (bits_per_sample / 8)) # Byte rate
+	file.store_16(num_channels * (bits_per_sample / 8)) # Block align
+	file.store_16(bits_per_sample)
+	file.store_string("data")
+	file.store_32(data_size)
+	
+	# Generate samples (a simple 440Hz sine wave on all channels)
+	for i in range(total_samples):
+		var t = float(i) / sample_rate
+		var val = 0.5 * sin(2.0 * PI * 440.0 * t)
+		var sample_val = int(val * 32767.0)
+		for ch in range(num_channels):
+			file.store_16(sample_val)
+			
+	file.close()
+
+func test_multichannel_downmixing() -> void:
+	var dsp = AudioDSP.new()
+	var test_path = "user://temp_multichannel.wav"
+	var global_path = ProjectSettings.globalize_path(test_path)
+	
+	# Generate a 4-channel test WAV file (2 seconds)
+	_generate_multichannel_test_wav(global_path, 2.0, 4)
+	assert_true(FileAccess.file_exists(global_path), "Multichannel test WAV should exist")
+	
+	# Verify analyze_file on it (previously failed with exception/empty result)
+	var results = dsp.analyze_file(global_path)
+	assert_false(results.is_empty(), "Analysis results for multichannel WAV should not be empty")
+	assert_gt(results.get("duration", 0.0), 1.9, "Duration should be correct (~2.0 seconds)")
+	
+	# Verify load_file on it (previously failed with exception)
+	var success = dsp.load_file(global_path)
+	assert_true(success, "Should successfully load multichannel WAV")
+	
+	# Give background thread a moment to perform initial cache load
+	var attempts = 0
+	while dsp.get_cache_sample_count() == 0 and attempts < 15:
+		await get_tree().create_timer(0.05).timeout
+		attempts += 1
+	
+	assert_gt(dsp.get_cache_sample_count(), 0, "Cache should have samples loaded from multichannel WAV")
+	
+	# Retrieve chunks to ensure it plays back
+	var chunk = dsp.get_next_chunk(1024, 1.0)
+	assert_gt(chunk.size(), 0, "Should retrieve non-empty chunk from multichannel WAV")
+	
+	# Clean up
+	dsp.free()
+	DirAccess.remove_absolute(global_path)
+
+

@@ -23,29 +23,36 @@ extends Control
 @onready var prefetch_progress: ProgressBar = %PrefetchProgress
 @onready var prefetch_status: Label = %PrefetchStatus
 
-# AutoEQ Controls
-@onready var auto_eq_separator: HSeparator = %AutoEQSeparator
-@onready var auto_eq_section: VBoxContainer = %AutoEQSection
-@onready var auto_eq_title: Label = %AutoEQTitle
-@onready var auto_eq_toggle_label: Label = %AutoEQToggleLabel
-@onready var auto_eq_toggle: CheckButton = %AutoEQToggle
-@onready var auto_eq_search_label: Label = %AutoEQSearchLabel
-@onready var auto_eq_search: LineEdit = %AutoEQSearch
-@onready var auto_eq_selector: OptionButton = %AutoEQSelector
-@onready var calibration_graph: CalibrationGraph = %CalibrationGraph
+# Caching Overlay Controls
+@onready var cache_overlay: PanelContainer = %CacheOverlay
+@onready var overlay_spinner: Label = %OverlaySpinner
+@onready var overlay_title: Label = %OverlayTitle
+@onready var overlay_progress: Label = %OverlayProgress
+@onready var overlay_warning: Label = %OverlayWarning
+@onready var minimize_cache_btn: Button = %MinimizeCacheBtn
+@onready var stop_cache_btn: Button = %StopCacheBtn
+
+var _user_minimized_overlay := false
+
+
+
+# Performance Diagnostics Controls
+@onready var performance_separator: HSeparator = %PerformanceSeparator
+@onready var performance_section: VBoxContainer = %PerformanceSection
+@onready var performance_title: Label = %PerformanceTitle
+@onready var fps_label: Label = %FPSLabel
+@onready var fps_value: Label = %FPSValue
+@onready var ram_label: Label = %RAMLabel
+@onready var ram_value: Label = %RAMValue
+@onready var audio_latency_label: Label = %AudioLatencyLabel
+@onready var audio_latency_value: Label = %AudioLatencyValue
 
 const THEME_MAP = {
 	"Vapor Dark" : "res://assets/themes/default_dark.tres",
 	"Vapor Light" : "res://assets/themes/default_light.tres"
 }
 
-# AutoEQ Presets Storage
-var all_presets: Dictionary = {}
-var all_models: Array = []
-var filtered_models: Array = []
-
 func _ready() -> void:
-	_load_headphone_presets()
 	_apply_styles()
 	ThemeManager.theme_changed.connect(_apply_styles)
 	
@@ -85,90 +92,15 @@ func _ready() -> void:
 		if AudioAnalyzer.background_caching_active:
 			_show_prefetch_progress(true)
 			_update_prefetch_ui(AudioAnalyzer._prefetch_downloaded, AudioAnalyzer._prefetch_total)
+			_update_overlay_progress(AudioAnalyzer._prefetch_downloaded, AudioAnalyzer._prefetch_total)
+			_update_overlay_visibility()
 		else:
 			_show_prefetch_progress(false)
+			_update_overlay_visibility()
 			
 	prefetch_button.pressed.connect(_on_prefetch_pressed)
-
-	# Initialize AutoEQ settings
-	auto_eq_toggle.button_pressed = SettingsManager.headphone_calibration_enabled
-	auto_eq_toggle.toggled.connect(_on_auto_eq_toggle_toggled)
-	
-	_populate_auto_eq_selector("")
-	auto_eq_selector.item_selected.connect(_on_auto_eq_selector_selected)
-	auto_eq_search.text_changed.connect(_on_auto_eq_search_text_changed)
-	
-	_update_calibration_audio_and_graph()
-
-func _load_headphone_presets() -> void:
-	var presets_path = "res://assets/settings/headphone_presets.json"
-	if FileAccess.file_exists(presets_path):
-		var file = FileAccess.open(presets_path, FileAccess.READ)
-		if file:
-			var json_text = file.get_as_text()
-			file.close()
-			var json = JSON.new()
-			var error = json.parse(json_text)
-			if error == OK and json.data is Dictionary:
-				all_presets = json.data
-				all_models = all_presets.keys()
-				all_models.sort()
-			else:
-				push_error("SettingsScreen: Failed to parse headphone presets JSON")
-		else:
-			push_error("SettingsScreen: Failed to open headphone presets file")
-	else:
-		push_error("SettingsScreen: Headphone presets file not found")
-
-func _populate_auto_eq_selector(filter_text: String = "") -> void:
-	auto_eq_selector.clear()
-	filtered_models.clear()
-	
-	var search_query = filter_text.strip_edges().to_lower()
-	for model in all_models:
-		if search_query.is_empty() or search_query in model.to_lower():
-			filtered_models.append(model)
-			
-	for model in filtered_models:
-		auto_eq_selector.add_item(model)
-		
-	# Reselect active profile if present in filtered list
-	var active_profile = SettingsManager.headphone_profile
-	var select_idx = filtered_models.find(active_profile)
-	if select_idx != -1:
-		auto_eq_selector.selected = select_idx
-	elif not filtered_models.is_empty():
-		# Fallback to first filtered option but don't save until confirmed
-		auto_eq_selector.selected = 0
-
-func _on_auto_eq_search_text_changed(new_text: String) -> void:
-	_populate_auto_eq_selector(new_text)
-
-func _on_auto_eq_selector_selected(index: int) -> void:
-	if index >= 0 and index < filtered_models.size():
-		var selected_model = filtered_models[index]
-		SettingsManager.save_headphone_profile(selected_model)
-		_update_calibration_audio_and_graph()
-
-func _on_auto_eq_toggle_toggled(button_pressed: bool) -> void:
-	SettingsManager.save_headphone_calibration_enabled(button_pressed)
-	_update_calibration_audio_and_graph()
-
-func _update_calibration_audio_and_graph() -> void:
-	if is_instance_valid(AudioManager):
-		AudioManager.update_calibration_state()
-		
-	var enabled = SettingsManager.headphone_calibration_enabled
-	calibration_graph.set_active(enabled)
-	
-	var active_profile = SettingsManager.headphone_profile
-	var raw_profile = all_presets.get(active_profile, "")
-	if not raw_profile.is_empty():
-		var parsed = AutoEQParser.parse_profile_text(raw_profile)
-		calibration_graph.set_profile(parsed)
-	else:
-		calibration_graph.clear_profile()
-
+	minimize_cache_btn.pressed.connect(_on_minimize_cache_pressed)
+	stop_cache_btn.pressed.connect(_on_prefetch_pressed)
 func _apply_styles() -> void:
 	# Skin the Settings frosted glass card container
 	if is_instance_valid(settings_panel):
@@ -296,41 +228,61 @@ func _apply_styles() -> void:
 	prefetch_status.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	prefetch_status.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 
-	# Skin new AutoEQ elements
-	auto_eq_title.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
-	auto_eq_title.add_theme_font_override("font", ThemeManager.current_theme.font_display)
-	auto_eq_title.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_MD)
+	# Skin Performance diagnostics elements
+	if is_instance_valid(performance_title):
+		performance_title.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		performance_title.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+		performance_title.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_MD)
+	
+	for lbl in [fps_label, ram_label, audio_latency_label]:
+		if is_instance_valid(lbl):
+			lbl.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+			lbl.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+			lbl.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+			
+	for val in [fps_value, ram_value, audio_latency_value]:
+		if is_instance_valid(val):
+			val.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+			val.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+			val.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 
-	auto_eq_toggle_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
-	auto_eq_toggle_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	auto_eq_toggle_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	# Caching Overlay styling
+	if is_instance_valid(cache_overlay):
+		var overlay_glass = ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_MD, 0.96)
+		cache_overlay.add_theme_stylebox_override("panel", overlay_glass)
+		
+	if is_instance_valid(overlay_spinner):
+		overlay_spinner.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+		overlay_spinner.add_theme_font_size_override("font_size", 48)
+		
+	if is_instance_valid(overlay_title):
+		overlay_title.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		overlay_title.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+		overlay_title.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_MD)
+		
+	if is_instance_valid(overlay_progress):
+		overlay_progress.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		overlay_progress.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		overlay_progress.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+		
+	if is_instance_valid(overlay_warning):
+		overlay_warning.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+		overlay_warning.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		overlay_warning.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 
-	auto_eq_search_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
-	auto_eq_search_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	auto_eq_search_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	# Overlay Buttons styling
+	for btn in [minimize_cache_btn, stop_cache_btn]:
+		if is_instance_valid(btn):
+			btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+			btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+			btn.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+			btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.TEXT_INVERSE)
+			btn.add_theme_color_override("font_pressed_color", ThemeManager.current_theme.TEXT_INVERSE)
+			btn.add_theme_stylebox_override("normal", ThemeManager.make_cta_button(false))
+			btn.add_theme_stylebox_override("hover", ThemeManager.make_cta_button(true))
+			btn.add_theme_stylebox_override("pressed", ThemeManager.make_cta_button(true))
+			btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 
-	# Search LineEdit style
-	auto_eq_search.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
-	auto_eq_search.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	auto_eq_search.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-	var search_style = StyleBoxFlat.new()
-	search_style.bg_color = ThemeManager.current_theme.BG_ELEVATED
-	search_style.border_color = ThemeManager.current_theme.GLASS_BORDER
-	search_style.set_border_width_all(1)
-	search_style.set_corner_radius_all(ThemeManager.current_theme.RADIUS_XS)
-	search_style.content_margin_left = 8
-	search_style.content_margin_right = 8
-	auto_eq_search.add_theme_stylebox_override("normal", search_style)
-	auto_eq_search.add_theme_stylebox_override("focus", search_style)
-
-	# Selector OptionButton style
-	auto_eq_selector.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
-	auto_eq_selector.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	auto_eq_selector.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-	auto_eq_selector.add_theme_stylebox_override("normal", opt_style)
-	auto_eq_selector.add_theme_stylebox_override("hover", opt_style)
-	auto_eq_selector.add_theme_stylebox_override("pressed", opt_style)
-	auto_eq_selector.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 
 func _on_theme_selected(index: int) -> void:
 	# Get the name (key) based on the index
@@ -364,21 +316,26 @@ func _on_prefetch_pressed() -> void:
 		AudioAnalyzer.start_prefetching(scanned)
 
 func _on_prefetch_started(total: int) -> void:
+	_user_minimized_overlay = false
 	_show_prefetch_progress(true)
 	_update_prefetch_ui(AudioAnalyzer._prefetch_downloaded, total)
+	_update_overlay_progress(AudioAnalyzer._prefetch_downloaded, total)
+	_update_overlay_visibility()
 
 func _on_prefetch_progress(downloaded: int, total: int) -> void:
 	_update_prefetch_ui(downloaded, total)
+	_update_overlay_progress(downloaded, total)
+	_update_overlay_visibility()
 
 func _on_prefetch_completed() -> void:
-	prefetch_button.text = "Pre-cache & Analyze Library"
-	prefetch_status.text = "✓ Cache complete & analyzed"
-	prefetch_progress.visible = false
+	_user_minimized_overlay = false
+	_update_status_after_caching(false)
+	_update_overlay_visibility()
 
 func _on_prefetch_stopped() -> void:
-	prefetch_button.text = "Pre-cache & Analyze Library"
-	prefetch_status.text = "Analysis stopped"
-	prefetch_progress.visible = false
+	_user_minimized_overlay = false
+	_update_status_after_caching(true)
+	_update_overlay_visibility()
 
 func _show_prefetch_progress(show: bool) -> void:
 	prefetch_progress.visible = show
@@ -406,3 +363,78 @@ func _update_prefetch_ui(_downloaded: int, total: int) -> void:
 		prefetch_progress.value = 100.0
 		prefetch_status.text = "✓ All tracks cached"
 		prefetch_progress.visible = false
+
+func _update_overlay_progress(_downloaded: int, total: int) -> void:
+	if not is_instance_valid(overlay_progress):
+		return
+	if total > 0:
+		var ready_count = 0
+		if is_instance_valid(AudioAnalyzer) and is_instance_valid(WebDAVService):
+			ready_count = AudioAnalyzer.get_ready_tracks_count(WebDAVService.scanned_files)
+		else:
+			ready_count = _downloaded
+			
+		var pct = float(ready_count) / float(total) * 100.0
+		overlay_progress.text = "Caching... %d / %d (%d%%)" % [ready_count, total, int(pct)]
+	else:
+		overlay_progress.text = "✓ All tracks cached"
+
+func _update_overlay_visibility() -> void:
+	if not is_instance_valid(cache_overlay) or not is_instance_valid(AudioAnalyzer):
+		return
+		
+	if AudioAnalyzer.background_caching_active and not _user_minimized_overlay:
+		cache_overlay.visible = true
+	else:
+		cache_overlay.visible = false
+
+func _on_minimize_cache_pressed() -> void:
+	_user_minimized_overlay = true
+	_update_overlay_visibility()
+
+func _update_status_after_caching(was_stopped: bool) -> void:
+	prefetch_button.text = "Pre-cache & Analyze Library"
+	prefetch_progress.visible = false
+	
+	var total = 0
+	var ready_count = 0
+	if is_instance_valid(AudioAnalyzer) and is_instance_valid(WebDAVService):
+		var scanned = WebDAVService.scanned_files
+		total = scanned.size()
+		ready_count = AudioAnalyzer.get_ready_tracks_count(scanned)
+	
+	var prefix = "Caching stopped" if was_stopped else "Cache incomplete"
+	if ready_count >= total and total > 0:
+		var msg = "✓ Cache complete & analyzed"
+		prefetch_status.text = msg
+		if is_instance_valid(overlay_progress):
+			overlay_progress.text = msg
+	else:
+		var left = total - ready_count
+		var msg = "%s: %d tracks remaining" % [prefix, left]
+		prefetch_status.text = msg
+		if is_instance_valid(overlay_progress):
+			overlay_progress.text = msg
+
+func _process(_delta: float) -> void:
+	if not is_inside_tree() or not is_visible_in_tree():
+		return
+		
+	# Spin the caching overlay spinner gear if active
+	if is_instance_valid(cache_overlay) and cache_overlay.visible and is_instance_valid(overlay_spinner):
+		overlay_spinner.pivot_offset = overlay_spinner.size / 2.0
+		overlay_spinner.rotation += _delta * 3.0
+		
+	# Update Performance Diagnostics
+	var fps = Performance.get_monitor(Performance.TIME_FPS)
+	if is_instance_valid(fps_value):
+		fps_value.text = "%d FPS" % int(fps)
+	
+	var ram_bytes = Performance.get_monitor(Performance.MEMORY_STATIC)
+	var ram_mb = float(ram_bytes) / 1024.0 / 1024.0
+	if is_instance_valid(ram_value):
+		ram_value.text = "%.1f MB" % ram_mb
+	
+	var audio_lat = Performance.get_monitor(Performance.AUDIO_OUTPUT_LATENCY) * 1000.0
+	if is_instance_valid(audio_latency_value):
+		audio_latency_value.text = "%.1f ms" % audio_lat

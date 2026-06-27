@@ -577,15 +577,15 @@ So that headphone calibration settings can be imported directly into our EQ filt
 
 ---
 
-### EQ-003 : Settings Headphone Calibration Selection UI (completed)
+### EQ-003 : Settings Headphone Calibration Selection UI (completed/removed)
 **User Story:**
 As a user,
 I'd like to select my headphone model from a list in the Settings screen,
 So that the correct corrective EQ profile is applied automatically.
 
-**Context:** The Settings screen needs an elegant selector interface showing supported headphone models, with search capability, and a master calibration toggle.
+**Context:** The Settings screen needs an elegant selector interface showing supported headphone models, with search capability, and a master calibration toggle. (Deprecated/Removed on 2026-06-27: This feature was removed from the settings screen because it was half-baked).
 
-**Description:** Redesign settings options to include an AutoEQ section. Add a searchable OptionButton/dropdown for headphone models, a master bypass switch, and target visual graphs showing the correction curve.
+**Description:** Redesign settings options to include an AutoEQ section. Add a searchable OptionButton/dropdown for headphone models, a master bypass switch, and target visual graphs showing the correction curve. (Removed on 2026-06-27)
 
 **Requirements:**
 - Build a list of common headphone presets (packaged inside a local JSON or fetched from a repository).
@@ -1706,3 +1706,111 @@ Extract procedurally generated UI components into dedicated scene files (`.tscn`
 - Then they are loaded from `.tscn` files and configured dynamically without programmatic node construction.
 - When resizing the window to narrow/mobile boundaries
 - Then the layouts resize responsively without layout bleeding.
+
+---
+
+### PERF-001 : Transition Performance Optimization & Diagnostics (completed)
+**User Story:**
+As a user,
+I'd like track transitions to be smooth and the app to be highly efficient in CPU/GPU usage when switching apps or sitting idle,
+So that I don't experience application window freezes or lags during playback.
+
+**Context:** The C++ `AudioDSP` does heavy decoding in a background thread, but redundant load calls on transitions stopped and joined this thread on the main loop, causing severe GUI hangs. In addition, the engine constantly rendered at maximum refresh rate when idle.
+
+**Description:**
+Add a loaded files registry in `AudioManager` to avoid duplicate audio loading. Enable low processor usage mode programmatically for production builds. Add a diagnostics panel in settings showing real-time FPS, RAM usage, and audio latency.
+
+**Requirements:**
+- Implement `load_dsp_file` in `AudioManager` to track loaded paths and prevent duplicate loading.
+- Enable `low_processor_usage_mode` programmatically in `main.gd` for non-headless production runs.
+- Add `PerformanceSection` container and diagnostic metric labels to `settings_screen.tscn`.
+- Style and update diagnostics labels in `settings_screen.gd` using the `Performance` singleton.
+
+**Acceptance Criteria:**
+- Given a song transition in Vibe DJ mode
+- When the transition triggers
+- Then the playback switches smoothly without main thread freezes.
+- Given the Settings screen is open
+- Then the System Diagnostics panel shows updating FPS, RAM, and audio latency metrics.
+
+---
+
+### UI-009 : Mobile Shuffle Checkbox Alignment (done)
+**User Story:**
+As a mobile user,
+I'd like the Smart Mixing checkbox in the bottom mini player to be centered within its touch target in portrait view,
+So that the navigation controls look balanced and aligned.
+
+**Context:**
+In mobile (portrait/narrow) view, the `ShuffleBtn` has its text cleared (`""`). By default, Godot's CheckBox node aligns the checkbox icon to the left, which made the control look off-center.
+
+**Description:**
+Add `alignment = 1` (horizontal alignment center) to the `ShuffleBtn` node in `mini_player.tscn` so that the checkbox icon centers itself when there is no text.
+
+**Acceptance Criteria:**
+- Given mobile portrait view
+- When the bottom mini player is visible
+- Then the Smart Mixing checkbox icon is centered within its button layout area.
+
+---
+
+### BUG-001 : Multi-Channel Audio Loader Exception Fix (completed)
+**User Story:**
+As a listener,
+I want the player and analyzer to successfully load and analyze multi-channel audio files (such as multi-channel WAVs, FLACs, or Dolby Atmos .m4a files) without throwing exceptions,
+So that I can import and play my entire music library regardless of channel configuration.
+
+**Context:**
+The GDExtension `AudioDSP` C++ layer uses Essentia's `MonoLoader` for analysis and caching. Essentia's `AudioLoader` (which is wrapped by `MonoLoader`) throws an exception `AudioLoader: could not load audio. Audio file has more than 2 channels` when loading files with more than 2 channels.
+
+**Description:**
+Add automatic multi-channel detection and downmixing support for all audio formats (such as WAV and Dolby Atmos M4A files) in the GDExtension `AudioDSP` C++ layer. If an audio file has more than 2 channels, downmix it to a temporary mono 16-bit PCM WAV file in the system `/tmp/` directory before loading/analyzing it (using `/tmp/` prevents the application scanner's cache pruning process from deleting the temporary downmixed file prematurely), and clean up the temporary file when finished.
+
+**Requirements:**
+- Implement `get_wav_channels()` to detect the channel count from WAV headers.
+- Implement `get_channels_via_ffprobe()` using `ffprobe` to detect channel count for compressed/non-WAV formats.
+- Implement `get_audio_channels()` to query channel counts utilizing the fast WAV detector or ffprobe.
+- Implement `downmix_wav_to_mono()` to decode and average WAV channels.
+- Implement `downmix_via_ffmpeg()` as a fallback using `ffmpeg` to downmix any audio format.
+- Integrate downmixing checks in `analyze_file` and `load_file`.
+- Clean up temporary files inside `clear_stream()` and `analyze_file`.
+
+**Testing Requirements:**
+- Added a unit test `test_multichannel_downmixing` in `tests/unit/test_audio_dsp.gd` that generates a 4-channel WAV file and asserts that analysis and streaming load succeed.
+- Verified that background library scans successfully analyze Dolby Atmos `.m4a` files without throwing exceptions.
+
+**Acceptance Criteria:**
+- Given a WAV or M4A file with > 2 channels (e.g. 6-channel Dolby Atmos)
+- When it is analyzed or loaded
+- Then the C++ layer automatically downmixes it to mono, and the analysis/playback succeeds without throwing an exception.
+
+---
+
+### PERF-002 : UI Responsiveness and Native Chrome Optimizations (completed)
+**User Story:**
+As a user,
+I want the UI to feel extremely snappy and fluid when dragging window panes, resizing, scrolling lists, and playing music,
+So that the overall interaction feels premium and native.
+
+**Context:**
+The previous implementation locked `OS.low_processor_usage_mode = true` with a `6900` µs sleep time, causing scrolling and visual updates to lag. Additionally, window dragging and resizing were done manually via GDScript relative mouse tracking, leading to cursor separation and frame pacing stutter. Real-time visualizers also allocated `StyleBox` resources on every frame in their draw loops.
+
+**Description:**
+Optimize UI performance by dynamically toggling low processor mode, offloading window dragging and resizing to OS-native window manager APIs, and caching StyleBox objects in drawing hot paths.
+
+**Requirements:**
+- Implement focus-based `low_processor_usage_mode` toggling in `scripts/main.gd` using standard Godot `_notification()` handlers to prevent startup viewport query failures.
+- Delegate custom window resize handles in `scripts/main.gd` to `get_window().start_resize()`.
+- Refactor custom window dragging in `sidebar.gd` and `mini_player.gd` to use `get_window().start_drag()`.
+- Cache `StyleBoxFlat` allocations in the `_draw()` loops of `waveform_visualizer.gd`, `phase_sync_meter.gd`, and `transition_timeline.gd`.
+- Remove dynamic window `min_size` setting inside the layout reflow functions (`_apply_mobile_layout` / `_apply_desktop_layout`) to eliminate layout cycles and feedback loops during resizing.
+
+**Acceptance Criteria:**
+- Given the window is focused
+- Then `OS.low_processor_usage_mode` is disabled, allowing smooth 60/120 FPS rendering.
+- Given the window is unfocused
+- Then `OS.low_processor_usage_mode` is enabled to reduce idle CPU/GPU consumption.
+- Given custom title bars or resize borders are dragged
+- Then the window moves and resizes natively without cursor lag.
+- Given any window resizing operation
+- Then the layout updates smoothly without freezing or rendering duplicate sidebar/mini-player elements.

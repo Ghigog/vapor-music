@@ -2,20 +2,22 @@
 ## Bottom UI controller component handling merged navigation and playback.
 extends Control
 
-@onready var progress_bar: HSlider = $VBox/ProgressContainer/ProgressBar
-@onready var loading_bar: ProgressBar = $VBox/ProgressContainer/LoadingBar
+@onready var progress_bar: HSlider = $VBox/ProgressBar
+@onready var loading_bar: ProgressBar = $VBox/LoadingBar
 
 @onready var nav_library: Button = $VBox/HBox/NavLibrary
 @onready var nav_vibe: Button = $VBox/HBox/NavVibe
+@onready var nav_playlists: Button = $VBox/HBox/NavPlaylists
 @onready var backward_btn: Button = $VBox/HBox/BackwardBtn
 @onready var play_pause_btn: Button = $VBox/HBox/PlayPauseBtn
 @onready var forward_btn: Button = $VBox/HBox/ForwardBtn
 @onready var nav_settings: Button = $VBox/HBox/NavSettings
 @onready var shuffle_btn: CheckBox = $VBox/HBox/ShuffleBtn
 
+var playlist_popup: Control = null
+
 
 var dragging = false
-var _panel_dragging = false
 var _custom_stylebox: StyleBoxFlat = null
 var _track_loading = false
 var _transitioning = false
@@ -57,7 +59,12 @@ func _ready() -> void:
 		AudioManager.smart_mixing_toggled.connect(func(enabled):
 			shuffle_btn.button_pressed = enabled
 		)
+	_update_progress_visibility()
 
+	NavManager.navigation_requested.connect(func(_screen_name):
+		if playlist_popup:
+			playlist_popup.hide_popup()
+	)
 	
 	# Connect to dynamic ThemeManager updates
 	ThemeManager.theme_changed.connect(_apply_styles)
@@ -106,6 +113,15 @@ func _apply_styles() -> void:
 	style.set_corner_radius(2, inner_radius) # CORNER_BOTTOM_RIGHT
 	style.set_corner_radius(3, inner_radius) # CORNER_BOTTOM_LEFT
 
+	# Zero ALL content margins so the ProgressBar sits flush against the
+	# top border line of the panel — no 12 px gap from make_glass_panel default.
+	# content_margin_top = -2: pulls the VBox up 2 px so the 4 px HSlider's
+	# centre (slider_y + 2) lands exactly on the panel border (y = 0).
+	style.content_margin_top = -2
+	style.content_margin_left = 0
+	style.content_margin_right = 0
+	style.content_margin_bottom = 0
+
 	custom_minimum_size.y = theme.MINI_PLAYER_HEIGHT
 
 	
@@ -115,7 +131,7 @@ func _apply_styles() -> void:
 	var hover_bg := Color(1.0, 1.0, 1.0, 0.06) if is_dark else Color(0.0, 0.0, 0.0, 0.06)
 	var pressed_bg := Color(1.0, 1.0, 1.0, 0.12) if is_dark else Color(0.0, 0.0, 0.0, 0.12)
 	
-	var buttons = [nav_library, nav_vibe, backward_btn, play_pause_btn, forward_btn, nav_settings, shuffle_btn]
+	var buttons = [nav_library, nav_vibe, nav_playlists, backward_btn, play_pause_btn, forward_btn, nav_settings, shuffle_btn]
 	for btn in buttons:
 		if btn:
 			btn.custom_minimum_size = Vector2(theme.TOUCH_TARGET_MIN, theme.TOUCH_TARGET_MIN)
@@ -179,6 +195,9 @@ func _apply_styles() -> void:
 		loading_fill.set_corner_radius_all(theme.RADIUS_PILL)
 		loading_bar.add_theme_stylebox_override("fill", loading_fill)
 
+	# Re-apply responsive sizing so that a theme change doesn't reset narrow-mode
+	# button sizes and flags that were set by _on_resized().
+	_on_resized()
 
 func _make_circle_button_style(bg_color: Color, border_color: Color = Color.TRANSPARENT, margin_left: int = 0) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
@@ -255,11 +274,12 @@ func _on_loading_track(is_loading: bool) -> void:
 
 
 func _update_progress_visibility() -> void:
-	var active_loading = _track_loading or _transitioning
+	# Local progress/loading indicators are disabled/hidden because they are
+	# now fully replaced by the custom horizontal VerticalProgress seeker.
 	if loading_bar:
-		loading_bar.visible = active_loading
+		loading_bar.visible = false
 	if progress_bar:
-		progress_bar.visible = !active_loading
+		progress_bar.visible = false
 
 
 func _on_backward_btn_pressed() -> void:
@@ -282,17 +302,8 @@ func _gui_input(event: InputEvent) -> void:
 	if not PlatformManager.is_desktop():
 		return
 		
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				_panel_dragging = true
-				get_viewport().set_input_as_handled()
-			else:
-				if _panel_dragging:
-					_panel_dragging = false
-					get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and _panel_dragging:
-		get_window().position += Vector2i(event.relative)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		get_window().start_drag()
 		get_viewport().set_input_as_handled()
 
 
@@ -302,22 +313,52 @@ func _on_resized() -> void:
 	var theme := ThemeManager.current_theme
 	var w := size.x
 	
+	var hbox: HBoxContainer = $VBox/HBox if has_node("VBox/HBox") else null
+	
 	if w < 540:
-		if nav_library: nav_library.text = "♪"
-		if nav_vibe: nav_vibe.text = "🎛"
-		if nav_settings: nav_settings.text = "⚙"
-		if shuffle_btn: shuffle_btn.text = ""
+		if nav_library:   nav_library.text   = "♪"
+		if nav_vibe:      nav_vibe.text      = "🎛"
+		if nav_playlists: nav_playlists.text = "▤"
+		if nav_settings:  nav_settings.text  = "⚙"
+		if shuffle_btn:   shuffle_btn.text   = ""
 		
-		if has_node("VBox/HBox"):
-			if w < 480:
-				$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_1) # 4px
-			else:
-				$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_2) # 8px
+		# In narrow mode: zero separation so buttons sit flush/squished,
+		# and switch to SIZE_SHRINK_CENTER so they don't expand to fill the panel.
+		if hbox:
+			hbox.add_theme_constant_override("separation", 0)
+		
+		# Each button: do NOT expand horizontally — pack them tightly.
+		var buttons = [nav_library, nav_vibe, nav_playlists, backward_btn, play_pause_btn, forward_btn, nav_settings, shuffle_btn]
+		for btn in buttons:
+			if btn:
+				btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+				# Reduce minimum size slightly to help fit all 8 at narrow widths.
+				btn.custom_minimum_size = Vector2(38, theme.TOUCH_TARGET_MIN)
 	else:
-		if nav_library: nav_library.text = "♪ Library"
-		if nav_vibe: nav_vibe.text = "🎛 Vibe"
-		if nav_settings: nav_settings.text = "⚙ Settings"
-		if shuffle_btn: shuffle_btn.text = "Smart Mixing"
+		if nav_library:   nav_library.text   = "♪ Library"
+		if nav_vibe:      nav_vibe.text      = "🎛 Vibe"
+		if nav_playlists: nav_playlists.text = "▤ Playlists"
+		if nav_settings:  nav_settings.text  = "⚙ Settings"
+		if shuffle_btn:   shuffle_btn.text   = "Smart Mixing"
 		
-		if has_node("VBox/HBox"):
-			$VBox/HBox.add_theme_constant_override("separation", theme.SPACE_3) # 12px
+		if hbox:
+			hbox.add_theme_constant_override("separation", theme.SPACE_2)
+		
+		# Wide mode: restore expansion and normal sizing.
+		var buttons = [nav_library, nav_vibe, nav_playlists, backward_btn, play_pause_btn, forward_btn, nav_settings, shuffle_btn]
+		for btn in buttons:
+			if btn:
+				btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				btn.custom_minimum_size = Vector2(theme.TOUCH_TARGET_MIN, theme.TOUCH_TARGET_MIN)
+
+
+func _on_nav_playlists_pressed() -> void:
+	if not playlist_popup:
+		var popup_scene = load("res://scenes/ui/mini_player/playlist_popup.tscn")
+		if popup_scene:
+			playlist_popup = popup_scene.instantiate()
+			playlist_popup.top_level = true
+			add_child(playlist_popup)
+			
+	if playlist_popup:
+		playlist_popup.toggle_popup(nav_playlists)

@@ -103,6 +103,13 @@ private:
 	void load_cache_at(size_t start_idx);
 	float get_wav_duration(const std::string& filepath);
 	float get_metadata_duration(const std::string& filepath);
+	int get_wav_channels(const std::string& filepath);
+	int get_audio_channels(const std::string& filepath);
+	int get_channels_via_ffprobe(const std::string& filepath);
+	bool downmix_wav_to_mono(const std::string& input_path, const std::string& output_path);
+	bool downmix_via_ffmpeg(const std::string& input_path, const std::string& output_path);
+
+	std::string m_temp_mono_path;
 
 	std::string m_file_path;
 	size_t m_total_samples = 0;

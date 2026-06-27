@@ -21,19 +21,20 @@ func test_sidebar_has_playback_control_buttons() -> void:
 	assert_not_null(sidebar_node, "Sidebar must exist under LayoutRoot")
 	
 	var play_pause = sidebar_node.get_node_or_null("VBox/PlayerTilesMargin/PlayerTiles/PlayPauseBtn")
-	var backward = sidebar_node.get_node_or_null("VBox/PlayerTilesMargin/PlayerTiles/ControlsHBox/BackwardBtn")
-	var forward = sidebar_node.get_node_or_null("VBox/PlayerTilesMargin/PlayerTiles/ControlsHBox/ForwardBtn")
+	var backward = sidebar_node.get_node_or_null("VBox/PlayerTilesMargin/PlayerTiles/BackwardBtn")
+	var forward = sidebar_node.get_node_or_null("VBox/PlayerTilesMargin/PlayerTiles/ForwardBtn")
 	
 	assert_not_null(play_pause, "Sidebar must contain PlayPauseBtn under VBox/PlayerTilesMargin/PlayerTiles")
-	assert_not_null(backward, "Sidebar must contain BackwardBtn under ControlsHBox")
-	assert_not_null(forward, "Sidebar must contain ForwardBtn under ControlsHBox")
+	assert_not_null(backward, "Sidebar must contain BackwardBtn under PlayerTiles")
+	assert_not_null(forward, "Sidebar must contain ForwardBtn under PlayerTiles")
 
 func test_minimum_window_size_limits() -> void:
-	assert_eq(main_node.MIN_WINDOW_SIZE, Vector2i(380, 400), "MIN_WINDOW_SIZE must be exactly 380x400")
+	assert_eq(main_node.MIN_WINDOW_SIZE, Vector2i(340, 380), "MIN_WINDOW_SIZE must be exactly 340x380")
 
 func test_mini_player_responsive_squeeze() -> void:
 	var mini_player = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/MiniPlayer")
 	assert_not_null(mini_player, "MiniPlayer must exist")
+	assert_not_null(mini_player.nav_playlists, "Playlists button must exist on MiniPlayer")
 	
 	# Clear opposite anchors to prevent Godot layout warning when manually sizing
 	mini_player.anchor_left = 0.0
@@ -43,38 +44,56 @@ func test_mini_player_responsive_squeeze() -> void:
 	mini_player.size.x = 600
 	mini_player._on_resized()
 	assert_eq(mini_player.nav_library.text, "♪ Library", "Should show full text at large width")
+	assert_eq(mini_player.nav_playlists.text, "▤ Playlists", "Should show full text at large width")
 	
 	# Simulate narrow layout
 	mini_player.size.x = 400
 	mini_player._on_resized()
 	assert_eq(mini_player.nav_library.text, "♪", "Should show icon-only at narrow width")
+	assert_eq(mini_player.nav_playlists.text, "▤", "Should show icon-only at narrow width")
+
+func test_mini_player_playlists_popup() -> void:
+	var mini_player = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/MiniPlayer")
+	assert_not_null(mini_player, "MiniPlayer must exist")
+	
+	assert_null(mini_player.playlist_popup, "Popup should be null initially")
+	
+	# Trigger the playlists pressed handler
+	mini_player._on_nav_playlists_pressed()
+	
+	assert_not_null(mini_player.playlist_popup, "Popup should be instantiated after press")
+	assert_true(mini_player.playlist_popup.visible, "Popup should be visible after first press")
+	
+	# Toggle it again
+	mini_player._on_nav_playlists_pressed()
+	assert_false(mini_player.playlist_popup.visible, "Popup should be hidden after second press")
 
 func test_sidebar_preview_square_visibility() -> void:
 	var sidebar_node = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/Sidebar")
 	assert_not_null(sidebar_node, "Sidebar must exist under LayoutRoot")
 	
 	# Verify initial state
-	assert_false(sidebar_node.preview_square.visible, "PreviewSquare should be hidden initially")
+	assert_false(sidebar_node.preview_margin.visible, "PreviewSquare should be hidden initially")
 	
 	# Simulating track focus
 	sidebar_node._on_track_focused("Artist", "Album", "Title", {}, "")
-	assert_true(sidebar_node.preview_square.visible, "PreviewSquare should be visible when track is focused")
+	assert_true(sidebar_node.preview_margin.visible, "PreviewSquare should be visible when track is focused")
 	
 	# Simulating artist focus with no image path (empty)
 	sidebar_node._on_artist_focused("Artist", "")
-	assert_false(sidebar_node.preview_square.visible, "PreviewSquare should be hidden when artist focused has no image path")
+	assert_false(sidebar_node.preview_margin.visible, "PreviewSquare should be hidden when artist focused has no image path")
 	
 	# Simulating artist focus with an image path
 	sidebar_node._on_artist_focused("Artist", "user://dummy_image.png")
-	assert_true(sidebar_node.preview_square.visible, "PreviewSquare should be visible when artist focused has an image path")
+	assert_true(sidebar_node.preview_margin.visible, "PreviewSquare should be visible when artist focused has an image path")
 	
 	# Simulating album focus with no image path (empty)
 	sidebar_node._on_album_focused("Artist", "Album", "")
-	assert_false(sidebar_node.preview_square.visible, "PreviewSquare should be hidden when album focused has no image path")
+	assert_false(sidebar_node.preview_margin.visible, "PreviewSquare should be hidden when album focused has no image path")
 	
 	# Simulating album focus with an image path
 	sidebar_node._on_album_focused("Artist", "Album", "user://dummy_image.png")
-	assert_true(sidebar_node.preview_square.visible, "PreviewSquare should be visible when album focused has an image path")
+	assert_true(sidebar_node.preview_margin.visible, "PreviewSquare should be visible when album focused has an image path")
 
 func test_transition_timeline_waveforms() -> void:
 	var vibe_screen = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/VibeScreen")
@@ -117,7 +136,7 @@ func test_vibe_screen_responsive_cards() -> void:
 	var vibe_screen = main_node.get_node_or_null("AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/VibeScreen")
 	assert_not_null(vibe_screen, "VibeScreen must exist")
 	
-	var list = vibe_screen.get_node_or_null("VBox/RunnerUpsSection/VBox/RunnerUpsScroll/RunnerUpsList")
+	var list = vibe_screen.get_node_or_null("VBox/RunnerUpsScroll/RunnerUpsList")
 	assert_not_null(list, "RunnerUpsList node must exist under ScrollContainer")
 	assert_true(list is BoxContainer, "RunnerUpsList must be a BoxContainer")
 	
@@ -135,22 +154,24 @@ func test_vibe_screen_responsive_cards() -> void:
 	
 	# Test Desktop layout
 	PlatformManager.current_breakpoint = PlatformManager.BREAKPOINT_LG
+	list.get_parent_control().size = Vector2(800, 400)
 	list.size = Vector2(800, 400)
 	vibe_screen._update_cards_layout()
 	
 	assert_false(list.vertical, "List should not be vertical on desktop layout")
-	var expected_width = clamp((list.size.x - 16.0) / 2.0, vibe_screen.CARD_MIN_WIDTH, vibe_screen.CARD_MAX_WIDTH)
+	var expected_width = clamp((list.get_parent_control().size.x - 16.0) / 2.0, vibe_screen.CARD_MIN_WIDTH, vibe_screen.CARD_MAX_WIDTH)
 	var expected_height = expected_width + vibe_screen.CARD_HEIGHT_OFFSET
 	assert_eq(card1.custom_minimum_size.y, expected_height, "Card height should be proportional to its width")
 	assert_true((card1.size_flags_horizontal & Control.SIZE_SHRINK_CENTER) != 0, "Card size flags should be set for centering/filling when width is large")
 	
 	# Test Mobile layout
 	PlatformManager.current_breakpoint = PlatformManager.BREAKPOINT_XS
+	list.get_parent_control().size = Vector2(300, 400)
 	list.size = Vector2(300, 400)
 	vibe_screen._update_cards_layout()
 	
 	assert_true(list.vertical, "List should be vertical on mobile layout")
-	var expected_mobile_width = clamp(list.size.x, vibe_screen.CARD_MIN_WIDTH, vibe_screen.CARD_MAX_WIDTH)
+	var expected_mobile_width = clamp(list.get_parent_control().size.x, vibe_screen.CARD_MIN_WIDTH, vibe_screen.CARD_MAX_WIDTH)
 	var expected_mobile_height = expected_mobile_width + vibe_screen.CARD_HEIGHT_OFFSET
 	assert_eq(card1.custom_minimum_size.y, expected_mobile_height, "Card height should be proportional to width on mobile stack")
 	

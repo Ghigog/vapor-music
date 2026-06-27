@@ -275,4 +275,39 @@ func test_prefetch_priority_override() -> void:
 	AudioManager.current_playlist = original_playlist
 	AudioManager.current_track_index = original_index
 
+func test_automatic_prefetch_on_library_scan_with_uncached() -> void:
+	var hrefs = ["uncached_track1.mp3", "uncached_track2.mp3"]
+	
+	# Verify prefetching is inactive initially
+	assert_false(analyzer.background_caching_active, "Prefetching should not be active initially")
+	
+	# Trigger library scanned. Since these tracks are uncached, it should automatically start prefetching
+	analyzer._on_library_scanned(hrefs)
+	
+	assert_true(analyzer.background_caching_active, "Prefetching should automatically start for uncached tracks")
+	
+	# Clean up
+	analyzer.stop_prefetching()
+
+func test_no_automatic_prefetch_when_all_cached() -> void:
+	var href = "cached_track.mp3"
+	var cache_path = analyzer.cache_dir + href.md5_text() + ".mp3"
+	
+	# Create a dummy cached file
+	var file = FileAccess.open(cache_path, FileAccess.WRITE)
+	file.store_string("dummy content")
+	file.close()
+	
+	assert_true(FileAccess.file_exists(cache_path), "Dummy cached track should exist")
+	assert_false(analyzer.background_caching_active, "Prefetching should not be active initially")
+	
+	# Trigger library scanned. Since all tracks are cached, it should NOT start prefetching
+	analyzer._on_library_scanned([href])
+	
+	assert_false(analyzer.background_caching_active, "Prefetching should not start when all tracks are already cached")
+	
+	# Clean up
+	DirAccess.remove_absolute(cache_path)
+
+
 

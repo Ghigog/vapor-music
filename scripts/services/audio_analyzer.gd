@@ -112,6 +112,22 @@ func _on_library_scanned(hrefs: Array) -> void:
 	# Automatically prune orphaned cache files every time the library is scanned/loaded
 	prune_orphaned_cache_files(hrefs)
 	scan_library_cache(hrefs)
+	
+	# Automatically start pre-caching uncached files on startup or when new music is scanned/detected
+	if not hrefs.is_empty():
+		var has_uncached := false
+		for href in hrefs:
+			var ext: String = href.get_extension()
+			if ext.is_empty():
+				ext = "mp3"
+			var cache_path: String = cache_dir + href.md5_text() + "." + ext
+			if not FileAccess.file_exists(cache_path):
+				has_uncached = true
+				break
+		if has_uncached:
+			print("AudioAnalyzer: Uncached tracks detected on library scan. Automatically starting prefetch.")
+			start_prefetching(hrefs)
+
 
 func scan_library_cache(hrefs: Array) -> void:
 	var metadata_service = _metadata_service

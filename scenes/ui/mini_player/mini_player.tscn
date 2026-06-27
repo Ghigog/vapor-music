@@ -11,17 +11,14 @@ script = ExtResource("1_mp")
 layout_mode = 2
 theme_override_constants/separation = 0
 
-[node name="ProgressContainer" type="MarginContainer" parent="VBox" unique_id=200000001]
-layout_mode = 2
-
-[node name="ProgressBar" type="HSlider" parent="VBox/ProgressContainer" unique_id=1190406527]
-custom_minimum_size = Vector2(0, 8)
+[node name="ProgressBar" type="HSlider" parent="VBox" unique_id=1190406527]
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="LoadingBar" type="ProgressBar" parent="VBox/ProgressContainer" unique_id=1535861406]
+[node name="LoadingBar" type="ProgressBar" parent="VBox" unique_id=1535861406]
 visible = false
-custom_minimum_size = Vector2(0, 8)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 size_flags_vertical = 1
 step = 0.0
@@ -46,6 +43,13 @@ custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "🎛 Vibe"
+clip_text = true
+
+[node name="NavPlaylists" type="Button" parent="VBox/HBox" unique_id=100000007]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "▤ Playlists"
 clip_text = true
 
 [node name="BackwardBtn" type="Button" parent="VBox/HBox" unique_id=1982662063]
@@ -77,16 +81,18 @@ clip_text = true
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
+alignment = 1
 clip_text = true
 
 
 
 
-[connection signal="drag_ended" from="VBox/ProgressContainer/ProgressBar" to="." method="_on_progress_bar_drag_ended"]
-[connection signal="drag_started" from="VBox/ProgressContainer/ProgressBar" to="." method="_on_progress_bar_drag_started"]
-[connection signal="value_changed" from="VBox/ProgressContainer/ProgressBar" to="." method="_on_progress_bar_value_changed"]
+[connection signal="drag_ended" from="VBox/ProgressBar" to="." method="_on_progress_bar_drag_ended"]
+[connection signal="drag_started" from="VBox/ProgressBar" to="." method="_on_progress_bar_drag_started"]
+[connection signal="value_changed" from="VBox/ProgressBar" to="." method="_on_progress_bar_value_changed"]
 [connection signal="pressed" from="VBox/HBox/NavLibrary" to="." method="_on_nav_library_pressed"]
 [connection signal="pressed" from="VBox/HBox/NavVibe" to="." method="_on_nav_vibe_pressed"]
+[connection signal="pressed" from="VBox/HBox/NavPlaylists" to="." method="_on_nav_playlists_pressed"]
 [connection signal="pressed" from="VBox/HBox/BackwardBtn" to="." method="_on_backward_btn_pressed"]
 [connection signal="pressed" from="VBox/HBox/PlayPauseBtn" to="." method="_on_play_pause_pressed"]
 [connection signal="pressed" from="VBox/HBox/ForwardBtn" to="." method="_on_forward_btn_pressed"]

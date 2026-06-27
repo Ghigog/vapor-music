@@ -40,8 +40,10 @@ func setup(href: String, meta: Dictionary, cost: float, type: String, is_selecte
 		
 	var has_img = false
 	if not img_path.is_empty() and FileAccess.file_exists(img_path):
-		var img = Image.load_from_file(img_path)
+		var img: Image = Image.load_from_file(img_path)
 		if img:
+			if img.get_width() > 256 or img.get_height() > 256:
+				img.resize(256, 256, Image.INTERPOLATE_LANCZOS)
 			art_rect.texture = ImageTexture.create_from_image(img)
 			has_img = true
 			

@@ -22,9 +22,14 @@ var outgoing_duration: float = 0.0
 var incoming_duration: float = 0.0
 var incoming_cue_in: float = 0.0
 
+var _cached_bg_sb: StyleBoxFlat = null
+
 func _ready() -> void:
 	resized.connect(queue_redraw)
-	ThemeManager.theme_changed.connect(queue_redraw)
+	ThemeManager.theme_changed.connect(func():
+		_cached_bg_sb = null
+		queue_redraw()
+	)
 
 func update_transition_info(out_t: String, in_t: String, out_b: float, in_b: float, dur: float, type: String) -> void:
 	outgoing_title = out_t
@@ -75,8 +80,9 @@ func _draw() -> void:
 	crossover_end = clamp(crossover_end, crossover_start, W)
 	
 	# Draw timeline background box
-	var bg_sb = ThemeManager.make_glass_panel(theme.RADIUS_SM, 0.25)
-	draw_style_box(bg_sb, Rect2(0, 0, W, H))
+	if not _cached_bg_sb:
+		_cached_bg_sb = ThemeManager.make_glass_panel(theme.RADIUS_SM, 0.25)
+	draw_style_box(_cached_bg_sb, Rect2(0, 0, W, H))
 	
 	# Outgoing Track Box (Top Half) - Full Width
 	var deck_a_color = theme.ACCENT_SURFACE

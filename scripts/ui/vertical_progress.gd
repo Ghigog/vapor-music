@@ -38,6 +38,13 @@ var _current_track_href: String = ""
 var _fetched_peaks_for_track: bool = false
 var max_amplitude: float = 20.0
 
+## When true the control is oriented horizontally (spine at y = h/2, time flows
+## left → right). Used for the mobile/portrait seek bar above the mini-player.
+var horizontal: bool = false:
+	set(val):
+		horizontal = val
+		queue_redraw()
+
 
 func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -126,43 +133,117 @@ func _check_and_fetch_peaks() -> void:
 
 
 func _draw() -> void:
-	var theme = ThemeManager.current_theme
-	var w = size.x
-	var h = size.y
+	var theme: ThemeData = ThemeManager.current_theme
+	var w: float = size.x
+	var h: float = size.y
 	
 	# Check and fetch peaks for background waveform
 	_check_and_fetch_peaks()
 	
+	if horizontal:
+		# ----------------------------------------------------------------
+		# Horizontal mode — spine at y = h/2, time flows left → right
+		# ----------------------------------------------------------------
+		var y_mid: float = h / 2.0
+		var num_bins: int = peaks.size()
+		
+		# Waveform fill + outlines
+		if num_bins > 0:
+			var wave_color: Color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.22)
+			var outline_color: Color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.30)
+			
+			var poly_pts: PackedVector2Array = PackedVector2Array()
+			poly_pts.append(Vector2(0, y_mid))
+			for i in range(num_bins):
+				var x: float = float(i) / float(num_bins - 1) * w
+				var offset: float = maxf(1.0, peaks[i] * max_amplitude)
+				poly_pts.append(Vector2(x, y_mid - offset))
+			poly_pts.append(Vector2(w, y_mid))
+			for i in range(num_bins - 1, -1, -1):
+				var x: float = float(i) / float(num_bins - 1) * w
+				var offset: float = maxf(1.0, peaks[i] * max_amplitude)
+				poly_pts.append(Vector2(x, y_mid + offset))
+			draw_polygon(poly_pts, PackedColorArray([wave_color]))
+			
+			var top_pts: PackedVector2Array = PackedVector2Array()
+			var bot_pts: PackedVector2Array = PackedVector2Array()
+			for i in range(num_bins):
+				var x: float = float(i) / float(num_bins - 1) * w
+				var offset: float = maxf(1.0, peaks[i] * max_amplitude)
+				top_pts.append(Vector2(x, y_mid - offset))
+				bot_pts.append(Vector2(x, y_mid + offset))
+			draw_polyline(top_pts, outline_color, 1.0, true)
+			draw_polyline(bot_pts, outline_color, 1.0, true)
+		
+		# Track line
+		var track_color: Color = Color(theme.GLASS_BORDER_SUBTLE.r, theme.GLASS_BORDER_SUBTLE.g, theme.GLASS_BORDER_SUBTLE.b, 0.25)
+		draw_line(Vector2(0, y_mid), Vector2(w, y_mid), track_color, 1.0)
+		
+		# Transition pin
+		if AudioManager.smart_mixing_enabled and AudioManager.has_method("get_transition_trigger_time"):
+			var trigger_time: float = AudioManager.get_transition_trigger_time()
+			if trigger_time > 0.0 and max_value > 0.0:
+				var trigger_ratio: float = trigger_time / max_value
+				if trigger_ratio < 1.0:
+					var trigger_x: float = trigger_ratio * w
+					var pin_color: Color = theme.ACCENT_CORE
+					draw_line(Vector2(trigger_x, y_mid), Vector2(trigger_x, h + 4.0), pin_color, 2.0)
+					draw_circle(Vector2(trigger_x, y_mid), 3.0, pin_color)
+		
+		if is_loading:
+			var ping_pong: float = 0.5 + 0.5 * sin(_loading_time * (2.0 * PI / 1.5))
+			var current_x: float = ping_pong * w
+			draw_circle(Vector2(current_x, y_mid), 5.0, theme.AQUA_CORE)
+		else:
+			var ratio: float = 0.0
+			if max_value > 0.0:
+				ratio = value / max_value
+			var current_x: float = ratio * w
+			var fill_color: Color = theme.ACCENT_CORE
+			if _hovered or _dragging:
+				fill_color = theme.ACCENT_BRIGHT
+			if current_x > 0.0:
+				draw_line(Vector2(0, y_mid), Vector2(current_x, y_mid), fill_color, 2.0)
+			var thumb_radius: float = 4.0
+			if _dragging:   thumb_radius = 7.0
+			elif _hovered:  thumb_radius = 6.0
+			draw_circle(Vector2(current_x, y_mid), thumb_radius, fill_color)
+		return
+	
+	# ----------------------------------------------------------------
+	# Vertical mode (original behaviour, unchanged)
+	# ----------------------------------------------------------------
+	
 	# Draw waveform in background if present (very subtle, simplified nice curves)
 	if not peaks.is_empty():
-		var x_mid = w / 2.0
-		var num_bins = peaks.size()
+		var x_mid: float = w / 2.0
+		var num_bins: int = peaks.size()
 		
 		# Low-opacity color themes: 22% fill opacity, 30% outline opacity
-		var wave_color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.22)
-		var outline_color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.30)
+		var wave_color: Color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.22)
+		var outline_color: Color = Color(theme.AQUA_CORE.r, theme.AQUA_CORE.g, theme.AQUA_CORE.b, 0.30)
 		
 		# 1. Build polygon for filled wave
-		var poly_pts = PackedVector2Array()
+		var poly_pts: PackedVector2Array = PackedVector2Array()
 		poly_pts.append(Vector2(x_mid, 0))
 		for i in range(num_bins):
-			var y = float(i) / float(num_bins - 1) * h
-			var offset = maxf(1.0, peaks[i] * max_amplitude)
+			var y: float = float(i) / float(num_bins - 1) * h
+			var offset: float = maxf(1.0, peaks[i] * max_amplitude)
 			poly_pts.append(Vector2(x_mid + offset, y))
 		poly_pts.append(Vector2(x_mid, h))
 		for i in range(num_bins - 1, -1, -1):
-			var y = float(i) / float(num_bins - 1) * h
-			var offset = maxf(1.0, peaks[i] * max_amplitude)
+			var y: float = float(i) / float(num_bins - 1) * h
+			var offset: float = maxf(1.0, peaks[i] * max_amplitude)
 			poly_pts.append(Vector2(x_mid - offset, y))
 			
 		draw_polygon(poly_pts, PackedColorArray([wave_color]))
 		
 		# 2. Draw left and right outlines using polyline for curves
-		var left_pts = PackedVector2Array()
-		var right_pts = PackedVector2Array()
+		var left_pts: PackedVector2Array = PackedVector2Array()
+		var right_pts: PackedVector2Array = PackedVector2Array()
 		for i in range(num_bins):
-			var y = float(i) / float(num_bins - 1) * h
-			var offset = maxf(1.0, peaks[i] * max_amplitude)
+			var y: float = float(i) / float(num_bins - 1) * h
+			var offset: float = maxf(1.0, peaks[i] * max_amplitude)
 			left_pts.append(Vector2(x_mid - offset, y))
 			right_pts.append(Vector2(x_mid + offset, y))
 			
@@ -170,17 +251,17 @@ func _draw() -> void:
 		draw_polyline(right_pts, outline_color, 1.0, true)
 	
 	# Draw the track line (very subtle)
-	var track_color = Color(theme.GLASS_BORDER_SUBTLE.r, theme.GLASS_BORDER_SUBTLE.g, theme.GLASS_BORDER_SUBTLE.b, 0.25)
+	var track_color: Color = Color(theme.GLASS_BORDER_SUBTLE.r, theme.GLASS_BORDER_SUBTLE.g, theme.GLASS_BORDER_SUBTLE.b, 0.25)
 	draw_line(Vector2(w / 2.0, 0), Vector2(w / 2.0, h), track_color, 1.0)
 	
 	# Draw the transition pin/dot if smart mixing is enabled
 	if AudioManager.smart_mixing_enabled and AudioManager.has_method("get_transition_trigger_time"):
-		var trigger_time = AudioManager.get_transition_trigger_time()
+		var trigger_time: float = AudioManager.get_transition_trigger_time()
 		if trigger_time > 0.0 and max_value > 0.0:
-			var trigger_ratio = trigger_time / max_value
+			var trigger_ratio: float = trigger_time / max_value
 			if trigger_ratio < 1.0:
-				var trigger_y = trigger_ratio * h
-				var pin_color = theme.ACCENT_CORE
+				var trigger_y: float = trigger_ratio * h
+				var pin_color: Color = theme.ACCENT_CORE
 				# Draw a line from seeker into the timeline/content
 				draw_line(Vector2(w / 2.0, trigger_y), Vector2(w + 4.0, trigger_y), pin_color, 2.0)
 				# Draw a small dot
@@ -189,21 +270,21 @@ func _draw() -> void:
 	if is_loading:
 		# Draw the loading spot (ball/pill) moving up and down
 		# Period of 1.5 seconds for a full round trip
-		var ping_pong = 0.5 + 0.5 * sin(_loading_time * (2.0 * PI / 1.5))
-		var current_y = ping_pong * h
-		var fill_color = theme.AQUA_CORE
+		var ping_pong: float = 0.5 + 0.5 * sin(_loading_time * (2.0 * PI / 1.5))
+		var current_y: float = ping_pong * h
+		var fill_color: Color = theme.AQUA_CORE
 		
 		# Draw the loading spot
-		var thumb_radius = 5.0
+		var thumb_radius: float = 5.0
 		draw_circle(Vector2(w / 2.0, current_y), thumb_radius, fill_color)
 	else:
 		# Draw the filled progress line (ACCENT_CORE) from top (0) to current position
-		var ratio = 0.0
+		var ratio: float = 0.0
 		if max_value > 0.0:
 			ratio = value / max_value
 		
-		var current_y = ratio * h
-		var fill_color = theme.ACCENT_CORE
+		var current_y: float = ratio * h
+		var fill_color: Color = theme.ACCENT_CORE
 		if _hovered or _dragging:
 			fill_color = theme.ACCENT_BRIGHT
 			
@@ -211,7 +292,7 @@ func _draw() -> void:
 			draw_line(Vector2(w / 2.0, 0), Vector2(w / 2.0, current_y), fill_color, 2.0)
 			
 		# Draw the grabber circle thumb
-		var thumb_radius = 4.0
+		var thumb_radius: float = 4.0
 		if _dragging:
 			thumb_radius = 7.0
 		elif _hovered:
@@ -226,7 +307,10 @@ func _gui_input(event: InputEvent) -> void:
 			if event.pressed:
 				_dragging = true
 				drag_started.emit()
-				_update_value_from_pos(event.position.y)
+				if horizontal:
+					_update_value_from_pos_h(event.position.x)
+				else:
+					_update_value_from_pos(event.position.y)
 				get_viewport().set_input_as_handled()
 			else:
 				if _dragging:
@@ -236,11 +320,20 @@ func _gui_input(event: InputEvent) -> void:
 					queue_redraw()
 					
 	elif event is InputEventMouseMotion and _dragging:
-		_update_value_from_pos(event.position.y)
+		if horizontal:
+			_update_value_from_pos_h(event.position.x)
+		else:
+			_update_value_from_pos(event.position.y)
 		get_viewport().set_input_as_handled()
 
 
 func _update_value_from_pos(y_pos: float) -> void:
-	var ratio = clampf(y_pos / size.y, 0.0, 1.0)
+	var ratio: float = clampf(y_pos / size.y, 0.0, 1.0)
+	value = ratio * max_value
+	value_changed.emit(value)
+
+
+func _update_value_from_pos_h(x_pos: float) -> void:
+	var ratio: float = clampf(x_pos / size.x, 0.0, 1.0)
 	value = ratio * max_value
 	value_changed.emit(value)
