@@ -30,8 +30,9 @@ vapor-music/
 │   ├── main.gd
 │   ├── ui/
 │   └── screens/
-├── shaders/
-│   └── frosted_glass.gdshader  # Canvas-item frosted glass effect
+├── assets/shaders/
+│   ├── premium_glass.gdshader  # SDF rounded-corner glassmorphism (app frame, sidebar)
+│   └── blur.gdshader           # Sidebar artwork blur overlay
 ├── tests/
 │   └── unit/            # GUT unit tests
 ├── addons/gut/          # GUT testing framework
@@ -127,12 +128,23 @@ In the MVP, glass panels are implemented as `PanelContainer` nodes with a
 `StyleBoxFlat` carrying the semi-transparent `BG_GLASS` colour and a `GLASS_BORDER`
 rule. This gives the colour and border feel of frosted glass without the blur pass.
 
-### Glass Blur (Phase 2)
-Full frosted-glass blur is implemented via:
-1. A `SubViewport` capturing the content layer.
-2. A `ColorRect` over the glass area with `ShaderMaterial` using `frosted_glass.gdshader`.
+### Glass Blur (current)
+Implemented with `assets/shaders/premium_glass.gdshader`, applied to `AppWindowFrame`
+and `Sidebar`. It samples `hint_screen_texture` and uses an SDF rounded box for
+anti-aliased corners and dual-stroke borders.
 
-Performance budget: **max 4 active blur passes simultaneously** (see `DESIGN_LANGUAGE.md §13`).
+Two things to know:
+
+- **`container_size` must be driven per node.** The shader maps `p = UV * container_size`,
+  so a wrong value distorts the corner radius and border into ellipses. Each node needs
+  its *own* material instance updating this from its own `resized` signal — see
+  `sidebar.gd::_setup_glass_material()`. Sharing one material across differently-sized
+  nodes is a bug.
+- **Each `hint_screen_texture` node costs a backbuffer copy per frame.** Performance
+  budget: **max 4 active blur passes simultaneously** (see `DESIGN_LANGUAGE.md §13`).
+
+Blur strength uses `textureLod`, which depends on screen-texture mipmaps. Whether the
+Compatibility renderer provides those is unconfirmed — see `PERFORMANCE_AUDIT.md §2.2`.
 
 ### Dynamic Palette (Phase 2)
 When a track loads, dominant colours are extracted from album art (k-means on a

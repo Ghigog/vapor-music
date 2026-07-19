@@ -70,15 +70,18 @@ func _ready() -> void:
 	ThemeManager.theme_changed.connect(_apply_styles)
 	_apply_styles()
 	
+	AudioManager.position_changed.connect(_on_position_changed)
+
 	# Connect to resized signal for responsive layout adjustments
 	resized.connect(_on_resized)
 	_on_resized()
 
 
-func _process(delta: float) -> void:
-	if AudioManager.is_playing and !dragging:
+## Driven by AudioManager.position_changed rather than a per-frame poll.
+func _on_position_changed(pos: float) -> void:
+	if not dragging:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
-			progress_bar.value = AudioManager.get_playback_position()
+			progress_bar.value = pos
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,22 @@ var _runner_ups: Array = []
 var _current_waveform_href: String = ""
 var _triggered_incoming_load_href: String = ""
 
+## Number of peak buckets requested from the DSP for the timeline waveform.
+const WAVEFORM_PEAK_COUNT := 1000
+
+## How often to re-check whether an async DSP decode has produced peaks.
+const WAVEFORM_POLL_INTERVAL := 0.5
+
+## The href each cached peak array currently corresponds to. Empty means "not
+## yet resolved" — these are the guards that keep _refresh_waveforms() cheap.
+var _peaks_out_href: String = ""
+var _peaks_in_href: String = ""
+
+## Transition trigger time, recomputed on track change rather than per frame.
+var _cached_trigger_time: float = 0.0
+
+var _waveform_poll: Timer
+
 func _ready() -> void:
 	_apply_styles()
 	ThemeManager.theme_changed.connect(_apply_styles)
@@ -54,7 +70,17 @@ func _ready() -> void:
 		AudioManager.connect("transition_started", _on_transition_started)
 	if AudioManager.has_signal("transition_completed"):
 		AudioManager.connect("transition_completed", _on_transition_completed)
-		
+
+	# Waveform peaks arrive asynchronously with no completion signal, so a
+	# low-frequency poll backstops the signal-driven refreshes above.
+	_waveform_poll = Timer.new()
+	_waveform_poll.wait_time = WAVEFORM_POLL_INTERVAL
+	_waveform_poll.timeout.connect(_refresh_waveforms)
+	add_child(_waveform_poll)
+	_waveform_poll.start()
+
+	visibility_changed.connect(_on_visibility_changed)
+
 	var audio_analyzer = get_node_or_null("/root/AudioAnalyzer")
 	if is_instance_valid(audio_analyzer):
 		audio_analyzer.analysis_completed.connect(_on_analysis_completed)
@@ -222,6 +248,7 @@ func _apply_styles() -> void:
 	_style_runner_ups()
 
 func _on_track_changed(_track_name: String) -> void:
+	_invalidate_waveform_cache()
 	_refresh_display()
 
 func _on_playback_toggled(_is_playing: bool) -> void:
@@ -232,8 +259,11 @@ func _on_transition_started(next_track: String, transition_type: String) -> void
 		next_track.get_file().uri_decode().get_basename(),
 		transition_type
 	]
+	# Deck roles swap on transition — cached peaks now point at the wrong deck.
+	_invalidate_waveform_cache()
 
 func _on_transition_completed(_track: String) -> void:
+	_invalidate_waveform_cache()
 	_refresh_display()
 
 func _on_analysis_completed(href: String, _results: Dictionary) -> void:
@@ -243,7 +273,16 @@ func _on_metadata_updated(href: String, _metadata: Dictionary) -> void:
 	var active_index = AudioManager.current_track_index
 	var playlist = AudioManager.current_playlist
 	if active_index != -1 and not playlist.is_empty() and playlist[active_index] == href:
+		# Segment data drives the trigger time — recompute now that it exists.
+		_refresh_trigger_time()
 		_refresh_display()
+
+
+## _refresh_waveforms() no-ops while hidden, so re-resolve on becoming visible
+## to pick up anything that changed off-screen.
+func _on_visibility_changed() -> void:
+	if is_visible_in_tree():
+		_invalidate_waveform_cache()
 
 func _update_analysis_status() -> void:
 	if not is_instance_valid(WebDAVService) or not is_instance_valid(MetadataService):
@@ -290,6 +329,9 @@ func _refresh_display() -> void:
 		if transition_timeline:
 			transition_timeline.update_transition_info("No Track", "No Track", 0.0, 0.0, 0.0, "Standard Crossfade")
 		_current_waveform_href = ""
+		_peaks_out_href = ""
+		_peaks_in_href = ""
+		_cached_trigger_time = 0.0
 		_clear_runner_ups()
 		return
 		
@@ -687,56 +729,86 @@ func _get_track_cache_path(href_path: String) -> String:
 		ext = "mp3"
 	return "user://audio_cache/" + href_path.md5_text() + "." + ext
 
+## Per-frame work is deliberately minimal: only the playhead moves every frame.
+##
+## Waveform peaks, durations, cue points and the trigger time all change at
+## track boundaries, not per frame — they are resolved in _refresh_waveforms(),
+## driven by track/transition signals plus a low-frequency poll. Previously this
+## function called get_waveform_peaks(1000) twice per frame (~120k floats/sec
+## across the GDExtension boundary) to recompute values that had not changed.
 func _process(_delta: float) -> void:
-	if not is_inside_tree() or not transition_timeline:
+	if not is_inside_tree() or not is_visible_in_tree() or not transition_timeline:
 		return
-		
+
 	var active_player = AudioManager.active_player
-	var is_trans = AudioManager.is_transitioning
-	var fader = AudioManager.crossfader
 	var pos = 0.0
-	var length = AudioManager.current_track_length
-	var trig = 0.0
-	
-	var dsp = null
+
 	if is_instance_valid(active_player) and active_player.playing:
-		dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
+		var dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
 		if dsp:
 			pos = dsp.get_playback_position()
-			
-	# Fetch trigger time for timeline prediction and manage waveform peaks
+
+	transition_timeline.update_playback_state(
+		AudioManager.is_transitioning,
+		AudioManager.crossfader,
+		pos,
+		AudioManager.current_track_length,
+		_cached_trigger_time
+	)
+
+
+## Recomputes the transition trigger time from analyzer segment data.
+## Falls back to a duration-derived estimate when no outro segment is known.
+func _refresh_trigger_time() -> void:
+	_cached_trigger_time = 0.0
+
+	var active_index = AudioManager.current_track_index
+	var playlist = AudioManager.current_playlist
+	if active_index == -1 or active_index >= playlist.size():
+		return
+	if not is_instance_valid(MetadataService):
+		return
+
+	var meta = MetadataService.get_cached_metadata(playlist[active_index])
+	if meta.is_empty():
+		return
+
+	var outro = meta.get("segments", {}).get("outro", [])
+	if not outro.is_empty():
+		_cached_trigger_time = outro[0]
+	else:
+		_cached_trigger_time = AudioManager.current_track_length \
+			- AudioManager.get_transition_duration(AudioManager.upcoming_transition_type) \
+			- 4.0
+
+
+## Resolves waveform peaks, durations and cue points for the transition timeline.
+##
+## Peaks arrive asynchronously — a DSP reports get_cache_sample_count() == 0
+## until its decode completes, and there is no signal for that. So this is
+## driven both by track/transition signals (for immediacy) and by a 2 Hz poll
+## (to catch the async completion). The per-href guards below mean the
+## expensive get_waveform_peaks() call only runs when peaks are genuinely new,
+## so the poll itself is close to free.
+func _refresh_waveforms() -> void:
+	if not is_inside_tree() or not is_visible_in_tree() or not transition_timeline:
+		return
+
+	var is_trans = AudioManager.is_transitioning
+
 	var active_index = AudioManager.current_track_index
 	var playlist = AudioManager.current_playlist
 	var current_href = ""
-	
 	if active_index != -1 and active_index < playlist.size():
 		current_href = playlist[active_index]
-		if is_instance_valid(MetadataService):
-			var meta = MetadataService.get_cached_metadata(current_href)
-			if not meta.is_empty():
-				var segments = meta.get("segments", {})
-				var outro = segments.get("outro", [])
-				if not outro.is_empty():
-					trig = outro[0]
-				else:
-					trig = AudioManager.current_track_length - AudioManager.get_transition_duration(AudioManager.upcoming_transition_type) - 4.0
-					
-	# Manage _current_waveform_href cache
-	if _current_waveform_href != current_href:
-		_current_waveform_href = current_href
-		
-	# Handle waveforms for transition timeline
-	var out_peaks = PackedFloat32Array()
-	var in_peaks = PackedFloat32Array()
-	var out_dur = 0.0
-	var in_dur = 0.0
-	
-	# Determine outgoing and incoming DSPs
+	_current_waveform_href = current_href
+
+	# Determine which deck is outgoing and which is incoming.
 	var outgoing_dsp = null
 	var incoming_dsp = null
 	var out_track_href = ""
 	var in_track_href = ""
-	
+
 	if is_trans:
 		out_track_href = AudioManager._outgoing_href
 		in_track_href = AudioManager._incoming_href
@@ -747,45 +819,57 @@ func _process(_delta: float) -> void:
 		in_track_href = AudioManager.get_next_track_href()
 		outgoing_dsp = AudioManager.dsp_a if AudioManager.active_player == AudioManager.player_a else AudioManager.dsp_b
 		incoming_dsp = AudioManager.dsp_b if AudioManager.active_player == AudioManager.player_a else AudioManager.dsp_a
-		
-	# 1. Fetch outgoing peaks
-	if outgoing_dsp and not out_track_href.is_empty():
-		if outgoing_dsp.get_cache_sample_count() > 0:
-			out_peaks = outgoing_dsp.get_waveform_peaks(1000)
-			out_dur = outgoing_dsp.get_duration()
-			
-	# 2. Fetch incoming peaks (load in background if not transitioning)
-	if not in_track_href.is_empty():
-		if not is_trans and transition_timeline.incoming_peaks.is_empty() and AudioManager.is_track_cached(in_track_href):
-			if _triggered_incoming_load_href != in_track_href:
-				_triggered_incoming_load_href = in_track_href
-				var path = _get_track_cache_path(in_track_href)
-				if not path.is_empty():
-					var duration_hint = 0.0
-					if is_instance_valid(MetadataService):
-						var next_meta = MetadataService.get_cached_metadata(in_track_href)
-						duration_hint = next_meta.get("duration", 0.0)
-					if incoming_dsp:
-						AudioManager.load_dsp_file(incoming_dsp, in_track_href, ProjectSettings.globalize_path(path), duration_hint)
-						
-		if incoming_dsp:
-			if incoming_dsp.get_cache_sample_count() > 0:
-				in_peaks = incoming_dsp.get_waveform_peaks(1000)
-				in_dur = incoming_dsp.get_duration()
-	else:
-		_triggered_incoming_load_href = ""
-		
-	# Pass peaks and durations to transition_timeline
-	transition_timeline.outgoing_peaks = out_peaks
-	transition_timeline.incoming_peaks = in_peaks
-	transition_timeline.outgoing_duration = out_dur
-	transition_timeline.incoming_duration = in_dur
-	
-	# Determine incoming cue_in
-	var in_cue_in = 0.0
-	if not in_track_href.is_empty() and is_instance_valid(MetadataService):
-		var meta_in = MetadataService.get_cached_metadata(in_track_href)
-		in_cue_in = meta_in.get("cue_in", 0.0)
-	transition_timeline.incoming_cue_in = in_cue_in
 
-	transition_timeline.update_playback_state(is_trans, fader, pos, length, trig)
+	# --- Outgoing peaks -----------------------------------------------------
+	if out_track_href.is_empty():
+		if not _peaks_out_href.is_empty():
+			_peaks_out_href = ""
+			transition_timeline.outgoing_peaks = PackedFloat32Array()
+			transition_timeline.outgoing_duration = 0.0
+	elif _peaks_out_href != out_track_href and outgoing_dsp:
+		if outgoing_dsp.get_cache_sample_count() > 0:
+			_peaks_out_href = out_track_href
+			transition_timeline.outgoing_peaks = outgoing_dsp.get_waveform_peaks(WAVEFORM_PEAK_COUNT)
+			transition_timeline.outgoing_duration = outgoing_dsp.get_duration()
+
+	# --- Incoming peaks -----------------------------------------------------
+	if in_track_href.is_empty():
+		_triggered_incoming_load_href = ""
+		if not _peaks_in_href.is_empty():
+			_peaks_in_href = ""
+			transition_timeline.incoming_peaks = PackedFloat32Array()
+			transition_timeline.incoming_duration = 0.0
+			transition_timeline.incoming_cue_in = 0.0
+		return
+
+	# Kick off a background decode of the upcoming track so its waveform is
+	# ready to draw before the transition starts.
+	if not is_trans and transition_timeline.incoming_peaks.is_empty() and AudioManager.is_track_cached(in_track_href):
+		if _triggered_incoming_load_href != in_track_href and incoming_dsp:
+			_triggered_incoming_load_href = in_track_href
+			var path = _get_track_cache_path(in_track_href)
+			if not path.is_empty():
+				var duration_hint = 0.0
+				if is_instance_valid(MetadataService):
+					duration_hint = MetadataService.get_cached_metadata(in_track_href).get("duration", 0.0)
+				AudioManager.load_dsp_file(incoming_dsp, in_track_href, ProjectSettings.globalize_path(path), duration_hint)
+
+	if _peaks_in_href != in_track_href and incoming_dsp:
+		if incoming_dsp.get_cache_sample_count() > 0:
+			_peaks_in_href = in_track_href
+			transition_timeline.incoming_peaks = incoming_dsp.get_waveform_peaks(WAVEFORM_PEAK_COUNT)
+			transition_timeline.incoming_duration = incoming_dsp.get_duration()
+
+			var cue_in = 0.0
+			if is_instance_valid(MetadataService):
+				cue_in = MetadataService.get_cached_metadata(in_track_href).get("cue_in", 0.0)
+			transition_timeline.incoming_cue_in = cue_in
+
+
+## Invalidates cached peaks so the next _refresh_waveforms() re-resolves them.
+## Call whenever the deck assignment or track selection changes underneath us.
+func _invalidate_waveform_cache() -> void:
+	_peaks_out_href = ""
+	_peaks_in_href = ""
+	_refresh_trigger_time()
+	_refresh_waveforms()

@@ -40,6 +40,9 @@ func _ready() -> void:
 	artist_label.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
 	
 	remove_btn.visible = false
+	# Scene bakes 24x24. Enforce the touch minimum on BOTH axes for icon buttons —
+	# this one removes a track, so a mis-tap is destructive and worth the space.
+	remove_btn.custom_minimum_size = ThemeManager.min_touch_size(remove_btn.custom_minimum_size)
 	remove_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 	remove_btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
 	remove_btn.add_theme_font_override("font", theme.font_ui)

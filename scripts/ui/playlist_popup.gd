@@ -82,7 +82,8 @@ func _rebuild_list() -> void:
 		var btn = Button.new()
 		btn.text = "    ♪  " + playlist.name
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		btn.custom_minimum_size.y = int(theme.TOUCH_TARGET_MIN * 0.75)
+		btn.custom_minimum_size.y = ThemeManager.min_touch_height(
+			int(theme.TOUCH_TARGET_MIN * 0.75))
 		
 		btn.add_theme_font_override("font", theme.font_ui)
 		btn.add_theme_font_size_override("font_size", theme.TYPE_SM)

@@ -40,6 +40,9 @@ var _nav_buttons: Dictionary = {}
 var _custom_stylebox: StyleBoxFlat = null
 var _playlists_visible := true
 
+## Per-instance copy of the premium_glass material. See _setup_glass_material().
+var _glass_material: ShaderMaterial = null
+
 
 func _ready() -> void:
 	if has_theme_stylebox_override("panel"):
@@ -72,6 +75,7 @@ func _ready() -> void:
 	_set_active_nav(NavManager.current_screen)
 	_style_player_buttons()
 	_setup_blur_shader()
+	_setup_glass_material()
 	_setup_playlists_ui()
 	ThemeManager.theme_changed.connect(_apply_panel_style)
 	ThemeManager.theme_changed.connect(_apply_logo_style)
@@ -125,7 +129,8 @@ func _refresh_nav_button_styles() -> void:
 
 func _style_nav_button(btn: Button, active: bool) -> void:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.custom_minimum_size.y = int(ThemeManager.current_theme.TOUCH_TARGET_MIN * 0.5)
+	btn.custom_minimum_size.y = ThemeManager.min_touch_height(
+		int(ThemeManager.current_theme.TOUCH_TARGET_MIN * 0.5))
 	btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
 	if active:
@@ -184,7 +189,8 @@ func _gui_input(event: InputEvent) -> void:
 func _connect_audio_signals() -> void:
 	AudioManager.track_changed.connect(_on_track_changed)
 	AudioManager.playback_toggled.connect(_on_playback_toggled)
-	
+	AudioManager.position_changed.connect(_on_position_changed)
+
 	play_pause_btn.pressed.connect(func(): AudioManager.toggle_play())
 	backward_btn.pressed.connect(func(): AudioManager.play_previous())
 	forward_btn.pressed.connect(func(): AudioManager.play_next())
@@ -246,10 +252,15 @@ func _style_player_buttons() -> void:
 	tile_pressed.content_margin_bottom = 4
 	
 	for btn in [play_pause_btn, backward_btn, forward_btn, shuffle_btn]:
+		# Scene bakes 32 px tall. These are transport controls — the most-tapped
+		# things in the sidebar — so lift them to the touch minimum on touch
+		# hardware. Width already expands to fill, so only height needs enforcing.
+		btn.custom_minimum_size.y = ThemeManager.min_touch_height(int(btn.custom_minimum_size.y))
+
 		var normal_style = tile_normal.duplicate()
 		var hover_style = tile_hover.duplicate()
 		var pressed_style = tile_pressed.duplicate()
-		
+
 		btn.add_theme_stylebox_override("normal", normal_style)
 		btn.add_theme_stylebox_override("hover", hover_style)
 		btn.add_theme_stylebox_override("pressed", pressed_style)
@@ -305,6 +316,35 @@ func _on_lyrics_fetched(href: String, lyrics: Dictionary) -> void:
 		if href == current_href:
 			# Update lyrics display on-the-fly
 			_on_track_focused("", "", "", lyrics, "")
+
+## Makes the premium_glass material unique to this node and keeps its
+## container_size in sync with the sidebar's actual dimensions.
+##
+## The scene assigns a ShaderMaterial whose container_size is baked to
+## (1232, 672) — the app frame's size, not the sidebar's. Nothing updated it:
+## main.gd's resize handler drives app_window_frame.material, which is a
+## *different* material created at runtime in _apply_background(). So the
+## sidebar rendered its rounded-box SDF against dimensions ~5x its real width,
+## which distorts the corner radius and border into anisotropic ellipses.
+##
+## duplicate() guards against the material being shared if the scene is ever
+## instanced more than once — each instance needs its own container_size.
+func _setup_glass_material() -> void:
+	var mat := material as ShaderMaterial
+	if not mat:
+		return
+
+	_glass_material = mat.duplicate() as ShaderMaterial
+	material = _glass_material
+
+	resized.connect(_update_glass_size)
+	_update_glass_size()
+
+
+func _update_glass_size() -> void:
+	if _glass_material:
+		_glass_material.set_shader_parameter("container_size", size)
+
 
 func _setup_blur_shader() -> void:
 	var shader = load("res://assets/shaders/blur.gdshader") as Shader
@@ -385,11 +425,14 @@ func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: 
 	lyrics_scroll.visible = true
 	preview_margin.visible = true
 
-func _process(_delta: float) -> void:
-	if is_synced_lyrics and lyrics_scroll.visible and AudioManager.is_playing:
+## Driven by AudioManager.position_changed rather than a per-frame poll.
+##
+## 10 Hz is ample for synced lyrics — lines are seconds apart — and it takes the
+## linear scan in _update_lyrics_scroller() off the frame path.
+func _on_position_changed(pos: float) -> void:
+	if is_synced_lyrics and lyrics_scroll.visible:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
-			var song_time = AudioManager.get_playback_position()
-			_update_lyrics_scroller(song_time)
+			_update_lyrics_scroller(pos)
 
 func _update_lyrics_scroller(song_time: float) -> void:
 	if lyrics_list.is_empty():
@@ -451,7 +494,8 @@ func _style_playlists_header_buttons() -> void:
 	var theme = ThemeManager.current_theme
 	
 	toggle_playlists_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	toggle_playlists_btn.custom_minimum_size.y = int(theme.TOUCH_TARGET_MIN * 0.5)
+	toggle_playlists_btn.custom_minimum_size.y = ThemeManager.min_touch_height(
+		int(theme.TOUCH_TARGET_MIN * 0.5))
 	toggle_playlists_btn.add_theme_font_override("font", theme.font_ui)
 	toggle_playlists_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	toggle_playlists_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
@@ -462,7 +506,9 @@ func _style_playlists_header_buttons() -> void:
 	toggle_playlists_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 	
 	add_playlist_btn.flat = true
-	add_playlist_btn.custom_minimum_size.y = int(theme.TOUCH_TARGET_MIN * 0.5)
+	# A bare "+" glyph — intrinsically ~17 px wide, so both axes need enforcing.
+	add_playlist_btn.custom_minimum_size = ThemeManager.min_touch_size(
+		Vector2(add_playlist_btn.custom_minimum_size.x, theme.TOUCH_TARGET_MIN * 0.5))
 	add_playlist_btn.add_theme_font_override("font", theme.font_ui)
 	add_playlist_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	add_playlist_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)

@@ -123,6 +123,32 @@ func make_cta_button(filled: bool = false) -> StyleBoxFlat:
 	return s
 
 
+## Returns the minimum height an interactive control should occupy.
+##
+## On touch-primary hardware nothing may render below TOUCH_TARGET_MIN (44 px) —
+## a finger has no pixel precision. On pointer hardware the caller's own compact
+## value stands, so desktop keeps its dense layout.
+##
+## Note this keys off INPUT hardware, not layout width: a tablet in landscape gets
+## the desktop sidebar layout but still needs finger-sized targets. See
+## PlatformManager's header for why those two concerns are kept separate.
+##
+## [param compact]  The height to use when a precise pointer is available.
+func min_touch_height(compact: int) -> int:
+	if is_instance_valid(PlatformManager) and PlatformManager.is_touch_primary():
+		return maxi(compact, current_theme.TOUCH_TARGET_MIN)
+	return compact
+
+
+## Square variant of min_touch_height() for icon buttons — enforces the minimum on
+## both axes, since a 44x24 target is still only 24 px tall to a fingertip.
+func min_touch_size(compact: Vector2) -> Vector2:
+	if is_instance_valid(PlatformManager) and PlatformManager.is_touch_primary():
+		var m := float(current_theme.TOUCH_TARGET_MIN)
+		return Vector2(maxf(compact.x, m), maxf(compact.y, m))
+	return compact
+
+
 ## Returns a StyleBoxFlat for the album-art circular placeholder.
 func make_circle_placeholder() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()

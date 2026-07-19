@@ -33,6 +33,7 @@ void AudioDSP::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_cache_sample_count"), &AudioDSP::get_cache_sample_count);
 	ClassDB::bind_method(D_METHOD("get_cross_correlation_offset", "other_dsp", "self_time", "other_time", "window_size_sec"), &AudioDSP::get_cross_correlation_offset);
 	ClassDB::bind_method(D_METHOD("get_waveform_peaks", "num_bins"), &AudioDSP::get_waveform_peaks);
+	ClassDB::bind_method(D_METHOD("calculate_chunk_rms", "chunk"), &AudioDSP::calculate_chunk_rms);
 }
 
 AudioDSP::AudioDSP() {
@@ -1328,6 +1329,81 @@ float AudioDSP::get_cross_correlation_offset(AudioDSP* other_dsp, float self_tim
 
 	float offset_sec = static_cast<float>(best_lag) / 4000.0f;
 	return offset_sec;
+}
+
+// Three-band RMS over one output chunk.
+//
+// Ported verbatim from audio_manager.gd::_calculate_chunk_rms(), which ran this
+// per-sample loop in GDScript on every _process for both decks. Two one-pole
+// lowpasses split each channel into low / mid / high; the band values are squared,
+// L/R averaged, accumulated, and reduced to an RMS per band.
+//
+// Coefficients and arithmetic order are kept identical to the GDScript original so
+// the clipping-prevention logic downstream sees the same numbers. Accumulation is
+// in double for the same reason — GDScript floats are 64-bit.
+//
+// Filter state persists across chunks (that is what makes these filters work), and
+// lives on the instance, so each deck's AudioDSP naturally keeps its own.
+Dictionary AudioDSP::calculate_chunk_rms(const PackedVector2Array &chunk) {
+	Dictionary result;
+
+	const int64_t num_frames = chunk.size();
+	if (num_frames == 0) {
+		result["low"] = 0.0;
+		result["mid"] = 0.0;
+		result["high"] = 0.0;
+		return result;
+	}
+
+	// Crossover coefficients: ~low band, and the low/mid split point.
+	const double LOW_COEF = 0.0344;
+	const double MID_COEF = 0.363;
+
+	// ptr() gives a direct pointer to the packed data — no per-element marshalling.
+	const Vector2 *data = chunk.ptr();
+
+	// Pull filter state into locals so the loop stays in registers.
+	double low_l = m_rms_low_l;
+	double low_r = m_rms_low_r;
+	double mid_low_l = m_rms_mid_low_l;
+	double mid_low_r = m_rms_mid_low_r;
+
+	double sum_low_sq = 0.0;
+	double sum_mid_sq = 0.0;
+	double sum_high_sq = 0.0;
+
+	for (int64_t i = 0; i < num_frames; ++i) {
+		// Left channel
+		const double sample_l = static_cast<double>(data[i].x);
+		low_l += LOW_COEF * (sample_l - low_l);
+		mid_low_l += MID_COEF * (sample_l - mid_low_l);
+		const double low_l_val = low_l;
+		const double mid_l_val = mid_low_l - low_l;
+		const double high_l_val = sample_l - mid_low_l;
+
+		// Right channel
+		const double sample_r = static_cast<double>(data[i].y);
+		low_r += LOW_COEF * (sample_r - low_r);
+		mid_low_r += MID_COEF * (sample_r - mid_low_r);
+		const double low_r_val = low_r;
+		const double mid_r_val = mid_low_r - low_r;
+		const double high_r_val = sample_r - mid_low_r;
+
+		sum_low_sq += (low_l_val * low_l_val + low_r_val * low_r_val) * 0.5;
+		sum_mid_sq += (mid_l_val * mid_l_val + mid_r_val * mid_r_val) * 0.5;
+		sum_high_sq += (high_l_val * high_l_val + high_r_val * high_r_val) * 0.5;
+	}
+
+	m_rms_low_l = low_l;
+	m_rms_low_r = low_r;
+	m_rms_mid_low_l = mid_low_l;
+	m_rms_mid_low_r = mid_low_r;
+
+	const double inv_frames = 1.0 / static_cast<double>(num_frames);
+	result["low"] = std::sqrt(sum_low_sq * inv_frames);
+	result["mid"] = std::sqrt(sum_mid_sq * inv_frames);
+	result["high"] = std::sqrt(sum_high_sq * inv_frames);
+	return result;
 }
 
 PackedFloat32Array AudioDSP::get_waveform_peaks(int num_bins) {

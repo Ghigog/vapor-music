@@ -11,6 +11,18 @@ signal transition_completed(track: String)
 signal length_changed(length: float)
 signal smart_mixing_toggled(enabled: bool)
 
+## Emitted at POSITION_EMIT_HZ while playing, and once immediately after a seek.
+##
+## Exists so playback-position consumers (progress bars, lyric scrollers) don't each
+## run their own _process polling get_playback_position() every frame. Three separate
+## consumers were doing exactly that; none of them need 60 Hz. At 10 Hz a full-width
+## progress bar advances well under a pixel per update, so it still reads as smooth.
+signal position_changed(position: float)
+
+## Playback-position broadcast rate, in Hz.
+const POSITION_EMIT_HZ := 10.0
+var _position_emit_accum: float = 0.0
+
 var player: AudioStreamPlayer # Compatibility reference, points to active_player
 var player_a: AudioStreamPlayer
 var player_b: AudioStreamPlayer
@@ -111,21 +123,11 @@ var _transition_eq_gains := {
 
 var _clipping_attenuation_db := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
-var _filter_states := {
-	"DeckA": {
-		"low_l": 0.0, "low_r": 0.0,
-		"mid_low_l": 0.0, "mid_low_r": 0.0
-	},
-	"DeckB": {
-		"low_l": 0.0, "low_r": 0.0,
-		"mid_low_l": 0.0, "mid_low_r": 0.0
-	}
-}
-
 var _last_rms := {
 	"DeckA": { "low": 0.0, "mid": 0.0, "high": 0.0 },
 	"DeckB": { "low": 0.0, "mid": 0.0, "high": 0.0 }
 }
+
 
 
 var deck_a_bar: int = 1
@@ -573,11 +575,13 @@ func _process(delta: float) -> void:
 				var in_bus_idx = AudioServer.get_bus_index(incoming_player.bus)
 				_reset_bus_effects(in_bus_idx)
 				AudioServer.set_bus_volume_db(in_bus_idx, -60.0)
-				print("AudioManager: Outro zone entered. Pre-loading incoming track: ", in_href)
+				if OS.is_debug_build():
+					print("AudioManager: Outro zone entered. Pre-loading incoming track: ", in_href)
 				_load_and_stream_remote_file(in_href, incoming_player, false)
 			
 			if pos >= trigger_threshold:
-				print("AudioManager: Approaching outro zone. Triggering start_transition. pos=", pos, ", threshold=", trigger_threshold)
+				if OS.is_debug_build():
+					print("AudioManager: Approaching outro zone. Triggering start_transition. pos=", pos, ", threshold=", trigger_threshold)
 				start_transition()
 			
 	if is_transitioning and is_playing:
@@ -590,6 +594,13 @@ func _process(delta: float) -> void:
 			crossfader = clamp(_transition_elapsed / _active_transition_duration, 0.0, 1.0)
 			
 	_process_clipping_prevention()
+
+	# Broadcast playback position on a fixed cadence rather than per frame.
+	if is_playing:
+		_position_emit_accum += delta
+		if _position_emit_accum >= 1.0 / POSITION_EMIT_HZ:
+			_position_emit_accum = 0.0
+			position_changed.emit(get_playback_position())
 
 func _setup_audio_buses() -> void:
 	var bus_names = ["DeckA", "DeckB"]
@@ -1983,50 +1994,6 @@ func _apply_final_eq_gains() -> void:
 			var gain = _transition_eq_gains[in_bus_name][b]
 			in_eq.set_band_gain_db(b, clamp(gain, -40.0, 0.0))
 
-func _calculate_chunk_rms(chunk: PackedVector2Array, deck_name: String) -> Dictionary:
-	var num_frames = chunk.size()
-	if num_frames == 0:
-		return { "low": 0.0, "mid": 0.0, "high": 0.0 }
-		
-	var state = _filter_states[deck_name]
-	
-	var sum_low_sq := 0.0
-	var sum_mid_sq := 0.0
-	var sum_high_sq := 0.0
-	
-	for i in range(num_frames):
-		var frame = chunk[i]
-		
-		# Left channel
-		var sample_l = frame.x
-		state.low_l += 0.0344 * (sample_l - state.low_l)
-		state.mid_low_l += 0.363 * (sample_l - state.mid_low_l)
-		var low_l_val = state.low_l
-		var mid_l_val = state.mid_low_l - state.low_l
-		var high_l_val = sample_l - state.mid_low_l
-		
-		# Right channel
-		var sample_r = frame.y
-		state.low_r += 0.0344 * (sample_r - state.low_r)
-		state.mid_low_r += 0.363 * (sample_r - state.mid_low_r)
-		var low_r_val = state.low_r
-		var mid_r_val = state.mid_low_r - state.low_r
-		var high_r_val = sample_r - state.mid_low_r
-		
-		sum_low_sq += (low_l_val * low_l_val + low_r_val * low_r_val) * 0.5
-		sum_mid_sq += (mid_l_val * mid_l_val + mid_r_val * mid_r_val) * 0.5
-		sum_high_sq += (high_l_val * high_l_val + high_r_val * high_r_val) * 0.5
-		
-	var rms_low = sqrt(sum_low_sq / num_frames)
-	var rms_mid = sqrt(sum_mid_sq / num_frames)
-	var rms_high = sqrt(sum_high_sq / num_frames)
-	
-	return {
-		"low": rms_low,
-		"mid": rms_mid,
-		"high": rms_high
-	}
-
 func _process_clipping_prevention() -> void:
 	if not is_transitioning or not _outgoing_player or not _incoming_player:
 		for b in range(6):
@@ -2202,6 +2169,11 @@ func scroll_track(value) -> void:
 	if playback:
 		if playback.has_method("clear_buffer"):
 			playback.clear_buffer()
+	# Broadcast immediately so listeners reflect the seek without waiting for the
+	# next scheduled tick — and reset the accumulator so the tick doesn't
+	# double-fire right behind it.
+	_position_emit_accum = 0.0
+	position_changed.emit(get_playback_position())
 
 func _on_deck_finished(finished_player: AudioStreamPlayer) -> void:
 	if _block_finished_signal:
@@ -2460,8 +2432,10 @@ func _feed_deck(p: AudioStreamPlayer, dsp: Node, base_speed_scale: float, is_inc
 			var chunk = dsp.get_next_chunk(frames_available, ratio)
 			if chunk.size() > 0:
 				playback.push_buffer(chunk)
-				var rms_levels = _calculate_chunk_rms(chunk, p.bus)
-				_last_rms[p.bus] = rms_levels
+				# Three-band RMS lives in the DSP extension — see audio_dsp.cpp.
+				# Filter state is per-AudioDSP-instance, so each deck keeps its own
+				# and no deck key needs threading through.
+				_last_rms[p.bus] = dsp.calculate_chunk_rms(chunk)
 
 
 func get_playback_position() -> float:

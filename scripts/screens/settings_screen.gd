@@ -47,6 +47,10 @@ var _user_minimized_overlay := false
 @onready var audio_latency_label: Label = %AudioLatencyLabel
 @onready var audio_latency_value: Label = %AudioLatencyValue
 
+## Refresh interval for the performance readout, in seconds.
+const DIAGNOSTICS_INTERVAL := 0.25
+var _diagnostics_timer: Timer
+
 const THEME_MAP = {
 	"Vapor Dark" : "res://assets/themes/default_dark.tres",
 	"Vapor Light" : "res://assets/themes/default_light.tres"
@@ -55,7 +59,16 @@ const THEME_MAP = {
 func _ready() -> void:
 	_apply_styles()
 	ThemeManager.theme_changed.connect(_apply_styles)
-	
+
+	# Performance readout refresh cadence — fast enough to feel live, slow
+	# enough that the string formatting cost is negligible.
+	_diagnostics_timer = Timer.new()
+	_diagnostics_timer.wait_time = DIAGNOSTICS_INTERVAL
+	_diagnostics_timer.timeout.connect(_update_diagnostics)
+	add_child(_diagnostics_timer)
+	_diagnostics_timer.start()
+	_update_diagnostics()
+
 	# Populate the Theme OptionButton
 	theme_selector.clear()
 	for theme_name in THEME_MAP.keys():
@@ -416,25 +429,36 @@ func _update_status_after_caching(was_stopped: bool) -> void:
 		if is_instance_valid(overlay_progress):
 			overlay_progress.text = msg
 
+## Only the spinner needs frame cadence. Diagnostics are refreshed on a timer —
+## see _update_diagnostics().
 func _process(_delta: float) -> void:
 	if not is_inside_tree() or not is_visible_in_tree():
 		return
-		
+
 	# Spin the caching overlay spinner gear if active
 	if is_instance_valid(cache_overlay) and cache_overlay.visible and is_instance_valid(overlay_spinner):
 		overlay_spinner.pivot_offset = overlay_spinner.size / 2.0
 		overlay_spinner.rotation += _delta * 3.0
-		
-	# Update Performance Diagnostics
+
+
+## Refreshes the performance readout.
+##
+## Driven by _diagnostics_timer at DIAGNOSTICS_INTERVAL rather than from
+## _process: each of these three lines allocates a String and forces a Label
+## re-layout, and no one can read a number that updates 60 times a second.
+func _update_diagnostics() -> void:
+	if not is_inside_tree() or not is_visible_in_tree():
+		return
+
 	var fps = Performance.get_monitor(Performance.TIME_FPS)
 	if is_instance_valid(fps_value):
 		fps_value.text = "%d FPS" % int(fps)
-	
+
 	var ram_bytes = Performance.get_monitor(Performance.MEMORY_STATIC)
 	var ram_mb = float(ram_bytes) / 1024.0 / 1024.0
 	if is_instance_valid(ram_value):
 		ram_value.text = "%.1f MB" % ram_mb
-	
+
 	var audio_lat = Performance.get_monitor(Performance.AUDIO_OUTPUT_LATENCY) * 1000.0
 	if is_instance_valid(audio_latency_value):
 		audio_latency_value.text = "%.1f ms" % audio_lat

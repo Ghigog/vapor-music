@@ -14,7 +14,58 @@ var cache_file_path = "user://metadata_cache.json"
 
 var cache: Dictionary = {}
 var _save_timer: Timer
+
+## Coalesces concurrent async work keyed by a string.
+##
+## The first caller for a key does the work; later callers await `done` instead of
+## duplicating it. Replaces both the per-call HTTPRequest churn and the busy-wait
+## loop that lookup_metadata() used to spin on.
+class _Pending extends RefCounted:
+	signal done(result: Variant)
+
+
+## href -> _Pending, for whole-track metadata lookups.
 var _pending_lookups: Dictionary = {}
+
+## url -> _Pending, for individual HTTP GETs and image downloads.
+var _inflight_http: Dictionary = {}
+var _inflight_images: Dictionary = {}
+
+## Idle HTTPRequest nodes available for reuse.
+##
+## Creating and freeing a node per request meant every artwork, lyric and genre
+## lookup allocated, entered the tree, and was freed again. Nodes are recycled
+## instead, capped so a burst of parallel fetches doesn't leave a large pool
+## resident afterwards.
+const HTTP_POOL_MAX := 4
+var _http_pool: Array[HTTPRequest] = []
+
+
+## Takes an idle HTTPRequest from the pool, or creates one if the pool is empty.
+func _acquire_http() -> HTTPRequest:
+	while not _http_pool.is_empty():
+		var pooled: HTTPRequest = _http_pool.pop_back()
+		if is_instance_valid(pooled):
+			# Always clear download_file — _download_image() sets it, and a stale
+			# value would silently redirect the next caller's response to a file.
+			pooled.download_file = ""
+			return pooled
+
+	var http := HTTPRequest.new()
+	add_child(http)
+	http.set_tls_options(TLSOptions.client())
+	return http
+
+
+## Returns an HTTPRequest to the pool, or frees it if the pool is full.
+func _release_http(http: HTTPRequest) -> void:
+	if not is_instance_valid(http):
+		return
+	http.download_file = ""
+	if _http_pool.size() < HTTP_POOL_MAX:
+		_http_pool.append(http)
+	else:
+		http.queue_free()
 
 func _ready() -> void:
 	load_cache()
@@ -32,6 +83,11 @@ func _exit_tree() -> void:
 	if _save_timer and not _save_timer.is_stopped():
 		_save_timer.stop()
 		_perform_save_cache()
+
+	for http in _http_pool:
+		if is_instance_valid(http):
+			http.queue_free()
+	_http_pool.clear()
 
 ## Loads the metadata cache from user://metadata_cache.json
 func load_cache() -> void:
@@ -93,30 +149,44 @@ func get_cached_metadata(href: String) -> Dictionary:
 	return {}
 
 ## Helper to make a standard HTTP GET request and return the body as string or null.
+## Performs a GET and returns the body as text, or "" on any failure.
+##
+## Requests for a URL already in flight are coalesced onto the existing one rather
+## than issuing a duplicate — the UI can easily ask for the same artist image twice
+## before the first resolves.
 func _make_http_request(url: String) -> String:
 	if not url.begins_with("http://") and not url.begins_with("https://"):
-		print("MetadataService HTTP Error: Invalid or empty URL: ", url)
+		push_warning("MetadataService HTTP: invalid or empty URL: %s" % url)
 		return ""
-		
-	var http := HTTPRequest.new()
-	add_child(http)
-	http.set_tls_options(TLSOptions.client())
-	
+
+	if _inflight_http.has(url):
+		return await (_inflight_http[url] as _Pending).done
+
+	var pending := _Pending.new()
+	_inflight_http[url] = pending
+
+	var result := ""
+	var http := _acquire_http()
 	var err := http.request(url, ["User-Agent: VaporMusicPlayer/1.0 (Godot)"], HTTPClient.METHOD_GET)
-	if err != OK:
-		print("MetadataService HTTP Error: Request to %s failed to initialize: %d" % [url, err])
-		http.queue_free()
-		return ""
-		
-	var response = await http.request_completed
-	var response_code: int = response[1]
-	var response_body: PackedByteArray = response[3]
-	http.queue_free()
-	
-	print("MetadataService HTTP: Request to %s completed with status code %d" % [url, response_code])
-	if response_code == 200:
-		return _safe_get_string(response_body)
-	return ""
+	if err == OK:
+		var response = await http.request_completed
+		var response_code: int = response[1]
+		var response_body: PackedByteArray = response[3]
+		if response_code == 200:
+			result = _safe_get_string(response_body)
+		elif OS.is_debug_build():
+			print("MetadataService HTTP: %s -> status %d" % [url, response_code])
+	else:
+		push_warning("MetadataService HTTP: request to %s failed to start: %d" % [url, err])
+
+	_release_http(http)
+
+	# Clear the in-flight entry BEFORE emitting, so a waiter that immediately
+	# re-requests the same URL starts a fresh request rather than awaiting a
+	# _Pending that has already fired and will never fire again.
+	_inflight_http.erase(url)
+	pending.done.emit(result)
+	return result
 
 ## Downloads an image to user://metadata_images/ and returns the local path. Returns empty string if failed.
 func _download_image(url: String) -> String:
@@ -136,32 +206,40 @@ func _download_image(url: String) -> String:
 		
 	var local_filename: String = url.md5_text() + "." + ext
 	var local_path: String = local_dir + local_filename
-	
+
 	if FileAccess.file_exists(local_path):
 		return local_path
-		
-	var http := HTTPRequest.new()
-	add_child(http)
-	http.set_tls_options(TLSOptions.client())
-	
+
+	# Two tracks from the same album resolve to the same art URL. Without this,
+	# both would download to the SAME local_path concurrently — two HTTPRequests
+	# writing one file.
+	if _inflight_images.has(url):
+		return await (_inflight_images[url] as _Pending).done
+
+	var pending := _Pending.new()
+	_inflight_images[url] = pending
+
+	var result := ""
+	var http := _acquire_http()
 	http.download_file = local_path
-	
+
 	var err := http.request(url, ["User-Agent: VaporMusicPlayer/1.0 (Godot)"], HTTPClient.METHOD_GET)
-	if err != OK:
-		http.queue_free()
-		return ""
-		
-	var response = await http.request_completed
-	var response_code: int = response[1]
-	http.queue_free()
-	
-	if response_code == 200:
-		return local_path
-	else:
-		if FileAccess.file_exists(local_path):
+	if err == OK:
+		var response = await http.request_completed
+		var response_code: int = response[1]
+		if response_code == 200:
+			result = local_path
+		elif FileAccess.file_exists(local_path):
+			# A non-200 still leaves a partial file behind — remove it so a later
+			# attempt doesn't take the file_exists() early-return above and hand
+			# back a truncated image.
 			DirAccess.remove_absolute(local_path)
-			
-	return ""
+
+	_release_http(http)
+
+	_inflight_images.erase(url)
+	pending.done.emit(result)
+	return result
 
 ## Fetches the artist image URL from Deezer API.
 func fetch_artist_image(artist: String) -> String:
@@ -530,12 +608,14 @@ func add_play_timestamp(href: String, timestamp: int) -> void:
 
 ## Main lookup function. Fetches missing metadata fields for a track and caches it.
 func lookup_metadata(href: String, artist: String, album: String, title: String) -> Dictionary:
+	# Wait on a signal rather than spinning. This previously polled every frame
+	# until the in-flight lookup cleared, waking the coroutine ~60x/sec to do
+	# nothing.
 	if _pending_lookups.has(href):
-		while _pending_lookups.has(href):
-			await get_tree().process_frame
+		await (_pending_lookups[href] as _Pending).done
 		return get_cached_metadata(href)
-		
-	_pending_lookups[href] = true
+
+	_pending_lookups[href] = _Pending.new()
 	var existing: Dictionary = get_cached_metadata(href)
 	var updated: bool = false
 	
@@ -671,7 +751,12 @@ func lookup_metadata(href: String, artist: String, album: String, title: String)
 		save_cache()
 		metadata_updated.emit(href, current)
 		
+	# Erase before emitting so any waiter that re-enters immediately starts a fresh
+	# lookup instead of awaiting a _Pending that has already fired.
+	var waiters: _Pending = _pending_lookups.get(href)
 	_pending_lookups.erase(href)
+	if waiters:
+		waiters.done.emit(null)
 	return cache.get(href, result)
 
 func focus_artist(artist: String) -> void:

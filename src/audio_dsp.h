@@ -98,6 +98,12 @@ public:
 	std::vector<float> get_samples_in_range(float start_time, float duration_sec);
 	PackedFloat32Array get_waveform_peaks(int num_bins);
 
+	// Three-band RMS over one output chunk, for transition clipping prevention.
+	// Filter state is per-instance and persists across chunks, so each deck's
+	// AudioDSP carries its own — this replaces the deck-keyed dictionary the
+	// GDScript version had to thread through by name.
+	Dictionary calculate_chunk_rms(const PackedVector2Array &chunk);
+
 private:
 	Dictionary _analyze_samples_impl(const std::vector<float>& samples, float sample_rate);
 	void load_cache_at(size_t start_idx);
@@ -140,6 +146,14 @@ private:
 
 	// Ring buffer
 	RingBuffer m_ring_buffer;
+
+	// One-pole filter state for calculate_chunk_rms(), carried across chunks.
+	// double, not float: the GDScript original accumulated in GDScript floats
+	// (64-bit), and matching that keeps the ported output bit-comparable.
+	double m_rms_low_l = 0.0;
+	double m_rms_low_r = 0.0;
+	double m_rms_mid_low_l = 0.0;
+	double m_rms_mid_low_r = 0.0;
 };
 
 }

@@ -38,6 +38,12 @@ var _current_track_href: String = ""
 var _fetched_peaks_for_track: bool = false
 var max_amplitude: float = 20.0
 
+## How often to re-check whether the DSP has finished decoding enough to give us
+## peaks. The timer stops as soon as peaks are in hand, so this only ticks during
+## the short window after a track loads.
+const PEAK_POLL_INTERVAL := 0.5
+var _peak_poll: Timer
+
 ## When true the control is oriented horizontally (spine at y = h/2, time flows
 ## left → right). Used for the mobile/portrait seek bar above the mini-player.
 var horizontal: bool = false:
@@ -52,12 +58,17 @@ func _ready() -> void:
 	mouse_entered.connect(func(): _hovered = true; queue_redraw())
 	mouse_exited.connect(func(): _hovered = false; queue_redraw())
 	
+	# Peaks arrive asynchronously from the DSP decode with no completion signal,
+	# so poll for them — but only while they are actually outstanding.
+	_peak_poll = Timer.new()
+	_peak_poll.wait_time = PEAK_POLL_INTERVAL
+	_peak_poll.timeout.connect(_check_and_fetch_peaks)
+	add_child(_peak_poll)
+
 	AudioManager.loading_track.connect(func(loading):
 		_track_loading = loading
 		if loading:
-			peaks = PackedFloat32Array()
-			_current_track_href = ""
-			_fetched_peaks_for_track = false
+			_invalidate_peaks()
 		_update_loading_state()
 	)
 	if AudioManager.has_signal("transition_started"):
@@ -71,12 +82,18 @@ func _ready() -> void:
 			_update_loading_state()
 		)
 	AudioManager.track_changed.connect(func(_name):
-		peaks = PackedFloat32Array()
-		_current_track_href = ""
-		_fetched_peaks_for_track = false
+		_invalidate_peaks()
 		queue_redraw()
 	)
 	set_process(false)
+
+
+## Drops cached peaks and restarts the poll that will re-acquire them.
+func _invalidate_peaks() -> void:
+	peaks = PackedFloat32Array()
+	_current_track_href = ""
+	_fetched_peaks_for_track = false
+	_peak_poll.start()
 
 
 func _update_loading_state() -> void:
@@ -89,38 +106,49 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 
+## Moving average over a 5-sample window, for nice curves with visible peaks/valleys.
+##
+## Uses a prefix-sum so the cost is O(n) rather than O(n × window). Edge samples
+## average over a truncated window, exactly as the previous nested-loop version did.
 func _smooth_peaks(raw: PackedFloat32Array) -> PackedFloat32Array:
 	if raw.is_empty():
 		return raw
-	var smoothed = PackedFloat32Array()
-	var size_raw = raw.size()
+	var size_raw := raw.size()
+	var smoothed := PackedFloat32Array()
 	smoothed.resize(size_raw)
-	
-	# Moving average window of 5 for nice curves with visible peaks/valleys
-	var window = 5
-	var half_win = window / 2
+
+	var prefix := PackedFloat32Array()
+	prefix.resize(size_raw + 1)
+	prefix[0] = 0.0
 	for i in range(size_raw):
-		var sum = 0.0
-		var count = 0
-		for j in range(i - half_win, i + half_win + 1):
-			if j >= 0 and j < size_raw:
-				sum += raw[j]
-				count += 1
-		smoothed[i] = sum / float(count)
+		prefix[i + 1] = prefix[i] + raw[i]
+
+	var half_win := 2  # window of 5
+	for i in range(size_raw):
+		var lo: int = maxi(0, i - half_win)
+		var hi: int = mini(size_raw - 1, i + half_win)
+		smoothed[i] = (prefix[hi + 1] - prefix[lo]) / float(hi - lo + 1)
 	return smoothed
 
 
+## Acquires waveform peaks once the DSP has decoded enough to provide them.
+##
+## Driven by _peak_poll, NOT by _draw(). It previously ran inside _draw() and
+## called queue_redraw() from there — a re-entrant side effect in a draw handler.
+## The _fetched_peaks_for_track guard stopped it looping, but any future edit that
+## cleared that flag mid-draw would have produced a redraw storm.
 func _check_and_fetch_peaks() -> void:
 	var active_player = AudioManager.active_player
 	var has_track = is_instance_valid(active_player) and active_player.stream != null
-	
+
 	if not has_track:
+		_peak_poll.stop()
 		if not peaks.is_empty():
 			peaks = PackedFloat32Array()
 			_fetched_peaks_for_track = false
 			queue_redraw()
 		return
-		
+
 	if peaks.is_empty() and not is_loading and not _fetched_peaks_for_track:
 		var dsp = AudioManager.dsp_a if active_player == AudioManager.player_a else AudioManager.dsp_b
 		if dsp and dsp.get_cache_sample_count() > 0:
@@ -130,16 +158,16 @@ func _check_and_fetch_peaks() -> void:
 				peaks = _smooth_peaks(raw_peaks)
 				queue_redraw()
 
+	# Nothing left to wait for once peaks are in hand.
+	if _fetched_peaks_for_track:
+		_peak_poll.stop()
 
 
 func _draw() -> void:
 	var theme: ThemeData = ThemeManager.current_theme
 	var w: float = size.x
 	var h: float = size.y
-	
-	# Check and fetch peaks for background waveform
-	_check_and_fetch_peaks()
-	
+
 	if horizontal:
 		# ----------------------------------------------------------------
 		# Horizontal mode — spine at y = h/2, time flows left → right

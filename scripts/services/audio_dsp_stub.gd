@@ -86,6 +86,16 @@ func get_cross_correlation_offset(_other_dsp: Object, _self_time: float, _other_
 func get_samples_in_range(_start_time: float, _duration_sec: float) -> Array:
 	return []
 
+## Three-band RMS. Mirrors AudioDSP::calculate_chunk_rms() in audio_dsp.cpp.
+##
+## get_next_chunk() above returns a zero-filled buffer, so every band is silent and
+## zero is the numerically correct answer — no need to run the filter loop. Doing so
+## in GDScript would also be self-defeating: this stub is the mobile path, and that
+## loop cost ~7 ms per chunk on desktop, which is precisely why it moved to C++.
+func calculate_chunk_rms(_chunk: PackedVector2Array) -> Dictionary:
+	return { "low": 0.0, "mid": 0.0, "high": 0.0 }
+
+
 func get_waveform_peaks(num_bins: int) -> PackedFloat32Array:
 	var peaks := PackedFloat32Array()
 	peaks.resize(num_bins)

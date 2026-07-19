@@ -82,6 +82,7 @@ func _ready() -> void:
 	_show_screen(NavManager.current_screen)
 	_check_setup()
 
+
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_APPLICATION_FOCUS_IN:
@@ -119,13 +120,16 @@ func _connect_vp_signals() -> void:
 	AudioManager.length_changed.connect(func(length):
 		vertical_progress.max_value = length
 	)
-func _process(_delta: float) -> void:
-	# Update vertical_progress in both desktop (vertical) and mobile (horizontal)
-	# orientations \u2014 the is_desktop() guard is intentionally removed so the portrait
-	# waveform bar also tracks playback position.
-	if vertical_progress and vertical_progress.visible and AudioManager.is_playing and not _vp_dragging:
+	AudioManager.position_changed.connect(_on_position_changed)
+## Updates vertical_progress in both desktop (vertical) and mobile (horizontal)
+## orientations \u2014 the is_desktop() guard is intentionally absent so the portrait
+## waveform bar also tracks playback position.
+##
+## Driven by AudioManager.position_changed rather than a per-frame poll.
+func _on_position_changed(pos: float) -> void:
+	if vertical_progress and vertical_progress.visible and not _vp_dragging:
 		if AudioManager.player and AudioManager.player.is_inside_tree():
-			vertical_progress.value = AudioManager.get_playback_position()
+			vertical_progress.value = pos
 
 
 func _check_setup() -> void:
