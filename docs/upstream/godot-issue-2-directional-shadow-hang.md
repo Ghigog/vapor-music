@@ -1,3 +1,5 @@
+> POSTED 2026-07-19: https://github.com/godotengine/godot/issues/121559
+
 # Draft for github.com/godotengine/godot/issues/new — issue 2 of 2
 
 > Post title suggestion:

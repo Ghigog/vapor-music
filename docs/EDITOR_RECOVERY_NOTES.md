@@ -48,9 +48,16 @@ the goal, do NOT reintroduce with 0; a small nonzero size or leaving defaults is
 borderless settings, boot splash, autoloads, GUT plugin, tests/, the AudioDSP
 GDExtension, audio latency, display/stretch settings, physics and plugin prefs.
 
-### Upstream reports worth filing (minimal repros available)
-1. Menu-race crash: `.ips` file + "external script edits, then open project" repro.
-2. Shadow-size-0 editor hang: blank project + the four lines above reproduces it.
+### Upstream reports — FILED 2026-07-19
+1. Menu-race crash: commented on the existing (closed-as-not-planned) report with
+   new evidence and a reopen request —
+   https://github.com/godotengine/godot/issues/115745#issuecomment-5017577491
+   Watch this issue for the real fix; when it lands, the
+   `use_embedded_menu = true` workaround can be reverted.
+2. Shadow-size-0 editor hang: filed as a new issue —
+   https://github.com/godotengine/godot/issues/121559
+   Four-line deterministic repro; do not reintroduce
+   `directional_shadow/size=0` until it is fixed.
 
 ### Residual state notes
 - Script-editor open-tab session was cleared during recovery (tabs won't restore
