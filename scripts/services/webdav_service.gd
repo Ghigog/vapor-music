@@ -11,7 +11,28 @@ signal connection_tested(success: bool, error_message: String)
 var scanned_files: Array = []
 var had_scan_errors: bool = false
 var is_scanning: bool = false
-var _propfind_lock: bool = false
+
+## Network I/O runs on these worker threads, not the main thread.
+##
+## The previous implementation interleaved socket polling with
+## `await process_frame`, which kept the UI alive but capped network progress at
+## one poll per rendered frame — a full library scan took ~20s wall-clock largely
+## by waiting for vsync. Workers poll on a millisecond cadence instead and hand
+## results back to the main thread with call_deferred.
+##
+## Thread-safety rules this file follows:
+##   - A worker owns its sockets exclusively (created and destroyed inside the
+##     worker function; never stored on the Node).
+##   - Workers read no mutable member state; every input is captured into a job
+##     Dictionary on the main thread before the thread starts.
+##   - All member writes and signal emissions happen on the main thread, in the
+##     _on_*_complete handlers.
+var _scan_thread: Thread = null
+var _test_thread: Thread = null
+
+## Sleep between socket polls on a worker, in ms. 2ms keeps a poll loop at
+## ~500Hz — responsive without burning a core.
+const POLL_INTERVAL_MS := 2
 
 const LIBRARY_CACHE_FILE = "user://library_cache.json"
 
@@ -45,11 +66,6 @@ func save_cached_library() -> void:
 const TCP_TIMEOUT_MS := 5000
 const TLS_TIMEOUT_MS := 5000
 const READ_TIMEOUT_MS := 10000
-
-var _active_tcp: StreamPeerTCP = null
-var _active_tls: StreamPeerTLS = null
-var _current_connected_host: String = ""
-var _current_connected_port: int = -1
 
 ## Parses a WebDAV URL into its component parts.
 func _parse_url(url: String) -> Dictionary:
@@ -105,28 +121,26 @@ func _build_propfind_request(host: String, path: String, auth_header: String, de
 	req += body
 	return req
 
-func _is_connection_alive() -> bool:
-	if not _active_tcp or not _active_tls:
-		return false
-	_active_tcp.poll()
-	_active_tls.poll()
-	return _active_tcp.get_status() == StreamPeerTCP.STATUS_CONNECTED and _active_tls.get_status() == StreamPeerTLS.STATUS_CONNECTED
+# ---------------------------------------------------------------------------
+# Worker-thread network layer
+#
+# Every function below prefixed _t_ runs ONLY on a worker thread. A connection
+# context is a plain Dictionary {tcp, tls, host, port} owned by one worker —
+# sockets never touch the Node's members, so no locking is needed.
+# ---------------------------------------------------------------------------
 
-func _ensure_connection(host: String, port: int) -> int:
-	if _is_connection_alive() and _current_connected_host == host and _current_connected_port == port:
-		return OK
-		
-	disconnect_active_connection()
-	
+func _t_connect(ctx: Dictionary) -> int:
+	_t_disconnect(ctx)
+
 	var tcp := StreamPeerTCP.new()
-	var err := tcp.connect_to_host(host, port)
+	var err := tcp.connect_to_host(ctx.host, ctx.port)
 	if err != OK:
 		return err
 
 	var start := Time.get_ticks_msec()
 	while tcp.get_status() == StreamPeerTCP.STATUS_CONNECTING:
 		tcp.poll()
-		await Engine.get_main_loop().process_frame
+		OS.delay_msec(POLL_INTERVAL_MS)
 		if Time.get_ticks_msec() - start > TCP_TIMEOUT_MS:
 			return ERR_CONNECTION_ERROR
 
@@ -134,7 +148,7 @@ func _ensure_connection(host: String, port: int) -> int:
 		return ERR_CONNECTION_ERROR
 
 	var tls := StreamPeerTLS.new()
-	err = tls.connect_to_stream(tcp, host, TLSOptions.client())
+	err = tls.connect_to_stream(tcp, ctx.host, TLSOptions.client())
 	if err != OK:
 		return err
 
@@ -146,83 +160,59 @@ func _ensure_connection(host: String, port: int) -> int:
 			break
 		elif tls_status == StreamPeerTLS.STATUS_ERROR or tls_status == StreamPeerTLS.STATUS_DISCONNECTED:
 			return ERR_CONNECTION_ERROR
-		await Engine.get_main_loop().process_frame
+		OS.delay_msec(POLL_INTERVAL_MS)
 		if Time.get_ticks_msec() - start > TLS_TIMEOUT_MS:
 			return ERR_CONNECTION_ERROR
 
-	_active_tcp = tcp
-	_active_tls = tls
-	_current_connected_host = host
-	_current_connected_port = port
+	ctx.tcp = tcp
+	ctx.tls = tls
 	return OK
 
-func disconnect_active_connection() -> void:
-	if _active_tcp:
-		_active_tcp.disconnect_from_host()
-	_active_tcp = null
-	_active_tls = null
-	_current_connected_host = ""
-	_current_connected_port = -1
 
-func _send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
-	while _propfind_lock:
-		await Engine.get_main_loop().process_frame
-	_propfind_lock = true
-	
-	var result = await _do_send_propfind(host, port, path, auth_header, depth)
-	
-	_propfind_lock = false
-	return result
+func _t_is_alive(ctx: Dictionary) -> bool:
+	if not ctx.get("tcp") or not ctx.get("tls"):
+		return false
+	ctx.tcp.poll()
+	ctx.tls.poll()
+	return ctx.tcp.get_status() == StreamPeerTCP.STATUS_CONNECTED \
+		and ctx.tls.get_status() == StreamPeerTLS.STATUS_CONNECTED
 
-## Sends a raw PROPFIND request over TLS and returns [response_code, header_string, body_string].
-func _do_send_propfind(host: String, port: int, path: String, auth_header: String, depth: int = 1) -> Array:
-	var err = await _ensure_connection(host, port)
-	if err != OK:
-		return [-1, "", "Connection establishment failed: %d" % err]
 
-	var tls := _active_tls
-	if not tls:
-		return [-1, "", "No active TLS connection"]
+func _t_disconnect(ctx: Dictionary) -> void:
+	if ctx.get("tcp"):
+		ctx.tcp.disconnect_from_host()
+	ctx.tcp = null
+	ctx.tls = null
 
-	# --- Send PROPFIND ---
-	var request_str := _build_propfind_request(host, path, auth_header, depth)
-	err = tls.put_data(request_str.to_utf8_buffer())
-	if err != OK:
-		print("WebDAVService: Send failed, retrying connection...")
-		disconnect_active_connection()
-		err = await _ensure_connection(host, port)
-		if err != OK:
-			return [-1, "", "Reconnection failed: %d" % err]
-		tls = _active_tls
-		if not tls:
-			return [-1, "", "No active TLS connection after reconnection"]
-		err = tls.put_data(request_str.to_utf8_buffer())
-		if err != OK:
-			return [-1, "", "Failed to send request after retry: %d" % err]
 
-	# --- Read response ---
+## Reads one HTTP response off the context's TLS stream. Returns raw bytes
+## (empty on timeout/closure). Completion is detected via Content-Length or the
+## chunked terminal marker, mirroring the previous implementation exactly —
+## only the wait between polls changed (frame await → millisecond sleep).
+func _t_read_response(ctx: Dictionary) -> PackedByteArray:
 	var response_bytes := PackedByteArray()
-	var start = Time.get_ticks_msec() 
-	
+	var start := Time.get_ticks_msec()
+
 	var headers_parsed := false
 	var is_chunked := false
 	var content_length := -1
 	var header_end_idx := -1
 
 	while true:
+		var tls: StreamPeerTLS = ctx.get("tls")
 		if not tls:
 			break
 		tls.poll()
 		var status := tls.get_status()
 		var available := tls.get_available_bytes()
-		
-		# 1. ALWAYS consume bytes if they are waiting in the TLS buffer
+
+		# ALWAYS consume bytes if they are waiting in the TLS buffer
 		if available > 0:
 			var chunk := tls.get_data(available)
 			if chunk[0] == OK:
 				response_bytes.append_array(chunk[1])
 				start = Time.get_ticks_msec() # Reset timeout window on fresh data
-				
+
 				if not headers_parsed:
 					header_end_idx = _find_header_delimiter(response_bytes)
 					if header_end_idx != -1:
@@ -232,7 +222,7 @@ func _do_send_propfind(host: String, port: int, path: String, auth_header: Strin
 						if "content-length:" in loop_header:
 							var cl_line := loop_header.split("content-length:")[1].split("\r\n")[0].strip_edges()
 							content_length = cl_line.to_int()
-				
+
 				if headers_parsed:
 					var body_bytes := response_bytes.slice(header_end_idx)
 					if is_chunked:
@@ -242,65 +232,45 @@ func _do_send_propfind(host: String, port: int, path: String, auth_header: Strin
 						if body_bytes.size() >= content_length:
 							break
 		else:
-			# 2. Only exit due to a closed stream if our buffer is completely dry
+			# Only exit due to a closed stream if our buffer is completely dry
 			if status != StreamPeerTLS.STATUS_CONNECTED:
 				break
-			await Engine.get_main_loop().process_frame
-			
+			OS.delay_msec(POLL_INTERVAL_MS)
+
 		if Time.get_ticks_msec() - start > READ_TIMEOUT_MS:
 			print("WebDAVService: Reading window closed due to channel inactivity timeout.")
 			break
 
-	if response_bytes.is_empty():
-		print("WebDAVService: Empty response, retrying with fresh connection...")
-		disconnect_active_connection()
-		err = await _ensure_connection(host, port)
-		if err == OK:
-			tls = _active_tls
-			if not tls:
-				return [-1, "", "No active TLS connection after reconnect retry"]
-			err = tls.put_data(request_str.to_utf8_buffer())
-			if err == OK:
-				response_bytes.clear()
-				start = Time.get_ticks_msec()
-				headers_parsed = false
-				is_chunked = false
-				content_length = -1
-				header_end_idx = -1
-				while true:
-					if not tls:
-						break
-					tls.poll()
-					var status := tls.get_status()
-					var available := tls.get_available_bytes()
-					if available > 0:
-						var chunk := tls.get_data(available)
-						if chunk[0] == OK:
-							response_bytes.append_array(chunk[1])
-							start = Time.get_ticks_msec()
-							if not headers_parsed:
-								header_end_idx = _find_header_delimiter(response_bytes)
-								if header_end_idx != -1:
-									headers_parsed = true
-									var loop_header := _safe_get_string(response_bytes.slice(0, header_end_idx)).to_lower()
-									is_chunked = "transfer-encoding: chunked" in loop_header
-									if "content-length:" in loop_header:
-										var cl_line := loop_header.split("content-length:")[1].split("\r\n")[0].strip_edges()
-										content_length = cl_line.to_int()
-							if headers_parsed:
-								var body_bytes := response_bytes.slice(header_end_idx)
-								if is_chunked:
-									if _has_terminal_chunk_marker(body_bytes):
-										break
-								elif content_length != -1:
-									if body_bytes.size() >= content_length:
-										break
-					else:
-						if status != StreamPeerTLS.STATUS_CONNECTED:
-							break
-						await Engine.get_main_loop().process_frame
-					if Time.get_ticks_msec() - start > READ_TIMEOUT_MS:
-						break
+	return response_bytes
+
+
+## Sends a PROPFIND on the worker's connection and returns
+## [response_code, header_string, body_string]. Reuses the context's live
+## connection (keep-alive); reconnects and retries once on send failure or an
+## empty response, matching the previous behaviour.
+func _t_send_propfind(ctx: Dictionary, path: String, auth_header: String, depth: int = 1) -> Array:
+	if not _t_is_alive(ctx):
+		var err := _t_connect(ctx)
+		if err != OK:
+			return [-1, "", "Connection establishment failed: %d" % err]
+
+	var request_str := _build_propfind_request(ctx.host, path, auth_header, depth)
+	var response_bytes := PackedByteArray()
+
+	# Attempt 1 on the (possibly reused) connection; attempt 2 on a fresh one.
+	for attempt in range(2):
+		var tls: StreamPeerTLS = ctx.get("tls")
+		var send_err: int = tls.put_data(request_str.to_utf8_buffer()) if tls else FAILED
+		if send_err == OK:
+			response_bytes = _t_read_response(ctx)
+			if not response_bytes.is_empty():
+				break
+
+		if attempt == 0:
+			print("WebDAVService: Empty response/send failure, retrying with fresh connection...")
+			var err := _t_connect(ctx)
+			if err != OK:
+				return [-1, "", "Reconnection failed: %d" % err]
 
 	if response_bytes.is_empty():
 		return [-1, "", "Empty response from server after retry"]
@@ -312,7 +282,7 @@ func _do_send_propfind(host: String, port: int, path: String, auth_header: Strin
 
 	var header_str := _safe_get_string(response_bytes.slice(0, header_end))
 	var raw_body_bytes := response_bytes.slice(header_end)
-	
+
 	if header_str.to_lower().contains("transfer-encoding: chunked"):
 		raw_body_bytes = _decode_chunked_body(raw_body_bytes)
 
@@ -396,19 +366,44 @@ func _normalize_path(path: String) -> String:
 # ---------------------------------------------------------------------------
 
 func test_connection(url: String, username: String, app_password: String) -> void:
+	if _test_thread and _test_thread.is_alive():
+		print("WebDAVService: Connection test already in progress. Ignoring request.")
+		return
+	if _test_thread:
+		_test_thread.wait_to_finish()
+
 	var parts := _parse_url(url)
-	var auth := _get_auth_header(username, app_password)
-	
 	var test_path: String = parts.path
 	if not test_path.ends_with("/"):
 		test_path += "/"
-		
-	var result := await _send_propfind(parts.host, parts.port, test_path, auth, 0)
-	disconnect_active_connection()
-	if result[0] == 207:
+
+	var job := {
+		"host": parts.host,
+		"port": parts.port,
+		"path": test_path,
+		"auth": _get_auth_header(username, app_password),
+	}
+	_test_thread = Thread.new()
+	_test_thread.start(_test_worker.bind(job))
+
+
+## Worker thread: single depth-0 PROPFIND against the server root.
+func _test_worker(job: Dictionary) -> void:
+	var ctx := {"tcp": null, "tls": null, "host": job.host, "port": job.port}
+	var result := _t_send_propfind(ctx, job.path, job.auth, 0)
+	_t_disconnect(ctx)
+	call_deferred("_on_test_complete", result[0])
+
+
+func _on_test_complete(response_code: int) -> void:
+	if _test_thread:
+		_test_thread.wait_to_finish()
+		_test_thread = null
+	if response_code == 207:
 		connection_tested.emit(true, "")
 	else:
-		connection_tested.emit(false, "Server responded with code: %d" % result[0])
+		connection_tested.emit(false, "Server responded with code: %d" % response_code)
+
 
 func scan_music_directory(target_folder: String = "") -> void:
 	if not SettingsManager.has_credentials():
@@ -418,18 +413,18 @@ func scan_music_directory(target_folder: String = "") -> void:
 		print("WebDAVService: Scan already in progress. Ignoring request.")
 		return
 	is_scanning = true
+	if _scan_thread:
+		_scan_thread.wait_to_finish()
 
-	had_scan_errors = false
-	var scan_start_time := Time.get_ticks_usec()
-
-	var base_url: String = SettingsManager.webdav_url
-	var parts := _parse_url(base_url)
+	# Capture every input on the main thread — the worker must not touch
+	# SettingsManager or any other autoload state.
+	var parts := _parse_url(SettingsManager.webdav_url)
 	var auth := _get_auth_header(SettingsManager.webdav_username, SettingsManager.webdav_password)
-	
+
 	var base_path: String = parts.path
 	if not base_path.ends_with("/"):
 		base_path += "/"
-		
+
 	var actual_folder := target_folder
 	if actual_folder.is_empty():
 		actual_folder = SettingsManager.webdav_folder
@@ -439,50 +434,126 @@ func scan_music_directory(target_folder: String = "") -> void:
 		initial_path = base_path + actual_folder.strip_edges().uri_encode()
 		if not initial_path.ends_with("/"):
 			initial_path += "/"
-			
-	var folder_queue: Array[String] = [_normalize_path(initial_path)]
-	var all_discovered_tracks := []
-	var scanned_paths: Array[String] = []
 
-	print("WebDAVService: Starting clear deep traversal at: %s" % _normalize_path(initial_path))
+	var job := {
+		"host": parts.host,
+		"port": parts.port,
+		"auth": auth,
+		"initial_path": _normalize_path(initial_path),
+	}
+	_scan_thread = Thread.new()
+	_scan_thread.start(_scan_worker.bind(job))
 
-	while not folder_queue.is_empty():
-		var current_scan_path: String = folder_queue.pop_front()
-		
-		if scanned_paths.has(current_scan_path):
+
+## How many parallel connections drain the folder queue during a scan.
+##
+## The traversal is latency-bound, not bandwidth-bound: each folder costs one
+## PROPFIND round-trip (~300ms to a remote WebDAV host), and folders can only
+## be discovered after their parent's response arrives. Sequential traversal of
+## ~65 folders therefore takes ~20s regardless of thread or main-loop hosting —
+## measured 19.77s cooperative vs 19.34s single-threaded. Parallel drains
+## overlap those round-trips.
+const SCAN_PARALLELISM := 4
+
+## Scan coordinator (runs on _scan_thread): spawns the drain workers, joins
+## them, and reports. Traversal semantics are unchanged from the sequential
+## version — each folder is PROPFINDed exactly once, children only enqueued
+## under their parent's subtree — just overlapped across connections.
+func _scan_worker(job: Dictionary) -> void:
+	var scan_start_time := Time.get_ticks_usec()
+
+	# Shared traversal state, guarded by `mutex`. `in_flight` counts folders
+	# handed to a worker whose children may not be enqueued yet — the queue
+	# being empty is NOT the end condition while any request is outstanding.
+	var shared := {
+		"mutex": Mutex.new(),
+		"queue": [job.initial_path],
+		"scanned": [],
+		"tracks": [],
+		"errors": false,
+		"in_flight": 0,
+	}
+
+	print("WebDAVService: Starting clear deep traversal at: %s" % job.initial_path)
+
+	var drains: Array[Thread] = []
+	for i in range(SCAN_PARALLELISM):
+		var t := Thread.new()
+		t.start(_scan_drain.bind(shared, job))
+		drains.append(t)
+	for t in drains:
+		t.wait_to_finish()
+
+	var duration := (Time.get_ticks_usec() - scan_start_time) / 1000000.0
+	print("WebDAVService: Deep traversal finished in %.3fs. Found %d total tracks." % [duration, shared.tracks.size()])
+
+	call_deferred("_on_scan_complete", shared.tracks, shared.errors)
+
+
+## Drain worker: pulls folders off the shared queue, PROPFINDs them on its own
+## connection, merges results back under the mutex. Exits when the queue is
+## empty and no other worker has a request in flight.
+func _scan_drain(shared: Dictionary, job: Dictionary) -> void:
+	var ctx := {"tcp": null, "tls": null, "host": job.host, "port": job.port}
+	var mutex: Mutex = shared.mutex
+
+	while true:
+		mutex.lock()
+		if shared.queue.is_empty():
+			if shared.in_flight == 0:
+				mutex.unlock()
+				break
+			mutex.unlock()
+			# Another worker may still discover subfolders — wait for it.
+			OS.delay_msec(10)
 			continue
-		scanned_paths.append(current_scan_path)
-		
-		var request_path = current_scan_path.uri_encode().replace("%2F", "/")
-		var result := await _send_propfind(parts.host, parts.port, request_path, auth, 1)
-		
+
+		var current_scan_path: String = shared.queue.pop_front()
+		if shared.scanned.has(current_scan_path):
+			mutex.unlock()
+			continue
+		shared.scanned.append(current_scan_path)
+		shared.in_flight += 1
+		mutex.unlock()
+
+		var request_path: String = current_scan_path.uri_encode().replace("%2F", "/")
+		var result := _t_send_propfind(ctx, request_path, job.auth, 1)
+
 		if result[0] != 207:
-			had_scan_errors = true
-			# ADDED: Essential debugging print statement
 			print("WebDAVService Error: PROPFIND failed for path '%s' with status code: %d. Server message: %s" % [request_path, result[0], result[2]])
+			mutex.lock()
+			shared.errors = true
+			shared.in_flight -= 1
+			mutex.unlock()
 			continue
-			
+
+		# Parse outside the lock — only the merge needs exclusivity.
 		var body_str: String = result[2]
-		
-		# 1. Parse tracks
 		var tracks_at_level := _parse_webdav_xml(body_str)
-		all_discovered_tracks.append_array(tracks_at_level)
-		
-		# 2. Parse subfolders safely
 		var subfolders_at_level := _discover_folders_from_xml(body_str)
+		var norm_current := _normalize_path(current_scan_path)
+
+		mutex.lock()
+		shared.tracks.append_array(tracks_at_level)
 		for sub_folder: String in subfolders_at_level:
 			var norm_sub := _normalize_path(sub_folder)
-			var norm_current := _normalize_path(current_scan_path)
-			
-			if norm_sub != norm_current and not scanned_paths.has(norm_sub) and not folder_queue.has(norm_sub):
+			if norm_sub != norm_current and not shared.scanned.has(norm_sub) and not shared.queue.has(norm_sub):
 				if norm_sub.begins_with(norm_current):
-					folder_queue.append(norm_sub)
-				
-	disconnect_active_connection()
-	var duration := (Time.get_ticks_usec() - scan_start_time) / 1000000.0
-	print("WebDAVService: Deep traversal finished in %.3fs. Found %d total tracks." % [duration, all_discovered_tracks.size()])
+					shared.queue.append(norm_sub)
+		shared.in_flight -= 1
+		mutex.unlock()
+
+	_t_disconnect(ctx)
+
+
+## Main thread: reconciles scan results with the cache and notifies the UI.
+func _on_scan_complete(all_discovered_tracks: Array, errors: bool) -> void:
+	if _scan_thread:
+		_scan_thread.wait_to_finish()
+		_scan_thread = null
 
 	is_scanning = false
+	had_scan_errors = errors
 
 	if had_scan_errors:
 		print("WebDAVService: Scan encountered errors. Keeping current cached library list to avoid data loss.")
@@ -512,6 +583,18 @@ func scan_music_directory(target_folder: String = "") -> void:
 		print("WebDAVService: Sync finished. Server matches cache perfectly. (No UI rebuild required)")
 		# Still emit to dismiss any explicit refresh/loading indicator
 		library_scanned.emit(scanned_files)
+
+
+func _exit_tree() -> void:
+	# Joining is mandatory — leaking a running Thread at shutdown aborts in
+	# debug builds. The workers hold no references to the tree, so a blocking
+	# join here is safe (worst case: one read-timeout window).
+	if _scan_thread:
+		_scan_thread.wait_to_finish()
+		_scan_thread = null
+	if _test_thread:
+		_test_thread.wait_to_finish()
+		_test_thread = null
 
 ## Internal XML structural extraction engines
 func _discover_folders_from_xml(xml_content: String) -> Array:

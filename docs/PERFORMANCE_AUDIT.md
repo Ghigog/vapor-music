@@ -484,15 +484,40 @@ dead-port cases all return `""`, so they could not have shown this.
 
 ---
 
-### [ ] 5.2 `WebDAVService` scanning is main-thread cooperative
-**File:** `scripts/services/webdav_service.gd:129, 149, 248, 301`
+### [x] 5.2 `WebDAVService` scanning moved to worker threads + parallel traversal
+**File:** `scripts/services/webdav_service.gd`
 
-Yields with `await Engine.get_main_loop().process_frame` between polls. Doesn't freeze
-the UI, but caps network progress at one poll per rendered frame — a slow scan is
-bottlenecked by framerate, not the network.
+Was main-thread cooperative: every socket poll awaited `process_frame`.
 
-**Fix:** Move to a real `Thread`. `AudioAnalyzer` already demonstrates the pattern
-(`Thread` + `Mutex`).
+**Audit premise correction:** the original claim ("scan bottlenecked by framerate")
+was **wrong**. Measured on the real 563-track / ~65-folder library:
+
+| Version | Scan wall-clock |
+|---|---|
+| Cooperative main-thread (baseline) | 19.77s |
+| Single worker thread | 19.34s |
+| 4 parallel drain workers | **7.55s (2.6x)** |
+
+The scan is **latency-bound** — one PROPFIND round-trip (~300ms) per folder,
+sequentially. Threading alone changed nothing; the win came from overlapping
+round-trips across `SCAN_PARALLELISM` (4) connections, which the cooperative
+single-connection design could never do.
+
+**Architecture:** `_t_*` transport functions operate on a per-worker connection
+context Dictionary (sockets never live on the Node); a coordinator thread spawns
+drain workers sharing a Mutex-guarded queue/results state with an `in_flight`
+counter for BFS termination; all member writes and signal emissions happen on the
+main thread via `call_deferred`. `test_connection` runs on its own short-lived
+thread. Job inputs (credentials, URL) are captured on the main thread before start.
+The duplicated ~90-line read/retry block in the old `_do_send_propfind` collapsed
+into `_t_read_response` + a 2-attempt loop.
+
+**Real benefit of off-main even without speedup:** ~65 responses' worth of socket
+polling, buffer churn and XML parsing no longer run on the main thread during boot.
+
+**Verified:** GUT tests 5/5; end-to-end scan finds the identical 563-track set (the
+cache comparator's sorted equality check passed: "Server matches cache perfectly");
+UI screenshot healthy during scan; clean exit (threads joined in `_exit_tree`).
 
 ---
 
@@ -531,9 +556,14 @@ on `_exit_tree`, cache pruning. It's the pattern the other services should follo
 - 3.4 Touch targets enforced via `ThemeManager.min_touch_height/size()`
 - 5.1 `HTTPRequest` pooling + URL dedup; `lookup_metadata` busy-wait removed
 
-**Next, in payoff order:**
-1. `WebDAVService` onto a real thread (5.2) — last structural item
-2. Verify the `textureLod` blur (2.2) — needs a real desktop-composite capture
+- 5.2 WebDAV scan threaded + parallelized — 19.8s → 7.6s measured
+
+**Remaining (all minor):**
+1. 2.2 `textureLod` blur question — RESOLVED in passing: the premium_glass blur
+   visibly works over the desktop (screenshot-verified during the July editor
+   recovery, game window over wallpaper). No action needed.
+2. Library track-list virtualization (4.1 residual) — only if a single album ever
+   gets large enough to hitch.
 
 **Now the likely top bottleneck:** with RMS gone, the C++ path sits pinned at vsync
 (16.68 ms) on an M1. The next thing worth profiling is rendering — specifically the two
