@@ -30,6 +30,7 @@ extends Control
 @onready var vibe_screen:   Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/VibeScreen
 @onready var settings_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/SettingsScreen
 @onready var playlist_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/PlaylistScreen
+@onready var dynamic_group_screen: Control = $AppWindowFrame/LayoutRoot/ContentFrame/ScreenContainer/DynamicGroupScreen
 
 ## Maps screen name strings to their scene-tree Control nodes.
 var _screens: Dictionary = {}
@@ -167,6 +168,7 @@ func _register_screens() -> void:
 		"vibe":     vibe_screen,
 		"settings": settings_screen,
 		"playlist": playlist_screen,
+		"dynamic_group": dynamic_group_screen,
 	}
 
 

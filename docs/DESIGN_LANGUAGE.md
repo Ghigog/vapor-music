@@ -663,9 +663,73 @@ MOTION
 
 *This document is a living specification. Any deviation from these tokens or patterns requires a documented design decision logged in the changelog below.*
 
+## 14. Regression Guards
+
+Rules born from real regressions. Each was violated once; do not violate them again.
+
+### 14.1 The sidebar's right edge is square. Always.
+
+The seek bar runs flush along the sidebar's right edge, top to bottom. Rounded right corners break that continuous line — the bar visibly detaches at the curves. Only the sidebar's **left** corners follow the window-frame radius (`RADIUS_LG`).
+
+- StyleBox: `corner_radius_top_right = 0`, `corner_radius_bottom_right = 0` (enforced in `sidebar._apply_panel_style`).
+- Glass shader: `premium_glass.gdshader` takes per-corner `corner_radii = (tl, tr, br, bl)`; the sidebar sets `(RADIUS_LG, 0, 0, RADIUS_LG)`. Never set a uniform radius on the sidebar's material.
+
+### 14.2 Hover controls live INSIDE the row highlight
+
+A hover-revealed control (✕ delete, drag handle, etc.) must:
+- span the **full row height** (anchor top 0 → bottom 1) so its glyph centers on the row's text baseline, and
+- sit **inset from the row's rounded edge** (≥ 6 px), never outside or clipped by the highlight stylebox.
+
+Anchoring a fixed-size child with a center preset before its size is known produces the misaligned floating glyph this rule exists to prevent.
+
+**Glyphs must exist in the app font.** A character the UI font lacks (the header's old "↕") silently falls back to an OS font with different metrics and renders on a shifted baseline, visibly misaligned beside its own text. Before using any symbol, confirm the app font has it; otherwise compose it from characters that do (the sortable indicator is two stacked in-font ▲▼ minis) or draw it. A symbol and its adjacent text share a baseline — always.
+
+### 14.3 Inline edits keep the row's metrics
+
+Renaming or creating an item inline replaces the row's *content*, never its *shape*. The `LineEdit` gets the row's exact height and compact content margins (see `sidebar._style_inline_edit`). If starting an edit makes the surrounding menu move, the edit is wrong.
+
+### 14.4 Modals are glass, not native — and dims live inside the frame
+
+Confirmations and dialogs use the in-app pattern: dim (`black @ 45%`), centered glass panel (`make_glass_panel(RADIUS_MD, 0.92)`), display-font title, `TEXT_SECONDARY` body, right-aligned actions (quiet Cancel, CTA-styled destructive/confirm). Godot's `ConfirmationDialog`/`AcceptDialog` render OS-default chrome and must not appear in the app. Backdrop click cancels.
+
+The dim overlay parents to **`AppWindowFrame`** with the frame's corner radius (`RADIUS_LG`) — parented to the scene root it paints the window's square bounds onto the desktop, revealing the transparent margins around the rounded frame.
+
+**Exception — file browsing is the OS's job.** `FileDialog` always sets `use_native_dialog = true`. We don't restyle file pickers; the platform's own browser is the correct UI.
+
+### 14.5 The sidebar preview square is the output monitor
+
+It always shows the image of whatever was focused last — artist, album, track (with lyrics overlay), or playlist. Anything that gains focus feeds it; nothing else hides it. Its minimum height is set in code (`SIDEBAR_WIDTH − 32`) because the texture's ignore-size expand mode reports a zero minimum — removing that minimum collapses the slot invisibly.
+
+### 14.6a Contextual pickers are glass, no dim, positioned at the trigger
+
+A CONTEXTUAL popup (right-click / long-press "Add to Playlist" or "Add to Group") is not a modal decision (§14.4) — it doesn't dim the screen, and it opens next to the thing you clicked/pressed, not centered. Reuse `add_to_picker.gd`'s pattern for anything in this category: plain undecorated `Control` backdrop (no `StyleBoxFlat` dim, mirrors `playlist_popup.tscn`'s own `Backdrop`) purely to catch outside-clicks, a glass `PanelContainer` positioned near `at_position` and clamped inside the viewport after one layout pass (`await get_tree().process_frame` — `panel.size` is a zero-rect before that). If it needs to darken the world and force a choice, it's a `GlassModal`, not this.
+
+### 14.6b GDScript closures cannot resolve a self-reference — use a bound method instead
+
+A "rebuild a list, where clicking a row triggers another rebuild" pattern is common in this app (selection checkboxes, the entity browser, "Add to…" pickers). The natural GDScript expression — `var rebuild: Callable; rebuild = func(): ...; row.pressed.connect(func(): ...; rebuild.call())` — **compiles and runs, but silently does nothing on the second click.** A lambda captures its free variables' values at the lambda's OWN creation moment; for a self-reference, that moment is *before* the assignment finishes, so the captured `rebuild` is an empty `Callable()`, not an error. Aliasing it into a shallower-nested local does not fix this — the underlying issue is the self-reference, not the nesting depth.
+
+The fix: give the rebuildable list a tiny inner `class` (`extends RefCounted`) with `rebuild()` as a real method, and have rows call a bound method (`row.pressed.connect(_on_row_pressed.bind(item))`) instead of a captured Callable. `self` inside a method is never subject to this timing problem. Keep the controller instance alive with `backdrop.set_meta("controller", instance)` — nothing else references it, so it would otherwise be freed the moment the building function returns. See `add_to_picker.gd`'s `_Picker` and `dynamic_group_screen.gd`'s `_EntityBrowser` for the pattern. This one is expensive to debug (no parse error, no exception until the *second* interaction, and the failure is silent) — reach for the inner-class pattern from the start for any rebuild-on-click list.
+
+### 14.6 Every affordance works narrow and on touch — check BOTH axes
+
+`PlatformManager` defines two orthogonal axes and its header says not to conflate them; §14.6 exists because we did anyway:
+
+- **Layout** follows *width* (`is_mobile_layout()` / `should_show_sidebar()`), never the device badge. A narrowed desktop window stacks rows; a landscape phone gets columns. Components re-render on `layout_changed`.
+- **Affordances** follow *input hardware* (`is_touch_primary()`). Hover-revealed controls (row ✕, sidebar ✕, preview-slot chip) are always visible on touch.
+
+Every control removed from or hidden in one layout needs a home in the other. Current mappings: column-header sorting ⇄ toolbar sort chip + direction toggle (narrow); sidebar rename/delete/title ⇄ playlist/dynamic-group compact strip (narrow, `should_show_sidebar()` false); glass confirm modal = shared `GlassModal` (both); **sidebar Playlists + Dynamic Groups lists ⇄ the single mobile popup (`playlist_popup.gd`)** — the popup renders both sections (a shared inline-creation `LineEdit` distinguishes target via a `"creating"` meta key: `"playlist"` or `"group"`), since mobile has no sidebar at all and nothing else opens a playlist or dynamic group screen on that layout. Verify narrow layouts on desktop by shrinking the window; add `VAPOR_FORCE_TOUCH=1` for touch affordances.
+
+### 14.7 Honest metadata rendering
+
+Verified metadata renders normal; filename/folder guesses render dimmed; unknowns render as "—". The literal strings "Unknown Artist"/"Unknown Album" never appear in a table cell, and percent-encoded text never reaches the screen.
+
 ## Changelog
 
 | Date | Version | Change |
 |---|---|---|
 | 2026-05-21 | 1.0 | Initial design language established |
 | 2026-06-02 | 1.1 | Migrated to Apple Glassmorphism palette. Single blue accent (#007AFF / #0A84FF). Retired dual-accent (Aurora + Aqua) in default themes. Updated all colour tables, Appendix A, and §2.3 light mode. |
+| 2026-07-20 | 1.2 | Added §14 Regression Guards: square sidebar right edge, hover controls inside row highlight, inline-edit metrics, glass modals, output-monitor preview slot, honest metadata rendering. |
+| 2026-07-20 | 1.3 | §14.4: modal dim parents to AppWindowFrame; native OS file browser exception. New §14.6: two-axis mobile rule (layout by width, affordances by input) with the narrow/touch equivalence mappings. |
+| 2026-07-22 | 1.4 | §14.6: Dynamic Groups' mobile path added to the mapping table — the mobile popup now renders both Playlists and Dynamic Groups sections rather than leaving the new sidebar feature unreachable on narrow layouts. |
+| 2026-07-22 | 1.5 | New §14.6a (contextual pickers: glass, no dim, positioned at trigger — distinct from §14.4 modals) and §14.6b (GDScript self-referencing closures silently no-op; use a bound method on a small inner class instead). Both codify bugs caught by the "Add to Playlist/Group" picker's own verification. |

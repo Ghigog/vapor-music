@@ -80,6 +80,21 @@ text = " + "
 [node name="PlaylistsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=999004]
 layout_mode = 2
 
+[node name="DynamicGroupsHeader" type="HBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=999011]
+layout_mode = 2
+
+[node name="ToggleDynamicGroupsBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsHeader" unique_id=999012]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "  ⚡  Dynamic Groups"
+
+[node name="AddDynamicGroupBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsHeader" unique_id=999013]
+layout_mode = 2
+text = " + "
+
+[node name="DynamicGroupsContainer" type="VBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=999014]
+layout_mode = 2
+
 [node name="NavSettings" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=356337049]
 layout_mode = 2
 text = "  ⛭  Settings"

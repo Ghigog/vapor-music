@@ -6,7 +6,8 @@ extends Node
 
 signal artist_focused(artist: String, image_path: String)
 signal album_focused(artist: String, album: String, image_path: String)
-signal track_focused(artist: String, album: String, title: String, lyrics: Dictionary, image_path: String)
+signal track_focused(href: String, artist: String, album: String, title: String, lyrics: Dictionary, image_path: String)
+signal custom_image_changed(kind: String, id: String, path: String)
 signal lyrics_fetched(href: String, lyrics: Dictionary)
 signal metadata_updated(href: String, metadata: Dictionary)
 
@@ -619,24 +620,30 @@ func lookup_metadata(href: String, artist: String, album: String, title: String)
 	var existing: Dictionary = get_cached_metadata(href)
 	var updated: bool = false
 	
-	# If we have fully cached resolved details, return them directly
+	# Adopt cached fields per-field — a cached artist is trusted even when the
+	# album is still unknown, and vice versa.
 	if not existing.is_empty():
 		var cached_artist: String = existing.get("artist_name", "")
 		var cached_album: String = existing.get("album_name", "")
-		if not cached_artist.is_empty() and cached_artist != "Unknown Artist" and not cached_album.is_empty() and cached_album != "Unknown Album":
+		if not cached_artist.is_empty() and cached_artist != "Unknown Artist":
 			artist = cached_artist
+		if not cached_album.is_empty() and cached_album != "Unknown Album":
 			album = cached_album
-			if existing.has("track_title"):
-				title = existing["track_title"]
-	
-	# Try to resolve unknown artist/album using Deezer search API
+		if artist != "Unknown Artist" and album != "Unknown Album" and existing.has("track_title"):
+			title = existing["track_title"]
+
+	# Try to resolve unknown artist/album using Deezer search API.
+	# Search results only FILL fields we don't know — a title-only search must
+	# never overwrite an artist we already resolved from tags or folder names.
 	var search_resolved_genre := ""
 	if artist == "Unknown Artist" or album == "Unknown Album":
 		var resolved = await resolve_metadata_via_search(title)
 		if not resolved.is_empty():
-			artist = resolved.artist
-			album = resolved.album
-			title = resolved.title
+			if artist == "Unknown Artist":
+				artist = resolved.artist
+				title = resolved.title
+			if album == "Unknown Album":
+				album = resolved.album
 			search_resolved_genre = resolved.get("genre", "")
 			updated = true
 	
@@ -797,7 +804,80 @@ func focus_track(href: String, artist: String, album: String, title: String) -> 
 	if img_path.is_empty():
 		img_path = meta.get("artist_image_local", "")
 	var lyrics: Dictionary = meta.get("lyrics", {})
-	track_focused.emit(artist, album, title, lyrics, img_path)
+	track_focused.emit(href, artist, album, title, lyrics, img_path)
+
+
+# ---------------------------------------------------------------------------
+# Custom image overrides
+# ---------------------------------------------------------------------------
+# Every entity (track/album/artist — playlists live in PlaylistService) has a
+# default image resolved from metadata; a user-imported image overrides it and
+# a reset returns to the default. Keyed "kind|id", persisted as JSON.
+
+const CUSTOM_IMAGES_FILE := "user://custom_images.json"
+const CUSTOM_IMAGES_DIR := "user://custom_images/"
+var custom_images: Dictionary = {}
+var _custom_images_loaded := false
+
+
+func _load_custom_images() -> void:
+	_custom_images_loaded = true
+	if not FileAccess.file_exists(CUSTOM_IMAGES_FILE):
+		return
+	var file := FileAccess.open(CUSTOM_IMAGES_FILE, FileAccess.READ)
+	if file:
+		var parsed = JSON.parse_string(file.get_as_text())
+		file.close()
+		if parsed is Dictionary:
+			custom_images = parsed
+
+
+func _save_custom_images() -> void:
+	var file := FileAccess.open(CUSTOM_IMAGES_FILE, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(custom_images, "\t"))
+		file.close()
+
+
+func get_custom_image(kind: String, id: String) -> String:
+	if not _custom_images_loaded:
+		_load_custom_images()
+	return custom_images.get(kind + "|" + id, "")
+
+
+## Copies the source image into user:// and records it as the override.
+func set_custom_image(kind: String, id: String, source_path: String) -> void:
+	var ext := source_path.get_extension().to_lower()
+	if ext.is_empty() or ext.length() > 4:
+		ext = "jpg"
+	if not DirAccess.dir_exists_absolute(CUSTOM_IMAGES_DIR):
+		DirAccess.make_dir_recursive_absolute(CUSTOM_IMAGES_DIR)
+	var hash := FileAccess.get_md5(source_path)
+	if hash.is_empty():
+		hash = str(Time.get_ticks_usec()).md5_text()
+	var dest := CUSTOM_IMAGES_DIR + hash + "." + ext
+	if DirAccess.copy_absolute(source_path, dest) != OK:
+		push_warning("MetadataService: failed to copy custom image from %s" % source_path)
+		return
+	if not _custom_images_loaded:
+		_load_custom_images()
+	custom_images[kind + "|" + id] = dest
+	_save_custom_images()
+	custom_image_changed.emit(kind, id, dest)
+
+
+func clear_custom_image(kind: String, id: String) -> void:
+	if not _custom_images_loaded:
+		_load_custom_images()
+	var key := kind + "|" + id
+	var path: String = custom_images.get(key, "")
+	if path.is_empty():
+		return
+	if path.begins_with(CUSTOM_IMAGES_DIR) and FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	custom_images.erase(key)
+	_save_custom_images()
+	custom_image_changed.emit(kind, id, "")
 
 func focus_track_by_href(href: String) -> void:
 	var info := parse_track_info(href)
@@ -816,17 +896,40 @@ func _is_track_number_prefix(s: String) -> bool:
 ## Smart metadata parser that handles structured filenames and path/directory fallbacks
 func parse_track_info(href: String) -> Dictionary:
 	var cached := get_cached_metadata(href)
-	if not cached.is_empty():
-		var cached_artist: String = cached.get("artist_name", "")
-		var cached_album: String = cached.get("album_name", "")
-		var cached_track: String = cached.get("track_title", "")
-		if not cached_artist.is_empty() and cached_artist != "Unknown Artist" \
-				and not cached_album.is_empty() and cached_album != "Unknown Album":
-			return {
-				"artist": cached_artist,
-				"album": cached_album,
-				"track": cached_track if not cached_track.is_empty() else href.get_file().uri_decode().get_basename()
-			}
+	var cached_artist: String = cached.get("artist_name", "")
+	var cached_album: String = cached.get("album_name", "")
+	var cached_track: String = cached.get("track_title", "")
+	# "Unknown X" placeholders in the cache carry no information — normalise
+	# them to empty so the per-field merge below treats them as gaps to fill.
+	if cached_artist == "Unknown Artist":
+		cached_artist = ""
+	if cached_album == "Unknown Album":
+		cached_album = ""
+
+	# Cached values get the noise cleaner too: lookup_metadata historically
+	# stored filename/folder guesses ("Homogenic [A] [8579…]") into the cache,
+	# so pollution can arrive from either direction.
+	var year_acc := [0]
+	cached_artist = _clean_segment_keep_nonempty(cached_artist, year_acc)
+	cached_album = _clean_segment_keep_nonempty(cached_album, year_acc)
+	cached_track = _clean_segment_keep_nonempty(cached_track, year_acc)
+
+	# Fast path: the cache knows everything, skip path parsing entirely.
+	# The *_source keys carry per-field provenance so UI can distinguish
+	# verified metadata ("cache") from guesses ("file"/"folder") and honest
+	# ignorance ("unknown") without re-deriving how a value was obtained.
+	if not cached_artist.is_empty() and not cached_album.is_empty():
+		# Cached titles can carry filename-derived "NN " prefixes from before
+		# the prefix strip existed, so the strip applies here too.
+		var fast_track := cached_track if not cached_track.is_empty() else href.get_file().uri_decode().get_basename()
+		return {
+			"artist": cached_artist,
+			"album": cached_album,
+			"track": _strip_track_number_prefix(fast_track),
+			"artist_source": "cache",
+			"album_source": "cache",
+			"year": year_acc[0],
+		}
 
 	var raw_filename := href.get_file().uri_decode()
 	var display_name := raw_filename.get_basename()
@@ -898,23 +1001,144 @@ func parse_track_info(href: String) -> Dictionary:
 		elif raw_parts.size() == 1:
 			file_track = raw_parts[0].strip_edges()
 
+	# Filename/folder guesses carry the worst release-dump noise — clean them
+	# all before the merge. The year, when present, was buried in one of these
+	# segments ("Vespertine (2001)").
+	folder_artist = _clean_segment_keep_nonempty(folder_artist, year_acc)
+	folder_album = _clean_segment_keep_nonempty(folder_album, year_acc)
+	file_artist = _clean_segment_keep_nonempty(file_artist, year_acc)
+	file_album = _clean_segment_keep_nonempty(file_album, year_acc)
+	file_track = _clean_segment_keep_nonempty(file_track, year_acc)
+
+	# Per-field merge: a field the cache HAS resolved must never be discarded
+	# because a sibling field is still unknown. (Previously artist AND album both
+	# had to be cached or the whole entry was ignored — a track with a known
+	# artist but unknown album displayed as "Unknown Artist".)
 	var artist := "Unknown Artist"
-	if not file_artist.is_empty():
+	var artist_source := "unknown"
+	if not cached_artist.is_empty():
+		artist = cached_artist
+		artist_source = "cache"
+	elif not file_artist.is_empty():
 		artist = file_artist
+		artist_source = "file"
 	elif not folder_artist.is_empty():
 		artist = folder_artist
-		
+		artist_source = "folder"
+
 	var album := "Unknown Album"
-	if not file_album.is_empty():
+	var album_source := "unknown"
+	if not cached_album.is_empty():
+		album = cached_album
+		album_source = "cache"
+	elif not file_album.is_empty():
 		album = file_album
+		album_source = "file"
 	elif not folder_album.is_empty():
 		album = folder_album
-		
+		album_source = "folder"
+
+	var track: String = cached_track if not cached_track.is_empty() else _strip_track_number_prefix(file_track)
 	return {
 		"artist": artist,
 		"album": album,
-		"track": file_track.strip_edges()
+		"track": track.strip_edges(),
+		"artist_source": artist_source,
+		"album_source": album_source,
+		"year": year_acc[0],
 	}
+
+
+var _track_num_regex: RegEx = null
+var _bracket_regex: RegEx = null
+var _paren_regex: RegEx = null
+var _year_group_regex: RegEx = null
+var _keep_qualifier_regex: RegEx = null
+var _paren_noise_regex: RegEx = null
+var _trailing_noise_regex: RegEx = null
+var _space_collapse_regex: RegEx = null
+
+
+func _ensure_clean_regexes() -> void:
+	if _bracket_regex != null:
+		return
+	_bracket_regex = RegEx.new()
+	_bracket_regex.compile("\\[([^\\]]*)\\]")
+	_paren_regex = RegEx.new()
+	_paren_regex.compile("\\(([^)]*)\\)")
+	_year_group_regex = RegEx.new()
+	_year_group_regex.compile("[\\[(]\\s*((?:19|20)\\d{2})\\s*[\\])]")
+	# Bracket groups that carry real musical meaning and must survive.
+	_keep_qualifier_regex = RegEx.new()
+	_keep_qualifier_regex.compile("(?i)remix|\\bmix\\b|edit|vip|live|acoustic|instrumental|bootleg|feat|ft\\.")
+	# Paren groups that are pure release-dump noise. Anything else in parens
+	# ("(Xilent Remix)", "(What's the Story)") is kept.
+	_paren_noise_regex = RegEx.new()
+	_paren_noise_regex.compile("(?i)^\\s*(dolby\\s*atmos|atmos|hi[\\s-]?res|lossless|flac|alac|wav|aac|mp3|web|cd|vinyl|explicit|clean|remaster(?:ed)?|deluxe(?:\\s+edition)?|\\d{5,})\\s*$")
+	_trailing_noise_regex = RegEx.new()
+	_trailing_noise_regex.compile("(?i)[\\s\\-·]+(dolby\\s*atmos|hi[\\s-]?res|lossless)\\s*$")
+	_space_collapse_regex = RegEx.new()
+	_space_collapse_regex.compile("\\s{2,}")
+
+
+## Cleans one filename/folder-derived display segment of release-dump noise:
+## "Homogenic [A] [85792657826873562] (1997) [Dolby Atmos]" → "Homogenic",
+## year 1997. Bracketed groups are dropped unless they carry musical meaning
+## (remix/live/feat/…); paren groups are dropped only when they match known
+## noise, so remix names survive. Returns {text: String, year: int} (year 0
+## when none found).
+func _clean_display_segment(seg: String) -> Dictionary:
+	_ensure_clean_regexes()
+	var text := seg
+	var year := 0
+
+	var ym := _year_group_regex.search(text)
+	if ym:
+		year = int(ym.get_string(1))
+		text = text.replace(ym.get_string(0), " ")
+
+	for m in _bracket_regex.search_all(text):
+		if not _keep_qualifier_regex.search(m.get_string(1)):
+			text = text.replace(m.get_string(0), " ")
+	for m in _paren_regex.search_all(text):
+		if _paren_noise_regex.search(m.get_string(1)):
+			text = text.replace(m.get_string(0), " ")
+	text = _trailing_noise_regex.sub(text, "", true)
+
+	# Only tidy separators when something was actually removed — a stylized
+	# title like "-3.AM.-" that contained no noise must pass through intact.
+	if text == seg:
+		return {"text": seg, "year": 0}
+	text = _space_collapse_regex.sub(text, " ", true).strip_edges()
+	while not text.is_empty() and (text.ends_with("-") or text.ends_with("·") or text.ends_with(",")):
+		text = text.left(text.length() - 1).strip_edges()
+	return {"text": text, "year": year}
+
+
+## Cleaner variant that never empties a segment: if stripping noise leaves
+## nothing (the whole name WAS the junk), the original is kept — a junk name
+## is more honest than a blank one.
+func _clean_segment_keep_nonempty(seg: String, year_acc: Array) -> String:
+	if seg.is_empty():
+		return seg
+	var cleaned := _clean_display_segment(seg)
+	if cleaned.year > 0 and year_acc[0] == 0:
+		year_acc[0] = cleaned.year
+	return cleaned.text if not (cleaned.text as String).is_empty() else seg
+
+## Strips a leading track-number prefix ("01 ", "07.", "12_") from a title that
+## has a real title after it — the number is ordering metadata, not part of the
+## name, and it wrecks title sorting. Titles that ARE numbers ("1985") have no
+## remainder after the digits and are left alone; "24K Magic" doesn't match
+## because the digits aren't followed by a separator.
+func _strip_track_number_prefix(title: String) -> String:
+	if _track_num_regex == null:
+		_track_num_regex = RegEx.new()
+		_track_num_regex.compile("^\\s*\\d{1,3}\\s*[.\\-_]?\\s+(\\S.*)$")
+	var m := _track_num_regex.search(title)
+	if m:
+		return m.get_string(1)
+	return title
 
 func _safe_get_string(bytes: PackedByteArray) -> String:
 	var clean := PackedByteArray()

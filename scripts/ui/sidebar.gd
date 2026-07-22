@@ -4,6 +4,8 @@
 ## and keeps active-item highlights in sync with NavManager signals.
 extends PanelContainer
 
+const GlassModal = preload("res://scripts/ui/glass_modal.gd")
+
 @onready var app_name:     Label  = $VBox/Header/HeaderHBox/LogoContainer/AppName
 @onready var nav_library:  Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavLibrary
 @onready var nav_vibe:   Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavVibe
@@ -11,6 +13,9 @@ extends PanelContainer
 @onready var toggle_playlists_btn: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader/TogglePlaylistsBtn
 @onready var add_playlist_btn: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader/AddPlaylistBtn
 @onready var playlists_container: VBoxContainer = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsContainer
+@onready var toggle_dynamic_groups_btn: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsHeader/ToggleDynamicGroupsBtn
+@onready var add_dynamic_group_btn: Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsHeader/AddDynamicGroupBtn
+@onready var dynamic_groups_container: VBoxContainer = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsContainer
 
 @onready var track_title_label: Label = $VBox/NowPlayingMargin/NowPlaying/HBox/Info/TrackTitle
 @onready var artist_label: Label = $VBox/NowPlayingMargin/NowPlaying/HBox/Info/ArtistLabel
@@ -35,10 +40,24 @@ var is_synced_lyrics := false
 var drop_indicator: ColorRect = null
 var active_drag_source_item: Control = null
 
+## Separate drop-indicator state for the Dynamic Groups list — distinct from
+## the Playlists one above so reordering one list never touches the other.
+var group_drop_indicator: ColorRect = null
+var active_group_drag_source_item: Control = null
+
+## What the output monitor currently shows: "artist" | "album" | "track" |
+## "playlist" plus its id (name / href / playlist id). Drives the custom-image
+## import/reset behavior on the preview slot.
+var _focused_kind := ""
+var _focused_id := ""
+var _slot_icon: Button = null
+var _image_dialog: FileDialog = null
+
 ## Maps screen-name strings to their corresponding Button nodes.
 var _nav_buttons: Dictionary = {}
 var _custom_stylebox: StyleBoxFlat = null
 var _playlists_visible := true
+var _dynamic_groups_visible := true
 
 ## Per-instance copy of the premium_glass material. See _setup_glass_material().
 var _glass_material: ShaderMaterial = null
@@ -60,8 +79,22 @@ func _ready() -> void:
 	$VBox/Scroll/ScrollMargin/ScrollVBox/NavItems.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/NowPlayingMargin/NowPlaying.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/NowPlayingMargin/NowPlaying/HBox.mouse_filter = Control.MOUSE_FILTER_PASS
-	$VBox/NowPlayingMargin/NowPlaying/HBox/Info.mouse_filter = Control.MOUSE_FILTER_PASS
 	$VBox/PlayerTilesMargin/PlayerTiles.mouse_filter = Control.MOUSE_FILTER_PASS
+
+	# Clicking the now-playing labels re-focuses the current track, bringing
+	# its art and lyrics back into the output monitor after browsing away.
+	var np_info := $VBox/NowPlayingMargin/NowPlaying/HBox/Info as Control
+	np_info.mouse_filter = Control.MOUSE_FILTER_STOP
+	np_info.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	np_info.tooltip_text = "Show the current track"
+	np_info.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			if is_instance_valid(MetadataService) \
+					and AudioManager.current_track_index != -1 \
+					and AudioManager.current_track_index < AudioManager.current_playlist.size():
+				MetadataService.focus_track_by_href(AudioManager.current_playlist[AudioManager.current_track_index])
+			get_viewport().set_input_as_handled()
+	)
 
 	if preview_margin:
 		preview_margin.visible = false
@@ -77,11 +110,14 @@ func _ready() -> void:
 	_setup_blur_shader()
 	_setup_glass_material()
 	_setup_playlists_ui()
+	_setup_dynamic_groups_ui()
+	_setup_preview_slot()
 	ThemeManager.theme_changed.connect(_apply_panel_style)
 	ThemeManager.theme_changed.connect(_apply_logo_style)
 	ThemeManager.theme_changed.connect(_refresh_nav_button_styles)
 	ThemeManager.theme_changed.connect(_style_player_buttons)
 	ThemeManager.theme_changed.connect(_style_playlists_header_buttons)
+	ThemeManager.theme_changed.connect(_style_dynamic_groups_header_buttons)
 
 
 
@@ -93,10 +129,21 @@ func _apply_panel_style() -> void:
 	if _custom_stylebox:
 		_custom_stylebox.bg_color = ThemeManager.current_theme.BG_BASE
 		_custom_stylebox.border_color = ThemeManager.current_theme.GLASS_BORDER_SUBTLE
+		# DESIGN RULE: the sidebar's right edge is ALWAYS square — the seek bar
+		# runs flush along it, and rounded right corners break that line. Only
+		# the left corners follow the window frame curve. (See DESIGN_LANGUAGE.md.)
+		_custom_stylebox.corner_radius_top_right = 0
+		_custom_stylebox.corner_radius_bottom_right = 0
 	else:
 		add_theme_stylebox_override("panel", ThemeManager.make_nav_panel())
 	var sw = ThemeManager.current_theme.SIDEBAR_WIDTH
 	custom_minimum_size.x = sw
+	# The preview texture uses EXPAND_IGNORE_SIZE, which reports a zero
+	# minimum — without an explicit minimum height the whole "output monitor"
+	# collapses to a 0-height rect: visible in the tree, invisible on screen.
+	# Square it against the sidebar width minus the 16px side margins.
+	if preview_square:
+		preview_square.custom_minimum_size.y = sw - 32
 
 
 func _apply_logo_style() -> void:
@@ -126,6 +173,7 @@ func _refresh_nav_button_styles() -> void:
 		var is_active = (nav == NavManager.current_screen)
 		_style_nav_button(btn, is_active)
 	_refresh_playlists_styles()
+	_refresh_dynamic_groups_styles()
 
 func _style_nav_button(btn: Button, active: bool) -> void:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -151,6 +199,11 @@ func _style_nav_button(btn: Button, active: bool) -> void:
 func _set_active_nav(screen_name: String) -> void:
 	for tab_name: String in _nav_buttons:
 		_style_nav_button(_nav_buttons[tab_name], tab_name == screen_name)
+	# Playlist and dynamic-group items are nav items too — their highlight
+	# depends on the active screen just as much as the fixed buttons do.
+	# Without this, navigating away left the last-opened one looking selected.
+	_refresh_playlists_styles()
+	_refresh_dynamic_groups_styles()
 
 
 # ---------------------------------------------------------------------------
@@ -273,21 +326,34 @@ func _style_player_buttons() -> void:
 
 
 func _on_track_changed(track_name: String) -> void:
-	var clean_name = track_name
-	var artist_name = ""
-	if " - " in track_name:
+	# Resolve names from the href through parse_track_info — the single source
+	# of truth — rather than string-splitting the emitted filename. The split
+	# showed "Rise.m4a" as the title (extension and all) with the track-number
+	# prefix folded into the artist.
+	var href := ""
+	if AudioManager.current_track_index != -1 and AudioManager.current_track_index < AudioManager.current_playlist.size():
+		href = AudioManager.current_playlist[AudioManager.current_track_index]
+
+	var clean_name := track_name
+	var artist_name := ""
+	if not href.is_empty() and is_instance_valid(MetadataService):
+		var info: Dictionary = MetadataService.parse_track_info(href)
+		if not (info.track as String).is_empty():
+			clean_name = info.track
+		if info.artist != "Unknown Artist":
+			artist_name = info.artist
+	elif " - " in track_name:
 		var parts = track_name.split(" - ")
 		clean_name = parts[parts.size() - 1]
 		if parts.size() > 1:
 			artist_name = parts[0]
 			for i in range(1, parts.size() - 1):
 				artist_name += " - " + parts[i]
-				
+
 	track_title_label.text = clean_name
 	artist_label.text = artist_name if artist_name != "" else "Unknown Artist"
 
-	if is_instance_valid(MetadataService) and AudioManager.current_track_index != -1 and AudioManager.current_track_index < AudioManager.current_playlist.size():
-		var href = AudioManager.current_playlist[AudioManager.current_track_index]
+	if not href.is_empty() and is_instance_valid(MetadataService):
 		MetadataService.focus_track_by_href(href)
 
 
@@ -315,7 +381,7 @@ func _on_lyrics_fetched(href: String, lyrics: Dictionary) -> void:
 		var current_href = AudioManager.current_playlist[AudioManager.current_track_index]
 		if href == current_href:
 			# Update lyrics display on-the-fly
-			_on_track_focused("", "", "", lyrics, "")
+			_on_track_focused(href, "", "", "", lyrics, "")
 
 ## Makes the premium_glass material unique to this node and keeps its
 ## container_size in sync with the sidebar's actual dimensions.
@@ -336,6 +402,11 @@ func _setup_glass_material() -> void:
 
 	_glass_material = mat.duplicate() as ShaderMaterial
 	material = _glass_material
+
+	# Left corners follow the window frame; right edge stays square so the
+	# seek bar can run flush along it. (tl, tr, br, bl)
+	var r := float(ThemeManager.current_theme.RADIUS_LG)
+	_glass_material.set_shader_parameter("corner_radii", Vector4(r, 0.0, 0.0, r))
 
 	resized.connect(_update_glass_size)
 	_update_glass_size()
@@ -367,19 +438,182 @@ func _load_image_to_texture(path: String) -> void:
 	else:
 		preview_texture.texture = null
 
-func _on_artist_focused(_artist: String, image_path: String) -> void:
-	_load_image_to_texture(image_path)
+## The preview square is the app's "output monitor": it always shows the image
+## of whatever was focused last — artist, album, playlist, or track. Tracks
+## additionally overlay lyrics via _on_track_focused; everything else is a
+## plain image through here. Passing kind/id records what is focused so the
+## slot's import/reset affordance targets the right entity.
+func show_preview_image(path: String, kind: String = "", id: String = "") -> void:
+	if not kind.is_empty():
+		_focused_kind = kind
+		_focused_id = id
+	_load_image_to_texture(path)
 	blur_overlay.visible = false
 	lyrics_scroll.visible = false
-	preview_margin.visible = not image_path.is_empty()
+	preview_margin.visible = not path.is_empty()
+	_update_slot_icon()
 
-func _on_album_focused(_artist: String, _album: String, image_path: String) -> void:
-	_load_image_to_texture(image_path)
-	blur_overlay.visible = false
-	lyrics_scroll.visible = false
-	preview_margin.visible = not image_path.is_empty()
+func _on_artist_focused(artist: String, image_path: String) -> void:
+	show_preview_image(_with_custom_override("artist", artist, image_path), "artist", artist)
 
-func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: Dictionary, image_path: String) -> void:
+func _on_album_focused(_artist: String, album: String, image_path: String) -> void:
+	show_preview_image(_with_custom_override("album", album, image_path), "album", album)
+
+## Returns the user-imported override for an entity when one exists, else the
+## default image the metadata pipeline resolved.
+func _with_custom_override(kind: String, id: String, default_path: String) -> String:
+	if is_instance_valid(MetadataService):
+		var custom: String = MetadataService.get_custom_image(kind, id)
+		if not custom.is_empty():
+			return custom
+	return default_path
+
+
+# ---------------------------------------------------------------------------
+# Preview slot: custom image import / reset
+# ---------------------------------------------------------------------------
+
+func _setup_preview_slot() -> void:
+	# Overlay layer: the AspectRatioContainer sizes it to the square itself,
+	# and it is the LAST child so the icon draws above the lyrics overlay.
+	var overlay_layer := Control.new()
+	overlay_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_square.add_child(overlay_layer)
+
+	_slot_icon = Button.new()
+	_slot_icon.visible = false
+	var icon_bg := StyleBoxFlat.new()
+	icon_bg.bg_color = Color(0, 0, 0, 0.55)
+	icon_bg.set_corner_radius_all(ThemeManager.current_theme.RADIUS_PILL)
+	var icon_bg_hover: StyleBoxFlat = icon_bg.duplicate()
+	icon_bg_hover.bg_color = Color(0, 0, 0, 0.8)
+	_slot_icon.add_theme_stylebox_override("normal", icon_bg)
+	_slot_icon.add_theme_stylebox_override("hover", icon_bg_hover)
+	_slot_icon.add_theme_stylebox_override("pressed", icon_bg_hover)
+	_slot_icon.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	_slot_icon.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	_slot_icon.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	overlay_layer.add_child(_slot_icon)
+	# Quiet 28px chip tucked into the bottom-right corner — a hint, not a
+	# billboard over the artwork.
+	_slot_icon.anchor_left = 1.0
+	_slot_icon.anchor_top = 1.0
+	_slot_icon.anchor_right = 1.0
+	_slot_icon.anchor_bottom = 1.0
+	_slot_icon.offset_left = -36.0
+	_slot_icon.offset_top = -36.0
+	_slot_icon.offset_right = -8.0
+	_slot_icon.offset_bottom = -8.0
+	_slot_icon.pressed.connect(_on_slot_icon_pressed)
+
+	preview_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	preview_margin.mouse_entered.connect(func() -> void: _update_slot_icon(true))
+	preview_margin.mouse_exited.connect(func() -> void:
+		if not preview_margin.get_global_rect().has_point(get_global_mouse_position()):
+			_slot_icon.visible = false
+	)
+
+	_image_dialog = FileDialog.new()
+	_image_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_image_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	# The OS file browser, not Godot's UI-toolkit one — picking a file is the
+	# platform's job and its dialog beats anything we'd restyle.
+	_image_dialog.use_native_dialog = true
+	_image_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Images"])
+	add_child(_image_dialog)
+	_image_dialog.file_selected.connect(_apply_custom_image)
+
+	get_tree().root.files_dropped.connect(_on_files_dropped_on_slot)
+
+	if is_instance_valid(MetadataService) and MetadataService.has_signal("custom_image_changed"):
+		MetadataService.custom_image_changed.connect(func(kind: String, id: String, _path: String) -> void:
+			if kind == _focused_kind and id == _focused_id:
+				_refresh_focused_preview()
+		)
+	if PlaylistService:
+		PlaylistService.playlist_cover_updated.connect(func(id: String, _path: String) -> void:
+			if _focused_kind == "playlist" and id == _focused_id:
+				_refresh_focused_preview()
+		)
+
+
+func _focused_has_custom() -> bool:
+	if _focused_kind == "playlist":
+		var pl: Dictionary = PlaylistService.get_playlist(_focused_id)
+		return not (pl.get("custom_cover_path", "") as String).is_empty()
+	return is_instance_valid(MetadataService) \
+		and not MetadataService.get_custom_image(_focused_kind, _focused_id).is_empty()
+
+
+func _update_slot_icon(show_now: bool = false) -> void:
+	if _slot_icon == null:
+		return
+	if not preview_margin.visible or _focused_kind.is_empty():
+		_slot_icon.visible = false
+		return
+	# Touch has no hover: the chip is always present when the slot shows (§14.7).
+	if show_now or PlatformManager.is_touch_primary():
+		_slot_icon.visible = true
+	if not _slot_icon.visible:
+		return
+	if _focused_has_custom():
+		_slot_icon.text = "↺"
+		_slot_icon.tooltip_text = "Reset to the default image"
+	else:
+		_slot_icon.text = "⇩"
+		_slot_icon.tooltip_text = "Drop an image here — or click — to set a custom one"
+
+
+func _on_slot_icon_pressed() -> void:
+	if _focused_kind.is_empty():
+		return
+	if _focused_has_custom():
+		if _focused_kind == "playlist":
+			PlaylistService.set_playlist_custom_cover(_focused_id, "")
+		else:
+			MetadataService.clear_custom_image(_focused_kind, _focused_id)
+	else:
+		_image_dialog.popup_centered_ratio(0.6)
+
+
+func _apply_custom_image(path: String) -> void:
+	if _focused_kind.is_empty():
+		return
+	if not path.get_extension().to_lower() in ["png", "jpg", "jpeg", "webp"]:
+		return
+	if _focused_kind == "playlist":
+		PlaylistService.set_playlist_custom_cover(_focused_id, path)
+	else:
+		MetadataService.set_custom_image(_focused_kind, _focused_id, path)
+
+
+func _on_files_dropped_on_slot(files: PackedStringArray) -> void:
+	if files.is_empty() or _focused_kind.is_empty() or not preview_margin.visible:
+		return
+	if preview_square.get_global_rect().has_point(get_global_mouse_position()):
+		_apply_custom_image(files[0])
+
+
+## Re-resolves the focused entity's image after an import/reset. Async kinds
+## re-run their focus flow, which re-emits through the normal handlers.
+func _refresh_focused_preview() -> void:
+	match _focused_kind:
+		"playlist":
+			show_preview_image(PlaylistService.get_playlist_cover_path(_focused_id), "playlist", _focused_id)
+		"dynamic_group":
+			show_preview_image(DynamicGroupService.get_group_cover_path(_focused_id), "dynamic_group", _focused_id)
+		"artist":
+			MetadataService.focus_artist(_focused_id)
+		"album":
+			MetadataService.focus_album("", _focused_id)
+		"track":
+			MetadataService.focus_track_by_href(_focused_id)
+
+func _on_track_focused(href: String, _artist: String, _album: String, _title: String, lyrics: Dictionary, image_path: String) -> void:
+	if not href.is_empty():
+		_focused_kind = "track"
+		_focused_id = href
+		image_path = _with_custom_override("track", href, image_path)
 	_load_image_to_texture(image_path)
 	
 	# Clear previous lyrics
@@ -424,6 +658,7 @@ func _on_track_focused(_artist: String, _album: String, _title: String, lyrics: 
 	blur_overlay.visible = true
 	lyrics_scroll.visible = true
 	preview_margin.visible = true
+	_update_slot_icon()
 
 ## Driven by AudioManager.position_changed rather than a per-frame poll.
 ##
@@ -479,6 +714,10 @@ func _setup_playlists_ui() -> void:
 		PlaylistService.playlist_deleted.connect(func(_id): call_deferred(&"_rebuild_playlists_list"))
 		PlaylistService.playlist_renamed.connect(func(_id, _name): call_deferred(&"_rebuild_playlists_list"))
 		PlaylistService.playlists_loaded.connect(func(): call_deferred(&"_rebuild_playlists_list"))
+		# Switching playlists while already on the playlist screen is a no-op for
+		# NavManager.navigate_to(), so navigation_requested never fires and the
+		# highlight would stay on the previously-opened playlist.
+		PlaylistService.active_playlist_changed.connect(func(_id): _refresh_playlists_styles())
 	
 	# Initialize Drop Indicator for Playlists
 	drop_indicator = ColorRect.new()
@@ -486,6 +725,9 @@ func _setup_playlists_ui() -> void:
 	drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	drop_indicator.visible = false
 	playlists_container.add_child(drop_indicator)
+
+	# Playlist deletion always confirms via the glass modal (_show_delete_modal)
+	# — one mis-click on the ✕ must never lose a crafted set.
 	
 	_style_playlists_header_buttons()
 	_rebuild_playlists_list()
@@ -534,10 +776,7 @@ func _on_add_playlist_pressed() -> void:
 	var line_edit = LineEdit.new()
 	line_edit.placeholder_text = "New Playlist..."
 	line_edit.set_meta("is_creation", true)
-	line_edit.add_theme_stylebox_override("normal", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.3))
-	line_edit.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	line_edit.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-	line_edit.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	_style_inline_edit(line_edit)
 	
 	playlists_container.add_child(line_edit)
 	
@@ -551,6 +790,9 @@ func _on_add_playlist_pressed() -> void:
 			PlaylistService.create_playlist(clean)
 		else:
 			line_edit.queue_free()
+			# Deferred: this commit can fire from focus loss during a rebuild's
+			# teardown, and rebuilding the list mid-teardown eats the fresh rows.
+			call_deferred(&"_rebuild_playlists_list")
 	
 	line_edit.text_submitted.connect(commit)
 	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
@@ -577,12 +819,56 @@ func _rebuild_playlists_list() -> void:
 		item_btn.pressed.connect(func():
 			PlaylistService.active_playlist_id = playlist.id
 			NavManager.navigate_to("playlist")
+			# Clicking a playlist points the output monitor at its cover; a
+			# later track click overwrites it, clicking the playlist again
+			# brings it back.
+			show_preview_image(PlaylistService.get_playlist_cover_path(playlist.id), "playlist", playlist.id)
 		)
-		
+
 		item_btn.gui_input.connect(func(event):
 			if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
 				_show_inline_rename(playlist, item_btn)
 		)
+
+		var del_btn := Button.new()
+		del_btn.text = "✕"
+		del_btn.flat = true
+		del_btn.visible = false
+		del_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+		del_btn.add_theme_stylebox_override("hover", ThemeManager.make_transparent())
+		del_btn.add_theme_stylebox_override("pressed", ThemeManager.make_transparent())
+		del_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+		del_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		del_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+		del_btn.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+		del_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+		item_btn.add_child(del_btn)
+		# DESIGN RULE: hover controls span the row's full height and sit INSIDE
+		# the row highlight (inset from the rounded edge), so the glyph centers
+		# on the row and never floats outside the hover state.
+		del_btn.anchor_left = 1.0
+		del_btn.anchor_right = 1.0
+		del_btn.anchor_top = 0.0
+		del_btn.anchor_bottom = 1.0
+		del_btn.offset_left = -30.0
+		del_btn.offset_right = -6.0
+		del_btn.offset_top = 0.0
+		del_btn.offset_bottom = 0.0
+		del_btn.pressed.connect(func() -> void:
+			_show_delete_modal(playlist)
+		)
+		# Touch has no hover — the ✕ stays visible on touch hardware and is
+		# hover-revealed only where a pointer exists (§14.7).
+		if PlatformManager.is_touch_primary():
+			del_btn.visible = true
+		else:
+			item_btn.mouse_entered.connect(func() -> void: del_btn.visible = true)
+			item_btn.mouse_exited.connect(func() -> void:
+				# Entering the ✕ itself fires the parent's mouse_exited — keep
+				# the button while the pointer is still inside the row.
+				if not Rect2(Vector2.ZERO, item_btn.size).has_point(item_btn.get_local_mouse_position()):
+					del_btn.visible = false
+			)
 		
 	_refresh_playlists_styles()
 
@@ -612,14 +898,44 @@ func hide_drop_indicator() -> void:
 		active_drag_source_item.modulate.a = 1.0
 		active_drag_source_item = null
 
+## Styles an inline LineEdit to the exact metrics of the nav row it replaces.
+## DESIGN RULE: inline edits never change row height or push the surrounding
+## menu around — editing happens in place, at the row's own size.
+func _style_inline_edit(line_edit: LineEdit) -> void:
+	var theme = ThemeManager.current_theme
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = theme.GLASS_TINT
+	sb.border_color = theme.ACCENT_CORE
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(theme.RADIUS_XS)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 1
+	sb.content_margin_bottom = 1
+	line_edit.add_theme_stylebox_override("normal", sb)
+	line_edit.add_theme_stylebox_override("focus", sb)
+	line_edit.add_theme_font_override("font", theme.font_ui)
+	line_edit.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	line_edit.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
+	line_edit.custom_minimum_size.y = ThemeManager.min_touch_height(int(theme.TOUCH_TARGET_MIN * 0.5))
+
+
+func _show_delete_modal(playlist: Dictionary) -> void:
+	GlassModal.confirm(self, "Delete Playlist",
+		"Delete playlist \"%s\"? This can't be undone." % playlist.name,
+		"Delete",
+		func() -> void:
+			if PlaylistService.active_playlist_id == playlist.id and NavManager.current_screen == "playlist":
+				NavManager.navigate_to("library")
+			PlaylistService.delete_playlist(playlist.id)
+	)
+
+
 func _show_inline_rename(playlist: Dictionary, item_btn: Button) -> void:
 	var line_edit = LineEdit.new()
 	line_edit.text = playlist.name
 	line_edit.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	line_edit.add_theme_stylebox_override("normal", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.3))
-	line_edit.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	line_edit.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-	line_edit.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+	_style_inline_edit(line_edit)
 	
 	var idx = item_btn.get_index()
 	playlists_container.add_child(line_edit)
@@ -635,7 +951,8 @@ func _show_inline_rename(playlist: Dictionary, item_btn: Button) -> void:
 		if not clean.is_empty() and clean != playlist.name:
 			PlaylistService.rename_playlist(playlist.id, clean)
 		else:
-			_rebuild_playlists_list()
+			# Deferred for the same teardown-reentrancy reason as creation.
+			call_deferred(&"_rebuild_playlists_list")
 
 	line_edit.text_submitted.connect(commit)
 	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
@@ -647,4 +964,229 @@ func _refresh_playlists_styles() -> void:
 	for child in playlists_container.get_children():
 		if child is Button and child.has_method("_can_drop_data"):
 			var is_active = (NavManager.current_screen == "playlist" and PlaylistService.active_playlist_id == child.playlist_id)
+			_style_nav_button(child, is_active)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Groups — mirrors the Playlists block above. A dynamic group holds
+# ENTITIES (artist/album/genre values), not tracks: dragging a library group
+# header onto one here adds it live; opening the group shows those entities
+# as cards (dynamic_group_screen.gd), never a track list directly.
+# ---------------------------------------------------------------------------
+
+func _setup_dynamic_groups_ui() -> void:
+	toggle_dynamic_groups_btn.pressed.connect(_on_toggle_dynamic_groups_pressed)
+	add_dynamic_group_btn.pressed.connect(_on_add_dynamic_group_pressed)
+
+	if DynamicGroupService:
+		DynamicGroupService.group_created.connect(func(_g): call_deferred(&"_rebuild_dynamic_groups_list"))
+		DynamicGroupService.group_deleted.connect(func(_id): call_deferred(&"_rebuild_dynamic_groups_list"))
+		DynamicGroupService.group_renamed.connect(func(_id, _name): call_deferred(&"_rebuild_dynamic_groups_list"))
+		DynamicGroupService.groups_loaded.connect(func(): call_deferred(&"_rebuild_dynamic_groups_list"))
+		DynamicGroupService.active_group_changed.connect(func(_id): _refresh_dynamic_groups_styles())
+
+	group_drop_indicator = ColorRect.new()
+	group_drop_indicator.custom_minimum_size.y = 3
+	group_drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	group_drop_indicator.visible = false
+	dynamic_groups_container.add_child(group_drop_indicator)
+
+	_style_dynamic_groups_header_buttons()
+	_rebuild_dynamic_groups_list()
+
+func _style_dynamic_groups_header_buttons() -> void:
+	var theme = ThemeManager.current_theme
+
+	toggle_dynamic_groups_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	toggle_dynamic_groups_btn.custom_minimum_size.y = ThemeManager.min_touch_height(
+		int(theme.TOUCH_TARGET_MIN * 0.5))
+	toggle_dynamic_groups_btn.add_theme_font_override("font", theme.font_ui)
+	toggle_dynamic_groups_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	toggle_dynamic_groups_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	toggle_dynamic_groups_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	toggle_dynamic_groups_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	toggle_dynamic_groups_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	toggle_dynamic_groups_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	toggle_dynamic_groups_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+
+	add_dynamic_group_btn.flat = true
+	add_dynamic_group_btn.custom_minimum_size = ThemeManager.min_touch_size(
+		Vector2(add_dynamic_group_btn.custom_minimum_size.x, theme.TOUCH_TARGET_MIN * 0.5))
+	add_dynamic_group_btn.add_theme_font_override("font", theme.font_ui)
+	add_dynamic_group_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	add_dynamic_group_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	add_dynamic_group_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	add_dynamic_group_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	add_dynamic_group_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	add_dynamic_group_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	add_dynamic_group_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+
+	add_dynamic_group_btn.visible = _dynamic_groups_visible
+
+func _on_toggle_dynamic_groups_pressed() -> void:
+	_dynamic_groups_visible = not _dynamic_groups_visible
+	dynamic_groups_container.visible = _dynamic_groups_visible
+	add_dynamic_group_btn.visible = _dynamic_groups_visible
+
+func _on_add_dynamic_group_pressed() -> void:
+	for child in dynamic_groups_container.get_children():
+		if child is LineEdit and child.has_meta("is_creation"):
+			child.grab_focus()
+			return
+
+	var line_edit = LineEdit.new()
+	line_edit.placeholder_text = "New Group..."
+	line_edit.set_meta("is_creation", true)
+	_style_inline_edit(line_edit)
+
+	dynamic_groups_container.add_child(line_edit)
+
+	line_edit.set_meta("committed", false)
+	var commit = func(new_text: String):
+		if line_edit.get_meta("committed", false):
+			return
+		line_edit.set_meta("committed", true)
+		var clean = new_text.strip_edges()
+		if not clean.is_empty():
+			DynamicGroupService.create_group(clean)
+		else:
+			line_edit.queue_free()
+			call_deferred(&"_rebuild_dynamic_groups_list")
+
+	line_edit.text_submitted.connect(commit)
+	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
+
+	line_edit.grab_focus.call_deferred()
+
+func _rebuild_dynamic_groups_list() -> void:
+	for child in dynamic_groups_container.get_children():
+		if child != group_drop_indicator:
+			child.queue_free()
+
+	if not DynamicGroupService:
+		return
+
+	var groups_list = DynamicGroupService.get_dynamic_groups()
+	for group in groups_list:
+		var item_btn = Button.new()
+		item_btn.set_script(preload("res://scripts/ui/dynamic_group_sidebar_item.gd"))
+		item_btn.group_id = group.id
+		item_btn.group_name = group.name
+		item_btn.text = "    ⚡  " + group.name
+		dynamic_groups_container.add_child(item_btn)
+
+		item_btn.pressed.connect(func():
+			DynamicGroupService.active_group_id = group.id
+			NavManager.navigate_to("dynamic_group")
+			show_preview_image(DynamicGroupService.get_group_cover_path(group.id), "dynamic_group", group.id)
+		)
+
+		item_btn.gui_input.connect(func(event):
+			if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
+				_show_inline_rename_group(group, item_btn)
+		)
+
+		var del_btn := Button.new()
+		del_btn.text = "✕"
+		del_btn.flat = true
+		del_btn.visible = false
+		del_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+		del_btn.add_theme_stylebox_override("hover", ThemeManager.make_transparent())
+		del_btn.add_theme_stylebox_override("pressed", ThemeManager.make_transparent())
+		del_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+		del_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		del_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+		del_btn.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+		del_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+		item_btn.add_child(del_btn)
+		del_btn.anchor_left = 1.0
+		del_btn.anchor_right = 1.0
+		del_btn.anchor_top = 0.0
+		del_btn.anchor_bottom = 1.0
+		del_btn.offset_left = -30.0
+		del_btn.offset_right = -6.0
+		del_btn.offset_top = 0.0
+		del_btn.offset_bottom = 0.0
+		del_btn.pressed.connect(func() -> void:
+			_show_delete_group_modal(group)
+		)
+		if PlatformManager.is_touch_primary():
+			del_btn.visible = true
+		else:
+			item_btn.mouse_entered.connect(func() -> void: del_btn.visible = true)
+			item_btn.mouse_exited.connect(func() -> void:
+				if not Rect2(Vector2.ZERO, item_btn.size).has_point(item_btn.get_local_mouse_position()):
+					del_btn.visible = false
+			)
+
+	_refresh_dynamic_groups_styles()
+
+func show_group_drop_indicator(source_idx: int, target_idx: int, above: bool) -> void:
+	if not group_drop_indicator:
+		return
+
+	group_drop_indicator.color = ThemeManager.current_theme.ACCENT_CORE
+
+	if active_group_drag_source_item and is_instance_valid(active_group_drag_source_item):
+		active_group_drag_source_item.modulate.a = 1.0
+	if source_idx >= 0 and source_idx < dynamic_groups_container.get_child_count():
+		active_group_drag_source_item = dynamic_groups_container.get_child(source_idx)
+		active_group_drag_source_item.modulate.a = 0.4
+
+	group_drop_indicator.visible = true
+	var new_idx = target_idx
+	if not above:
+		new_idx += 1
+	new_idx = clamp(new_idx, 0, dynamic_groups_container.get_child_count() - 1)
+	dynamic_groups_container.move_child(group_drop_indicator, new_idx)
+
+func hide_group_drop_indicator() -> void:
+	if group_drop_indicator:
+		group_drop_indicator.visible = false
+	if active_group_drag_source_item and is_instance_valid(active_group_drag_source_item):
+		active_group_drag_source_item.modulate.a = 1.0
+		active_group_drag_source_item = null
+
+func _show_delete_group_modal(group: Dictionary) -> void:
+	GlassModal.confirm(self, "Delete Dynamic Group",
+		"Delete group \"%s\"? This can't be undone." % group.name,
+		"Delete",
+		func() -> void:
+			if DynamicGroupService.active_group_id == group.id and NavManager.current_screen == "dynamic_group":
+				NavManager.navigate_to("library")
+			DynamicGroupService.delete_group(group.id)
+	)
+
+func _show_inline_rename_group(group: Dictionary, item_btn: Button) -> void:
+	var line_edit = LineEdit.new()
+	line_edit.text = group.name
+	line_edit.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_style_inline_edit(line_edit)
+
+	var idx = item_btn.get_index()
+	dynamic_groups_container.add_child(line_edit)
+	dynamic_groups_container.move_child(line_edit, idx)
+	item_btn.visible = false
+
+	line_edit.set_meta("committed", false)
+	var commit = func(new_text: String):
+		if line_edit.get_meta("committed", false):
+			return
+		line_edit.set_meta("committed", true)
+		var clean = new_text.strip_edges()
+		if not clean.is_empty() and clean != group.name:
+			DynamicGroupService.rename_group(group.id, clean)
+		else:
+			call_deferred(&"_rebuild_dynamic_groups_list")
+
+	line_edit.text_submitted.connect(commit)
+	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
+
+	line_edit.grab_focus.call_deferred()
+	line_edit.select_all.call_deferred()
+
+func _refresh_dynamic_groups_styles() -> void:
+	for child in dynamic_groups_container.get_children():
+		if child is Button and child.has_method("_can_drop_data"):
+			var is_active = (NavManager.current_screen == "dynamic_group" and DynamicGroupService.active_group_id == child.group_id)
 			_style_nav_button(child, is_active)

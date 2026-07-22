@@ -1,6 +1,8 @@
 extends Control
 
-const PLAYLIST_TRACK_ROW = preload("res://scenes/screens/playlist/playlist_track_row.tscn")
+const TrackIndex = preload("res://scripts/services/track_index.gd")
+const TrackTable = preload("res://scripts/ui/track_table.gd")
+const GlassModal = preload("res://scripts/ui/glass_modal.gd")
 
 
 @onready var CoverContainer: PanelContainer = $Margin/VBox/HeaderHBox/CoverContainer
@@ -18,20 +20,66 @@ const PLAYLIST_TRACK_ROW = preload("res://scenes/screens/playlist/playlist_track
 @onready var EmptyBody: Label = $Margin/VBox/EmptyState/EmptyVBox/EmptyBody
 @onready var FileDialogNode: FileDialog = $FileDialog
 
-var drop_indicator: ColorRect = null
-var active_drag_source_row: Control = null
+## Shared row builder — playlists derive their rows exactly like the library
+## does, so both screens show identical (honest) names for the same track.
+var _row_builder := TrackIndex.new()
+var _table: VBoxContainer
+
+## Narrow layouts have no sidebar, so the title (rename in place) and delete
+## live in this compact strip above the table (§14.7). Wide layouts get both
+## from the sidebar and never show it.
+var _compact_header: HBoxContainer
+var _compact_title: LineEdit
+
+
+func _setup_table(vbox: VBoxContainer) -> void:
+	_table = TrackTable.new()
+	_table.manual_mode = true
+	vbox.add_child(_table)
+	vbox.move_child(_table, Scroll.get_index())
+	_table.play_requested.connect(_on_table_play_requested)
+	_table.remove_requested.connect(func(manual_index: int) -> void:
+		PlaylistService.remove_track_from_playlist(PlaylistService.active_playlist_id, manual_index)
+	)
+	_table.reorder_requested.connect(func(from_index: int, to_index: int) -> void:
+		PlaylistService.reorder_track_in_playlist(PlaylistService.active_playlist_id, from_index, to_index)
+	)
+	_table.insert_requested.connect(func(href: String, at_index: int) -> void:
+		PlaylistService.add_track_to_playlist_at_index(PlaylistService.active_playlist_id, href, at_index)
+	)
 
 func _ready() -> void:
 	visible = (NavManager.current_screen == "playlist")
 	NavManager.navigation_requested.connect(_on_navigation_requested)
 	ThemeManager.theme_changed.connect(_apply_styles)
-	
+
+	# The header (cover, title, play/delete buttons) was dead space: the title
+	# lives in the sidebar, the cover lives in the sidebar preview slot,
+	# playing is clicking a track, and deleting moved to the sidebar ✕.
+	$Margin/VBox/HeaderHBox.visible = false
+
+	# A playlist IS the track table in manual mode — same columns, search,
+	# sort, and honesty rules as the library, plus reorder/remove/insert.
+	Scroll.visible = false
+	var vbox := $Margin/VBox as VBoxContainer
+	_setup_table(vbox)
+
+	_build_compact_header(vbox)
+	PlatformManager.layout_changed.connect(func(_bp: String) -> void: _update_compact_header())
+
 	if PlaylistService:
 		PlaylistService.playlist_tracks_updated.connect(_on_playlist_tracks_updated)
 		PlaylistService.playlist_cover_updated.connect(_on_playlist_cover_updated)
 		PlaylistService.playlist_renamed.connect(_on_playlist_renamed)
 		PlaylistService.playlists_loaded.connect(_refresh_playlist)
 		PlaylistService.active_playlist_changed.connect(func(_id): _refresh_playlist())
+
+	var ms = get_node_or_null("/root/MetadataService")
+	if ms and ms.has_signal("metadata_updated"):
+		ms.metadata_updated.connect(func(href: String, _meta: Dictionary) -> void:
+			if visible:
+				_table.refresh_row(_row_builder.build_row(href))
+		)
 		
 	# Cover Hover & Edit Wiring
 	PencilBtn.visible = false
@@ -44,14 +92,7 @@ func _ready() -> void:
 	)
 	PencilBtn.pressed.connect(func(): FileDialogNode.popup_centered_ratio(0.6))
 	FileDialogNode.file_selected.connect(_on_cover_file_selected)
-	
-	# Initialize Drop Indicator
-	drop_indicator = ColorRect.new()
-	drop_indicator.custom_minimum_size.y = 3
-	drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	drop_indicator.visible = false
-	TrackList.add_child(drop_indicator)
-	
+
 	# OS drag and drop files connection
 	get_tree().get_root().files_dropped.connect(_on_files_dropped)
 	
@@ -66,32 +107,60 @@ func _ready() -> void:
 	_apply_styles()
 	_refresh_playlist()
 
-func show_drop_indicator(source_idx: int, target_idx: int, above: bool) -> void:
-	if not drop_indicator:
-		return
-		
-	# Apply styling from current theme if needed
-	drop_indicator.color = ThemeManager.current_theme.ACCENT_CORE
-	
-	if active_drag_source_row and is_instance_valid(active_drag_source_row):
-		active_drag_source_row.modulate.a = 1.0
-	if source_idx >= 0 and source_idx < TrackList.get_child_count():
-		active_drag_source_row = TrackList.get_child(source_idx)
-		active_drag_source_row.modulate.a = 0.4
-		
-	drop_indicator.visible = true
-	var new_idx = target_idx
-	if not above:
-		new_idx += 1
-	new_idx = clamp(new_idx, 0, TrackList.get_child_count() - 1)
-	TrackList.move_child(drop_indicator, new_idx)
+func _build_compact_header(vbox: VBoxContainer) -> void:
+	var theme = ThemeManager.current_theme
+	_compact_header = HBoxContainer.new()
+	_compact_header.add_theme_constant_override("separation", theme.SPACE_2)
+	vbox.add_child(_compact_header)
+	vbox.move_child(_compact_header, _table.get_index())
 
-func hide_drop_indicator() -> void:
-	if drop_indicator:
-		drop_indicator.visible = false
-	if active_drag_source_row and is_instance_valid(active_drag_source_row):
-		active_drag_source_row.modulate.a = 1.0
-		active_drag_source_row = null
+	_compact_title = LineEdit.new()
+	_compact_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_compact_title.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	_compact_title.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	_compact_title.add_theme_font_override("font", theme.font_display)
+	_compact_title.add_theme_font_size_override("font_size", theme.TYPE_MD)
+	_compact_title.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
+	_compact_header.add_child(_compact_title)
+	var commit_title := func() -> void:
+		var clean: String = _compact_title.text.strip_edges()
+		if not clean.is_empty() and not PlaylistService.active_playlist_id.is_empty():
+			PlaylistService.rename_playlist(PlaylistService.active_playlist_id, clean)
+	_compact_title.text_submitted.connect(func(_t: String) -> void: commit_title.call())
+	_compact_title.focus_exited.connect(commit_title)
+
+	var del_btn := Button.new()
+	del_btn.text = "✕"
+	del_btn.flat = true
+	del_btn.tooltip_text = "Delete playlist"
+	del_btn.custom_minimum_size = ThemeManager.min_touch_size(Vector2(32, 32))
+	del_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	del_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	del_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	del_btn.add_theme_font_override("font", theme.font_ui)
+	del_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	del_btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
+	_compact_header.add_child(del_btn)
+	del_btn.pressed.connect(func() -> void:
+		var pl: Dictionary = PlaylistService.get_playlist(PlaylistService.active_playlist_id)
+		if pl.is_empty():
+			return
+		GlassModal.confirm(self, "Delete Playlist",
+			"Delete playlist \"%s\"? This can't be undone." % pl.name,
+			"Delete",
+			func() -> void:
+				NavManager.navigate_to("library")
+				PlaylistService.delete_playlist(pl.id)
+		)
+	)
+
+	_update_compact_header()
+
+
+func _update_compact_header() -> void:
+	_compact_header.visible = not PlatformManager.should_show_sidebar()
+
 
 func _on_navigation_requested(screen_name: String) -> void:
 	visible = (screen_name == "playlist")
@@ -162,54 +231,31 @@ func _refresh_playlist() -> void:
 		return
 		
 	TitleEdit.text = playlist.name
+	if _compact_title:
+		_compact_title.text = playlist.name
 	
 	# Load cover
 	var cover_path = PlaylistService.get_playlist_cover_path(PlaylistService.active_playlist_id)
 	_load_cover_image(cover_path)
 	
-	# Clear track list
-	for child in TrackList.get_children():
-		if child != drop_indicator:
-			child.queue_free()
-		
 	var tracks = playlist.tracks
 	MetaLabel.text = "%d tracks" % tracks.size()
-	
+
 	if tracks.is_empty():
-		Scroll.visible = false
+		_table.visible = false
 		EmptyState.visible = true
 	else:
-		Scroll.visible = true
+		_table.visible = true
 		EmptyState.visible = false
-		
+
+		# Same rows the library table shows, plus manual_pos — the playlist's
+		# one piece of state the library doesn't have: the crafted order.
+		var rows: Array = []
 		for i in range(tracks.size()):
-			var href = tracks[i]
-			var title = ""
-			var artist = "Unknown Artist"
-			
-			if MetadataService:
-				var meta = MetadataService.get_cached_metadata(href)
-				if not meta.is_empty():
-					title = meta.get("track_title", "")
-					artist = meta.get("artist_name", "Unknown Artist")
-					
-			if title.is_empty():
-				var file_name = href.get_file().get_basename()
-				if " - " in file_name:
-					var parts = file_name.split(" - ")
-					artist = parts[0].strip_edges()
-					title = parts[1].strip_edges()
-				else:
-					title = file_name
-					
-			var row = PLAYLIST_TRACK_ROW.instantiate()
-			TrackList.add_child(row)
-			row.setup(i, href, title, artist)
-			
-			row.reorder_requested.connect(_on_row_reorder_requested)
-			row.track_dropped_at.connect(_on_row_track_dropped_at)
-			row.play_requested.connect(_on_row_play_requested)
-			row.remove_requested.connect(_on_row_remove_requested)
+			var row := _row_builder.build_row(tracks[i])
+			row.manual_pos = i
+			rows.append(row)
+		_table.set_rows(rows)
 
 func _load_cover_image(path: String) -> void:
 	if path.is_empty() or not FileAccess.file_exists(path):
@@ -288,16 +334,9 @@ func _drop_data(_at_position: Vector2, data: Variant) -> void:
 	if not href.is_empty() and not PlaylistService.active_playlist_id.is_empty():
 		PlaylistService.add_track_to_playlist(PlaylistService.active_playlist_id, href)
 
-func _on_row_reorder_requested(source_idx: int, target_idx: int) -> void:
-	PlaylistService.reorder_track_in_playlist(PlaylistService.active_playlist_id, source_idx, target_idx)
-
-func _on_row_track_dropped_at(track_href: String, target_idx: int) -> void:
-	PlaylistService.add_track_to_playlist_at_index(PlaylistService.active_playlist_id, track_href, target_idx)
-
-func _on_row_play_requested(index: int) -> void:
-	var playlist = PlaylistService.get_playlist(PlaylistService.active_playlist_id)
-	if not playlist.is_empty() and index < playlist.tracks.size():
-		AudioManager.play_track(playlist.tracks[index], playlist.tracks)
-
-func _on_row_remove_requested(index: int) -> void:
-	PlaylistService.remove_track_from_playlist(PlaylistService.active_playlist_id, index)
+## Queue is the table's current view order — a temporarily BPM-sorted playlist
+## plays in the order on screen, while the stored manual order stays untouched.
+func _on_table_play_requested(row: Dictionary, queue: Array) -> void:
+	AudioManager.play_track(row.href, queue)
+	if is_instance_valid(MetadataService):
+		MetadataService.focus_track(row.href, row.artist, row.album, row.title)

@@ -2163,7 +2163,14 @@ func _on_debounce_timeout() -> void:
 		_load_and_stream_remote_file(target_href, active_player, is_playing)
 
 func scroll_track(value) -> void:
+	# Seeking with no track loaded crashed the app: with active_player null the
+	# deck pick fell through to dsp_b and seek_pos() ran on a DSP that never
+	# loaded a stream — a native crash inside the extension, no script error.
+	if not is_instance_valid(active_player) or active_player.stream == null:
+		return
 	var dsp = dsp_a if active_player == player_a else dsp_b
+	if dsp == null:
+		return
 	dsp.seek_pos(value)
 	var playback = active_player.get_stream_playback()
 	if playback:

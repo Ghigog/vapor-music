@@ -28,7 +28,16 @@ func _ready() -> void:
 		PlaylistService.playlist_created.connect(func(_p): call_deferred(&"_rebuild_list"))
 		PlaylistService.playlist_deleted.connect(func(_id): call_deferred(&"_rebuild_list"))
 		PlaylistService.playlists_loaded.connect(func(): call_deferred(&"_rebuild_list"))
-	
+
+	# Mobile has no sidebar, so this popup is the ONLY way to reach Dynamic
+	# Groups on that layout — without this, groups built on desktop would be
+	# permanently unreachable on a phone (§14.6: every affordance needs a
+	# narrow/touch path, not just a nicer one).
+	if DynamicGroupService:
+		DynamicGroupService.group_created.connect(func(_g): call_deferred(&"_rebuild_list"))
+		DynamicGroupService.group_deleted.connect(func(_id): call_deferred(&"_rebuild_list"))
+		DynamicGroupService.groups_loaded.connect(func(): call_deferred(&"_rebuild_list"))
+
 	ThemeManager.theme_changed.connect(_apply_styles)
 	_apply_styles()
 
@@ -105,7 +114,69 @@ func _rebuild_list() -> void:
 			NavManager.navigate_to("playlist")
 			hide_popup()
 		)
-		
+
+		list_container.add_child(btn)
+
+	if DynamicGroupService:
+		_rebuild_dynamic_groups_section(theme)
+
+func _rebuild_dynamic_groups_section(theme) -> void:
+	var sep = HSeparator.new()
+	list_container.add_child(sep)
+
+	var section_header = HBoxContainer.new()
+	list_container.add_child(section_header)
+
+	var section_label = Label.new()
+	section_label.text = "  Dynamic Groups"
+	section_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	section_label.add_theme_font_override("font", theme.font_ui)
+	section_label.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	section_label.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	section_header.add_child(section_label)
+
+	var add_group_btn = Button.new()
+	add_group_btn.text = " + "
+	add_group_btn.custom_minimum_size = ThemeManager.min_touch_size(Vector2(32, 32))
+	add_group_btn.add_theme_font_override("font", theme.font_ui)
+	add_group_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	add_group_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	add_group_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	add_group_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	add_group_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	add_group_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	add_group_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	section_header.add_child(add_group_btn)
+	add_group_btn.pressed.connect(_on_add_group_btn_pressed)
+
+	for group in DynamicGroupService.get_dynamic_groups():
+		var btn = Button.new()
+		btn.text = "    ⚡  " + group.name
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		btn.custom_minimum_size.y = ThemeManager.min_touch_height(
+			int(theme.TOUCH_TARGET_MIN * 0.75))
+
+		btn.add_theme_font_override("font", theme.font_ui)
+		btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+		btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+		btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+		btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+		btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+
+		var is_active = (NavManager.current_screen == "dynamic_group" and DynamicGroupService.active_group_id == group.id)
+		if is_active:
+			btn.add_theme_stylebox_override("normal", ThemeManager.make_nav_item_active())
+			btn.add_theme_color_override("font_color", theme.ACCENT_CORE)
+		else:
+			btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+			btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+
+		btn.pressed.connect(func():
+			DynamicGroupService.active_group_id = group.id
+			NavManager.navigate_to("dynamic_group")
+			hide_popup()
+		)
+
 		list_container.add_child(btn)
 
 func toggle_popup(anchor_button: Button) -> void:
@@ -152,11 +223,26 @@ func _on_backdrop_gui_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 func _on_add_btn_pressed() -> void:
+	new_playlist_input.placeholder_text = "New Playlist..."
+	new_playlist_input.set_meta("creating", "playlist")
 	new_playlist_input.text = ""
 	new_playlist_input.visible = !new_playlist_input.visible
 	if new_playlist_input.visible:
 		new_playlist_input.grab_focus()
-	
+
+	await get_tree().process_frame
+	_position_popup()
+
+## Shares the same inline LineEdit as playlist creation — a "creating" meta
+## flag on the input tells _on_new_playlist_submitted which service to call.
+func _on_add_group_btn_pressed() -> void:
+	new_playlist_input.placeholder_text = "New Group..."
+	new_playlist_input.set_meta("creating", "group")
+	new_playlist_input.text = ""
+	new_playlist_input.visible = !new_playlist_input.visible
+	if new_playlist_input.visible:
+		new_playlist_input.grab_focus()
+
 	await get_tree().process_frame
 	_position_popup()
 
@@ -167,14 +253,18 @@ func _on_new_playlist_submitted(new_text: String) -> void:
 	if _creation_committed:
 		return
 	_creation_committed = true
-	
+
 	var clean = new_text.strip_edges()
-	if not clean.is_empty() and PlaylistService:
-		PlaylistService.create_playlist(clean)
-	
+	if not clean.is_empty():
+		if new_playlist_input.get_meta("creating", "playlist") == "group":
+			if DynamicGroupService:
+				DynamicGroupService.create_group(clean)
+		elif PlaylistService:
+			PlaylistService.create_playlist(clean)
+
 	new_playlist_input.visible = false
 	_creation_committed = false
-	
+
 	await get_tree().process_frame
 	_position_popup()
 

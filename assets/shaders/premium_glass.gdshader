@@ -14,6 +14,11 @@ group_uniforms PanelDimensions;
 uniform vec2 container_size = vec2(1232.0, 672.0);
 // Corner radius in pixels.
 uniform float corner_radius = 24.0;
+// Per-corner override in pixels: (top-left, top-right, bottom-right,
+// bottom-left). A negative component falls back to corner_radius. The
+// sidebar uses this to keep its RIGHT edge square — the seek bar runs flush
+// along it — while its left corners follow the window frame curve.
+uniform vec4 corner_radii = vec4(-1.0, -1.0, -1.0, -1.0);
 
 group_uniforms BlurAndSaturation;
 // Blur intensity (Lod level).
@@ -49,6 +54,17 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
 	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
 
+// Radius for the quadrant containing centered point p.
+float pick_radius(vec2 p) {
+	float r;
+	if (p.x >= 0.0) {
+		r = (p.y >= 0.0) ? corner_radii.z : corner_radii.y;
+	} else {
+		r = (p.y >= 0.0) ? corner_radii.w : corner_radii.x;
+	}
+	return (r < 0.0) ? corner_radius : r;
+}
+
 void fragment() {
 	// Fallback if size is not yet initialized by the script (prevents division by zero or negative size)
 	vec2 size_safe = max(container_size, vec2(2.0));
@@ -58,7 +74,8 @@ void fragment() {
 	vec2 half_size = size_safe * 0.5;
 	vec2 p_centered = p - half_size;
 	
-	float d = sdRoundedBox(p_centered, half_size, corner_radius);
+	float r_active = pick_radius(p_centered);
+	float d = sdRoundedBox(p_centered, half_size, r_active);
 	
 	// Anti-aliased mask for the panel background (disabled if size is uninitialized to avoid clipping)
 	float panel_mask = (container_size.x < 1.0) ? 1.0 : smoothstep(0.5, -0.5, d);
@@ -94,7 +111,7 @@ void fragment() {
 	
 	// 6. Procedural rounded border with light source highlights
 	// Calculate the normal vector along the border boundary
-	vec2 q = abs(p_centered) - half_size + vec2(corner_radius);
+	vec2 q = abs(p_centered) - half_size + vec2(r_active);
 	vec2 N = vec2(0.0);
 	if (max(q.x, q.y) > 0.0) {
 		N = sign(p_centered) * normalize(max(q, 0.0));

@@ -74,6 +74,15 @@ func create_playlist(name: String) -> Dictionary:
 	playlist_created.emit(new_playlist)
 	return new_playlist
 
+## Snapshot of a library view: the given hrefs, in the given order, as a
+## normal (fully editable) playlist.
+func create_snapshot_playlist(name: String, hrefs: Array) -> Dictionary:
+	var playlist = create_playlist(name)
+	playlist.tracks = hrefs.duplicate()
+	save_playlists()
+	playlist_tracks_updated.emit(playlist.id)
+	return playlist
+
 func delete_playlist(id: String) -> void:
 	if playlists.has(id):
 		var playlist = playlists[id]
