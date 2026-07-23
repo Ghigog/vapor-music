@@ -190,6 +190,11 @@ func _build_ui() -> void:
 		_group_btn.add_item("Genres")
 		_group_btn.add_item("All tracks")
 		_group_keys = [TrackIndex.GROUP_ARTIST, TrackIndex.GROUP_ALBUM, TrackIndex.GROUP_GENRE, TrackIndex.GROUP_NONE]
+		# Default to the flat list, not grouped-by-artist — a saved per-screen
+		# choice in view_state.json (below) still wins over this once one
+		# exists; this only sets what a screen with no saved preference yet
+		# opens to.
+		_group_btn.select(_group_keys.find(TrackIndex.GROUP_NONE))
 		_group_btn.item_selected.connect(func(_i: int) -> void:
 			_persist_view_state()
 			_reset_and_render()

@@ -7,6 +7,7 @@ signal playlist_tracks_updated(id: String)
 signal playlist_cover_updated(id: String, new_cover_path: String)
 signal playlists_loaded()
 signal active_playlist_changed(id: String)
+signal playlist_folder_changed(id: String, folder_id: String)
 
 var playlist_file_path = "user://playlists.json"
 
@@ -58,13 +59,14 @@ func get_playlist(id: String) -> Dictionary:
 		return playlists[id]
 	return {}
 
-func create_playlist(name: String) -> Dictionary:
+func create_playlist(name: String, folder_id: String = "") -> Dictionary:
 	var id = "playlist_" + str(Time.get_ticks_usec()) + "_" + str(randi() % 1000)
 	var new_playlist = {
 		"id": id,
 		"name": name,
 		"custom_cover_path": "",
-		"tracks": []
+		"tracks": [],
+		"folder_id": folder_id
 	}
 	var new_dict = { id: new_playlist }
 	for key in playlists:
@@ -193,10 +195,40 @@ func reorder_playlists(from_index: int, to_index: int) -> void:
 		var key = keys[from_index]
 		keys.remove_at(from_index)
 		keys.insert(to_index, key)
-		
+
 		var new_dict = {}
 		for k in keys:
 			new_dict[k] = playlists[k]
 		playlists = new_dict
 		save_playlists()
 		playlists_loaded.emit()
+
+func set_playlist_folder(id: String, folder_id: String) -> void:
+	if playlists.has(id) and playlists[id].get("folder_id", "") != folder_id:
+		playlists[id]["folder_id"] = folder_id
+		save_playlists()
+		playlist_folder_changed.emit(id, folder_id)
+
+## Id-based reorder: repositions playlist_id immediately before/after
+## target_id in the master order. Unlike reorder_playlists' index pair, this
+## stays correct no matter what subset of rows the UI is currently showing —
+## once folders can filter the sidebar's playlist list, an on-screen row
+## index no longer corresponds to an index into the full playlists dict, but
+## an id always does.
+func reorder_playlist_relative(playlist_id: String, target_id: String, place_before: bool) -> void:
+	if playlist_id == target_id or not playlists.has(playlist_id) or not playlists.has(target_id):
+		return
+	var keys = playlists.keys()
+	keys.erase(playlist_id)
+	var idx = keys.find(target_id)
+	if idx == -1:
+		return
+	if not place_before:
+		idx += 1
+	keys.insert(idx, playlist_id)
+	var new_dict = {}
+	for k in keys:
+		new_dict[k] = playlists[k]
+	playlists = new_dict
+	save_playlists()
+	playlists_loaded.emit()

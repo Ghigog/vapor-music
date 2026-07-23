@@ -40,6 +40,10 @@ var is_synced_lyrics := false
 var drop_indicator: ColorRect = null
 var active_drag_source_item: Control = null
 
+## Folder expand/collapse state, keyed by folder id (default expanded — not
+## persisted, mirrors the Playlists/Dynamic Groups section toggles).
+var _expanded_folders: Dictionary = {}
+
 ## Separate drop-indicator state for the Dynamic Groups list — distinct from
 ## the Playlists one above so reordering one list never touches the other.
 var group_drop_indicator: ColorRect = null
@@ -708,18 +712,38 @@ func _update_lyrics_scroller(song_time: float) -> void:
 func _setup_playlists_ui() -> void:
 	toggle_playlists_btn.pressed.connect(_on_toggle_playlists_pressed)
 	add_playlist_btn.pressed.connect(_on_add_playlist_pressed)
-	
+	add_playlist_btn.tooltip_text = "New Playlist (right-click for a folder)"
+	# One "+" — same as Dynamic Groups' — not two crowded side by side.
+	# Folder creation rides the same right-click/long-press vocabulary the
+	# app already uses for secondary actions elsewhere (track rows, group
+	# headers): right-click on desktop; touch still gets an explicit button
+	# in the mobile popup, since there's no hidden gesture there.
+	add_playlist_btn.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			_on_add_folder_pressed()
+			get_viewport().set_input_as_handled()
+	)
+
 	if PlaylistService:
 		PlaylistService.playlist_created.connect(func(_p): call_deferred(&"_rebuild_playlists_list"))
 		PlaylistService.playlist_deleted.connect(func(_id): call_deferred(&"_rebuild_playlists_list"))
 		PlaylistService.playlist_renamed.connect(func(_id, _name): call_deferred(&"_rebuild_playlists_list"))
 		PlaylistService.playlists_loaded.connect(func(): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistService.playlist_folder_changed.connect(func(_id, _folder_id): call_deferred(&"_rebuild_playlists_list"))
 		# Switching playlists while already on the playlist screen is a no-op for
 		# NavManager.navigate_to(), so navigation_requested never fires and the
 		# highlight would stay on the previously-opened playlist.
 		PlaylistService.active_playlist_changed.connect(func(_id): _refresh_playlists_styles())
-	
-	# Initialize Drop Indicator for Playlists
+
+	if PlaylistFolderService:
+		PlaylistFolderService.folder_created.connect(func(_f): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistFolderService.folder_deleted.connect(func(_id): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistFolderService.folder_renamed.connect(func(_id, _name): call_deferred(&"_rebuild_playlists_list"))
+		PlaylistFolderService.folders_loaded.connect(func(): call_deferred(&"_rebuild_playlists_list"))
+
+	# Initialize Drop Indicator for Playlists — shared across the root list and
+	# every folder's nested list; show_drop_indicator reparents it into
+	# whichever container is currently being dragged over.
 	drop_indicator = ColorRect.new()
 	drop_indicator.custom_minimum_size.y = 3
 	drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -728,7 +752,7 @@ func _setup_playlists_ui() -> void:
 
 	# Playlist deletion always confirms via the glass modal (_show_delete_modal)
 	# — one mis-click on the ✕ must never lose a crafted set.
-	
+
 	_style_playlists_header_buttons()
 	_rebuild_playlists_list()
 
@@ -759,7 +783,7 @@ func _style_playlists_header_buttons() -> void:
 	add_playlist_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
 	add_playlist_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
 	add_playlist_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
-	
+
 	add_playlist_btn.visible = _playlists_visible
 
 func _on_toggle_playlists_pressed() -> void:
@@ -799,97 +823,219 @@ func _on_add_playlist_pressed() -> void:
 	
 	line_edit.grab_focus.call_deferred()
 
+func _on_add_folder_pressed() -> void:
+	for child in playlists_container.get_children():
+		if child is LineEdit and child.has_meta("is_folder_creation"):
+			child.grab_focus()
+			return
+
+	var line_edit = LineEdit.new()
+	line_edit.placeholder_text = "New Folder..."
+	line_edit.set_meta("is_folder_creation", true)
+	_style_inline_edit(line_edit)
+
+	playlists_container.add_child(line_edit)
+
+	line_edit.set_meta("committed", false)
+	var commit = func(new_text: String):
+		if line_edit.get_meta("committed", false):
+			return
+		line_edit.set_meta("committed", true)
+		var clean = new_text.strip_edges()
+		if not clean.is_empty():
+			PlaylistFolderService.create_folder(clean)
+		else:
+			line_edit.queue_free()
+			call_deferred(&"_rebuild_playlists_list")
+
+	line_edit.text_submitted.connect(commit)
+	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
+
+	line_edit.grab_focus.call_deferred()
+
+## Single-level folders (agreed for v1 — data model's parent_id already
+## supports nesting for later): every folder renders at the top of the
+## Playlists list, each with its own nested container of member playlists;
+## playlists with no folder_id render below, same as before folders existed.
 func _rebuild_playlists_list() -> void:
 	for child in playlists_container.get_children():
 		if child != drop_indicator:
 			child.queue_free()
-		
+
 	if not PlaylistService:
 		return
-		
-	var playlists_list = PlaylistService.get_playlists()
-	for playlist in playlists_list:
-		var item_btn = Button.new()
-		item_btn.set_script(preload("res://scripts/ui/sidebar_playlist_item.gd"))
-		item_btn.playlist_id = playlist.id
-		item_btn.playlist_name = playlist.name
-		item_btn.text = "    ♪  " + playlist.name
-		playlists_container.add_child(item_btn)
-		
-		item_btn.pressed.connect(func():
-			PlaylistService.active_playlist_id = playlist.id
-			NavManager.navigate_to("playlist")
-			# Clicking a playlist points the output monitor at its cover; a
-			# later track click overwrites it, clicking the playlist again
-			# brings it back.
-			show_preview_image(PlaylistService.get_playlist_cover_path(playlist.id), "playlist", playlist.id)
-		)
 
-		item_btn.gui_input.connect(func(event):
-			if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
-				_show_inline_rename(playlist, item_btn)
-		)
+	var all_playlists = PlaylistService.get_playlists()
 
-		var del_btn := Button.new()
-		del_btn.text = "✕"
-		del_btn.flat = true
-		del_btn.visible = false
-		del_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
-		del_btn.add_theme_stylebox_override("hover", ThemeManager.make_transparent())
-		del_btn.add_theme_stylebox_override("pressed", ThemeManager.make_transparent())
-		del_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
-		del_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-		del_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
-		del_btn.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
-		del_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
-		item_btn.add_child(del_btn)
-		# DESIGN RULE: hover controls span the row's full height and sit INSIDE
-		# the row highlight (inset from the rounded edge), so the glyph centers
-		# on the row and never floats outside the hover state.
-		del_btn.anchor_left = 1.0
-		del_btn.anchor_right = 1.0
-		del_btn.anchor_top = 0.0
-		del_btn.anchor_bottom = 1.0
-		del_btn.offset_left = -30.0
-		del_btn.offset_right = -6.0
-		del_btn.offset_top = 0.0
-		del_btn.offset_bottom = 0.0
-		del_btn.pressed.connect(func() -> void:
-			_show_delete_modal(playlist)
-		)
-		# Touch has no hover — the ✕ stays visible on touch hardware and is
-		# hover-revealed only where a pointer exists (§14.7).
-		if PlatformManager.is_touch_primary():
-			del_btn.visible = true
-		else:
-			item_btn.mouse_entered.connect(func() -> void: del_btn.visible = true)
-			item_btn.mouse_exited.connect(func() -> void:
-				# Entering the ✕ itself fires the parent's mouse_exited — keep
-				# the button while the pointer is still inside the row.
-				if not Rect2(Vector2.ZERO, item_btn.size).has_point(item_btn.get_local_mouse_position()):
-					del_btn.visible = false
-			)
-		
+	if PlaylistFolderService:
+		for folder in PlaylistFolderService.get_playlist_folders():
+			_add_folder_section(folder, all_playlists)
+
+	for playlist in all_playlists:
+		if (playlist.get("folder_id", "") as String).is_empty():
+			_add_playlist_row(playlists_container, playlist, "")
+
 	_refresh_playlists_styles()
 
-func show_drop_indicator(source_idx: int, target_idx: int, above: bool) -> void:
+func _add_folder_section(folder: Dictionary, all_playlists: Array) -> void:
+	var header_btn := Button.new()
+	header_btn.set_script(preload("res://scripts/ui/sidebar_folder_item.gd"))
+	header_btn.folder_id = folder.id
+	header_btn.folder_name = folder.name
+	header_btn.set_expanded(_expanded_folders.get(folder.id, true))
+	playlists_container.add_child(header_btn)
+
+	# Indents member playlists so the folder reads as a container, not just
+	# another row of the same weight.
+	var content_margin := MarginContainer.new()
+	content_margin.add_theme_constant_override("margin_left", 16)
+	content_margin.visible = _expanded_folders.get(folder.id, true)
+	playlists_container.add_child(content_margin)
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 0)
+	content_margin.add_child(content)
+
+	for playlist in all_playlists:
+		if playlist.get("folder_id", "") == folder.id:
+			_add_playlist_row(content, playlist, folder.id)
+
+	header_btn.pressed.connect(func():
+		var expanded = not _expanded_folders.get(folder.id, true)
+		_expanded_folders[folder.id] = expanded
+		content_margin.visible = expanded
+		header_btn.set_expanded(expanded)
+	)
+
+	header_btn.gui_input.connect(func(event):
+		if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
+			_show_inline_rename_folder(folder, header_btn)
+	)
+
+	var del_btn := Button.new()
+	del_btn.text = "✕"
+	del_btn.flat = true
+	del_btn.visible = false
+	del_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("hover", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("pressed", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	del_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	del_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+	del_btn.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+	del_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+	header_btn.add_child(del_btn)
+	del_btn.anchor_left = 1.0
+	del_btn.anchor_right = 1.0
+	del_btn.anchor_top = 0.0
+	del_btn.anchor_bottom = 1.0
+	del_btn.offset_left = -30.0
+	del_btn.offset_right = -6.0
+	del_btn.offset_top = 0.0
+	del_btn.offset_bottom = 0.0
+	del_btn.pressed.connect(func() -> void:
+		_show_delete_folder_modal(folder)
+	)
+	if PlatformManager.is_touch_primary():
+		del_btn.visible = true
+	else:
+		header_btn.mouse_entered.connect(func() -> void: del_btn.visible = true)
+		header_btn.mouse_exited.connect(func() -> void:
+			if not Rect2(Vector2.ZERO, header_btn.size).has_point(header_btn.get_local_mouse_position()):
+				del_btn.visible = false
+		)
+
+func _add_playlist_row(container: VBoxContainer, playlist: Dictionary, folder_id: String) -> void:
+	var item_btn = Button.new()
+	item_btn.set_script(preload("res://scripts/ui/sidebar_playlist_item.gd"))
+	item_btn.playlist_id = playlist.id
+	item_btn.playlist_name = playlist.name
+	item_btn.folder_id = folder_id
+	item_btn.text = "    ♪  " + playlist.name
+	container.add_child(item_btn)
+
+	item_btn.pressed.connect(func():
+		PlaylistService.active_playlist_id = playlist.id
+		NavManager.navigate_to("playlist")
+		# Clicking a playlist points the output monitor at its cover; a
+		# later track click overwrites it, clicking the playlist again
+		# brings it back.
+		show_preview_image(PlaylistService.get_playlist_cover_path(playlist.id), "playlist", playlist.id)
+	)
+
+	item_btn.gui_input.connect(func(event):
+		if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
+			_show_inline_rename(playlist, item_btn)
+	)
+
+	var del_btn := Button.new()
+	del_btn.text = "✕"
+	del_btn.flat = true
+	del_btn.visible = false
+	del_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("hover", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("pressed", ThemeManager.make_transparent())
+	del_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	del_btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	del_btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+	del_btn.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+	del_btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+	item_btn.add_child(del_btn)
+	# DESIGN RULE: hover controls span the row's full height and sit INSIDE
+	# the row highlight (inset from the rounded edge), so the glyph centers
+	# on the row and never floats outside the hover state.
+	del_btn.anchor_left = 1.0
+	del_btn.anchor_right = 1.0
+	del_btn.anchor_top = 0.0
+	del_btn.anchor_bottom = 1.0
+	del_btn.offset_left = -30.0
+	del_btn.offset_right = -6.0
+	del_btn.offset_top = 0.0
+	del_btn.offset_bottom = 0.0
+	del_btn.pressed.connect(func() -> void:
+		_show_delete_modal(playlist)
+	)
+	# Touch has no hover — the ✕ stays visible on touch hardware and is
+	# hover-revealed only where a pointer exists (§14.7).
+	if PlatformManager.is_touch_primary():
+		del_btn.visible = true
+	else:
+		item_btn.mouse_entered.connect(func() -> void: del_btn.visible = true)
+		item_btn.mouse_exited.connect(func() -> void:
+			# Entering the ✕ itself fires the parent's mouse_exited — keep
+			# the button while the pointer is still inside the row.
+			if not Rect2(Vector2.ZERO, item_btn.size).has_point(item_btn.get_local_mouse_position()):
+				del_btn.visible = false
+		)
+
+## container is whichever VBoxContainer target_item actually lives in — the
+## root playlists_container, or a folder's own nested content container.
+## Since a dragged playlist can be repositioned within either scope (or move
+## between them), the indicator must follow the row being hovered rather than
+## assuming a single fixed list.
+func show_drop_indicator(container: Node, source_item: Control, target_item: Control, above: bool) -> void:
 	if not drop_indicator:
 		return
-		
+
 	drop_indicator.color = ThemeManager.current_theme.ACCENT_CORE
-	
+
 	if active_drag_source_item and is_instance_valid(active_drag_source_item):
 		active_drag_source_item.modulate.a = 1.0
-	if source_idx >= 0 and source_idx < playlists_container.get_child_count():
-		active_drag_source_item = playlists_container.get_child(source_idx)
+	active_drag_source_item = source_item
+	if active_drag_source_item and is_instance_valid(active_drag_source_item):
 		active_drag_source_item.modulate.a = 0.4
-		
+
+	if drop_indicator.get_parent() != container:
+		if drop_indicator.get_parent():
+			drop_indicator.get_parent().remove_child(drop_indicator)
+		container.add_child(drop_indicator)
+
 	drop_indicator.visible = true
-	var new_idx = target_idx
+	var new_idx = target_item.get_index()
 	if not above:
 		new_idx += 1
-	new_idx = clamp(new_idx, 0, playlists_container.get_child_count() - 1)
-	playlists_container.move_child(drop_indicator, new_idx)
+	new_idx = clamp(new_idx, 0, container.get_child_count() - 1)
+	container.move_child(drop_indicator, new_idx)
 
 func hide_drop_indicator() -> void:
 	if drop_indicator:
@@ -936,12 +1082,15 @@ func _show_inline_rename(playlist: Dictionary, item_btn: Button) -> void:
 	line_edit.text = playlist.name
 	line_edit.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_style_inline_edit(line_edit)
-	
+
+	# The row's own parent — playlists_container for a root playlist, or a
+	# folder's nested content container — not assumed to be a fixed list.
+	var parent := item_btn.get_parent()
 	var idx = item_btn.get_index()
-	playlists_container.add_child(line_edit)
-	playlists_container.move_child(line_edit, idx)
+	parent.add_child(line_edit)
+	parent.move_child(line_edit, idx)
 	item_btn.visible = false
-	
+
 	line_edit.set_meta("committed", false)
 	var commit = func(new_text: String):
 		if line_edit.get_meta("committed", false):
@@ -956,15 +1105,74 @@ func _show_inline_rename(playlist: Dictionary, item_btn: Button) -> void:
 
 	line_edit.text_submitted.connect(commit)
 	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
-	
+
 	line_edit.grab_focus.call_deferred()
 	line_edit.select_all.call_deferred()
 
+func _show_delete_folder_modal(folder: Dictionary) -> void:
+	GlassModal.confirm(self, "Delete Folder",
+		"Delete folder \"%s\"? Its playlists move back to the top level — nothing is deleted." % folder.name,
+		"Delete",
+		func() -> void:
+			PlaylistFolderService.delete_folder(folder.id)
+	)
+
+func _show_inline_rename_folder(folder: Dictionary, header_btn: Button) -> void:
+	var line_edit = LineEdit.new()
+	line_edit.text = folder.name
+	line_edit.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_style_inline_edit(line_edit)
+
+	var idx = header_btn.get_index()
+	playlists_container.add_child(line_edit)
+	playlists_container.move_child(line_edit, idx)
+	header_btn.visible = false
+
+	line_edit.set_meta("committed", false)
+	var commit = func(new_text: String):
+		if line_edit.get_meta("committed", false):
+			return
+		line_edit.set_meta("committed", true)
+		var clean = new_text.strip_edges()
+		if not clean.is_empty() and clean != folder.name:
+			PlaylistFolderService.rename_folder(folder.id, clean)
+		else:
+			call_deferred(&"_rebuild_playlists_list")
+
+	line_edit.text_submitted.connect(commit)
+	line_edit.focus_exited.connect(func(): commit.call(line_edit.text))
+
+	line_edit.grab_focus.call_deferred()
+	line_edit.select_all.call_deferred()
+
+## Recurses into folder content containers (MarginContainer > VBoxContainer)
+## so nested playlist rows get the same active-state highlight as root ones.
 func _refresh_playlists_styles() -> void:
-	for child in playlists_container.get_children():
-		if child is Button and child.has_method("_can_drop_data"):
+	_style_playlist_tree(playlists_container)
+
+func _style_playlist_tree(node: Node) -> void:
+	for child in node.get_children():
+		if child is Button and child.has_method("set_expanded"):
+			child.set_expanded(_expanded_folders.get(child.folder_id, true))
+			_style_folder_header(child)
+		elif child is Button and "playlist_id" in child:
 			var is_active = (NavManager.current_screen == "playlist" and PlaylistService.active_playlist_id == child.playlist_id)
 			_style_nav_button(child, is_active)
+		elif child.get_child_count() > 0:
+			_style_playlist_tree(child)
+
+func _style_folder_header(btn: Button) -> void:
+	var theme = ThemeManager.current_theme
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.custom_minimum_size.y = ThemeManager.min_touch_height(int(theme.TOUCH_TARGET_MIN * 0.5))
+	btn.add_theme_font_override("font", theme.font_ui)
+	btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
+	btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
+	btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
+	btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+	btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	btn.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
+	btn.add_theme_color_override("font_hover_color", theme.TEXT_PRIMARY)
 
 
 # ---------------------------------------------------------------------------

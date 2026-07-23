@@ -33,12 +33,13 @@ MetadataService="*res://scripts/services/metadata_service.gd"
 AudioAnalyzer="*res://scripts/services/audio_analyzer.gd"
 AudioManager="*uid://bxledcc7ud1e8"
 PlaylistService="*res://scripts/services/playlist_service.gd"
+PlaylistFolderService="*res://scripts/services/playlist_folder_service.gd"
 DynamicGroupService="*res://scripts/services/dynamic_group_service.gd"
 
 [display]
 
 window/size/viewport_width=1600
-window/size/viewport_height=900
+window/size/viewport_height=1350
 window/size/borderless=true
 window/size/transparent=true
 window/stretch/aspect="expand"

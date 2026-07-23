@@ -723,6 +723,14 @@ Every control removed from or hidden in one layout needs a home in the other. Cu
 
 Verified metadata renders normal; filename/folder guesses render dimmed; unknowns render as "—". The literal strings "Unknown Artist"/"Unknown Album" never appear in a table cell, and percent-encoded text never reaches the screen.
 
+### 14.8 A `Container` re-fits every direct child on every layout pass — corner overlays need a plain `Control` parent
+
+`PanelContainer`, `MarginContainer`, `VBoxContainer`, `AspectRatioContainer` — any `Container` — ignores a direct child's own anchors/offsets and stretches it to fill the container's content rect on every `NOTIFICATION_SORT_CHILDREN` pass. A hidden child is skipped by that pass, so hand-set anchor/offset positioning (e.g. a small hover ✕ pinned to a corner) *appears* to work right up until the child's `visible` flips true — the very next sort pass then stretches it to nearly the whole container, silently. This is invisible in code review: the anchors are set correctly, they just never take effect once the child is shown.
+
+Caught in `dynamic_group_screen.gd`'s entity-card remove button: hovering anywhere on the card fired the hover signal correctly, but the ✕ rendered (per debug-verified geometry) stretched over almost the entire card instead of the intended top-right corner — meaning the *whole card* was the hover/click target, not a small badge, which is what read as "the ✕ only shows in some weird spot" from the outside.
+
+**Fix**: give the overlay control a plain `Control` (not `Container`) parent, itself a full-rect direct child of the `Container` — `Control` never resizes its own children, so anchors set on grandchildren are respected. Already-proven precedent: `sidebar.gd`'s `_setup_preview_slot()` (`overlay_layer := Control.new()`, `mouse_filter = MOUSE_FILTER_IGNORE`, added to `preview_square` an `AspectRatioContainer`) for the same reason. Any future corner-badge/hover-chip added to a `PanelContainer`-based card must go through an overlay `Control`, never straight into the `PanelContainer`.
+
 ## Changelog
 
 | Date | Version | Change |
@@ -733,3 +741,4 @@ Verified metadata renders normal; filename/folder guesses render dimmed; unknown
 | 2026-07-20 | 1.3 | §14.4: modal dim parents to AppWindowFrame; native OS file browser exception. New §14.6: two-axis mobile rule (layout by width, affordances by input) with the narrow/touch equivalence mappings. |
 | 2026-07-22 | 1.4 | §14.6: Dynamic Groups' mobile path added to the mapping table — the mobile popup now renders both Playlists and Dynamic Groups sections rather than leaving the new sidebar feature unreachable on narrow layouts. |
 | 2026-07-22 | 1.5 | New §14.6a (contextual pickers: glass, no dim, positioned at trigger — distinct from §14.4 modals) and §14.6b (GDScript self-referencing closures silently no-op; use a bound method on a small inner class instead). Both codify bugs caught by the "Add to Playlist/Group" picker's own verification. |
+| 2026-07-22 | 1.6 | New §14.8: a `Container` re-fits every direct child to its own rect on layout — a corner overlay's anchors only "work" while the child is hidden, then break the moment it becomes visible. Fix is an intermediate plain `Control` parent. Codifies the entity-card remove-button hover bug (whole card was the hit target instead of the corner ✕). |

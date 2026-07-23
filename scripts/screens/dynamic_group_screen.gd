@@ -91,11 +91,10 @@ func _ready() -> void:
 		DynamicGroupService.group_entities_updated.connect(func(id: String) -> void:
 			if visible and id == DynamicGroupService.active_group_id:
 				# An entity vanishing mid-drill would leave the table pointed at
-				# nothing meaningful — bounce back to the honest state: the cards.
-				if _in_drill:
-					_show_cards()
-				else:
-					_refresh_cards()
+				# nothing meaningful — bounce back to the honest state: the
+				# cards plus the combined tracklist, both freshly rebuilt either
+				# way (adding/removing an entity changes the union too).
+				_show_cards()
 		)
 		DynamicGroupService.group_renamed.connect(func(id: String, new_name: String) -> void:
 			if id == DynamicGroupService.active_group_id and _compact_title:
@@ -192,7 +191,12 @@ func _build_ui() -> void:
 	_toolbar.add_child(add_btn)
 
 	_cards_scroll = ScrollContainer.new()
-	_cards_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Cards are a compact strip, not the main content — the table below is
+	# the actual point of the screen (the group's live combined playlist), so
+	# cards get a capped height (scrolling internally past a couple of wrapped
+	# rows) and the table gets the space that's left, not the other way round.
+	_cards_scroll.custom_minimum_size.y = 120
+	_cards_scroll.size_flags_vertical = Control.SIZE_FILL
 	_cards_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	layout.add_child(_cards_scroll)
 
@@ -300,11 +304,34 @@ func _refresh_cards() -> void:
 		_cards_flow.add_child(_make_card(e.get("type", ""), e.get("value", "")))
 
 
+## The default view: cards for managing entities, plus — the actual point of
+## a dynamic group — the live combined tracklist of everything they currently
+## match. This is what makes it a playable "dynamic playlist of multiple
+## genres/albums/artists" rather than just a bookmark list of entities.
 func _show_cards() -> void:
 	_in_drill = false
 	_back_btn.visible = false
-	_table.visible = false
 	_refresh_cards()
+	_refresh_union_table()
+
+
+## Rebuilds the table to the UNION of every entity's current matches — the
+## same live-resolved-against-the-whole-library approach as a single card's
+## drill-in (TrackIndex.matches_any_entity), just not narrowed to one entity.
+func _refresh_union_table() -> void:
+	var group: Dictionary = DynamicGroupService.get_group(DynamicGroupService.active_group_id)
+	var entities: Array = group.get("entities", [])
+	if entities.is_empty():
+		_table.visible = false
+		return
+
+	var rows: Array = []
+	for row in _index.rows:
+		if TrackIndex.matches_any_entity(row, entities):
+			rows.append(row)
+
+	_table.visible = true
+	_table.set_rows(rows)
 
 
 func _count_matches(entity_type: String, value: String) -> int:
@@ -367,6 +394,24 @@ func _make_card(entity_type: String, value: String) -> Control:
 	hit.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hit.pressed.connect(func() -> void: _drill_into(entity_type, value))
 
+	# PanelContainer (like any Container) re-fits every DIRECT child to its
+	# own full content rect on each layout pass — it ignores a child's own
+	# anchors/offsets entirely. remove_btn's corner positioning only held
+	# while it started invisible (Containers skip hidden children when
+	# fitting); the instant hover set it visible, the next sort pass
+	# stretched it to nearly the whole card, which is why the ✕ never
+	# appeared where intended and the click/hover target ended up covering
+	# almost the entire card instead of a small corner.
+	#
+	# Fix: give remove_btn a plain Control parent instead — Control (unlike
+	# Container) never resizes its children, so anchors/offsets set on
+	# remove_btn are respected. Same pattern as sidebar.gd's preview-slot
+	# overlay (_setup_preview_slot) for a hover chip over an AspectRatioContainer.
+	var overlay := Control.new()
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(overlay)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
 	var remove_btn := Button.new()
 	remove_btn.text = "✕"
 	remove_btn.flat = true
@@ -376,9 +421,11 @@ func _make_card(entity_type: String, value: String) -> Control:
 	remove_btn.add_theme_stylebox_override("hover", ThemeManager.make_transparent())
 	remove_btn.add_theme_stylebox_override("pressed", ThemeManager.make_transparent())
 	remove_btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	remove_btn.add_theme_font_override("font", theme.font_ui)
+	remove_btn.add_theme_font_size_override("font_size", theme.TYPE_XS)
 	remove_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 	remove_btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
-	panel.add_child(remove_btn)
+	overlay.add_child(remove_btn)
 	remove_btn.custom_minimum_size = ThemeManager.min_touch_size(Vector2(24, 24))
 	remove_btn.anchor_left = 1.0
 	remove_btn.anchor_right = 1.0
@@ -391,9 +438,21 @@ func _make_card(entity_type: String, value: String) -> Control:
 	remove_btn.pressed.connect(func() -> void:
 		DynamicGroupService.remove_entity(DynamicGroupService.active_group_id, entity_type, value)
 	)
+
 	if not PlatformManager.is_touch_primary():
-		panel.mouse_entered.connect(func() -> void: remove_btn.visible = true)
-		panel.mouse_exited.connect(func() -> void: remove_btn.visible = false)
+		# `hit` is a full-rect Button covering the entire card, so it — not
+		# `panel` — is what actually receives hover: panel.mouse_entered/exited
+		# only fired in the razor-thin sliver where hit's geometry didn't
+		# perfectly coincide with panel's. Listening on hit instead covers
+		# the whole card. The exit guard mirrors sidebar.gd's del-button
+		# pattern: moving onto remove_btn itself (drawn on top of hit in the
+		# corner) also fires hit's mouse_exited, so only hide once the
+		# pointer has actually left panel's bounds, not just hit's.
+		hit.mouse_entered.connect(func() -> void: remove_btn.visible = true)
+		hit.mouse_exited.connect(func() -> void:
+			if not Rect2(Vector2.ZERO, panel.size).has_point(panel.get_local_mouse_position()):
+				remove_btn.visible = false
+		)
 
 	return panel
 
