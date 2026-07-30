@@ -268,4 +268,215 @@ func test_id3v2_tag_parsing() -> void:
 	assert_eq(tags["musical_key"], "8A", "Key should be parsed as 8A")
 	assert_eq(tags["genre"], "Rock", "Genre should be parsed as Rock")
 
+func test_get_entity_image_path_prefers_custom_override() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Daft Punk",
+			"artist_image_local": "user://metadata_images/cached_artist.jpg"
+		}
+	}
+	# Populate in-memory only — CUSTOM_IMAGES_FILE is a shared user:// path,
+	# not test-isolated, so tests must never round-trip it through disk.
+	service._custom_images_loaded = true
+	service.custom_images = {"artist|Daft Punk": "user://custom_images/override.jpg"}
+
+	assert_eq(service.get_entity_image_path("artist", "Daft Punk"), "user://custom_images/override.jpg")
+
+func test_get_entity_image_path_falls_back_to_cache_scan() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"album_name": "Discovery",
+			"album_art_local": "user://metadata_images/cached_album.jpg"
+		}
+	}
+	service._custom_images_loaded = true
+	service.custom_images = {}
+
+	assert_eq(service.get_entity_image_path("album", "Discovery"), "user://metadata_images/cached_album.jpg")
+
+func test_get_entity_image_path_empty_when_unresolved() -> void:
+	service.cache = {}
+	service._custom_images_loaded = true
+	service.custom_images = {}
+
+	assert_eq(service.get_entity_image_path("artist", "Nobody"), "")
+
+func test_needs_enrichment_true_for_unknown_href() -> void:
+	service.cache = {}
+	assert_true(service._needs_enrichment("never_seen.mp3"))
+
+func test_needs_enrichment_true_when_genre_unknown() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"genre": "Unknown",
+			"artist_name": "",
+			"album_name": ""
+		}
+	}
+	assert_true(service._needs_enrichment("file1.mp3"))
+
+func test_needs_enrichment_true_when_artist_known_but_image_missing() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"genre": "Electronic",
+			"artist_name": "Daft Punk",
+			"artist_image_local": "",
+			"album_name": "Unknown Album"
+		}
+	}
+	assert_true(service._needs_enrichment("file1.mp3"))
+
+func test_needs_enrichment_false_when_fully_enriched() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"genre": "Electronic",
+			"artist_name": "Daft Punk",
+			"artist_image_local": "user://metadata_images/a.jpg",
+			"album_name": "Discovery",
+			"album_art_local": "user://metadata_images/b.jpg"
+		}
+	}
+	assert_false(service._needs_enrichment("file1.mp3"))
+
+func test_start_background_enrichment_noop_when_nothing_needed() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"genre": "Electronic",
+			"artist_name": "Daft Punk",
+			"artist_image_local": "user://metadata_images/a.jpg",
+			"album_name": "Discovery",
+			"album_art_local": "user://metadata_images/b.jpg"
+		}
+	}
+	watch_signals(service)
+	await service.start_background_enrichment(["file1.mp3"])
+
+	assert_signal_not_emitted(service, "enrichment_progress", "Nothing needed enrichment, so the sweep should never start")
+	assert_signal_not_emitted(service, "enrichment_completed")
+
+func test_set_manual_metadata_writes_fields() -> void:
+	service.cache = {
+		"file1.mp3": {"artist_name": "Wrong Artist", "album_name": "Wrong Album"}
+	}
+	watch_signals(service)
+	# Artist/album deliberately left unchanged here — this test is only about
+	# the plain field write, not the identity-change side effects covered below.
+	service.set_manual_metadata("file1.mp3", {
+		"artist_name": "Wrong Artist",
+		"album_name": "Wrong Album",
+		"genre": "Techno",
+		"bpm": 128.0,
+		"musical_key": "8A",
+	})
+
+	var entry: Dictionary = service.cache["file1.mp3"]
+	assert_eq(entry.genre, "Techno")
+	assert_eq(entry.bpm, 128.0)
+	assert_eq(entry.musical_key, "8A")
+	assert_signal_emitted(service, "metadata_updated")
+
+func test_set_manual_metadata_clears_stale_art_on_artist_change() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Wrong Artist",
+			"album_name": "Right Album",
+			"artist_image_local": "user://metadata_images/wrong_artist.jpg",
+			"album_art_local": "user://metadata_images/album.jpg",
+		}
+	}
+	service.set_manual_metadata("file1.mp3", {
+		"artist_name": "Right Artist",
+		"album_name": "Right Album",
+		"genre": "House",
+		"bpm": 0.0,
+		"musical_key": "",
+	})
+
+	var entry: Dictionary = service.cache["file1.mp3"]
+	assert_eq(entry.artist_name, "Right Artist")
+	assert_eq(entry.artist_image_local, "", "Artist image resolved for the wrong artist must be cleared")
+	assert_eq(entry.album_art_local, "", "Album art is also cleared since the whole identity changed")
+
+func test_set_manual_metadata_resets_genre_on_album_change_when_not_retyped() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Some Artist",
+			"album_name": "Wrong Album",
+			"genre": "Jazz",
+		}
+	}
+	service.set_manual_metadata("file1.mp3", {
+		"artist_name": "Some Artist",
+		"album_name": "Right Album",
+		"genre": "Jazz", # left exactly as prefilled, i.e. not actually retyped
+		"bpm": 0.0,
+		"musical_key": "",
+	})
+
+	assert_eq(service.cache["file1.mp3"].genre, "Unknown",
+		"Genre resolved against the old album shouldn't survive an album fix the user didn't also retype the genre for")
+
+func test_set_manual_metadata_keeps_explicit_genre_on_album_change() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Some Artist",
+			"album_name": "Wrong Album",
+			"genre": "Jazz",
+		}
+	}
+	service.set_manual_metadata("file1.mp3", {
+		"artist_name": "Some Artist",
+		"album_name": "Right Album",
+		"genre": "Techno", # explicitly retyped alongside the album fix
+		"bpm": 0.0,
+		"musical_key": "",
+	})
+
+	assert_eq(service.cache["file1.mp3"].genre, "Techno")
+
+func test_set_manual_metadata_clears_lyrics_on_title_change() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Some Artist",
+			"album_name": "Some Album",
+			"track_title": "Wrong Title",
+			"lyrics": {"synced": false, "plain": "la la la"},
+		}
+	}
+	service.set_manual_metadata("file1.mp3", {
+		"artist_name": "Some Artist",
+		"album_name": "Some Album",
+		"track_title": "Right Title",
+		"genre": "Unknown",
+		"bpm": 0.0,
+		"musical_key": "",
+	})
+
+	assert_eq(service.cache["file1.mp3"].lyrics, {}, "Lyrics resolved for the wrong title must be cleared")
+
+func test_set_manual_metadata_leaves_art_untouched_for_bpm_only_edit() -> void:
+	service.cache = {
+		"file1.mp3": {
+			"artist_name": "Some Artist",
+			"album_name": "Some Album",
+			"artist_image_local": "user://metadata_images/a.jpg",
+			"album_art_local": "user://metadata_images/b.jpg",
+			"genre": "House",
+			"bpm": 0.0,
+		}
+	}
+	service.set_manual_metadata("file1.mp3", {
+		"artist_name": "Some Artist",
+		"album_name": "Some Album",
+		"genre": "House",
+		"bpm": 140.0,
+		"musical_key": "",
+	})
+
+	var entry: Dictionary = service.cache["file1.mp3"]
+	assert_eq(entry.bpm, 140.0)
+	assert_eq(entry.artist_image_local, "user://metadata_images/a.jpg",
+		"Neither artist nor album changed, so cached art must survive an unrelated BPM edit")
+	assert_eq(entry.album_art_local, "user://metadata_images/b.jpg")
+
 

@@ -49,10 +49,12 @@ layout_mode = 2
 theme_override_constants/separation = 20
 alignment = 1
 
-[node name="IconLabel" type="Label" parent="Center/EmptyState" unique_id=663024685]
+[node name="IconLabel" type="TextureRect" parent="Center/EmptyState" unique_id=663024685]
+custom_minimum_size = Vector2(80, 80)
 layout_mode = 2
-text = "♪"
-horizontal_alignment = 1
+size_flags_horizontal = 4
+expand_mode = 1
+stretch_mode = 5
 
 [node name="HeadingLabel" type="Label" parent="Center/EmptyState" unique_id=2042730646]
 layout_mode = 2

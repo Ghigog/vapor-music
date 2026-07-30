@@ -13,10 +13,10 @@ script = ExtResource("1_tab")
 [node name="TabRow" type="HBoxContainer" parent="GlassPill"]
 
 [node name="TabLibrary" type="Button" parent="GlassPill/TabRow"]
-text = "♪\nLibrary"
+text = "Library"
 
 [node name="TabSearch" type="Button" parent="GlassPill/TabRow"]
 text = "⌕\nSearch"
 
 [node name="TabSettings" type="Button" parent="GlassPill/TabRow"]
-text = "⚙\nSettings"
+text = "Settings"

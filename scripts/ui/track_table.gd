@@ -14,9 +14,38 @@
 extends VBoxContainer
 
 const TrackIndex = preload("res://scripts/services/track_index.gd")
+const FileUtil = preload("res://scripts/services/file_util.gd")
 const TRACK_DRAG_BUTTON = preload("res://scripts/screens/track_drag_button.gd")
 const GROUP_HEADER_DRAG_BUTTON = preload("res://scripts/ui/group_header_drag_button.gd")
 const AddToPicker = preload("res://scripts/ui/add_to_picker.gd")
+const TrackContextMenu = preload("res://scripts/ui/track_context_menu.gd")
+
+const ICON_PLAY := preload("res://assets/icon/play-cropped.png")
+const ARROW_ICON_SIZE := 12
+
+## The group-header disclosure arrow reuses the play icon: right-pointing as
+## exported for collapsed, rotated 90° clockwise (pointing down) for expanded.
+## Cached lazily since every header row in a big grouped library needs it.
+static var _icon_arrow_expanded_cache: ImageTexture = null
+
+static func _icon_arrow_expanded() -> ImageTexture:
+	if _icon_arrow_expanded_cache == null:
+		var img := ICON_PLAY.get_image().duplicate()
+		img.rotate_90(0) # 0 = clockwise. This build doesn't expose Image.ClockDirection to GDScript, so it's a bare int.
+		_icon_arrow_expanded_cache = ImageTexture.create_from_image(img)
+	return _icon_arrow_expanded_cache
+
+## Sort-direction indicators reuse the same play icon: rotated 90°
+## counter-clockwise (pointing up) for ascending, the same "expanded" rotation
+## above (pointing down) for descending.
+static var _icon_arrow_ascending_cache: ImageTexture = null
+
+static func _icon_arrow_ascending() -> ImageTexture:
+	if _icon_arrow_ascending_cache == null:
+		var img := ICON_PLAY.get_image().duplicate()
+		img.rotate_90(1) # 1 = counter-clockwise. See note above re: the missing enum.
+		_icon_arrow_ascending_cache = ImageTexture.create_from_image(img)
+	return _icon_arrow_ascending_cache
 
 ## Emitted with the full row and the current view order as the play queue.
 signal play_requested(row: Dictionary, queue: Array)
@@ -80,6 +109,40 @@ var _expanded_groups: Dictionary = {}
 ## Width of a collapsed column's stub in the header and its spacer in rows.
 const COLLAPSED_W := 18
 
+## User-adjustable column widths, keyed by column id — dragged from the
+## resize handle beside each fixed-width header cell. Starting widths for a
+## column that hasn't been resized yet; year/bpm/key match their old
+## hardcoded widths exactly (no visual change until the user drags).
+const DEFAULT_COL_WIDTHS := {
+	"title": 200,
+	"artist": 140,
+	"album": 140,
+	"genre": 90,
+	"year": 48,
+	"bpm": 56,
+	"key": 44,
+}
+const MIN_COL_WIDTH := 36
+const MAX_COL_WIDTH := 480
+## Width of the draggable strip between resizable header cells. Wider than
+## the visible divider line itself (drawn centered within it, see
+## _make_resize_handle) so it's forgiving to grab with a real mouse.
+const RESIZE_HANDLE_W := 10
+
+var _col_widths: Dictionary = {}
+## col_id → live header cell, so a drag can resize the header alongside
+## already-built rows without a full _render().
+var _header_cells: Dictionary = {}
+var _resizing_col := ""
+var _resize_start_x := 0.0
+var _resize_start_width := 0.0
+
+## Fixed sizes for the artist/album art slot — see _make_art_rect. Rounded to
+## the row height each context uses (28/44/28 for wide/narrow/header rows).
+const ROW_ART_SIZE_WIDE := 20
+const ROW_ART_SIZE_NARROW := 32
+const HEADER_ART_SIZE := 20
+
 ## All sortable fields, for the narrow-layout sort control. Wide layouts sort
 ## from the column header; narrow layouts hide the header, so they get a
 ## compact toolbar chip instead (§14.7 — every affordance needs a narrow/touch
@@ -102,6 +165,7 @@ var _confirm_btn: Button
 var _cancel_btn: Button
 var _mobile_sort_btn: OptionButton
 var _mobile_dir_btn: Button
+var _h_scroll: ScrollContainer
 var _col_header_margin: MarginContainer
 var _col_header: HBoxContainer
 var _scroll: ScrollContainer
@@ -137,19 +201,46 @@ func set_rows(rows: Array) -> void:
 	_render()
 
 
-## Updates one row's data and any visible cells in place. Preserves
-## manual_pos, and never re-renders — a re-render mid-browse would destroy
-## the user's group-expansion state.
+## Updates one row's data and any visible cells in place — EXCEPT when the
+## edit moves the row to a different group bucket (see below), it never
+## re-renders, so a re-render mid-browse doesn't destroy the user's
+## group-expansion state. Preserves manual_pos.
 func refresh_row(fresh: Dictionary) -> void:
+	var old_row: Dictionary = {}
 	for i in _rows.size():
 		if _rows[i].href == fresh.href:
+			old_row = _rows[i]
 			if _rows[i].has("manual_pos") and not fresh.has("manual_pos"):
 				fresh.manual_pos = _rows[i].manual_pos
 			_rows[i] = fresh
 			break
+
+	# The active grouping field (artist/album/genre) can change under an
+	# in-place edit — e.g. "Edit Metadata" moving a track to a different
+	# album. This row's position in the grouped tree was fixed at the last
+	# _render(), so an in-place cell-text update alone would leave it
+	# rendered under the OLD group. _expanded_groups is keyed by header TEXT,
+	# not tree position, so it survives a re-render here — other groups stay
+	# exactly as expanded/collapsed as they were.
+	var group_key: String = _group_keys[_group_btn.selected] if not manual_mode and not _group_keys.is_empty() else TrackIndex.GROUP_NONE
+	if not _search_edit.text.strip_edges().is_empty():
+		group_key = TrackIndex.GROUP_NONE
+	var grouping_stale: bool = group_key != TrackIndex.GROUP_NONE and not old_row.is_empty() and old_row.get(group_key) != fresh.get(group_key)
+
+	# Same problem, one level down: even ungrouped/flat views are SORTED by
+	# one of these fields, so an edited field the current sort runs on leaves
+	# the row's list position stale too ("order" is manual playlist position,
+	# untouched by a metadata edit, so it's excluded).
+	var sort_stale: bool = _sort_key != "order" and not old_row.is_empty() and old_row.get(_sort_key) != fresh.get(_sort_key)
+
+	if grouping_stale or sort_stale:
+		_render()
+		return
+
 	if not _live_cells.has(fresh.href):
 		return
-	var cells: Dictionary = _live_cells[fresh.href].cells
+	var live: Dictionary = _live_cells[fresh.href]
+	var cells: Dictionary = live.cells
 	for col_id: String in cells:
 		var lbl: Label = cells[col_id]
 		if not is_instance_valid(lbl):
@@ -161,6 +252,23 @@ func refresh_row(fresh: Dictionary) -> void:
 			var role := _cell_role(fresh, col_id)
 			lbl.set_meta("role", role)
 			lbl.add_theme_color_override("font_color", _style_for_role(role).color)
+
+	# Enrichment can fill in artwork after the row was already built (it only
+	# runs reactively otherwise) — pick up a newly-available path without a
+	# full re-render, which would collapse group expansion.
+	var art_rect: TextureRect = live.get("art_rect")
+	if is_instance_valid(art_rect):
+		var fresh_art_path: String = fresh.get("album_art_local", "")
+		if fresh_art_path.is_empty():
+			fresh_art_path = fresh.get("artist_image_local", "")
+		if fresh_art_path.is_empty():
+			# This row's own cache entry never got an artist image (enrichment
+			# hasn't reached it yet, or its lookup short-circuited) — but another
+			# track by the same artist may already have one cached.
+			fresh_art_path = MetadataService.get_entity_image_path(TrackIndex.GROUP_ARTIST, fresh.get("artist", ""))
+		if fresh_art_path != live.get("art_path", ""):
+			live.art_path = fresh_art_path
+			_request_art(art_rect, fresh_art_path)
 
 
 # ---------------------------------------------------------------------------
@@ -238,11 +346,12 @@ func _build_ui() -> void:
 	toolbar.add_child(_mobile_sort_btn)
 
 	_mobile_dir_btn = Button.new()
-	_mobile_dir_btn.text = "▲"
+	_mobile_dir_btn.icon = _icon_arrow_ascending()
+	_mobile_dir_btn.add_theme_constant_override("icon_max_width", 14)
 	_mobile_dir_btn.tooltip_text = "Toggle sort direction"
 	_mobile_dir_btn.pressed.connect(func() -> void:
 		_sort_asc = not _sort_asc
-		_mobile_dir_btn.text = "▲" if _sort_asc else "▼"
+		_mobile_dir_btn.icon = _icon_arrow_ascending() if _sort_asc else _icon_arrow_expanded()
 		_persist_view_state()
 		_reset_and_render()
 	)
@@ -256,15 +365,43 @@ func _build_ui() -> void:
 	_search_timer.timeout.connect(_reset_and_render)
 	_search_edit.text_changed.connect(func(_t: String) -> void: _search_timer.start())
 
+	# Columns are user-resizable up to MAX_COL_WIDTH regardless of how narrow
+	# the window is — content that no longer fits scrolls horizontally
+	# instead of being capped to the current window size or (worse) forcing
+	# the table's own minimum width to grow, which would squeeze the sidebar
+	# next to it. This wrapper is what actually scrolls; the header and row
+	# list inside it (_h_content) are free to be wider than it and share one
+	# horizontal scroll position, so columns stay aligned while scrolling.
+	_h_scroll = ScrollContainer.new()
+	_h_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_h_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# The toolbar above is an HFlowContainer that wraps onto extra lines
+	# whenever its controls don't all fit on one row — a window narrow enough
+	# to wrap it several times could otherwise demand more minimum height than
+	# this VBoxContainer has, squeezing the row list to zero and making an
+	# apparently-populated table render as totally empty. This floor keeps the
+	# list always showing at least a few rows; a badly wrapped toolbar clips
+	# instead, which is a far less confusing failure.
+	_h_scroll.custom_minimum_size.y = 160
+	_h_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_h_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	add_child(_h_scroll)
+	var h_content := VBoxContainer.new()
+	h_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	h_content.add_theme_constant_override("separation", 0)
+	_h_scroll.add_child(h_content)
+
 	_col_header_margin = MarginContainer.new()
-	add_child(_col_header_margin)
+	h_content.add_child(_col_header_margin)
 	_col_header = HBoxContainer.new()
 	_col_header.add_theme_constant_override("separation", 10)
 	_col_header_margin.add_child(_col_header)
 
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	add_child(_scroll)
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	h_content.add_child(_scroll)
 	_list = VBoxContainer.new()
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list.add_theme_constant_override("separation", 2)
@@ -413,6 +550,9 @@ func _load_view_state() -> void:
 	_collapsed.clear()
 	for col_id in s.get("collapsed", []):
 		_collapsed[col_id] = true
+	_col_widths.clear()
+	for col_id: String in s.get("col_widths", {}):
+		_col_widths[col_id] = int(s.col_widths[col_id])
 	if not manual_mode:
 		var group_idx: int = s.get("group", _group_btn.selected)
 		if group_idx >= 0 and group_idx < _group_btn.item_count:
@@ -434,12 +574,10 @@ func _persist_view_state() -> void:
 		"sort_key": _sort_key,
 		"sort_asc": _sort_asc,
 		"collapsed": _collapsed.keys(),
+		"col_widths": _col_widths,
 		"group": _group_btn.selected if not manual_mode else 0,
 	}
-	var wf := FileAccess.open(VIEW_STATE_PATH, FileAccess.WRITE)
-	if wf:
-		wf.store_string(JSON.stringify(all, "\t"))
-		wf.close()
+	FileUtil.write_string_atomic(VIEW_STATE_PATH, JSON.stringify(all, "\t"))
 
 
 ## Shows/hides the narrow-layout sort controls and syncs them to the current
@@ -452,7 +590,7 @@ func _update_layout_mode() -> void:
 		var idx: int = _sort_field_list().find(_sort_key)
 		if idx >= 0:
 			_mobile_sort_btn.select(idx)
-		_mobile_dir_btn.text = "▲" if _sort_asc else "▼"
+		_mobile_dir_btn.icon = _icon_arrow_ascending() if _sort_asc else _icon_arrow_expanded()
 
 
 # ---------------------------------------------------------------------------
@@ -618,25 +756,30 @@ func _filtered(query: String) -> Array:
 func _columns(group_key: String) -> Array[Dictionary]:
 	var context_field := "album" if group_key == TrackIndex.GROUP_ARTIST else "artist"
 	var cols: Array[Dictionary] = [
-		{"id": "title", "label": "Title", "ratio": 3.0},
-		{"id": context_field, "label": "Album" if context_field == "album" else "Artist", "ratio": 2.0},
+		{"id": "title", "label": "Title", "width": _col_width("title")},
+		{"id": context_field, "label": "Album" if context_field == "album" else "Artist", "width": _col_width(context_field)},
 	]
 	if group_key != TrackIndex.GROUP_GENRE:
-		cols.append({"id": "genre", "label": "Genre", "ratio": 1.2})
-	cols.append({"id": "year", "label": "Year", "width": 48})
-	cols.append({"id": "bpm", "label": "BPM", "width": 56})
-	cols.append({"id": "key", "label": "Key", "width": 44})
+		cols.append({"id": "genre", "label": "Genre", "width": _col_width("genre")})
+	cols.append({"id": "year", "label": "Year", "width": _col_width("year"), "align_right": true})
+	cols.append({"id": "bpm", "label": "BPM", "width": _col_width("bpm"), "align_right": true})
+	cols.append({"id": "key", "label": "Key", "width": _col_width("key"), "align_right": true})
 
 	for col in cols:
 		col["collapsed"] = _collapsed.has(col.id)
 	return cols
 
 
+func _col_width(col_id: String) -> int:
+	return int(_col_widths.get(col_id, DEFAULT_COL_WIDTHS.get(col_id, 100)))
+
+
 func _apply_col_sizing(lbl: Label, col: Dictionary) -> void:
 	lbl.clip_text = true
 	if col.has("width"):
 		lbl.custom_minimum_size.x = col.width
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		if col.get("align_right", false):
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	else:
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		lbl.size_flags_stretch_ratio = col.ratio
@@ -645,6 +788,7 @@ func _apply_col_sizing(lbl: Label, col: Dictionary) -> void:
 func _build_col_header(group_key: String, empty: bool) -> void:
 	for child in _col_header.get_children():
 		child.queue_free()
+	_header_cells.clear()
 	_col_header_margin.visible = not empty and not PlatformManager.is_mobile_layout()
 	if not _col_header_margin.visible:
 		return
@@ -654,7 +798,18 @@ func _build_col_header(group_key: String, empty: bool) -> void:
 		gutter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_col_header.add_child(gutter)
 	for col: Dictionary in _columns(group_key):
-		_col_header.add_child(_make_header_cell(col))
+		var cell := _make_header_cell(col)
+		_header_cells[col.id] = cell
+		_col_header.add_child(cell)
+		# Every visible column is a fixed, user-resizable width — a drag handle
+		# goes right after it. Growing one only pushes columns to ITS right
+		# (never the flexible trailing spacer below shrinking something on the
+		# left) — the old "Title absorbs all leftover space" design made every
+		# drag look reversed, since growing anything shrank Title upstream and
+		# pulled the whole rest of the row left to compensate.
+		if col.has("width") and not col.get("collapsed", false):
+			_col_header.add_child(_make_resize_handle(col.id))
+	_col_header.add_child(_make_trailing_spacer())
 	if manual_mode:
 		_col_header.add_child(_make_row_gutter())
 
@@ -694,7 +849,8 @@ func _make_header_cell(col: Dictionary) -> Control:
 
 	if col.has("width"):
 		cell.custom_minimum_size.x = col.width
-		cell.alignment = BoxContainer.ALIGNMENT_END
+		if col.get("align_right", false):
+			cell.alignment = BoxContainer.ALIGNMENT_END
 	else:
 		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		cell.size_flags_stretch_ratio = col.ratio
@@ -722,12 +878,12 @@ func _make_header_cell(col: Dictionary) -> Control:
 	arrow.tooltip_text = "Sort by %s" % col.label
 	_style_header_button(arrow, active)
 	if active:
-		arrow.text = "▲" if _sort_asc else "▼"
+		arrow.icon = _icon_arrow_ascending() if _sort_asc else _icon_arrow_expanded()
+		arrow.add_theme_constant_override("icon_max_width", 12)
+		arrow.add_theme_color_override("icon_normal_color", ThemeManager.current_theme.ACCENT_CORE)
+		arrow.add_theme_color_override("icon_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
 	else:
-		# In-font stacked mini-triangles. The previous "↕" glyph is not in the
-		# app font — the OS fallback renders it on a higher baseline, visibly
-		# misaligned beside its title (DESIGN_LANGUAGE §14.2: glyphs come from
-		# the app font or get composed from characters that do).
+		# Stacked up/down hint, tiny — same play icon, one rotated each way.
 		arrow.custom_minimum_size.x = 16.0
 		var stack := VBoxContainer.new()
 		stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -735,14 +891,14 @@ func _make_header_cell(col: Dictionary) -> Control:
 		stack.add_theme_constant_override("separation", -1)
 		arrow.add_child(stack)
 		stack.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		for glyph: String in ["▲", "▼"]:
-			var mini := Label.new()
-			mini.text = glyph
-			mini.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		for icon_tex: Texture2D in [_icon_arrow_ascending(), _icon_arrow_expanded()]:
+			var mini := TextureRect.new()
+			mini.texture = icon_tex
+			mini.custom_minimum_size = Vector2(7, 7)
+			mini.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			mini.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			mini.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			mini.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-			mini.add_theme_font_size_override("font_size", 7)
-			mini.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
+			mini.self_modulate = ThemeManager.current_theme.TEXT_TERTIARY
 			stack.add_child(mini)
 	arrow.pressed.connect(func() -> void:
 		_on_sort_arrow_pressed(col.id)
@@ -795,7 +951,7 @@ func _add_group(header: String, rows: Array, group_key: String) -> void:
 		contents.set_meta("built", true)
 		for row: Dictionary in rows:
 			contents.add_child(_make_track_row(row, group_key))
-		header_row.label.text = "▼  " + header
+		header_row.arrow.texture = _icon_arrow_expanded()
 	contents.visible = start_expanded
 
 	header_row.button.pressed.connect(func() -> void:
@@ -810,7 +966,7 @@ func _add_group(header: String, rows: Array, group_key: String) -> void:
 			for row: Dictionary in rows:
 				contents.add_child(_make_track_row(row, group_key))
 		contents.visible = expanded
-		header_row.label.text = ("▼  " if expanded else "▶  ") + header
+		header_row.arrow.texture = _icon_arrow_expanded() if expanded else ICON_PLAY
 		if expanded:
 			_expanded_groups[header] = true
 		else:
@@ -855,6 +1011,36 @@ func _row_shell(min_height: int, left_margin: int) -> Dictionary:
 	return {"container": margin, "stack": stack, "button": btn}
 
 
+## Builds a fixed-size art slot, masked circle (artist) or rounded-square
+## (album). Always reserves its layout space — texture starts null and is
+## filled in later by _request_art, so a row/header never shifts when
+## enrichment fills in an image that wasn't cached yet.
+func _make_art_rect(size: int, circle: bool) -> TextureRect:
+	var rect := TextureRect.new()
+	rect.custom_minimum_size = Vector2(size, size)
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_SCALE
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if circle:
+		ThumbnailService.apply_circle_mask(rect)
+	else:
+		ThumbnailService.apply_rounded_mask(rect, ThemeManager.current_theme.RADIUS_XS)
+	return rect
+
+
+## Resolves `rect`'s texture from a cache-only local path. Empty path clears
+## it (e.g. not enriched yet); a cache miss decodes in the background and
+## fills in later, guarded against the row having been freed by a re-render.
+func _request_art(rect: TextureRect, path: String, max_size: int = 128) -> void:
+	if path.is_empty():
+		rect.texture = null
+		return
+	ThumbnailService.request(path, func(tex: Texture2D) -> void:
+		if is_instance_valid(rect):
+			rect.texture = tex
+	, max_size)
+
+
 func _make_header_row(header: String, count: int, group_key: String = TrackIndex.GROUP_NONE) -> Dictionary:
 	var theme = ThemeManager.current_theme
 	var shell := _row_shell(28, theme.SPACE_3)
@@ -883,8 +1069,24 @@ func _make_header_row(header: String, count: int, group_key: String = TrackIndex
 	shell.stack.add_child(hbox)
 	hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
+	# Circle for an artist's photo, rounded-square for an album's art — shape
+	# follows what's pictured, not just "it's a header" (DESIGN_LANGUAGE §5.2).
+	if (group_key == TrackIndex.GROUP_ARTIST or group_key == TrackIndex.GROUP_ALBUM) and header != TrackIndex.UNKNOWN_HEADER:
+		var art := _make_art_rect(HEADER_ART_SIZE, group_key == TrackIndex.GROUP_ARTIST)
+		hbox.add_child(art)
+		_request_art(art, MetadataService.get_entity_image_path(group_key, header), 96)
+
+	var arrow_rect := TextureRect.new()
+	arrow_rect.texture = ICON_PLAY
+	arrow_rect.custom_minimum_size = Vector2(ARROW_ICON_SIZE, ARROW_ICON_SIZE)
+	arrow_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	arrow_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	arrow_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	arrow_rect.self_modulate = ThemeManager.current_theme.TEXT_PRIMARY
+	hbox.add_child(arrow_rect)
+
 	var lbl := Label.new()
-	lbl.text = "▶  " + header
+	lbl.text = header
 	# No clip_text: a clipped label without expand flags reports zero minimum
 	# width and vanishes. Headers take their natural width so the count sits
 	# beside them; the trailing spacer absorbs the rest.
@@ -905,7 +1107,7 @@ func _make_header_row(header: String, count: int, group_key: String = TrackIndex
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(spacer)
 
-	return {"container": shell.container, "button": shell.button, "label": lbl}
+	return {"container": shell.container, "button": shell.button, "label": lbl, "arrow": arrow_rect}
 
 
 func _cell_text(row: Dictionary, col_id: String) -> String:
@@ -975,6 +1177,103 @@ func _make_row_gutter() -> Control:
 	return gutter
 
 
+## Inert spacer matching a header resize handle's width, so a row's fixed-
+## width cells land at the same x as the header's (the handle itself only
+## exists in the header — rows never receive mouse events for it).
+func _make_col_gap() -> Control:
+	var gap := Control.new()
+	gap.custom_minimum_size.x = RESIZE_HANDLE_W
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return gap
+
+
+## The one flexible element in the row — sits after every fixed-width column
+## and absorbs whatever width they don't use. Since it's last, resizing any
+## column only ever pushes what's to its right; this is the only thing that
+## grows or shrinks in response, so nothing upstream of a resized column ever
+## moves.
+func _make_trailing_spacer() -> Control:
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return spacer
+
+
+## Draggable strip after a fixed-width header cell. A faint vertical line
+## marks it at rest (otherwise there's nothing on screen to find besides the
+## cursor change) and brightens to the accent color on hover. Drag start/end
+## are caught here (the mouse is guaranteed to be over this thin strip at
+## press time); the drag itself is tracked in _input since a fast drag
+## quickly leaves the strip's own rect.
+func _make_resize_handle(col_id: String) -> Control:
+	var handle := Control.new()
+	handle.custom_minimum_size.x = RESIZE_HANDLE_W
+	handle.mouse_filter = Control.MOUSE_FILTER_STOP
+	handle.mouse_default_cursor_shape = Control.CURSOR_HSPLIT
+
+	var line := ColorRect.new()
+	line.color = ThemeManager.current_theme.GLASS_BORDER
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.set_anchors_preset(Control.PRESET_FULL_RECT)
+	line.offset_left = RESIZE_HANDLE_W / 2 - 1
+	line.offset_right = -(RESIZE_HANDLE_W / 2 - 1)
+	handle.add_child(line)
+	handle.mouse_entered.connect(func() -> void:
+		line.color = ThemeManager.current_theme.ACCENT_CORE
+	)
+	handle.mouse_exited.connect(func() -> void:
+		line.color = ThemeManager.current_theme.GLASS_BORDER
+	)
+
+	handle.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			if event.double_click:
+				_col_widths.erase(col_id)
+				_set_col_width(col_id, DEFAULT_COL_WIDTHS.get(col_id, 100))
+				_persist_view_state()
+				return
+			_resizing_col = col_id
+			_resize_start_x = _col_header.get_local_mouse_position().x
+			_resize_start_width = _col_width(col_id)
+			get_viewport().set_input_as_handled()
+	)
+	return handle
+
+
+## Applies a resized column width to the live header cell and every currently
+## built row's cell for that column — no re-render, so scroll position and
+## group-expansion state survive a drag.
+func _set_col_width(col_id: String, width: int) -> void:
+	var clamped: int = clampi(width, MIN_COL_WIDTH, MAX_COL_WIDTH)
+	_col_widths[col_id] = clamped
+	var header_cell: Control = _header_cells.get(col_id)
+	if header_cell and is_instance_valid(header_cell):
+		header_cell.custom_minimum_size.x = clamped
+	for href: String in _live_cells:
+		var width_nodes: Dictionary = _live_cells[href].get("width_nodes", {})
+		var node: Control = width_nodes.get(col_id)
+		if node and is_instance_valid(node):
+			node.custom_minimum_size.x = clamped
+
+
+func _input(event: InputEvent) -> void:
+	if _resizing_col.is_empty():
+		return
+	if event is InputEventMouseMotion:
+		# No positional clamping needed here: MAX_COL_WIDTH in _set_col_width
+		# is the only ceiling, and a column wider than the visible panel is
+		# fine now — the table scrolls horizontally instead of the panel
+		# (or the sidebar next to it) having to grow to fit it.
+		var local_x: float = _col_header.get_local_mouse_position().x
+		var delta: float = local_x - _resize_start_x
+		_set_col_width(_resizing_col, int(_resize_start_width + delta))
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_resizing_col = ""
+		_persist_view_state()
+		get_viewport().set_input_as_handled()
+
+
 func _make_track_row(row: Dictionary, group_key: String) -> Control:
 	var theme = ThemeManager.current_theme
 	# Row shape follows layout WIDTH, not the device badge — a narrowed
@@ -989,10 +1288,10 @@ func _make_track_row(row: Dictionary, group_key: String) -> Control:
 	btn.href = row.href
 	btn.track_title = row.title
 	btn.long_pressed.connect(func(pos: Vector2) -> void:
-		AddToPicker.show_for_track(self, row.href, pos)
+		TrackContextMenu.show_for_track(self, row.href, pos)
 	)
 	btn.right_clicked.connect(func(pos: Vector2) -> void:
-		AddToPicker.show_for_track(self, row.href, pos)
+		TrackContextMenu.show_for_track(self, row.href, pos)
 	)
 	if manual_mode:
 		btn.set_meta("drag_extras", {"manual_index": row.get("manual_pos", -1), "table_iid": get_instance_id()})
@@ -1002,7 +1301,26 @@ func _make_track_row(row: Dictionary, group_key: String) -> Control:
 	shell.container.set_meta("href", row.href)
 
 	var cells: Dictionary = {}
+	## Node whose custom_minimum_size.x a live resize should touch — same as
+	## cells[id] for plain-Label columns, but the wrapping hbox for "title"
+	## (which also carries the art icon, so the Label itself must stay
+	## expand-fill inside a fixed-width wrapper rather than being fixed-width
+	## itself).
+	var width_nodes: Dictionary = {}
 	var title_lbl: Label
+	var art_rect: TextureRect = null
+
+	# Album art first, artist image as fallback — same order focus_track()
+	# already uses when it picks a single image for a track.
+	var art_path: String = row.get("album_art_local", "")
+	if art_path.is_empty():
+		art_path = row.get("artist_image_local", "")
+	if art_path.is_empty():
+		# This row's own cache entry never got an artist image (enrichment
+		# hasn't reached it yet, or its lookup short-circuited) — but another
+		# track by the same artist may already have one cached (the group
+		# header art already relies on this same cross-track lookup).
+		art_path = MetadataService.get_entity_image_path(TrackIndex.GROUP_ARTIST, row.get("artist", ""))
 
 	if narrow:
 		var outer := HBoxContainer.new()
@@ -1012,6 +1330,10 @@ func _make_track_row(row: Dictionary, group_key: String) -> Control:
 		outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		if _selecting:
 			outer.add_child(_make_check_box(row.href))
+
+		art_rect = _make_art_rect(ROW_ART_SIZE_NARROW, false)
+		outer.add_child(art_rect)
+		_request_art(art_rect, art_path)
 
 		var vbox := VBoxContainer.new()
 		vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1051,6 +1373,35 @@ func _make_track_row(row: Dictionary, group_key: String) -> Control:
 				spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				hbox.add_child(spacer)
 				continue
+			if col.id == "title":
+				# Title carries the art slot, so it's wrapped in its own hbox
+				# rather than going through _apply_col_sizing (Label-only) —
+				# the wrapper takes the fixed column width; cells["title"]
+				# still ends up bound to the actual Label (hover/live-cell
+				# code needs the Label), so a live resize targets the wrapper
+				# via width_nodes instead.
+				var title_box := HBoxContainer.new()
+				title_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				title_box.add_theme_constant_override("separation", 6)
+				title_box.custom_minimum_size.x = col.width
+				hbox.add_child(title_box)
+				width_nodes[col.id] = title_box
+
+				art_rect = _make_art_rect(ROW_ART_SIZE_WIDE, false)
+				title_box.add_child(art_rect)
+				_request_art(art_rect, art_path)
+
+				var title_cell := Label.new()
+				title_cell.text = _cell_text(row, col.id)
+				title_cell.clip_text = true
+				title_cell.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				title_cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				title_cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				_register_cell(title_cell, _cell_role(row, col.id))
+				title_box.add_child(title_cell)
+				cells[col.id] = title_cell
+				hbox.add_child(_make_col_gap())
+				continue
 			var lbl := Label.new()
 			lbl.text = _cell_text(row, col.id)
 			lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -1059,11 +1410,15 @@ func _make_track_row(row: Dictionary, group_key: String) -> Control:
 			_register_cell(lbl, _cell_role(row, col.id))
 			hbox.add_child(lbl)
 			cells[col.id] = lbl
+			width_nodes[col.id] = lbl
+			if col.has("width"):
+				hbox.add_child(_make_col_gap())
+		hbox.add_child(_make_trailing_spacer())
 		if manual_mode:
 			hbox.add_child(_make_row_gutter())
 		title_lbl = cells["title"]
 
-	_live_cells[row.href] = {"cells": cells}
+	_live_cells[row.href] = {"cells": cells, "width_nodes": width_nodes, "art_rect": art_rect, "art_path": art_path}
 
 	var remove_btn: Button = null
 	if manual_mode:

@@ -6,6 +6,26 @@ extends PanelContainer
 
 const GlassModal = preload("res://scripts/ui/glass_modal.gd")
 
+const ICON_LIBRARY := preload("res://assets/icon/library-cropped.png")
+const ICON_VIBE := preload("res://assets/icon/vibe-cropped.png")
+const ICON_SETTINGS := preload("res://assets/icon/settings-cropped.png")
+const ICON_PLAYLISTS := preload("res://assets/icon/playlist-cropped.png")
+const ICON_GROUPS := preload("res://assets/icon/group-cropped.png")
+const ICON_PLAY := preload("res://assets/icon/play-cropped.png")
+const ICON_PAUSE := preload("res://assets/icon/pause-cropped.png")
+const ICON_NEXT := preload("res://assets/icon/next-cropped.png")
+
+## "Previous" is just "Next" mirrored — no separate asset. Cached lazily
+## since flipping is a one-off cost, not something to redo per instance.
+static var _icon_prev_cache: ImageTexture = null
+
+static func _icon_prev() -> ImageTexture:
+	if _icon_prev_cache == null:
+		var img := ICON_NEXT.get_image().duplicate()
+		img.flip_x()
+		_icon_prev_cache = ImageTexture.create_from_image(img)
+	return _icon_prev_cache
+
 @onready var app_name:     Label  = $VBox/Header/HeaderHBox/LogoContainer/AppName
 @onready var nav_library:  Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavLibrary
 @onready var nav_vibe:   Button = $VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/NavVibe
@@ -166,6 +186,9 @@ func _register_nav_buttons() -> void:
 		"vibe":     nav_vibe,
 		"settings": nav_settings,
 	}
+	nav_library.icon = ICON_LIBRARY
+	nav_vibe.icon = ICON_VIBE
+	nav_settings.icon = ICON_SETTINGS
 	for screen_name: String in _nav_buttons:
 		var btn: Button = _nav_buttons[screen_name]
 		btn.pressed.connect(_on_nav_pressed.bind(screen_name))
@@ -179,25 +202,46 @@ func _refresh_nav_button_styles() -> void:
 	_refresh_playlists_styles()
 	_refresh_dynamic_groups_styles()
 
-func _style_nav_button(btn: Button, active: bool) -> void:
+## [param indent]  True for rows nested under a section header (playlist /
+## dynamic-group items) — pushes icon+text right so the hierarchy reads
+## visually, while the hover/active background still spans the full row.
+func _style_nav_button(btn: Button, active: bool, indent: bool = false) -> void:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.custom_minimum_size.y = ThemeManager.min_touch_height(
 		int(ThemeManager.current_theme.TOUCH_TARGET_MIN * 0.5))
 	btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	# Source PNGs are 512x512 — Button.icon draws at native resolution unless
+	# capped, so without this the icon overflows the row entirely.
+	btn.add_theme_constant_override("icon_max_width", 18)
+
+	var indent_px: int = ThemeManager.current_theme.SPACE_5 if indent else 0
+
 	if active:
-		btn.add_theme_stylebox_override("normal",  ThemeManager.make_nav_item_active())
-		btn.add_theme_stylebox_override("hover",   ThemeManager.make_nav_item_active())
-		btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_active())
+		var style_active := ThemeManager.make_nav_item_active()
+		style_active.content_margin_left = indent_px
+		btn.add_theme_stylebox_override("normal",  style_active)
+		btn.add_theme_stylebox_override("hover",   style_active)
+		btn.add_theme_stylebox_override("pressed", style_active)
 		btn.add_theme_color_override("font_color",       ThemeManager.current_theme.ACCENT_CORE)
 		btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+		btn.add_theme_color_override("icon_normal_color", ThemeManager.current_theme.ACCENT_CORE)
+		btn.add_theme_color_override("icon_hover_color",  ThemeManager.current_theme.ACCENT_BRIGHT)
 	else:
-		btn.add_theme_stylebox_override("normal",  ThemeManager.make_transparent())
-		btn.add_theme_stylebox_override("hover",   ThemeManager.make_nav_item_hover())
-		btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
+		var style_normal := ThemeManager.make_transparent()
+		style_normal.content_margin_left = indent_px
+		var style_hover := ThemeManager.make_nav_item_hover()
+		style_hover.content_margin_left = indent_px
+		btn.add_theme_stylebox_override("normal",  style_normal)
+		btn.add_theme_stylebox_override("hover",   style_hover)
+		btn.add_theme_stylebox_override("pressed", style_hover)
 		btn.add_theme_color_override("font_color",       ThemeManager.current_theme.TEXT_TERTIARY)
 		btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.TEXT_SECONDARY)
-	btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+		btn.add_theme_color_override("icon_normal_color", ThemeManager.current_theme.TEXT_TERTIARY)
+		btn.add_theme_color_override("icon_hover_color",  ThemeManager.current_theme.TEXT_SECONDARY)
+	var style_focus := ThemeManager.make_transparent()
+	style_focus.content_margin_left = indent_px
+	btn.add_theme_stylebox_override("focus", style_focus)
 
 
 func _set_active_nav(screen_name: String) -> void:
@@ -248,10 +292,27 @@ func _connect_audio_signals() -> void:
 	AudioManager.playback_toggled.connect(_on_playback_toggled)
 	AudioManager.position_changed.connect(_on_position_changed)
 
+	# Button draws icon AND text side by side — these buttons only ever want
+	# the icon, so their scene-default glyph text must be cleared or it
+	# renders a second, duplicate arrow next to the real icon.
+	play_pause_btn.icon = ICON_PAUSE if AudioManager.is_playing else ICON_PLAY
+	play_pause_btn.text = ""
+	backward_btn.icon = _icon_prev()
+	backward_btn.text = ""
+	forward_btn.icon = ICON_NEXT
+	forward_btn.text = ""
+	# Smart Mixing / shuffle is the same concept as Vibe (the AI DJ), so it
+	# reuses that icon everywhere rather than a distinct glyph.
+	shuffle_btn.icon = ICON_VIBE
+	shuffle_btn.text = ""
+	# Icon-only — Button.icon_alignment defaults to LEFT regardless of text,
+	# so without this the icon sits pinned to the button's left edge.
+	for icon_only_btn in [play_pause_btn, backward_btn, forward_btn, shuffle_btn]:
+		icon_only_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	play_pause_btn.pressed.connect(func(): AudioManager.toggle_play())
 	backward_btn.pressed.connect(func(): AudioManager.play_previous())
 	forward_btn.pressed.connect(func(): AudioManager.play_next())
-	
+
 	shuffle_btn.button_pressed = AudioManager.smart_mixing_enabled
 	shuffle_btn.toggled.connect(func(pressed): AudioManager.smart_mixing_enabled = pressed)
 	AudioManager.smart_mixing_toggled.connect(func(enabled):
@@ -327,6 +388,12 @@ func _style_player_buttons() -> void:
 		btn.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
 		btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
 		btn.add_theme_color_override("font_pressed_color", theme.ACCENT_DIM)
+		btn.add_theme_color_override("icon_normal_color", theme.TEXT_SECONDARY)
+		btn.add_theme_color_override("icon_hover_color", theme.ACCENT_BRIGHT)
+		btn.add_theme_color_override("icon_pressed_color", theme.ACCENT_DIM)
+		# Source PNGs are 512x512 — Button.icon draws at native resolution
+		# unless capped, so without this the icon overflows the tile entirely.
+		btn.add_theme_constant_override("icon_max_width", 20)
 
 
 func _on_track_changed(track_name: String) -> void:
@@ -364,9 +431,9 @@ func _on_track_changed(track_name: String) -> void:
 
 func _on_playback_toggled(is_playing: bool) -> void:
 	if is_playing:
-		play_pause_btn.text = "⏸"
+		play_pause_btn.icon = ICON_PAUSE
 	else:
-		play_pause_btn.text = "▶"
+		play_pause_btn.icon = ICON_PLAY
 
 func _connect_metadata_signals() -> void:
 	var ms = get_node_or_null("/root/MetadataService")
@@ -428,19 +495,20 @@ func _setup_blur_shader() -> void:
 		mat.shader = shader
 		blur_overlay.material = mat
 
+## Tracks the most recently requested path so a slow decode that resolves
+## after a newer focus change doesn't clobber the slot with a stale image.
+var _preview_request_path: String = ""
+
 func _load_image_to_texture(path: String) -> void:
-	if path.is_empty() or not FileAccess.file_exists(path):
+	_preview_request_path = path
+	if path.is_empty():
 		preview_texture.texture = null
 		return
-		
-	var img: Image = Image.load_from_file(path)
-	if img:
-		if img.get_width() > 512 or img.get_height() > 512:
-			img.resize(512, 512, Image.INTERPOLATE_LANCZOS)
-		var tex: ImageTexture = ImageTexture.create_from_image(img)
-		preview_texture.texture = tex
-	else:
-		preview_texture.texture = null
+
+	ThumbnailService.request(path, func(tex: Texture2D) -> void:
+		if is_instance_valid(self) and _preview_request_path == path:
+			preview_texture.texture = tex
+	, 512)
 
 ## The preview square is the app's "output monitor": it always shows the image
 ## of whatever was focused last — artist, album, playlist, or track. Tracks
@@ -629,14 +697,10 @@ func _on_track_focused(href: String, _artist: String, _album: String, _title: St
 	is_synced_lyrics = false
 	
 	if lyrics.is_empty():
-		var label = Label.new()
-		label.text = "[No Lyrics Found]"
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
-		label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-		label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
-		lyrics_container.add_child(label)
+		blur_overlay.visible = false
+		lyrics_scroll.visible = false
+		_update_slot_icon()
+		return
 	elif lyrics.get("synced", false):
 		is_synced_lyrics = true
 		lyrics_list = lyrics.get("lines", [])
@@ -758,7 +822,8 @@ func _setup_playlists_ui() -> void:
 
 func _style_playlists_header_buttons() -> void:
 	var theme = ThemeManager.current_theme
-	
+
+	toggle_playlists_btn.icon = ICON_PLAYLISTS
 	toggle_playlists_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	toggle_playlists_btn.custom_minimum_size.y = ThemeManager.min_touch_height(
 		int(theme.TOUCH_TARGET_MIN * 0.5))
@@ -766,6 +831,9 @@ func _style_playlists_header_buttons() -> void:
 	toggle_playlists_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	toggle_playlists_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 	toggle_playlists_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	toggle_playlists_btn.add_theme_color_override("icon_normal_color", theme.TEXT_TERTIARY)
+	toggle_playlists_btn.add_theme_color_override("icon_hover_color", theme.TEXT_SECONDARY)
+	toggle_playlists_btn.add_theme_constant_override("icon_max_width", 18)
 	toggle_playlists_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
 	toggle_playlists_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
 	toggle_playlists_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
@@ -951,7 +1019,7 @@ func _add_playlist_row(container: VBoxContainer, playlist: Dictionary, folder_id
 	item_btn.playlist_id = playlist.id
 	item_btn.playlist_name = playlist.name
 	item_btn.folder_id = folder_id
-	item_btn.text = "    ♪  " + playlist.name
+	item_btn.text = "    " + playlist.name
 	container.add_child(item_btn)
 
 	item_btn.pressed.connect(func():
@@ -1157,7 +1225,7 @@ func _style_playlist_tree(node: Node) -> void:
 			_style_folder_header(child)
 		elif child is Button and "playlist_id" in child:
 			var is_active = (NavManager.current_screen == "playlist" and PlaylistService.active_playlist_id == child.playlist_id)
-			_style_nav_button(child, is_active)
+			_style_nav_button(child, is_active, true)
 		elif child.get_child_count() > 0:
 			_style_playlist_tree(child)
 
@@ -1205,6 +1273,7 @@ func _setup_dynamic_groups_ui() -> void:
 func _style_dynamic_groups_header_buttons() -> void:
 	var theme = ThemeManager.current_theme
 
+	toggle_dynamic_groups_btn.icon = ICON_GROUPS
 	toggle_dynamic_groups_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	toggle_dynamic_groups_btn.custom_minimum_size.y = ThemeManager.min_touch_height(
 		int(theme.TOUCH_TARGET_MIN * 0.5))
@@ -1212,6 +1281,9 @@ func _style_dynamic_groups_header_buttons() -> void:
 	toggle_dynamic_groups_btn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	toggle_dynamic_groups_btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 	toggle_dynamic_groups_btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+	toggle_dynamic_groups_btn.add_theme_color_override("icon_normal_color", theme.TEXT_TERTIARY)
+	toggle_dynamic_groups_btn.add_theme_color_override("icon_hover_color", theme.TEXT_SECONDARY)
+	toggle_dynamic_groups_btn.add_theme_constant_override("icon_max_width", 18)
 	toggle_dynamic_groups_btn.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
 	toggle_dynamic_groups_btn.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
 	toggle_dynamic_groups_btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
@@ -1280,7 +1352,7 @@ func _rebuild_dynamic_groups_list() -> void:
 		item_btn.set_script(preload("res://scripts/ui/dynamic_group_sidebar_item.gd"))
 		item_btn.group_id = group.id
 		item_btn.group_name = group.name
-		item_btn.text = "    ⚡  " + group.name
+		item_btn.text = "    " + group.name
 		dynamic_groups_container.add_child(item_btn)
 
 		item_btn.pressed.connect(func():
@@ -1397,4 +1469,4 @@ func _refresh_dynamic_groups_styles() -> void:
 	for child in dynamic_groups_container.get_children():
 		if child is Button and child.has_method("_can_drop_data"):
 			var is_active = (NavManager.current_screen == "dynamic_group" and DynamicGroupService.active_group_id == child.group_id)
-			_style_nav_button(child, is_active)
+			_style_nav_button(child, is_active, true)

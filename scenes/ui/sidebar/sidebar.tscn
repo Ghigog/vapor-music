@@ -59,11 +59,11 @@ layout_mode = 2
 
 [node name="NavLibrary" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=1158763471]
 layout_mode = 2
-text = "  ♫  Library"
+text = "  Library"
 
 [node name="NavVibe" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=1701566622]
 layout_mode = 2
-text = "  ✦  Vibe"
+text = "  Vibe"
 
 [node name="PlaylistsHeader" type="HBoxContainer" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=999001]
 layout_mode = 2
@@ -71,7 +71,7 @@ layout_mode = 2
 [node name="TogglePlaylistsBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999002]
 layout_mode = 2
 size_flags_horizontal = 3
-text = "  ▤  Playlists"
+text = "  Playlists"
 
 [node name="AddPlaylistBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/PlaylistsHeader" unique_id=999003]
 layout_mode = 2
@@ -86,7 +86,7 @@ layout_mode = 2
 [node name="ToggleDynamicGroupsBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsHeader" unique_id=999012]
 layout_mode = 2
 size_flags_horizontal = 3
-text = "  ⚡  Dynamic Groups"
+text = "  Dynamic Groups"
 
 [node name="AddDynamicGroupBtn" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems/DynamicGroupsHeader" unique_id=999013]
 layout_mode = 2
@@ -97,7 +97,7 @@ layout_mode = 2
 
 [node name="NavSettings" type="Button" parent="VBox/Scroll/ScrollMargin/ScrollVBox/NavItems" unique_id=356337049]
 layout_mode = 2
-text = "  ⛭  Settings"
+text = "  Settings"
 
 [node name="PreviewMargin" type="MarginContainer" parent="VBox" unique_id=555555550]
 visible = false
@@ -168,24 +168,20 @@ theme_override_constants/separation = 2
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "⏮"
 
 [node name="PlayPauseBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222222]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "▶"
 
 [node name="ForwardBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222225]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "⏭"
 
 [node name="ShuffleBtn" type="Button" parent="VBox/PlayerTilesMargin/PlayerTiles" unique_id=222222226]
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 size_flags_horizontal = 3
 toggle_mode = true
-text = "✦"
 alignment = 1

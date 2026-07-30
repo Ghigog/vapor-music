@@ -20,6 +20,13 @@ var webdav_folder: String = "Music"
 var base_font_size: int = 16
 var ui_scale: float = 1.2
 
+# Theme Settings
+## "preset" (a .tres in assets/themes/) or "custom" (generated from the two colors below).
+var theme_mode: String = "preset"
+var active_theme_path: String = "res://assets/themes/default_dark.tres"
+var custom_base_color: Color = Color(0.157, 0.157, 0.157, 1.0)
+var custom_accent_color: Color = Color(0.0392, 0.5176, 1.0, 1.0)
+
 # Headphone Calibration Settings
 var headphone_profile: String = ""
 var headphone_calibration_enabled: bool = false
@@ -73,8 +80,19 @@ func load_settings() -> void:
 		ui_scale = config.get_value(SECTION_SYSTEM, "ui_scale", 1.2)
 		headphone_profile = config.get_value(SECTION_SYSTEM, "headphone_profile", "")
 		headphone_calibration_enabled = config.get_value(SECTION_SYSTEM, "headphone_calibration_enabled", false)
+		theme_mode = config.get_value(SECTION_SYSTEM, "theme_mode", "preset")
+		active_theme_path = config.get_value(SECTION_SYSTEM, "active_theme_path", "res://assets/themes/default_dark.tres")
+		custom_base_color = config.get_value(SECTION_SYSTEM, "custom_base_color", custom_base_color)
+		custom_accent_color = config.get_value(SECTION_SYSTEM, "custom_accent_color", custom_accent_color)
 		credentials_loaded.emit()
-		
+
+		# Apply the persisted theme before the font-size pass below so its
+		# tokens are in place first.
+		if theme_mode == "custom":
+			ThemeManager.apply_custom_colors(custom_base_color, custom_accent_color)
+		elif active_theme_path != "":
+			ThemeManager.load_theme(active_theme_path)
+
 		# Set initial base font size in ThemeManager
 		ThemeManager.set_base_font_size(base_font_size)
 		# Set initial UI scale factor on the window
@@ -89,7 +107,11 @@ func save_settings() -> void:
 	config.set_value(SECTION_SYSTEM, "ui_scale", ui_scale)
 	config.set_value(SECTION_SYSTEM, "headphone_profile", headphone_profile)
 	config.set_value(SECTION_SYSTEM, "headphone_calibration_enabled", headphone_calibration_enabled)
-	
+	config.set_value(SECTION_SYSTEM, "theme_mode", theme_mode)
+	config.set_value(SECTION_SYSTEM, "active_theme_path", active_theme_path)
+	config.set_value(SECTION_SYSTEM, "custom_base_color", custom_base_color)
+	config.set_value(SECTION_SYSTEM, "custom_accent_color", custom_accent_color)
+
 	var passw := _get_encryption_password()
 	config.save_encrypted_pass(settings_file_path, passw)
 
@@ -125,3 +147,19 @@ func save_ui_scale(scale: float) -> void:
 	var window = get_window()
 	if window:
 		window.content_scale_factor = ui_scale
+
+## Switches to a bundled preset theme (e.g. Vapor Dark) and persists the choice.
+func save_active_theme(path: String) -> void:
+	theme_mode = "preset"
+	active_theme_path = path
+	save_settings()
+	ThemeManager.load_theme(path)
+
+## Switches to a fully custom theme generated from the two given colors and
+## persists the choice. Applying is left to the caller (Settings screen
+## applies live as the user drags the color wheel; this just saves).
+func save_custom_theme_colors(base_color: Color, accent_color: Color) -> void:
+	theme_mode = "custom"
+	custom_base_color = base_color
+	custom_accent_color = accent_color
+	save_settings()

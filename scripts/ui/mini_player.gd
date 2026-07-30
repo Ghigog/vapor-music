@@ -2,6 +2,25 @@
 ## Bottom UI controller component handling merged navigation and playback.
 extends Control
 
+const ICON_LIBRARY := preload("res://assets/icon/library-cropped.png")
+const ICON_VIBE := preload("res://assets/icon/vibe-cropped.png")
+const ICON_PLAYLISTS := preload("res://assets/icon/playlist-cropped.png")
+const ICON_SETTINGS := preload("res://assets/icon/settings-cropped.png")
+const ICON_PLAY := preload("res://assets/icon/play-cropped.png")
+const ICON_PAUSE := preload("res://assets/icon/pause-cropped.png")
+const ICON_NEXT := preload("res://assets/icon/next-cropped.png")
+
+## "Previous" is just "Next" mirrored — no separate asset. Cached lazily
+## since flipping is a one-off cost, not something to redo per instance.
+static var _icon_prev_cache: ImageTexture = null
+
+static func _icon_prev() -> ImageTexture:
+	if _icon_prev_cache == null:
+		var img := ICON_NEXT.get_image().duplicate()
+		img.flip_x()
+		_icon_prev_cache = ImageTexture.create_from_image(img)
+	return _icon_prev_cache
+
 @onready var progress_bar: HSlider = $VBox/ProgressBar
 @onready var loading_bar: ProgressBar = $VBox/LoadingBar
 
@@ -24,6 +43,30 @@ var _transitioning = false
 
 
 func _ready() -> void:
+	if nav_library:   nav_library.icon   = ICON_LIBRARY
+	if nav_vibe:      nav_vibe.icon      = ICON_VIBE
+	if nav_playlists: nav_playlists.icon = ICON_PLAYLISTS
+	if nav_settings:  nav_settings.icon  = ICON_SETTINGS
+	# Smart Mixing / shuffle is the same concept as Vibe (the AI DJ), so it
+	# reuses that icon everywhere rather than a distinct glyph.
+	if shuffle_btn: shuffle_btn.icon = ICON_VIBE
+	# Button draws icon AND text side by side — these buttons only ever want
+	# the icon, so their scene-default glyph text must be cleared or it
+	# renders a second, duplicate arrow next to the real icon.
+	if play_pause_btn: play_pause_btn.icon = ICON_PLAY
+	if play_pause_btn: play_pause_btn.text = ""
+	if backward_btn:  backward_btn.icon = _icon_prev()
+	if backward_btn:  backward_btn.text = ""
+	if forward_btn:   forward_btn.icon = ICON_NEXT
+	if forward_btn:   forward_btn.text = ""
+	# These three are always icon-only (never grow text like the nav buttons
+	# below do) — Button.icon_alignment defaults to LEFT independently of the
+	# text alignment, so without this the icon sits pinned to the button's
+	# left edge instead of centered in it.
+	for icon_only_btn in [play_pause_btn, backward_btn, forward_btn]:
+		if icon_only_btn:
+			icon_only_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
 	if has_theme_stylebox_override("panel"):
 		var sb = get_theme_stylebox("panel")
 		if sb is StyleBoxFlat:
@@ -144,11 +187,21 @@ func _apply_styles() -> void:
 			btn.add_theme_stylebox_override("hover", _make_circle_button_style(hover_bg))
 			btn.add_theme_stylebox_override("pressed", _make_circle_button_style(pressed_bg))
 			btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
-			
+
 			btn.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
 			btn.add_theme_color_override("font_hover_color", theme.ACCENT_BRIGHT)
 			btn.add_theme_color_override("font_pressed_color", theme.ACCENT_DIM)
 			btn.add_theme_color_override("font_focus_color", theme.TEXT_SECONDARY)
+
+			# Icons are plain white silhouettes (assets/icon/*.png) so they can be
+			# dynamically tinted here — same colour roles as the font overrides above.
+			btn.add_theme_color_override("icon_normal_color", theme.TEXT_SECONDARY)
+			btn.add_theme_color_override("icon_hover_color", theme.ACCENT_BRIGHT)
+			btn.add_theme_color_override("icon_pressed_color", theme.ACCENT_DIM)
+			btn.add_theme_color_override("icon_focus_color", theme.TEXT_SECONDARY)
+			# Source PNGs are 512x512 — Button.icon draws at native resolution
+			# unless capped, so without this the icon overflows the button entirely.
+			btn.add_theme_constant_override("icon_max_width", 20)
 
 	# 4. Scrubber Bar (HSlider / progress_bar)
 	if progress_bar:
@@ -249,9 +302,9 @@ func _on_playback_toggled(is_playing: bool) -> void:
 	progress_bar.max_value = AudioManager.current_track_length
 	if play_pause_btn:
 		if is_playing:
-			play_pause_btn.text = "⏸"
+			play_pause_btn.icon = ICON_PAUSE
 		else:
-			play_pause_btn.text = "▶"
+			play_pause_btn.icon = ICON_PLAY
 
 
 func _on_play_pause_pressed() -> void:
@@ -319,12 +372,17 @@ func _on_resized() -> void:
 	var hbox: HBoxContainer = $VBox/HBox if has_node("VBox/HBox") else null
 	
 	if w < 540:
-		if nav_library:   nav_library.text   = "♪"
-		if nav_vibe:      nav_vibe.text      = "🎛"
-		if nav_playlists: nav_playlists.text = "▤"
-		if nav_settings:  nav_settings.text  = "⚙"
+		if nav_library:   nav_library.text   = ""
+		if nav_vibe:      nav_vibe.text      = ""
+		if nav_playlists: nav_playlists.text = ""
+		if nav_settings:  nav_settings.text  = ""
 		if shuffle_btn:   shuffle_btn.text   = ""
-		
+		# Icon-only now — Button.icon_alignment defaults to LEFT regardless of
+		# text, so without this the icon sits pinned to the button's left edge.
+		for nav_btn in [nav_library, nav_vibe, nav_playlists, nav_settings, shuffle_btn]:
+			if nav_btn:
+				nav_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
 		# In narrow mode: zero separation so buttons sit flush/squished,
 		# and switch to SIZE_SHRINK_CENTER so they don't expand to fill the panel.
 		if hbox:
@@ -338,12 +396,16 @@ func _on_resized() -> void:
 				# Reduce minimum size slightly to help fit all 8 at narrow widths.
 				btn.custom_minimum_size = Vector2(38, theme.TOUCH_TARGET_MIN)
 	else:
-		if nav_library:   nav_library.text   = "♪ Library"
-		if nav_vibe:      nav_vibe.text      = "🎛 Vibe"
-		if nav_playlists: nav_playlists.text = "▤ Playlists"
-		if nav_settings:  nav_settings.text  = "⚙ Settings"
+		if nav_library:   nav_library.text   = "Library"
+		if nav_vibe:      nav_vibe.text      = "Vibe"
+		if nav_playlists: nav_playlists.text = "Playlists"
+		if nav_settings:  nav_settings.text  = "Settings"
 		if shuffle_btn:   shuffle_btn.text   = "Smart Mixing"
-		
+		# Text is back — icon-then-label reads better left-aligned than centered.
+		for nav_btn in [nav_library, nav_vibe, nav_playlists, nav_settings, shuffle_btn]:
+			if nav_btn:
+				nav_btn.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+
 		if hbox:
 			hbox.add_theme_constant_override("separation", theme.SPACE_2)
 		

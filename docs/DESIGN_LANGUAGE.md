@@ -731,6 +731,16 @@ Caught in `dynamic_group_screen.gd`'s entity-card remove button: hovering anywhe
 
 **Fix**: give the overlay control a plain `Control` (not `Container`) parent, itself a full-rect direct child of the `Container` — `Control` never resizes its own children, so anchors set on grandchildren are respected. Already-proven precedent: `sidebar.gd`'s `_setup_preview_slot()` (`overlay_layer := Control.new()`, `mouse_filter = MOUSE_FILTER_IGNORE`, added to `preview_square` an `AspectRatioContainer`) for the same reason. Any future corner-badge/hover-chip added to a `PanelContainer`-based card must go through an overlay `Control`, never straight into the `PanelContainer`.
 
+### 14.9 Artist/album imagery: shape follows subject, never load on the main thread, art slots never shift layout
+
+Three rules from wiring imagery into the table, group headers, and dynamic-group entity cards (phase 6):
+
+**Shape follows subject, not location.** Circle for an artist's photo, rounded-square (`RADIUS_XS` at this small scale) for album art — matching §5.1/§5.2's existing avatar-vs-album-art convention. A group header grouped by artist gets a circle; grouped by album gets a rounded-square. It is not "headers are always circle" — the same location can picture either subject depending on what's grouped.
+
+**Never decode an image on the main thread.** `Image.load_from_file` + `ImageTexture.create_from_image` is real disk I/O and decode work; doing it inline (the sidebar preview slot's original `_load_image_to_texture` was the one place this happened) blocks a frame, and doing it once per row in a synchronously-built 500-row table would be far worse. All image decoding goes through `ThumbnailService.request(path, callback, max_size)` — a background-thread Mutex/Semaphore worker mirroring `AudioAnalyzer`'s existing pattern, cached by `path@size` so repeated requests for the same art (common — many rows share one album) resolve inline after the first decode. Masking (circle/rounded-square) is a `ShaderMaterial` (`assets/shaders/image_mask.gdshader`, an SDF rounded-box adapted from `premium_glass.gdshader`'s panel mask) applied via `ThumbnailService.apply_circle_mask`/`apply_rounded_mask` — never a runtime-baked `Image`.
+
+**An art slot always reserves its layout space**, even with no texture yet. Metadata enrichment (`MetadataService.start_background_enrichment`, triggered off `WebDAVService.library_scanned` same as `AudioAnalyzer`'s prefetch) fills in artist/album images well after a row was first built, so an art `TextureRect` is sized and inserted at build time regardless of whether a path is known yet, and its texture is set later in place (`track_table.gd`'s `refresh_row` compares the freshly-rebuilt row's art path against what's stored and re-requests only on change) — never hidden-then-shown, which would shift the row the instant an image arrives.
+
 ## Changelog
 
 | Date | Version | Change |
@@ -742,3 +752,4 @@ Caught in `dynamic_group_screen.gd`'s entity-card remove button: hovering anywhe
 | 2026-07-22 | 1.4 | §14.6: Dynamic Groups' mobile path added to the mapping table — the mobile popup now renders both Playlists and Dynamic Groups sections rather than leaving the new sidebar feature unreachable on narrow layouts. |
 | 2026-07-22 | 1.5 | New §14.6a (contextual pickers: glass, no dim, positioned at trigger — distinct from §14.4 modals) and §14.6b (GDScript self-referencing closures silently no-op; use a bound method on a small inner class instead). Both codify bugs caught by the "Add to Playlist/Group" picker's own verification. |
 | 2026-07-22 | 1.6 | New §14.8: a `Container` re-fits every direct child to its own rect on layout — a corner overlay's anchors only "work" while the child is hidden, then break the moment it becomes visible. Fix is an intermediate plain `Control` parent. Codifies the entity-card remove-button hover bug (whole card was the hit target instead of the corner ✕). |
+| 2026-07-22 | 1.7 | New §14.9 (phase 6, imagery): shape-follows-subject (circle=artist, square=album, not tied to location), all image decoding through the new background-thread `ThumbnailService` (never main-thread `Image.load_from_file`), art slots always reserve layout space so enrichment filling in an image later never shifts a row. |

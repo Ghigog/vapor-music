@@ -6,6 +6,8 @@
 ## migration, but the UI only renders a single level for now.
 extends Node
 
+const FileUtil = preload("res://scripts/services/file_util.gd")
+
 signal folder_created(folder: Dictionary)
 signal folder_deleted(id: String)
 signal folder_renamed(id: String, new_name: String)
@@ -36,10 +38,7 @@ func load_folders() -> void:
 
 
 func save_folders() -> void:
-	var file := FileAccess.open(folders_file_path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(folders, "\t"))
-		file.close()
+	FileUtil.write_string_atomic(folders_file_path, JSON.stringify(folders, "\t"))
 
 
 ## Named to match DynamicGroupService.get_dynamic_groups()'s precedent — avoids

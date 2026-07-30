@@ -9,8 +9,9 @@ extends Control
 const TrackIndex = preload("res://scripts/services/track_index.gd")
 const TrackTable = preload("res://scripts/ui/track_table.gd")
 const GlassModal = preload("res://scripts/ui/glass_modal.gd")
+const ICON_LIBRARY := preload("res://assets/icon/library-cropped.png")
 
-@onready var icon_label:    Label           = $Center/EmptyState/IconLabel
+@onready var icon_label:    TextureRect     = $Center/EmptyState/IconLabel
 @onready var heading:       Label           = $Center/EmptyState/HeadingLabel
 @onready var body:          Label           = $Center/EmptyState/BodyLabel
 @onready var add_music_btn: Button          = $Center/EmptyState/BtnRow/AddMusicBtn
@@ -75,8 +76,8 @@ func show_loading() -> void:
 func _apply_styles() -> void:
 	var theme = ThemeManager.current_theme
 
-	icon_label.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
-	icon_label.add_theme_font_size_override("font_size", 80)
+	icon_label.texture = ICON_LIBRARY
+	icon_label.self_modulate = theme.TEXT_TERTIARY
 
 	heading.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
 	heading.add_theme_font_override("font", theme.font_display)

@@ -1,5 +1,19 @@
 extends Button
 
+const ICON_PLAYLIST_ITEM := preload("res://assets/icon/playlist-item-cropped.png")
+const ICON_GRAB := preload("res://assets/icon/grab-cropped.png")
+
+## The grab icon ships pointing the wrong way for a drag handle — rotated
+## 90° clockwise here. Cached lazily since every row needs the same rotation.
+static var _icon_grab_rotated_cache: ImageTexture = null
+
+static func _icon_grab_rotated() -> ImageTexture:
+	if _icon_grab_rotated_cache == null:
+		var img := ICON_GRAB.get_image().duplicate()
+		img.rotate_90(0) # 0 = clockwise. This build doesn't expose Image.ClockDirection to GDScript.
+		_icon_grab_rotated_cache = ImageTexture.create_from_image(img)
+	return _icon_grab_rotated_cache
+
 var playlist_id: String = ""
 var playlist_name: String = ""
 ## Which folder (if any) this row currently belongs to — "" for root. Set by
@@ -7,14 +21,15 @@ var playlist_name: String = ""
 var folder_id: String = ""
 
 func _ready() -> void:
+	icon = ICON_PLAYLIST_ITEM
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 
 func _on_mouse_entered() -> void:
-	text = "    ☰  " + playlist_name
+	icon = _icon_grab_rotated()
 
 func _on_mouse_exited() -> void:
-	text = "    ♪  " + playlist_name
+	icon = ICON_PLAYLIST_ITEM
 
 	var sidebar = get_tree().current_scene.find_child("Sidebar", true, false)
 	if sidebar and sidebar.has_method("hide_drop_indicator"):

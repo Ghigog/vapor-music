@@ -35,46 +35,43 @@ alignment = 1
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "♪ Library"
+text = "Library"
 clip_text = true
 
 [node name="NavVibe" type="Button" parent="VBox/HBox" unique_id=100000004]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "🎛 Vibe"
+text = "Vibe"
 clip_text = true
 
 [node name="NavPlaylists" type="Button" parent="VBox/HBox" unique_id=100000007]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "▤ Playlists"
+text = "Playlists"
 clip_text = true
 
 [node name="BackwardBtn" type="Button" parent="VBox/HBox" unique_id=1982662063]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "⏮"
 
 [node name="PlayPauseBtn" type="Button" parent="VBox/HBox" unique_id=1985718635]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "▶"
 
 [node name="ForwardBtn" type="Button" parent="VBox/HBox" unique_id=440200079]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "⏭"
 
 [node name="NavSettings" type="Button" parent="VBox/HBox" unique_id=100000005]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 size_flags_horizontal = 3
-text = "⚙ Settings"
+text = "Settings"
 clip_text = true
 
 [node name="ShuffleBtn" type="CheckBox" parent="VBox/HBox" unique_id=100000006]

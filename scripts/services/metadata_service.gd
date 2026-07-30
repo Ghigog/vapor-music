@@ -10,6 +10,8 @@ signal track_focused(href: String, artist: String, album: String, title: String,
 signal custom_image_changed(kind: String, id: String, path: String)
 signal lyrics_fetched(href: String, lyrics: Dictionary)
 signal metadata_updated(href: String, metadata: Dictionary)
+signal enrichment_progress(done: int, total: int)
+signal enrichment_completed()
 
 var cache_file_path = "user://metadata_cache.json"
 
@@ -38,6 +40,7 @@ var _inflight_images: Dictionary = {}
 ## lookup allocated, entered the tree, and was freed again. Nodes are recycled
 ## instead, capped so a burst of parallel fetches doesn't leave a large pool
 ## resident afterwards.
+const FileUtil = preload("res://scripts/services/file_util.gd")
 const HTTP_POOL_MAX := 4
 var _http_pool: Array[HTTPRequest] = []
 
@@ -72,6 +75,7 @@ func _ready() -> void:
 	load_cache()
 	if WebDAVService.has_signal("library_scanned"):
 		WebDAVService.library_scanned.connect(prune_cache)
+		WebDAVService.library_scanned.connect(start_background_enrichment)
 
 	# Set up save debounce timer
 	_save_timer = Timer.new()
@@ -104,10 +108,7 @@ func load_cache() -> void:
 	cache = {}
 
 func _perform_save_cache() -> void:
-	var file := FileAccess.open(cache_file_path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(cache, "\t"))
-		file.close()
+	if FileUtil.write_string_atomic(cache_file_path, JSON.stringify(cache, "\t")) == OK:
 		print("MetadataService: Cache written to disk.")
 
 ## Saves the current metadata cache to user://metadata_cache.json
@@ -292,7 +293,7 @@ func fetch_album_art(artist: String, album: String) -> String:
 		var album_data = data["data"][0]
 		if album_data is Dictionary:
 			for key in ["cover_xl", "cover_big", "cover_medium", "cover_small"]:
-				if album_data.has(key) and not album_data[key].is_empty():
+				if album_data.has(key) and album_data[key] != null and not (album_data[key] as String).is_empty():
 					var val: String = album_data[key]
 					return val
 	return ""
@@ -833,10 +834,7 @@ func _load_custom_images() -> void:
 
 
 func _save_custom_images() -> void:
-	var file := FileAccess.open(CUSTOM_IMAGES_FILE, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(custom_images, "\t"))
-		file.close()
+	FileUtil.write_string_atomic(CUSTOM_IMAGES_FILE, JSON.stringify(custom_images, "\t"))
 
 
 func get_custom_image(kind: String, id: String) -> String:
@@ -878,6 +876,132 @@ func clear_custom_image(kind: String, id: String) -> void:
 	custom_images.erase(key)
 	_save_custom_images()
 	custom_image_changed.emit(kind, id, "")
+
+# ---------------------------------------------------------------------------
+# Manual metadata edits
+# ---------------------------------------------------------------------------
+# The automatic detector (resolve_metadata_via_search / ID3 tags) has no way
+# to disambiguate two different songs that share a title — a plain-title
+# Deezer search resolves to whichever hit sorts first, which isn't always the
+# right one. A manual fix here needs no separate "locked" flag: lookup_metadata's
+# per-field merge (see its "Adopt cached fields" comment above) already treats
+# any known, non-"Unknown …" cache value as resolved and never overwrites it
+# via search — so writing straight into cache is sufficient to make an edit
+# stick against future automatic runs.
+
+const _MANUAL_METADATA_FIELDS := ["track_title", "artist_name", "album_name", "genre", "bpm", "musical_key"]
+
+## Applies a user-edited title/artist/album/genre/bpm/key to a track — the
+## "Edit Metadata" context-menu action. Changing artist or album means any
+## cached art/genre/lyrics were resolved against the WRONG identity, so
+## they're invalidated here rather than left stale, and a background
+## lookup_metadata immediately refetches them against the corrected fields.
+func set_manual_metadata(href: String, fields: Dictionary) -> void:
+	var current: Dictionary = cache.get(href, {})
+	var artist_changed: bool = fields.has("artist_name") and fields.artist_name != current.get("artist_name", "")
+	var album_changed: bool = fields.has("album_name") and fields.album_name != current.get("album_name", "")
+	var title_changed: bool = fields.has("track_title") and fields.track_title != current.get("track_title", "")
+	var genre_changed: bool = fields.has("genre") and fields.genre != current.get("genre", "")
+
+	for key in _MANUAL_METADATA_FIELDS:
+		if fields.has(key):
+			current[key] = fields[key]
+
+	if artist_changed:
+		current.artist_image_url = ""
+		current.artist_image_local = ""
+	if artist_changed or album_changed:
+		current.album_art_url = ""
+		current.album_art_local = ""
+		# The old genre was resolved against the wrong album too — unless the
+		# user retyped it themselves in the same edit, let it re-resolve.
+		if not genre_changed:
+			current.genre = "Unknown"
+	if artist_changed or title_changed:
+		current.lyrics = {}
+
+	cache[href] = current
+	save_cache(true)
+	metadata_updated.emit(href, current)
+
+	if artist_changed or album_changed:
+		var info := parse_track_info(href)
+		lookup_metadata(href, info.artist, info.album, info.track)
+
+
+## Cache-only, synchronous image-path resolver for an artist or album by
+## name. Custom override first, else the first cached local image found for
+## that name. Never triggers network I/O — safe to call from a synchronous
+## row/header build loop. Mirrors the same custom-then-cache-scan logic
+## DynamicGroupService.get_group_cover_path and sidebar.gd's
+## _with_custom_override apply independently for their own entities.
+func get_entity_image_path(kind: String, id: String) -> String:
+	var custom := get_custom_image(kind, id)
+	if not custom.is_empty():
+		return custom
+	var name_field := "artist_name" if kind == "artist" else "album_name"
+	var image_field := "artist_image_local" if kind == "artist" else "album_art_local"
+	for href in cache:
+		var item = cache[href]
+		if item is Dictionary and item.get(name_field, "") == id:
+			var path: String = item.get(image_field, "")
+			if not path.is_empty():
+				return path
+	return ""
+
+
+# ---------------------------------------------------------------------------
+# Background enrichment sweep
+# ---------------------------------------------------------------------------
+# lookup_metadata() only ever ran reactively (focus, first play, or the
+# post-analysis genre check in audio_analyzer.gd), so most of the library
+# never got genre/artwork filled in until a track happened to be touched.
+# This sweeps the whole scanned library once per scan, sequentially awaiting
+# lookup_metadata per track — that's I/O-bound (Deezer/LRCLIB HTTP calls), so
+# plain async chaining is enough throttling; no thread needed. Existing
+# per-href coalescing in lookup_metadata means this can never race with a
+# reactive caller touching the same track mid-sweep.
+
+var _enrichment_active := false
+
+
+func _needs_enrichment(href: String) -> bool:
+	var item: Dictionary = cache.get(href, {})
+	if item.is_empty():
+		return true
+	if _is_unknown_genre(item.get("genre", "")):
+		return true
+	var artist: String = item.get("artist_name", "")
+	if not artist.is_empty() and artist != "Unknown Artist" and (item.get("artist_image_local", "") as String).is_empty():
+		return true
+	var album: String = item.get("album_name", "")
+	if not album.is_empty() and album != "Unknown Album" and (item.get("album_art_local", "") as String).is_empty():
+		return true
+	return false
+
+
+func start_background_enrichment(hrefs: Array) -> void:
+	if _enrichment_active:
+		return
+	var targets: Array = []
+	for href in hrefs:
+		if _needs_enrichment(href):
+			targets.append(href)
+	if targets.is_empty():
+		return
+
+	_enrichment_active = true
+	var total := targets.size()
+	var done := 0
+	enrichment_progress.emit(done, total)
+	for href: String in targets:
+		var info: Dictionary = parse_track_info(href)
+		await lookup_metadata(href, info.artist, info.album, info.track)
+		done += 1
+		enrichment_progress.emit(done, total)
+	_enrichment_active = false
+	enrichment_completed.emit()
+
 
 func focus_track_by_href(href: String) -> void:
 	var info := parse_track_info(href)

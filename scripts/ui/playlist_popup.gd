@@ -3,6 +3,9 @@
 ## Handles dynamic styling, list rendering, position calculations, and playlist creation.
 extends Control
 
+const ICON_PLAYLIST_ITEM := preload("res://assets/icon/playlist-item-cropped.png")
+const ICON_GROUP_ITEM := preload("res://assets/icon/group-item-cropped.png")
+
 @onready var backdrop: Control = $Backdrop
 @onready var popup_panel: PanelContainer = $PopupPanel
 @onready var title_label: Label = $PopupPanel/Margin/VBox/Header/TitleLabel
@@ -138,7 +141,11 @@ func _add_folder_label(folder: Dictionary, theme) -> void:
 
 func _add_playlist_row(playlist: Dictionary, theme, indented: bool) -> void:
 	var btn = Button.new()
-	btn.text = ("        ♪  " if indented else "    ♪  ") + playlist.name
+	btn.icon = ICON_PLAYLIST_ITEM
+	# Source PNGs are 512x512 — Button.icon draws at native resolution unless
+	# capped, so without this the icon overflows the row entirely.
+	btn.add_theme_constant_override("icon_max_width", 18)
+	btn.text = ("        " if indented else "    ") + playlist.name
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.custom_minimum_size.y = ThemeManager.min_touch_height(
 		int(theme.TOUCH_TARGET_MIN * 0.75))
@@ -154,9 +161,12 @@ func _add_playlist_row(playlist: Dictionary, theme, indented: bool) -> void:
 	if is_active:
 		btn.add_theme_stylebox_override("normal", ThemeManager.make_nav_item_active())
 		btn.add_theme_color_override("font_color", theme.ACCENT_CORE)
+		btn.add_theme_color_override("icon_normal_color", theme.ACCENT_CORE)
 	else:
 		btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 		btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+		btn.add_theme_color_override("icon_normal_color", theme.TEXT_TERTIARY)
+		btn.add_theme_color_override("icon_hover_color", theme.TEXT_SECONDARY)
 
 	btn.pressed.connect(func():
 		PlaylistService.active_playlist_id = playlist.id
@@ -197,7 +207,9 @@ func _rebuild_dynamic_groups_section(theme) -> void:
 
 	for group in DynamicGroupService.get_dynamic_groups():
 		var btn = Button.new()
-		btn.text = "    ⚡  " + group.name
+		btn.icon = ICON_GROUP_ITEM
+		btn.add_theme_constant_override("icon_max_width", 18)
+		btn.text = "    " + group.name
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		btn.custom_minimum_size.y = ThemeManager.min_touch_height(
 			int(theme.TOUCH_TARGET_MIN * 0.75))
@@ -213,9 +225,12 @@ func _rebuild_dynamic_groups_section(theme) -> void:
 		if is_active:
 			btn.add_theme_stylebox_override("normal", ThemeManager.make_nav_item_active())
 			btn.add_theme_color_override("font_color", theme.ACCENT_CORE)
+			btn.add_theme_color_override("icon_normal_color", theme.ACCENT_CORE)
 		else:
 			btn.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
 			btn.add_theme_color_override("font_hover_color", theme.TEXT_SECONDARY)
+			btn.add_theme_color_override("icon_normal_color", theme.TEXT_TERTIARY)
+			btn.add_theme_color_override("icon_hover_color", theme.TEXT_SECONDARY)
 
 		btn.pressed.connect(func():
 			DynamicGroupService.active_group_id = group.id

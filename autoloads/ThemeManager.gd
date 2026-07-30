@@ -162,15 +162,87 @@ func load_theme(path: String) -> void:
 	# Load the new resource
 	var new_theme = load(path)
 	if new_theme is ThemeData:
-		current_theme = new_theme
-		# Re-apply system fonts to the new resource
-		_setup_fonts() 
-		# Re-apply base font size if SettingsManager exists
-		var sm = get_node_or_null("/root/SettingsManager")
-		if sm and "base_font_size" in sm:
-			set_base_font_size(sm.base_font_size)
-		else:
-			theme_changed.emit()
+		_apply_theme(new_theme)
+
+
+## Builds a full ThemeData palette from just two user-picked colors, then
+## applies it as the active theme. This is the "dynamic theme" entry point
+## used by the Settings color pickers — see docs/theme_system.md §7.
+## [param base_color]    The main surface tone (what the user sees as panels/cards).
+## [param accent_color]  The interactive/highlight color.
+func apply_custom_colors(base_color: Color, accent_color: Color) -> void:
+	_apply_theme(generate_theme_from_colors(base_color, accent_color))
+
+
+## Derives a complete ThemeData resource from a base surface color and an
+## accent color. Layout scales, semantic colors, and fonts are left at their
+## ThemeData defaults — only the color tokens are computed. Whether the theme
+## reads as "dark" or "light" is decided automatically from the base color's
+## luminance, so text and glass borders always stay legible.
+func generate_theme_from_colors(base_color: Color, accent_color: Color) -> ThemeData:
+	var t := ThemeData.new()
+	var is_dark := base_color.get_luminance() < 0.5
+
+	# Background layers — BG_ELEVATED is the base color as picked; the other
+	# layers are lightened/darkened steps away from it. BG_VOID stays fully
+	# transparent (it's the clear color behind the OS-level frosted window).
+	var base_layer := base_color.darkened(0.08) if is_dark else base_color.darkened(0.02)
+	var float_layer := base_color.lightened(0.10) if is_dark else base_color.lightened(0.02)
+	t.BG_VOID = Color(base_color.r, base_color.g, base_color.b, 0.0)
+	t.BG_BASE = Color(base_layer.r, base_layer.g, base_layer.b, 0.65)
+	t.BG_ELEVATED = Color(base_color.r, base_color.g, base_color.b, 1.0)
+	t.BG_FLOAT = Color(float_layer.r, float_layer.g, float_layer.b, 1.0)
+	t.BG_GLASS = Color(base_color.r, base_color.g, base_color.b, 0.55)
+
+	# Text hierarchy and glass borders flip between white-on-dark and
+	# black-on-light depending on the base color's luminance.
+	if is_dark:
+		t.TEXT_PRIMARY = Color(1, 1, 1, 1)
+		t.TEXT_SECONDARY = Color(1, 1, 1, 0.6)
+		t.TEXT_TERTIARY = Color(1, 1, 1, 0.35)
+		t.TEXT_DISABLED = Color(1, 1, 1, 0.18)
+		t.TEXT_INVERSE = Color(0.08, 0.08, 0.08, 1)
+		t.GLASS_TINT = Color(1, 1, 1, 0.03)
+		t.GLASS_BORDER = Color(1, 1, 1, 0.15)
+		t.GLASS_BORDER_SUBTLE = Color(1, 1, 1, 0.06)
+		t.GLASS_SHIMMER = Color(1, 1, 1, 0.05)
+	else:
+		t.TEXT_PRIMARY = Color(0.149, 0.149, 0.149, 1)
+		t.TEXT_SECONDARY = Color(0.557, 0.557, 0.576, 1)
+		t.TEXT_TERTIARY = Color(0.557, 0.557, 0.576, 0.6)
+		t.TEXT_DISABLED = Color(0.557, 0.557, 0.576, 0.3)
+		t.TEXT_INVERSE = Color(1, 1, 1, 1)
+		t.GLASS_TINT = Color(0.957, 0.957, 0.965, 0.05)
+		t.GLASS_BORDER = Color(1, 1, 1, 0.8)
+		t.GLASS_BORDER_SUBTLE = Color(0, 0, 0, 0.06)
+		t.GLASS_SHIMMER = Color(1, 1, 1, 0.08)
+
+	# Accent family — every interactive/highlight tone derives from the one
+	# accent color. The secondary "Aqua" group aliases it, matching the
+	# convention already used by the default presets (see theme_system.md).
+	t.ACCENT_CORE = accent_color
+	t.ACCENT_BRIGHT = accent_color.lightened(0.2)
+	t.ACCENT_DIM = accent_color.darkened(0.18)
+	t.ACCENT_GLOW = Color(accent_color.r, accent_color.g, accent_color.b, 0.35)
+	t.ACCENT_SURFACE = Color(accent_color.r, accent_color.g, accent_color.b, 0.12)
+	t.AQUA_CORE = t.ACCENT_CORE
+	t.AQUA_DIM = t.ACCENT_DIM
+	t.AQUA_GLOW = Color(accent_color.r, accent_color.g, accent_color.b, 0.3)
+
+	return t
+
+
+## Shared tail for load_theme()/apply_custom_colors(): swaps in the resource,
+## rebuilds fonts, and re-applies the user's font-size scale before notifying
+## listeners so a single theme_changed carries a fully consistent state.
+func _apply_theme(new_theme: ThemeData) -> void:
+	current_theme = new_theme
+	_setup_fonts()
+	var sm = get_node_or_null("/root/SettingsManager")
+	if sm and "base_font_size" in sm:
+		set_base_font_size(sm.base_font_size)
+	else:
+		theme_changed.emit()
 
 func set_base_font_size(size: int) -> void:
 	current_theme.TYPE_2XS = max(6, size - 5)

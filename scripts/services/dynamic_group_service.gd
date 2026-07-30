@@ -15,6 +15,7 @@ signal group_entities_updated(id: String)
 signal groups_loaded()
 signal active_group_changed(id: String)
 
+const FileUtil = preload("res://scripts/services/file_util.gd")
 const GROUPS_FILE := "user://dynamic_groups.json"
 
 ## Key: group ID (String), Value: {id, name, entities: [{type, value}]}
@@ -43,10 +44,7 @@ func load_groups() -> void:
 
 
 func save_groups() -> void:
-	var file := FileAccess.open(GROUPS_FILE, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(groups, "\t"))
-		file.close()
+	FileUtil.write_string_atomic(GROUPS_FILE, JSON.stringify(groups, "\t"))
 
 
 ## Named to avoid colliding with Node's own native get_groups() (the "groups"

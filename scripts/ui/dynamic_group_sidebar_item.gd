@@ -6,18 +6,33 @@ extends Button
 ## a dynamic group holds entities, not tracks; that distinction is the whole
 ## point of the feature.
 
+const ICON_GROUP_ITEM := preload("res://assets/icon/group-item-cropped.png")
+const ICON_GRAB := preload("res://assets/icon/grab-cropped.png")
+
+## The grab icon ships pointing the wrong way for a drag handle — rotated
+## 90° clockwise here. Cached lazily since every row needs the same rotation.
+static var _icon_grab_rotated_cache: ImageTexture = null
+
+static func _icon_grab_rotated() -> ImageTexture:
+	if _icon_grab_rotated_cache == null:
+		var img := ICON_GRAB.get_image().duplicate()
+		img.rotate_90(0) # 0 = clockwise. This build doesn't expose Image.ClockDirection to GDScript.
+		_icon_grab_rotated_cache = ImageTexture.create_from_image(img)
+	return _icon_grab_rotated_cache
+
 var group_id: String = ""
 var group_name: String = ""
 
 func _ready() -> void:
+	icon = ICON_GROUP_ITEM
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 
 func _on_mouse_entered() -> void:
-	text = "    ☰  " + group_name
+	icon = _icon_grab_rotated()
 
 func _on_mouse_exited() -> void:
-	text = "    ⚡  " + group_name
+	icon = ICON_GROUP_ITEM
 
 	var sidebar = get_tree().current_scene.find_child("Sidebar", true, false)
 	if sidebar and sidebar.has_method("hide_group_drop_indicator"):

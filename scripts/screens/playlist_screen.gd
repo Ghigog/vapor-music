@@ -3,6 +3,8 @@ extends Control
 const TrackIndex = preload("res://scripts/services/track_index.gd")
 const TrackTable = preload("res://scripts/ui/track_table.gd")
 const GlassModal = preload("res://scripts/ui/glass_modal.gd")
+const ICON_PLAY := preload("res://assets/icon/play-cropped.png")
+const ICON_SONG := preload("res://assets/icon/song-cropped.png")
 
 
 @onready var CoverContainer: PanelContainer = $Margin/VBox/HeaderHBox/CoverContainer
@@ -15,7 +17,7 @@ const GlassModal = preload("res://scripts/ui/glass_modal.gd")
 @onready var Scroll: ScrollContainer = $Margin/VBox/Scroll
 @onready var TrackList: VBoxContainer = $Margin/VBox/Scroll/TrackList
 @onready var EmptyState: PanelContainer = $Margin/VBox/EmptyState
-@onready var EmptyIcon: Label = $Margin/VBox/EmptyState/EmptyVBox/EmptyIcon
+@onready var EmptyIcon: TextureRect = $Margin/VBox/EmptyState/EmptyVBox/EmptyIcon
 @onready var EmptyHeading: Label = $Margin/VBox/EmptyState/EmptyVBox/EmptyHeading
 @onready var EmptyBody: Label = $Margin/VBox/EmptyState/EmptyVBox/EmptyBody
 @onready var FileDialogNode: FileDialog = $FileDialog
@@ -185,12 +187,16 @@ func _apply_styles() -> void:
 	MetaLabel.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	MetaLabel.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
 	
+	PlayBtn.icon = ICON_PLAY
+	PlayBtn.add_theme_constant_override("icon_max_width", 16)
 	PlayBtn.add_theme_stylebox_override("normal", ThemeManager.make_cta_button(false))
 	PlayBtn.add_theme_stylebox_override("hover", ThemeManager.make_cta_button(true))
 	PlayBtn.add_theme_stylebox_override("pressed", ThemeManager.make_cta_button(true))
 	PlayBtn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 	PlayBtn.add_theme_color_override("font_color", theme.ACCENT_BRIGHT)
 	PlayBtn.add_theme_color_override("font_hover_color", theme.TEXT_INVERSE)
+	PlayBtn.add_theme_color_override("icon_normal_color", theme.ACCENT_BRIGHT)
+	PlayBtn.add_theme_color_override("icon_hover_color", theme.TEXT_INVERSE)
 	PlayBtn.add_theme_font_override("font", theme.font_ui)
 	PlayBtn.add_theme_font_size_override("font_size", theme.TYPE_SM)
 	
@@ -210,8 +216,8 @@ func _apply_styles() -> void:
 	PencilBtn.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
 	PencilBtn.add_theme_font_override("font", theme.font_ui)
 	
-	EmptyIcon.add_theme_font_size_override("font_size", 48)
-	EmptyIcon.add_theme_color_override("font_color", theme.TEXT_TERTIARY)
+	EmptyIcon.texture = ICON_SONG
+	EmptyIcon.self_modulate = theme.TEXT_TERTIARY
 	
 	EmptyHeading.add_theme_font_override("font", theme.font_display)
 	EmptyHeading.add_theme_font_size_override("font_size", theme.TYPE_MD)
@@ -257,19 +263,20 @@ func _refresh_playlist() -> void:
 			rows.append(row)
 		_table.set_rows(rows)
 
+## Tracks the most recently requested path so a slow decode that resolves
+## after the playlist changes doesn't clobber the cover with a stale image.
+var _cover_request_path: String = ""
+
 func _load_cover_image(path: String) -> void:
-	if path.is_empty() or not FileAccess.file_exists(path):
+	_cover_request_path = path
+	if path.is_empty():
 		CoverTexture.texture = null
 		return
-		
-	var img: Image = Image.load_from_file(path)
-	if img:
-		if img.get_width() > 512 or img.get_height() > 512:
-			img.resize(512, 512, Image.INTERPOLATE_LANCZOS)
-		var tex: ImageTexture = ImageTexture.create_from_image(img)
-		CoverTexture.texture = tex
-	else:
-		CoverTexture.texture = null
+
+	ThumbnailService.request(path, func(tex: Texture2D) -> void:
+		if is_instance_valid(self) and _cover_request_path == path:
+			CoverTexture.texture = tex
+	, 512)
 
 func _on_playlist_tracks_updated(id: String) -> void:
 	if id == PlaylistService.active_playlist_id:

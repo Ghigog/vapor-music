@@ -3,15 +3,21 @@
 ## Includes theme, font size, library syncing, pre-caching, and headphone AutoEQ calibration.
 extends Control
 
+const ICON_SETTINGS := preload("res://assets/icon/settings-cropped.png")
+
 # App Window Containers
 @onready var settings_panel: PanelContainer = %SettingsPanel
 
 # Basic Settings Controls
-@onready var icon_label: Label = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/IconLabel
+@onready var icon_label: TextureRect = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/IconLabel
 @onready var heading:    Label = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/HeadingLabel
 @onready var body:       Label = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/BodyLabel
 @onready var select_a_theme: Label = $"ScrollContainer/Center/SettingsPanel/MarginContainer/Content/Select a theme"
 @onready var theme_selector: OptionButton = $ScrollContainer/Center/SettingsPanel/MarginContainer/Content/ThemeSelector
+@onready var base_color_label: Label = %BaseColorLabel
+@onready var base_color_picker: ColorPickerButton = %BaseColorPicker
+@onready var accent_color_label: Label = %AccentColorLabel
+@onready var accent_color_picker: ColorPickerButton = %AccentColorPicker
 
 @onready var font_size_label: Label = %FontSizeLabel
 @onready var font_size_spinbox: SpinBox = %FontSizeSpinBox
@@ -25,7 +31,7 @@ extends Control
 
 # Caching Overlay Controls
 @onready var cache_overlay: PanelContainer = %CacheOverlay
-@onready var overlay_spinner: Label = %OverlaySpinner
+@onready var overlay_spinner: TextureRect = %OverlaySpinner
 @onready var overlay_title: Label = %OverlayTitle
 @onready var overlay_progress: Label = %OverlayProgress
 @onready var overlay_warning: Label = %OverlayWarning
@@ -75,13 +81,24 @@ func _ready() -> void:
 		theme_selector.add_item(theme_name)
 		
 	# Select current active theme
-	var active_path = ThemeManager.current_theme.resource_path
-	for theme_name in THEME_MAP.keys():
-		if THEME_MAP[theme_name] == active_path:
-			theme_selector.text = theme_name
+	if SettingsManager.theme_mode == "custom":
+		theme_selector.text = "Custom"
+	else:
+		var active_path = ThemeManager.current_theme.resource_path
+		for theme_name in THEME_MAP.keys():
+			if THEME_MAP[theme_name] == active_path:
+				theme_selector.text = theme_name
 		
 	# Connect the selection signal
 	theme_selector.item_selected.connect(_on_theme_selected)
+
+	# Initialize the custom color swatches from whatever theme is active
+	base_color_picker.color = ThemeManager.current_theme.BG_ELEVATED
+	accent_color_picker.color = ThemeManager.current_theme.ACCENT_CORE
+	base_color_picker.color_changed.connect(_on_custom_color_changed)
+	accent_color_picker.color_changed.connect(_on_custom_color_changed)
+	base_color_picker.popup_closed.connect(_on_custom_color_picker_closed)
+	accent_color_picker.popup_closed.connect(_on_custom_color_picker_closed)
 
 	# Initialize font size spinbox
 	font_size_spinbox.value = SettingsManager.base_font_size
@@ -119,8 +136,8 @@ func _apply_styles() -> void:
 	if is_instance_valid(settings_panel):
 		settings_panel.add_theme_stylebox_override("panel", ThemeManager.make_glass_panel())
 
-	icon_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_TERTIARY)
-	icon_label.add_theme_font_size_override("font_size", 80)
+	icon_label.texture = ICON_SETTINGS
+	icon_label.self_modulate = ThemeManager.current_theme.TEXT_TERTIARY
 
 	heading.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
 	heading.add_theme_font_override("font", ThemeManager.current_theme.font_display)
@@ -151,6 +168,21 @@ func _apply_styles() -> void:
 	body.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
 	body.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	body.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+
+	# Custom color swatch labels
+	for lbl in [base_color_label, accent_color_label]:
+		lbl.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_SECONDARY)
+		lbl.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		lbl.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_XS)
+
+	# Color swatch buttons — round the picker button to match the rest of the UI
+	for picker in [base_color_picker, accent_color_picker]:
+		picker.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+		var swatch_style = StyleBoxFlat.new()
+		swatch_style.border_color = ThemeManager.current_theme.GLASS_BORDER
+		swatch_style.set_border_width_all(1)
+		swatch_style.set_corner_radius_all(ThemeManager.current_theme.RADIUS_SM)
+		picker.add_theme_stylebox_override("normal", swatch_style)
 
 	# Font size label style
 	font_size_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
@@ -265,8 +297,8 @@ func _apply_styles() -> void:
 		cache_overlay.add_theme_stylebox_override("panel", overlay_glass)
 		
 	if is_instance_valid(overlay_spinner):
-		overlay_spinner.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
-		overlay_spinner.add_theme_font_size_override("font_size", 48)
+		overlay_spinner.texture = ICON_SETTINGS
+		overlay_spinner.self_modulate = ThemeManager.current_theme.ACCENT_BRIGHT
 		
 	if is_instance_valid(overlay_title):
 		overlay_title.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
@@ -301,9 +333,24 @@ func _on_theme_selected(index: int) -> void:
 	# Get the name (key) based on the index
 	var theme_name = theme_selector.get_item_text(index)
 	var theme_path = THEME_MAP[theme_name]
-	
-	# Update the global theme manager
-	ThemeManager.load_theme(theme_path)
+
+	# Update the global theme manager and persist the choice
+	SettingsManager.save_active_theme(theme_path)
+
+	# Sync the custom color swatches to reflect the preset that just loaded
+	base_color_picker.color = ThemeManager.current_theme.BG_ELEVATED
+	accent_color_picker.color = ThemeManager.current_theme.ACCENT_CORE
+
+## Live preview as the user drags the color wheel or edits the hex field —
+## regenerates the theme in memory but doesn't touch disk yet.
+func _on_custom_color_changed(_color: Color) -> void:
+	ThemeManager.apply_custom_colors(base_color_picker.color, accent_color_picker.color)
+	theme_selector.text = "Custom"
+
+## Persist the custom colors once the picker popup closes, so we're not
+## writing settings.cfg on every drag frame.
+func _on_custom_color_picker_closed() -> void:
+	SettingsManager.save_custom_theme_colors(base_color_picker.color, accent_color_picker.color)
 
 func _on_font_size_changed(value: float) -> void:
 	SettingsManager.save_base_font_size(int(value))

@@ -3,6 +3,9 @@ extends Control
 ## DJ Vibe Workbench controller. Shows now-playing analyzer tags
 ## and lists compatible runner-up selections.
 
+const ICON_VIBE := preload("res://assets/icon/vibe-cropped.png")
+
+@onready var heading_icon: TextureRect = $VBox/Header/HBox/HeadingIcon
 @onready var heading: Label = $VBox/Header/HBox/Heading
 @onready var analysis_status: Label = $VBox/Header/HBox/AnalysisStatus
 
@@ -131,13 +134,12 @@ func _apply_styles() -> void:
 		if center:
 			var vbox = center.get_child(0) as VBoxContainer
 			if vbox:
-				var icon_lbl = vbox.get_child(0) as Label
+				var icon_rect = vbox.get_child(0) as TextureRect
 				var msg_lbl = vbox.get_child(1) as Label
 				var sub_lbl = vbox.get_child(2) as Label
-				
-				icon_lbl.add_theme_font_override("font", theme.font_display)
-				icon_lbl.add_theme_font_size_override("font_size", theme.TYPE_DISPLAY)
-				icon_lbl.add_theme_color_override("font_color", theme.ACCENT_CORE)
+
+				icon_rect.texture = ICON_VIBE
+				icon_rect.self_modulate = theme.ACCENT_CORE
 				
 				msg_lbl.add_theme_font_override("font", theme.font_display)
 				msg_lbl.add_theme_font_size_override("font_size", theme.TYPE_LG)
@@ -146,6 +148,9 @@ func _apply_styles() -> void:
 				sub_lbl.add_theme_font_override("font", theme.font_ui)
 				sub_lbl.add_theme_font_size_override("font_size", theme.TYPE_SM)
 				sub_lbl.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
+
+	heading_icon.texture = ICON_VIBE
+	heading_icon.self_modulate = theme.TEXT_PRIMARY
 
 	heading.add_theme_color_override("font_color", theme.TEXT_PRIMARY)
 	heading.add_theme_font_override("font", theme.font_display)

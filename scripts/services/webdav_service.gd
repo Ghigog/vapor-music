@@ -34,6 +34,7 @@ var _test_thread: Thread = null
 ## ~500Hz — responsive without burning a core.
 const POLL_INTERVAL_MS := 2
 
+const FileUtil = preload("res://scripts/services/file_util.gd")
 const LIBRARY_CACHE_FILE = "user://library_cache.json"
 
 func _ready() -> void:
@@ -57,10 +58,7 @@ func load_cached_library() -> Array:
 	return []
 
 func save_cached_library() -> void:
-	var file := FileAccess.open(LIBRARY_CACHE_FILE, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(scanned_files))
-		file.close()
+	if FileUtil.write_string_atomic(LIBRARY_CACHE_FILE, JSON.stringify(scanned_files)) == OK:
 		print("WebDAVService: Library cache saved to disk.")
 
 const TCP_TIMEOUT_MS := 5000

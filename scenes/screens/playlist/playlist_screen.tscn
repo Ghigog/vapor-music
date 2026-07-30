@@ -67,11 +67,11 @@ theme_override_constants/separation = 12
 
 [node name="PlayBtn" type="Button" parent="Margin/VBox/HeaderHBox/InfoVBox/ActionHBox"]
 layout_mode = 2
-text = "▶ Play"
+text = "Play"
 
 [node name="DeleteBtn" type="Button" parent="Margin/VBox/HeaderHBox/InfoVBox/ActionHBox"]
 layout_mode = 2
-text = "🗑 Delete"
+text = "✕ Delete"
 
 [node name="Scroll" type="ScrollContainer" parent="Margin/VBox"]
 layout_mode = 2
@@ -93,10 +93,12 @@ size_flags_horizontal = 4
 size_flags_vertical = 4
 theme_override_constants/separation = 12
 
-[node name="EmptyIcon" type="Label" parent="Margin/VBox/EmptyState/EmptyVBox"]
+[node name="EmptyIcon" type="TextureRect" parent="Margin/VBox/EmptyState/EmptyVBox"]
+custom_minimum_size = Vector2(48, 48)
 layout_mode = 2
-text = "🎵"
-horizontal_alignment = 1
+size_flags_horizontal = 4
+expand_mode = 1
+stretch_mode = 5
 
 [node name="EmptyHeading" type="Label" parent="Margin/VBox/EmptyState/EmptyVBox"]
 layout_mode = 2

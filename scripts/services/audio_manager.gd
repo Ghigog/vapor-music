@@ -20,6 +20,7 @@ signal smart_mixing_toggled(enabled: bool)
 signal position_changed(position: float)
 
 ## Playback-position broadcast rate, in Hz.
+const FileUtil = preload("res://scripts/services/file_util.gd")
 const POSITION_EMIT_HZ := 10.0
 var _position_emit_accum: float = 0.0
 
@@ -2466,10 +2467,7 @@ func _load_transition_history() -> Array:
 	return []
 
 func _save_transition_history(history: Array) -> void:
-	var file = FileAccess.open(_transition_history_file, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(history, "\t"))
-		file.close()
+	FileUtil.write_string_atomic(_transition_history_file, JSON.stringify(history, "\t"))
 
 func log_transition_event(track_a: String, track_b: String, transition_type: String, outcome: String) -> void:
 	if track_a.is_empty() or track_b.is_empty():

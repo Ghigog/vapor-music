@@ -1,4 +1,5 @@
 extends Button
+const ICON_SONG := preload("res://assets/icon/song-cropped.png")
 ## track_drag_button.gd
 ## Button that handles dragging library tracks, plus the two touch/desktop
 ## equivalents of "drop this on a playlist": long-press (mobile/touch) and
@@ -73,15 +74,26 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	for key in extras:
 		data[key] = extras[key]
 	
-	var preview = Label.new()
-	preview.text = "♫  " + track_title
-	preview.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
-	preview.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
-	preview.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
-	
+	var preview_icon = TextureRect.new()
+	preview_icon.texture = ICON_SONG
+	preview_icon.custom_minimum_size = Vector2(16, 16)
+	preview_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	preview_icon.self_modulate = ThemeManager.current_theme.TEXT_PRIMARY
+
+	var preview_label = Label.new()
+	preview_label.text = track_title
+	preview_label.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+	preview_label.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+	preview_label.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+
+	var preview_hbox = HBoxContainer.new()
+	preview_hbox.add_theme_constant_override("separation", 6)
+	preview_hbox.add_child(preview_icon)
+	preview_hbox.add_child(preview_label)
+
 	var container = PanelContainer.new()
 	container.add_theme_stylebox_override("panel", ThemeManager.make_glass_panel(ThemeManager.current_theme.RADIUS_SM, 0.85))
-	container.add_child(preview)
+	container.add_child(preview_hbox)
 	set_drag_preview(container)
 	
 	return data

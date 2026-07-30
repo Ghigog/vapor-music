@@ -4,6 +4,9 @@
 ## the active-tab highlight in sync with NavManager signals.
 extends Control
 
+const ICON_LIBRARY := preload("res://assets/icon/library-cropped.png")
+const ICON_SETTINGS := preload("res://assets/icon/settings-cropped.png")
+
 @onready var glass_pill:   PanelContainer = $GlassPill
 @onready var tab_library:  Button         = $GlassPill/TabRow/TabLibrary
 @onready var tab_search:   Button         = $GlassPill/TabRow/TabSearch
@@ -41,6 +44,8 @@ func _apply_pill_style() -> void:
 
 
 func _setup_tab_buttons() -> void:
+	tab_library.icon = ICON_LIBRARY
+	tab_settings.icon = ICON_SETTINGS
 	for tab_name: String in _tabs:
 		var btn: Button = _tabs[tab_name]
 		btn.pressed.connect(_on_tab_pressed.bind(tab_name))
@@ -58,12 +63,17 @@ func _style_tab_button(btn: Button, active: bool) -> void:
 	btn.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
 	btn.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_2XS)
 	btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+	# Source PNGs are 512x512 — Button.icon draws at native resolution unless
+	# capped, so without this the icon overflows the tab entirely.
+	btn.add_theme_constant_override("icon_max_width", 18)
 	var color := ThemeManager.current_theme.ACCENT_CORE if active else ThemeManager.current_theme.TEXT_TERTIARY
 	btn.add_theme_stylebox_override("normal",  ThemeManager.make_transparent())
 	btn.add_theme_stylebox_override("hover",   ThemeManager.make_nav_item_hover())
 	btn.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
 	btn.add_theme_color_override("font_color",       color)
 	btn.add_theme_color_override("font_hover_color", ThemeManager.current_theme.TEXT_SECONDARY)
+	btn.add_theme_color_override("icon_normal_color", color)
+	btn.add_theme_color_override("icon_hover_color",  ThemeManager.current_theme.TEXT_SECONDARY)
 
 
 func _set_active_tab(screen_name: String) -> void:

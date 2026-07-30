@@ -15,6 +15,7 @@ const GlassModal = preload("res://scripts/ui/glass_modal.gd")
 ## handed straight to the group_btn on drill-in.
 const ENTITY_TYPES := [TrackIndex.GROUP_ARTIST, TrackIndex.GROUP_ALBUM, TrackIndex.GROUP_GENRE]
 const ENTITY_LABELS := {"artist": "Artist", "album": "Album", "genre": "Genre"}
+const CARD_ART_SIZE := 36
 
 ## A rebuild-on-interaction list needs a row's own click handler to trigger
 ## another rebuild — a real bound method on an object, not a Callable that
@@ -357,10 +358,37 @@ func _make_card(entity_type: String, value: String) -> Control:
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", theme.SPACE_1)
-	margin.add_child(vbox)
 
-	# Type badge (no imagery here by design — see Phase 6 for enrichment;
-	# this card shows what the app is CERTAIN of: the entity's own name).
+	# Artist/album cards get a circle/rounded-square art slot beside the
+	# labels; genre has no natural image, so it stays text-only.
+	if entity_type == "artist" or entity_type == "album":
+		var art_row := HBoxContainer.new()
+		art_row.add_theme_constant_override("separation", theme.SPACE_2)
+		margin.add_child(art_row)
+
+		var art := TextureRect.new()
+		art.custom_minimum_size = Vector2(CARD_ART_SIZE, CARD_ART_SIZE)
+		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		art.stretch_mode = TextureRect.STRETCH_SCALE
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if entity_type == "artist":
+			ThumbnailService.apply_circle_mask(art)
+		else:
+			ThumbnailService.apply_rounded_mask(art, theme.RADIUS_XS)
+		art_row.add_child(art)
+
+		var art_path := MetadataService.get_entity_image_path(entity_type, value)
+		if not art_path.is_empty():
+			ThumbnailService.request(art_path, func(tex: Texture2D) -> void:
+				if is_instance_valid(art):
+					art.texture = tex
+			, 96)
+
+		art_row.add_child(vbox)
+	else:
+		margin.add_child(vbox)
+
+	# Type badge.
 	var badge := Label.new()
 	badge.text = ENTITY_LABELS.get(entity_type, entity_type)
 	badge.add_theme_font_override("font", theme.font_ui)

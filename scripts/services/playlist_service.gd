@@ -1,5 +1,7 @@
 extends Node
 
+const FileUtil = preload("res://scripts/services/file_util.gd")
+
 signal playlist_created(playlist: Dictionary)
 signal playlist_deleted(id: String)
 signal playlist_renamed(id: String, new_name: String)
@@ -43,10 +45,7 @@ func load_playlists() -> void:
 	playlists_loaded.emit()
 
 func save_playlists() -> void:
-	var file = FileAccess.open(playlist_file_path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(playlists, "\t"))
-		file.close()
+	FileUtil.write_string_atomic(playlist_file_path, JSON.stringify(playlists, "\t"))
 
 func get_playlists() -> Array:
 	var result = []

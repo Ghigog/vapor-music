@@ -31,10 +31,16 @@ layout_mode = 2
 [node name="HBox" type="HBoxContainer" parent="VBox/Header"]
 layout_mode = 2
 
+[node name="HeadingIcon" type="TextureRect" parent="VBox/Header/HBox"]
+custom_minimum_size = Vector2(22, 22)
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 5
+
 [node name="Heading" type="Label" parent="VBox/Header/HBox"]
 layout_mode = 2
 size_flags_horizontal = 3
-text = "🎛  Vibe Workbench"
+text = "Vibe Workbench"
 
 [node name="AnalysisStatus" type="Label" parent="VBox/Header/HBox"]
 layout_mode = 2
@@ -155,10 +161,12 @@ layout_mode = 2
 theme_override_constants/separation = 16
 mouse_filter = 2
 
-[node name="IconLabel" type="Label" parent="DisabledOverlay/Center/VBox"]
+[node name="IconLabel" type="TextureRect" parent="DisabledOverlay/Center/VBox"]
+custom_minimum_size = Vector2(48, 48)
 layout_mode = 2
-text = "🎛"
-horizontal_alignment = 1
+size_flags_horizontal = 4
+expand_mode = 1
+stretch_mode = 5
 mouse_filter = 2
 
 [node name="MsgLabel" type="Label" parent="DisabledOverlay/Center/VBox"]

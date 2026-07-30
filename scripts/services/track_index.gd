@@ -6,15 +6,17 @@
 ## beyond reading MetadataService's in-memory cache at build time.
 ##
 ## Row schema:
-##   href: String            — WebDAV path (identity)
-##   title: String           — display title (never percent-encoded)
-##   artist: String          — "Unknown Artist" sentinel when unknown
-##   album: String           — "Unknown Album" sentinel when unknown
-##   artist_source: String   — "cache" | "file" | "folder" | "unknown"
-##   album_source: String    — "cache" | "file" | "folder" | "unknown"
-##   genre: String           — "" when unknown
-##   bpm: float              — 0.0 when unknown
-##   key: String             — Camelot key, "" when unknown
+##   href: String              — WebDAV path (identity)
+##   title: String             — display title (never percent-encoded)
+##   artist: String            — "Unknown Artist" sentinel when unknown
+##   album: String             — "Unknown Album" sentinel when unknown
+##   artist_source: String     — "cache" | "file" | "folder" | "unknown"
+##   album_source: String      — "cache" | "file" | "folder" | "unknown"
+##   genre: String             — "" when unknown
+##   bpm: float                — 0.0 when unknown
+##   key: String               — Camelot key, "" when unknown
+##   album_art_local: String   — local image path, "" when not yet fetched
+##   artist_image_local: String — local image path, "" when not yet fetched
 ##
 ## No class_name on purpose: consumers preload this script into a const, which
 ## resolves without depending on the editor's global-class cache.
@@ -66,6 +68,8 @@ func build_row(href: String) -> Dictionary:
 		"bpm": 0.0,
 		"key": "",
 		"year": 0,
+		"album_art_local": "",
+		"artist_image_local": "",
 	}
 	if is_instance_valid(MetadataService):
 		var info: Dictionary = MetadataService.parse_track_info(href)
@@ -84,6 +88,8 @@ func build_row(href: String) -> Dictionary:
 				row.genre = genre
 			row.bpm = cached.get("bpm", 0.0)
 			row.key = cached.get("musical_key", "")
+			row.album_art_local = cached.get("album_art_local", "")
+			row.artist_image_local = cached.get("artist_image_local", "")
 	return row
 
 
