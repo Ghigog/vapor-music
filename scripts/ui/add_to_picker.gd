@@ -24,18 +24,35 @@ extends RefCounted
 class _Picker:
 	extends RefCounted
 	var list_vbox: VBoxContainer
+	## ScrollContainer wrapping list_vbox — a plain ScrollContainer reports a
+	## minimum size of (0,0) regardless of its content's real size (by design,
+	# so scrollable content never forces a parent to grow), which left this
+	## wrapped in a VBoxContainer with nothing reserving it any room: real
+	## playlist rows existed and had real height, but the ScrollContainer
+	## around them still got squeezed to zero — same bug shape as the
+	## blank-library toolbar-wrap issue. rebuild() gives it an explicit floor
+	## sized to the actual row count instead.
+	var list_scroll: ScrollContainer
 	var theme
 	var list_items: Callable
 	var is_checked: Callable
 	var toggle_item: Callable
 
+	## Cap on how many rows' worth of height the list reserves before it
+	## scrolls instead of growing further — a handful of playlists shouldn't
+	## show a big empty scroll area, and dozens shouldn't push the picker off
+	## the bottom of the screen.
+	const MAX_VISIBLE_ROWS := 6
+
 	func rebuild() -> void:
 		for child in list_vbox.get_children():
 			child.queue_free()
+		var row_h: int = ThemeManager.min_touch_height(28)
+		var count := 0
 		for item: Dictionary in list_items.call():
 			var row := Button.new()
 			row.alignment = HORIZONTAL_ALIGNMENT_LEFT
-			row.custom_minimum_size.y = ThemeManager.min_touch_height(28)
+			row.custom_minimum_size.y = row_h
 			row.add_theme_stylebox_override("normal", ThemeManager.make_transparent())
 			row.add_theme_stylebox_override("hover", ThemeManager.make_nav_item_hover())
 			row.add_theme_stylebox_override("pressed", ThemeManager.make_nav_item_hover())
@@ -48,6 +65,8 @@ class _Picker:
 			row.text = "  %s  %s" % ["✓" if is_checked.call(item) else "+", item.name]
 			row.pressed.connect(_on_row_pressed.bind(item))
 			list_vbox.add_child(row)
+			count += 1
+		list_scroll.custom_minimum_size.y = mini(count, MAX_VISIBLE_ROWS) * row_h
 
 	func _on_row_pressed(item: Dictionary) -> void:
 		toggle_item.call(item)
@@ -156,6 +175,7 @@ static func _show(context: Node, at_position: Vector2, title_text: String, creat
 
 	var picker := _Picker.new()
 	picker.list_vbox = list_vbox
+	picker.list_scroll = list_scroll
 	picker.theme = theme
 	picker.list_items = list_items
 	picker.is_checked = is_checked

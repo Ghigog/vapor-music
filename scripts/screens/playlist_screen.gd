@@ -37,6 +37,7 @@ var _compact_title: LineEdit
 func _setup_table(vbox: VBoxContainer) -> void:
 	_table = TrackTable.new()
 	_table.manual_mode = true
+	_table.show_save_view = true
 	vbox.add_child(_table)
 	vbox.move_child(_table, Scroll.get_index())
 	_table.play_requested.connect(_on_table_play_requested)
@@ -48,6 +49,10 @@ func _setup_table(vbox: VBoxContainer) -> void:
 	)
 	_table.insert_requested.connect(func(href: String, at_index: int) -> void:
 		PlaylistService.add_track_to_playlist_at_index(PlaylistService.active_playlist_id, href, at_index)
+	)
+	_table.save_selection_requested.connect(_on_save_selection_requested)
+	_table.remove_selection_requested.connect(func(manual_indices: Array) -> void:
+		PlaylistService.remove_tracks_from_playlist(PlaylistService.active_playlist_id, manual_indices)
 	)
 
 func _ready() -> void:
@@ -347,3 +352,13 @@ func _on_table_play_requested(row: Dictionary, queue: Array) -> void:
 	AudioManager.play_track(row.href, queue)
 	if is_instance_valid(MetadataService):
 		MetadataService.focus_track(row.href, row.artist, row.album, row.title)
+
+
+## The ✓ of selection mode: name the ticked tracks and freeze them, in view
+## order, into a NEW playlist — mirrors library_screen.gd's identical
+## handler. Still useful from inside a playlist (e.g. splitting a subset of
+## this one into its own smaller playlist), distinct from "Remove" above.
+func _on_save_selection_requested(hrefs: Array) -> void:
+	GlassModal.prompt_name(self, hrefs.size(), func(name: String) -> void:
+		PlaylistService.create_snapshot_playlist(name, hrefs)
+	)

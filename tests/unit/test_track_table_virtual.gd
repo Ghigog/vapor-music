@@ -199,6 +199,38 @@ func test_bound_cells_reflects_only_the_currently_visible_window() -> void:
 	assert_true(table._bound_cells.has("href_100"), "The newly-scrolled-to row should now be bound")
 
 
+func test_group_hrefs_populated_per_header_regardless_of_expand_state() -> void:
+	table._group_btn.select(table._group_keys.find(TrackIndex.GROUP_ARTIST))
+	table.set_rows([
+		_row("a", "Artist A", "Album A"), _row("b", "Artist A", "Album A"),
+		_row("c", "Artist B", "Album B"),
+	])
+	# Neither group is expanded, but _group_hrefs must still know every
+	# member — a collapsed group has no track Controls to derive this from.
+	assert_eq(table._group_hrefs.get("Artist A", []), ["a", "b"])
+	assert_eq(table._group_hrefs.get("Artist B", []), ["c"])
+
+
+func test_toggle_checked_group_selects_and_deselects_all_members() -> void:
+	table._group_btn.select(table._group_keys.find(TrackIndex.GROUP_ARTIST))
+	table.set_rows([
+		_row("a", "Artist A", "Album A"), _row("b", "Artist A", "Album A"),
+		_row("c", "Artist B", "Album B"),
+	])
+	table._enter_selection()
+	table._checked.clear()
+
+	table._toggle_checked_group("Artist A")
+	assert_true(table._checked.has("a"))
+	assert_true(table._checked.has("b"))
+	assert_false(table._checked.has("c"), "Selecting one group must not touch another group's tracks")
+
+	# Pressing the same (fully-checked) group again should deselect it.
+	table._toggle_checked_group("Artist A")
+	assert_false(table._checked.has("a"))
+	assert_false(table._checked.has("b"))
+
+
 func test_checkbox_state_survives_scrolling_away_and_back() -> void:
 	table._scroll.size = Vector2(300, 200)
 	table.set_rows(_many_rows(200))

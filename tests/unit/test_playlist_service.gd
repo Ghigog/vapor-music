@@ -122,6 +122,45 @@ func test_add_tracks_to_playlist_all_already_present_is_a_noop() -> void:
 	assert_eq(updated.tracks.size(), 2)
 
 
+func test_remove_tracks_from_playlist_bulk_removes_by_index() -> void:
+	var playlist = PlaylistService.create_playlist("Bulk Remove FM")
+	PlaylistService.add_track_to_playlist(playlist.id, "track1")
+	PlaylistService.add_track_to_playlist(playlist.id, "track2")
+	PlaylistService.add_track_to_playlist(playlist.id, "track3")
+	PlaylistService.add_track_to_playlist(playlist.id, "track4")
+
+	# Watch only starts here, after setup — the assertion below cares
+	# exclusively about the bulk remove's own emit count.
+	# Remove indices 1 and 3 (track2, track4) — deliberately out of order and
+	# with the LOWER index first, to prove removal doesn't shift indices out
+	# from under a later removal in the same batch.
+	var watcher = watch_signals(PlaylistService)
+	PlaylistService.remove_tracks_from_playlist(playlist.id, [1, 3])
+	assert_signal_emit_count(PlaylistService, "playlist_tracks_updated", 1, "One batched save/signal, not one per index")
+
+	var updated = PlaylistService.get_playlist(playlist.id)
+	assert_eq(updated.tracks.size(), 2)
+	assert_eq(updated.tracks[0], "track1")
+	assert_eq(updated.tracks[1], "track3")
+
+	# Verify persistence.
+	PlaylistService.load_playlists()
+	var loaded = PlaylistService.get_playlist(playlist.id)
+	assert_eq(loaded.tracks.size(), 2)
+
+
+func test_remove_tracks_from_playlist_empty_indices_is_a_noop() -> void:
+	var playlist = PlaylistService.create_playlist("Nothing To Remove FM")
+	PlaylistService.add_track_to_playlist(playlist.id, "track1")
+
+	var watcher = watch_signals(PlaylistService)
+	PlaylistService.remove_tracks_from_playlist(playlist.id, [])
+	assert_signal_not_emitted(PlaylistService, "playlist_tracks_updated")
+
+	var updated = PlaylistService.get_playlist(playlist.id)
+	assert_eq(updated.tracks.size(), 1)
+
+
 func test_reorder_tracks() -> void:
 	var playlist = PlaylistService.create_playlist("Reorder FM")
 	PlaylistService.add_track_to_playlist(playlist.id, "track1")

@@ -59,6 +59,10 @@ signal album_focused(album_name: String)
 ## Emitted when the user confirms a selection (✓) — the checked hrefs in the
 ## current sort order. The host names and creates the playlist.
 signal save_selection_requested(hrefs: Array)
+## Manual mode only — the ticked rows' playlist positions, so the host can
+## remove them in one batch. Indices, not hrefs: a playlist can hold the same
+## href more than once, so only position identifies which entry to drop.
+signal remove_selection_requested(manual_indices: Array)
 
 ## Flat and search modes build real nodes per row, so they are capped until
 ## the list is virtualized. Grouped modes stay lazy per group.
@@ -92,9 +96,9 @@ var _sort_key := "title"
 var _sort_asc := true
 var _collapsed: Dictionary = {}
 
-## Selection mode ("Save playlist"): every row gets a checkbox, pre-ticked
-## for what was on screen when it started — expansion is the selection
-## gesture. Row clicks toggle instead of play; ✓ confirms, ✕ abandons.
+## Selection mode ("Select"): every row gets a checkbox, pre-ticked for what
+## was on screen when it started — expansion is the selection gesture. Row
+## clicks toggle instead of play; ✓ confirms, ✕ abandons.
 var _selecting := false
 var _checked: Dictionary = {}
 var _row_checks: Dictionary = {}
@@ -102,9 +106,14 @@ const CHECK_W := 18
 
 ## Which group headers are expanded, keyed by header text — survives _render()
 ## rebuilds (entering/exiting selection mode re-renders the whole list; without
-## this every group snapped shut the instant "Save playlist" was pressed,
+## this every group snapped shut the instant "Select" was pressed,
 ## hiding the very selection the user just made).
 var _expanded_groups: Dictionary = {}
+
+## header text -> Array of hrefs in that group, refreshed each _render_virtual()
+## regardless of expand state. Lets a header click select the whole group while
+## selecting, even collapsed groups whose track rows were never built.
+var _group_hrefs: Dictionary = {}
 
 ## Width of a collapsed column's stub in the header and its spacer in rows.
 const COLLAPSED_W := 18
@@ -193,6 +202,8 @@ var _group_btn: OptionButton
 var _save_btn: Button
 var _confirm_btn: Button
 var _add_to_btn: Button
+## Manual mode only — bulk-removes the ticked rows from this playlist.
+var _remove_btn: Button
 var _cancel_btn: Button
 var _mobile_sort_btn: OptionButton
 var _mobile_dir_btn: Button
@@ -351,8 +362,9 @@ func _build_ui() -> void:
 
 	if show_save_view:
 		_save_btn = Button.new()
-		_save_btn.text = "Save playlist"
-		_save_btn.tooltip_text = "Pick tracks for a new playlist — what's on screen starts ticked"
+		_save_btn.text = "Select"
+		_save_btn.tooltip_text = ("Select tracks — remove them, add them to a playlist, or save as a new one"
+			if manual_mode else "Select tracks — save as a new playlist or add to an existing one")
 		_save_btn.pressed.connect(_enter_selection)
 		toolbar.add_child(_save_btn)
 
@@ -369,6 +381,14 @@ func _build_ui() -> void:
 		_add_to_btn.visible = false
 		_add_to_btn.pressed.connect(_on_add_to_pressed)
 		toolbar.add_child(_add_to_btn)
+
+		if manual_mode:
+			_remove_btn = Button.new()
+			_remove_btn.text = "Remove"
+			_remove_btn.tooltip_text = "Remove the ticked tracks from this playlist"
+			_remove_btn.visible = false
+			_remove_btn.pressed.connect(_on_remove_pressed)
+			toolbar.add_child(_remove_btn)
 
 		_cancel_btn = Button.new()
 		_cancel_btn.text = "  ✕  "
@@ -503,7 +523,7 @@ func _sort_field_list() -> Array:
 
 
 # ---------------------------------------------------------------------------
-# Selection mode (Save playlist)
+# Selection mode (Select)
 # ---------------------------------------------------------------------------
 
 func _enter_selection() -> void:
@@ -550,6 +570,26 @@ func _on_add_to_pressed() -> void:
 	AddToPicker.show_for_tracks(self, out, _add_to_btn.get_global_rect().position)
 
 
+## Manual mode only. Positions, not hrefs — a playlist can hold the same href
+## more than once, so only manual_pos identifies which entry to drop.
+func _checked_manual_indices() -> Array:
+	var out: Array = []
+	for row: Dictionary in _rows:
+		if _checked.has(row.href):
+			out.append(row.get("manual_pos", -1))
+	return out
+
+
+## "Remove" — drops the ticked tracks from this playlist. Unlike "Add to...",
+## this exits selection mode: the ticked rows are about to disappear, so
+## staying in a selection built around them doesn't make sense.
+func _on_remove_pressed() -> void:
+	var indices := _checked_manual_indices()
+	if not indices.is_empty():
+		remove_selection_requested.emit(indices)
+	_exit_selection()
+
+
 ## Pre-ticks what the user can currently see: in flat/search mode every match,
 ## in grouped mode only the tracks of groups they have expanded — expansion is
 ## the selection gesture. Reads _expanded_groups (not the live tree) so it
@@ -581,6 +621,8 @@ func _update_selection_buttons() -> void:
 	_save_btn.visible = not _selecting
 	_confirm_btn.visible = _selecting
 	_add_to_btn.visible = _selecting
+	if _remove_btn:
+		_remove_btn.visible = _selecting
 	_cancel_btn.visible = _selecting
 
 
@@ -592,6 +634,28 @@ func _toggle_checked(href: String) -> void:
 	var chk = _row_checks.get(href)
 	if chk and is_instance_valid(chk):
 		_apply_check_visual(chk, _checked.has(href))
+
+
+## While selecting, a group header click ticks/unticks every track in that
+## group in one gesture — works even collapsed, since _group_hrefs is
+## rebuilt from the full row set regardless of expand state. Toggle (not
+## always-on) so clicking an already-fully-checked group is a fast way to
+## deselect it again.
+func _toggle_checked_group(header: String) -> void:
+	var hrefs: Array = _group_hrefs.get(header, [])
+	if hrefs.is_empty():
+		return
+	var all_checked := true
+	for href in hrefs:
+		if not _checked.has(href):
+			all_checked = false
+			break
+	for href in hrefs:
+		if all_checked:
+			_checked.erase(href)
+		else:
+			_checked[href] = true
+	_render()
 
 
 ## Font-independent checkbox: an accent-filled rounded square when ticked, a
@@ -716,6 +780,8 @@ func _apply_styles() -> void:
 	if _save_btn:
 		toolbar_buttons.append(_save_btn)
 		toolbar_buttons.append(_add_to_btn)
+		if _remove_btn:
+			toolbar_buttons.append(_remove_btn)
 		toolbar_buttons.append(_cancel_btn)
 	if _confirm_btn:
 		_confirm_btn.add_theme_stylebox_override("normal", ThemeManager.make_cta_button(false))
@@ -852,6 +918,14 @@ func _render_virtual() -> void:
 	_view_hrefs = []
 	for row in rows:
 		_view_hrefs.append(row.href)
+
+	_group_hrefs.clear()
+	if group_key != TrackIndex.GROUP_NONE:
+		for group: Dictionary in TrackIndex.grouped(rows, group_key):
+			var hrefs: Array = []
+			for row: Dictionary in group.rows:
+				hrefs.append(row.href)
+			_group_hrefs[group.header] = hrefs
 
 	_build_col_header(group_key, rows.is_empty())
 
@@ -1297,6 +1371,9 @@ func _create_header_shell(group_key: String) -> Dictionary:
 			return
 		var slot: Dictionary = _slot_plan[entry.bound_index]
 		var header: String = slot.header
+		if _selecting:
+			_toggle_checked_group(header)
+			return
 		var expanded: bool = not _expanded_groups.get(header, false)
 		if expanded:
 			_expanded_groups[header] = true

@@ -145,6 +145,27 @@ func remove_track_from_playlist(id: String, index: int) -> void:
 			save_playlists()
 			playlist_tracks_updated.emit(id)
 
+## Batched multi-index remove for the table's bulk-select "Remove" action.
+## Removes highest index first so earlier positions in the same batch never
+## shift out from under a later removal — looping remove_track_from_playlist
+## for N indices would both save N times and remove the WRONG tracks once
+## the first removal shifted everything after it down by one.
+func remove_tracks_from_playlist(id: String, indices: Array) -> void:
+	if not playlists.has(id):
+		return
+	var tracks: Array = playlists[id]["tracks"]
+	var sorted_indices: Array = indices.duplicate()
+	sorted_indices.sort()
+	sorted_indices.reverse()
+	var removed := false
+	for index in sorted_indices:
+		if index >= 0 and index < tracks.size():
+			tracks.remove_at(index)
+			removed = true
+	if removed:
+		save_playlists()
+		playlist_tracks_updated.emit(id)
+
 func reorder_track_in_playlist(id: String, from_index: int, to_index: int) -> void:
 	if playlists.has(id):
 		var tracks = playlists[id]["tracks"]
