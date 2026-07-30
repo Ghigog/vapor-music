@@ -154,14 +154,45 @@ const SORT_FIELDS := ["title", "artist", "album", "genre", "year", "bpm", "key"]
 var _styled_cells: Array[Dictionary] = []
 
 ## href → {cells: {col_id: Label}} for visible rows, so metadata enrichment
-## during playback updates cells in place without a re-render.
+## during playback updates cells in place without a re-render. Manual mode
+## only (playlists) — every row is a real, permanent Control there, same as
+## before virtualization.
 var _live_cells: Dictionary = {}
+
+## Virtualized (non-manual) mode only — see "Virtual row list" section below.
+## href → pooled track-row entry, but ONLY for hrefs currently scrolled into
+## view; refresh_row() no-ops for anything not in here, same contract as
+## _live_cells for the (rare) case of an off-screen row.
+var _bound_cells: Dictionary = {}
+## Flat list of {kind:"header"|"track", height, ...} slots computed from
+## TrackIndex.grouped() + _expanded_groups — the whole scrollable content
+## described as pure data, before any row Control exists. Rebuilt whenever
+## the underlying rows/filter/sort/group/expand state changes.
+var _slot_plan: Array[Dictionary] = []
+## Cumulative height prefix sum, one longer than _slot_plan (offsets[i] is
+## the y where slot i starts; offsets[-1] is the total scrollable height).
+var _slot_offsets: PackedInt64Array = PackedInt64Array()
+## Recycled Control pools, one entry per currently-instantiated pooled row —
+## sized to roughly what the viewport can show, not to the full row count.
+## Each entry: {shell, bound_index: int, ...kind-specific fields}.
+var _header_pool: Array[Dictionary] = []
+var _track_pool: Array[Dictionary] = []
+## Identifies whether the CURRENT pool Controls match what layout/grouping/
+## column-visibility calls for — narrow-vs-wide, group_key, and which columns
+## are collapsed all change a row's Control SHAPE (not just its content), so
+## a pool built for one shape is wrong for another. Compared once per render;
+## a mismatch frees and rebuilds both pools from scratch.
+var _pool_shape_sig := ""
+## Permanent "No tracks." label for the virtualized path (manual mode builds
+## its own each render, same as before — see _render_manual()).
+var _empty_label: Label
 
 var _toolbar_margin: MarginContainer
 var _search_edit: LineEdit
 var _group_btn: OptionButton
 var _save_btn: Button
 var _confirm_btn: Button
+var _add_to_btn: Button
 var _cancel_btn: Button
 var _mobile_sort_btn: OptionButton
 var _mobile_dir_btn: Button
@@ -169,7 +200,10 @@ var _h_scroll: ScrollContainer
 var _col_header_margin: MarginContainer
 var _col_header: HBoxContainer
 var _scroll: ScrollContainer
-var _list: VBoxContainer
+## VBoxContainer in manual mode (auto-laid-out, unchanged from before
+## virtualization); a bare Control in the virtualized path, whose pooled
+## children are positioned/sized manually — see _rebind_visible().
+var _list: Control
 var _drop_indicator: ColorRect
 
 
@@ -237,9 +271,15 @@ func refresh_row(fresh: Dictionary) -> void:
 		_render()
 		return
 
-	if not _live_cells.has(fresh.href):
+	# Manual mode's rows are permanent Controls tracked in _live_cells; the
+	# virtualized path's are pooled and only tracked in _bound_cells while
+	# actually scrolled into view — refresh_row() no-ops for anything not
+	# currently bound there, same contract manual mode always had for a row
+	# that was never built in the first place.
+	var cell_map: Dictionary = _live_cells if manual_mode else _bound_cells
+	if not cell_map.has(fresh.href):
 		return
-	var live: Dictionary = _live_cells[fresh.href]
+	var live: Dictionary = cell_map[fresh.href]
 	var cells: Dictionary = live.cells
 	for col_id: String in cells:
 		var lbl: Label = cells[col_id]
@@ -268,7 +308,7 @@ func refresh_row(fresh: Dictionary) -> void:
 			fresh_art_path = MetadataService.get_entity_image_path(TrackIndex.GROUP_ARTIST, fresh.get("artist", ""))
 		if fresh_art_path != live.get("art_path", ""):
 			live.art_path = fresh_art_path
-			_request_art(art_rect, fresh_art_path)
+			_request_art(art_rect, fresh_art_path, 128, live if not manual_mode else {})
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +362,13 @@ func _build_ui() -> void:
 		_confirm_btn.visible = false
 		_confirm_btn.pressed.connect(_confirm_selection)
 		toolbar.add_child(_confirm_btn)
+
+		_add_to_btn = Button.new()
+		_add_to_btn.text = "Add to..."
+		_add_to_btn.tooltip_text = "Add the ticked tracks to an existing playlist"
+		_add_to_btn.visible = false
+		_add_to_btn.pressed.connect(_on_add_to_pressed)
+		toolbar.add_child(_add_to_btn)
 
 		_cancel_btn = Button.new()
 		_cancel_btn.text = "  ✕  "
@@ -402,16 +449,48 @@ func _build_ui() -> void:
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	h_content.add_child(_scroll)
-	_list = VBoxContainer.new()
-	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_list.add_theme_constant_override("separation", 2)
-	_scroll.add_child(_list)
 
-	_drop_indicator = ColorRect.new()
-	_drop_indicator.custom_minimum_size.y = 3
-	_drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_drop_indicator.visible = false
-	_list.add_child(_drop_indicator)
+	if manual_mode:
+		# Manual mode (playlists) stays exactly as before virtualization: every
+		# row is a real, permanent child of a normal auto-laying-out
+		# VBoxContainer. Playlists are human-curated and naturally small, and
+		# drag-reorder's drop-indicator positioning depends on real sibling
+		# indices — not worth the risk of rewriting for a virtual scroll when
+		# this path never had the performance problem virtualization solves.
+		_list = VBoxContainer.new()
+		_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_list.add_theme_constant_override("separation", 2)
+		_scroll.add_child(_list)
+
+		_drop_indicator = ColorRect.new()
+		_drop_indicator.custom_minimum_size.y = 3
+		_drop_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_drop_indicator.visible = false
+		_list.add_child(_drop_indicator)
+	else:
+		# Virtualized path: _list is a bare Control, not a Container — nothing
+		# auto-lays-out its children, so every pooled row's position/size is
+		# set explicitly (see _rebind_visible). custom_minimum_size.y is set to
+		# the FULL virtual content height each render, which is what drives
+		# the ScrollContainer's scrollbar range even though only a handful of
+		# rows are ever real Controls at once.
+		_list = Control.new()
+		_list.clip_contents = true
+		_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_scroll.add_child(_list)
+
+		_empty_label = Label.new()
+		_empty_label.visible = false
+		_empty_label.position = Vector2(ThemeManager.current_theme.SPACE_3, ThemeManager.current_theme.SPACE_2)
+		_register_cell(_empty_label, "meta")
+		_list.add_child(_empty_label)
+
+		# Every scroll path (wheel, scrollbar drag, touch, keyboard focus-
+		# scroll) ultimately calls Range.set_value() on the internal
+		# VScrollBar, so this fires reliably; _scroll.resized covers a window
+		# resize revealing more rows without any scrolling happening.
+		_scroll.get_v_scroll_bar().value_changed.connect(func(_v: float) -> void: _rebind_visible())
+		_scroll.resized.connect(_rebind_visible)
 
 
 func _reset_and_render() -> void:
@@ -441,9 +520,9 @@ func _exit_selection() -> void:
 	_render()
 
 
-func _confirm_selection() -> void:
-	# Checked hrefs in the current sort order — the selection can span
-	# collapsed groups and searches, so order comes from the full index.
+## Checked hrefs in the current sort order — the selection can span
+## collapsed groups and searches, so order comes from the full index.
+func _checked_hrefs_in_order() -> Array:
 	var rows: Array[Dictionary] = []
 	rows.assign(_rows)
 	TrackIndex.sort_rows(rows, _sort_key, _sort_asc)
@@ -451,9 +530,24 @@ func _confirm_selection() -> void:
 	for row in rows:
 		if _checked.has(row.href):
 			out.append(row.href)
+	return out
+
+
+func _confirm_selection() -> void:
+	var out := _checked_hrefs_in_order()
 	if not out.is_empty():
 		save_selection_requested.emit(out)
 	_exit_selection()
+
+
+## "Add to..." — adds the ticked tracks to an EXISTING playlist, without
+## leaving selection mode, so the same selection can be added to more than
+## one playlist before the user dismisses with ✓ or ✕.
+func _on_add_to_pressed() -> void:
+	var out := _checked_hrefs_in_order()
+	if out.is_empty():
+		return
+	AddToPicker.show_for_tracks(self, out, _add_to_btn.get_global_rect().position)
 
 
 ## Pre-ticks what the user can currently see: in flat/search mode every match,
@@ -486,6 +580,7 @@ func _update_selection_buttons() -> void:
 		return
 	_save_btn.visible = not _selecting
 	_confirm_btn.visible = _selecting
+	_add_to_btn.visible = _selecting
 	_cancel_btn.visible = _selecting
 
 
@@ -620,6 +715,7 @@ func _apply_styles() -> void:
 	var toolbar_buttons: Array = [_group_btn, _mobile_sort_btn, _mobile_dir_btn]
 	if _save_btn:
 		toolbar_buttons.append(_save_btn)
+		toolbar_buttons.append(_add_to_btn)
 		toolbar_buttons.append(_cancel_btn)
 	if _confirm_btn:
 		_confirm_btn.add_theme_stylebox_override("normal", ThemeManager.make_cta_button(false))
@@ -688,6 +784,16 @@ func _restyle_cells() -> void:
 # ---------------------------------------------------------------------------
 
 func _render() -> void:
+	if manual_mode:
+		_render_manual()
+	else:
+		_render_virtual()
+
+
+## Unchanged from before virtualization — every row is a real, permanent
+## Control. Manual mode is always flat (GROUP_NONE), so there's no grouping
+## branch here.
+func _render_manual() -> void:
 	for child in _list.get_children():
 		if child != _drop_indicator:
 			child.queue_free()
@@ -696,7 +802,44 @@ func _render() -> void:
 	_row_checks.clear()
 
 	var query := _search_edit.text.strip_edges()
-	var group_key: String = _group_keys[_group_btn.selected] if not manual_mode else TrackIndex.GROUP_NONE
+
+	var rows: Array[Dictionary] = []
+	rows.assign(_filtered(query))
+	TrackIndex.sort_rows(rows, _sort_key, _sort_asc)
+
+	_view_hrefs = []
+	for row in rows:
+		_view_hrefs.append(row.href)
+
+	_build_col_header(TrackIndex.GROUP_NONE, rows.is_empty())
+
+	if rows.is_empty():
+		var margin := MarginContainer.new()
+		margin.add_theme_constant_override("margin_left", ThemeManager.current_theme.SPACE_3)
+		margin.add_theme_constant_override("margin_top", ThemeManager.current_theme.SPACE_2)
+		var lbl := Label.new()
+		lbl.text = "No tracks match \"%s\"." % query if not query.is_empty() else "No tracks."
+		_register_cell(lbl, "meta")
+		margin.add_child(lbl)
+		_list.add_child(margin)
+		return
+
+	var shown: int = mini(rows.size(), _flat_shown)
+	for i in range(shown):
+		_list.add_child(_make_track_row(rows[i], TrackIndex.GROUP_NONE))
+	if rows.size() > shown:
+		_list.add_child(_make_show_more_row(rows.size() - shown))
+
+
+## Virtualized (non-manual) path: no Control is built per row/header here —
+## just the flat data plan + total scrollable height. Actual Controls are
+## handed out by _rebind_visible() from a small recycled pool, only for
+## whatever's currently scrolled into view.
+func _render_virtual() -> void:
+	_row_checks.clear()
+
+	var query := _search_edit.text.strip_edges()
+	var group_key: String = _group_keys[_group_btn.selected]
 	# An active search flattens to matches — searching into collapsed groups
 	# would hide the results it just found.
 	if not query.is_empty():
@@ -712,26 +855,102 @@ func _render() -> void:
 
 	_build_col_header(group_key, rows.is_empty())
 
+	var shape_sig := _current_shape_sig(group_key)
+	if shape_sig != _pool_shape_sig:
+		_clear_pools()
+		_pool_shape_sig = shape_sig
+
 	if rows.is_empty():
-		var margin := MarginContainer.new()
-		margin.add_theme_constant_override("margin_left", ThemeManager.current_theme.SPACE_3)
-		margin.add_theme_constant_override("margin_top", ThemeManager.current_theme.SPACE_2)
-		var lbl := Label.new()
-		lbl.text = "No tracks match \"%s\"." % query if not query.is_empty() else "No tracks."
-		_register_cell(lbl, "meta")
-		margin.add_child(lbl)
-		_list.add_child(margin)
+		_empty_label.text = "No tracks match \"%s\"." % query if not query.is_empty() else "No tracks."
+		_empty_label.visible = true
+		_slot_plan = []
+		_slot_offsets = PackedInt64Array([0])
+		_list.custom_minimum_size.y = 0
+		_pool_release_excess("header", 0)
+		_pool_release_excess("track", 0)
 		return
 
+	_empty_label.visible = false
+	_slot_plan = _build_slot_plan(rows, group_key)
+	_slot_offsets = _build_slot_offsets(_slot_plan)
+	_list.custom_minimum_size.y = _slot_offsets[_slot_offsets.size() - 1]
+	_rebind_visible()
+
+
+## Identifies the row Control SHAPE currently in effect — narrow-vs-wide
+## layout, the active grouping (changes which columns show), and which
+## columns are collapsed to a stub all change what a pooled row/header
+## Control looks like, not just its content. Deliberately excludes _selecting
+## (checkboxes are permanent children, just visibility-toggled) and
+## _col_widths (a resize changes width, not shape — handled live).
+func _current_shape_sig(group_key: String) -> String:
+	return "%s|%s|%s" % [PlatformManager.is_mobile_layout(), group_key, str(_collapsed.keys())]
+
+
+func _clear_pools() -> void:
+	for entry: Dictionary in _header_pool:
+		entry.shell.container.queue_free()
+	for entry: Dictionary in _track_pool:
+		entry.shell.container.queue_free()
+	_header_pool.clear()
+	_track_pool.clear()
+	_bound_cells.clear()
+	_row_checks.clear()
+	_styled_cells.clear()
+
+
+# ---------------------------------------------------------------------------
+# Virtual slot plan — pure data, no Controls. See track_table_virtual tests.
+# ---------------------------------------------------------------------------
+
+## Flattens TrackIndex.grouped() + _expanded_groups into ordered slots. A
+## collapsed group contributes ONE header slot and zero track slots — this
+## alone is what keeps a fully-collapsed grouped library to a handful of
+## Controls instead of one per group, before pooling even comes into it.
+func _build_slot_plan(rows: Array[Dictionary], group_key: String) -> Array[Dictionary]:
+	var narrow := PlatformManager.is_mobile_layout()
+	var track_h: int = ThemeManager.min_touch_height(44 if narrow else 28)
+	var header_h: int = ThemeManager.min_touch_height(28)
+	var plan: Array[Dictionary] = []
 	if group_key == TrackIndex.GROUP_NONE:
-		var shown: int = mini(rows.size(), _flat_shown)
-		for i in range(shown):
-			_list.add_child(_make_track_row(rows[i], group_key))
-		if rows.size() > shown:
-			_list.add_child(_make_show_more_row(rows.size() - shown))
-	else:
-		for group: Dictionary in TrackIndex.grouped(rows, group_key):
-			_add_group(group.header, group.rows, group_key)
+		for row: Dictionary in rows:
+			plan.append({"kind": "track", "row": row, "group_key": group_key, "height": track_h})
+		return plan
+	for group: Dictionary in TrackIndex.grouped(rows, group_key):
+		plan.append({"kind": "header", "header": group.header, "count": group.rows.size(), "group_key": group_key, "height": header_h})
+		if _expanded_groups.get(group.header, false):
+			for row: Dictionary in group.rows:
+				plan.append({"kind": "track", "row": row, "group_key": group_key, "height": track_h})
+	return plan
+
+
+## offsets[i] = y-position where slot i starts; offsets[N] = total height.
+func _build_slot_offsets(plan: Array[Dictionary]) -> PackedInt64Array:
+	var offsets := PackedInt64Array()
+	offsets.resize(plan.size() + 1)
+	offsets[0] = 0
+	for i in plan.size():
+		offsets[i + 1] = offsets[i] + int(plan[i].height)
+	return offsets
+
+
+## Returns [start, end) slot indices overlapping the vertical window
+## [scroll_y, scroll_y + viewport_h). Binary search over the offsets prefix
+## sum — offsets is strictly increasing (every slot height > 0), so a plain
+## bsearch is unambiguous.
+func _visible_slot_range(offsets: PackedInt64Array, scroll_y: float, viewport_h: float) -> Vector2i:
+	var n := offsets.size() - 1
+	if n <= 0:
+		return Vector2i.ZERO
+	# Largest i such that offsets[i] <= scroll_y.
+	var start_idx: int = offsets.bsearch(int(floor(scroll_y)), true)
+	if start_idx >= offsets.size() or offsets[start_idx] > scroll_y:
+		start_idx -= 1
+	start_idx = clampi(start_idx, 0, n - 1)
+	# Smallest i such that offsets[i] >= scroll_y + viewport_h.
+	var end_idx: int = offsets.bsearch(int(ceil(scroll_y + viewport_h)), true)
+	end_idx = clampi(end_idx, start_idx + 1, n)
+	return Vector2i(start_idx, end_idx)
 
 
 func _filtered(query: String) -> Array:
@@ -931,52 +1150,194 @@ func _on_sort_arrow_pressed(field: String) -> void:
 	_reset_and_render()
 
 
-func _add_group(header: String, rows: Array, group_key: String) -> void:
-	var section := VBoxContainer.new()
-	section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_list.add_child(section)
+# ---------------------------------------------------------------------------
+# Virtual row list — pool management + rebind (non-manual mode only)
+# ---------------------------------------------------------------------------
 
-	var header_row := _make_header_row(header, rows.size(), group_key)
-	section.add_child(header_row.container)
+## Returns the pool entry for `index` within the currently-visible run,
+## creating one (and adding it to _list) if the pool isn't that big yet.
+func _pool_get(kind: String, index: int, group_key: String) -> Dictionary:
+	var pool: Array = _header_pool if kind == "header" else _track_pool
+	if index < pool.size():
+		return pool[index]
+	var entry: Dictionary = _create_header_shell(group_key) if kind == "header" else _create_track_shell(group_key)
+	pool.append(entry)
+	_list.add_child(entry.shell.container)
+	return entry
 
-	var contents := VBoxContainer.new()
-	contents.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# Expansion state lives in _expanded_groups (survives rebuilds), not on
-	# this node — a fresh _render() recreates every section from scratch.
-	contents.set_meta("built", false)
-	section.add_child(contents)
 
-	var start_expanded: bool = _expanded_groups.get(header, false)
-	if start_expanded:
-		contents.set_meta("built", true)
-		for row: Dictionary in rows:
-			contents.add_child(_make_track_row(row, group_key))
-		header_row.arrow.texture = _icon_arrow_expanded()
-	contents.visible = start_expanded
+## Hides (never frees) any pool entries beyond what this rebind needs.
+func _pool_release_excess(kind: String, needed_count: int) -> void:
+	var pool: Array = _header_pool if kind == "header" else _track_pool
+	for i in range(needed_count, pool.size()):
+		var entry: Dictionary = pool[i]
+		entry.shell.container.visible = false
+		entry.bound_index = -1
 
-	header_row.button.pressed.connect(func() -> void:
+
+## Recomputes the visible slot range from current scroll position + viewport
+## size, and binds/positions/sizes pool Controls to cover exactly that range.
+## Called after every _render_virtual() and on every scroll/resize.
+func _rebind_visible() -> void:
+	if manual_mode or _slot_plan.is_empty():
+		return
+	var viewport_h: float = _scroll.size.y
+	var total_h: float = float(_slot_offsets[_slot_offsets.size() - 1])
+	var scroll_y: float = clampf(_scroll.scroll_vertical, 0.0, maxf(0.0, total_h - viewport_h))
+	var visible: Vector2i = _visible_slot_range(_slot_offsets, scroll_y, viewport_h)
+
+	var row_width: float = _scroll.size.x
+	var header_cursor := 0
+	var track_cursor := 0
+	# Rebuilt fresh every call from whatever's actually on screen right now —
+	# refresh_row() and _row_checks both key off this, so it must reflect the
+	# CURRENT visible set, not just what changed since the last rebind.
+	_bound_cells.clear()
+	_row_checks.clear()
+	for i in range(visible.x, visible.y):
+		var slot: Dictionary = _slot_plan[i]
+		var y: float = float(_slot_offsets[i])
+		var h: float = float(slot.height)
+		var kind: String = slot.kind
+		var entry: Dictionary = _pool_get(kind, header_cursor if kind == "header" else track_cursor, slot.group_key)
+		if kind == "header":
+			header_cursor += 1
+		else:
+			track_cursor += 1
+		if entry.bound_index != i:
+			if kind == "header":
+				_bind_header_shell(entry, slot)
+			else:
+				_bind_track_shell(entry, slot)
+			entry.bound_index = i
+		if kind == "track":
+			# Re-applied every rebind (not just on a fresh bind) — _bound_cells
+			# and _row_checks were just cleared above, so an already-bound row
+			# that's merely staying on screen across a scroll-only rebind still
+			# needs to be re-registered in both, or it'd silently drop out.
+			_checkbox_bind(entry.checkbox, entry.href)
+			_bound_cells[entry.href] = entry
+		entry.shell.container.position = Vector2(0, y)
+		entry.shell.container.size = Vector2(row_width, h)
+		entry.shell.container.visible = true
+
+	_pool_release_excess("header", header_cursor)
+	_pool_release_excess("track", track_cursor)
+
+
+## Wired once per pooled Control at creation — never re-attached per bind
+## (that would duplicate the gesture Timer/connections). Every handler below
+## reads state live off the button/entry instead of closing over the slot
+## data that was true when this shell happened to be created.
+func _create_header_shell(group_key: String) -> Dictionary:
+	var theme = ThemeManager.current_theme
+	var shell := _row_shell(28, theme.SPACE_3)
+
+	shell.button.set_script(GROUP_HEADER_DRAG_BUTTON)
+	shell.button._setup_gestures()
+	shell.button.long_pressed.connect(func(pos: Vector2) -> void:
+		if not shell.button.entity_type.is_empty():
+			AddToPicker.show_for_entity(self, shell.button.entity_type, shell.button.entity_value, pos)
+	)
+	shell.button.right_clicked.connect(func(pos: Vector2) -> void:
+		if not shell.button.entity_type.is_empty():
+			AddToPicker.show_for_entity(self, shell.button.entity_type, shell.button.entity_value, pos)
+	)
+
+	var hbox := HBoxContainer.new()
+	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_theme_constant_override("separation", 10)
+	shell.stack.add_child(hbox)
+	hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	# Circle for an artist's photo, rounded-square for an album's art — shape
+	# follows what's pictured (DESIGN_LANGUAGE §5.2). Presence/shape is fixed
+	# by group_key at creation time, safe since group_key is part of the pool
+	# shape signature (a group_key change frees and rebuilds both pools).
+	var art_rect: TextureRect = null
+	if group_key == TrackIndex.GROUP_ARTIST or group_key == TrackIndex.GROUP_ALBUM:
+		art_rect = _make_art_rect(HEADER_ART_SIZE, group_key == TrackIndex.GROUP_ARTIST)
+		hbox.add_child(art_rect)
+
+	var arrow_rect := TextureRect.new()
+	arrow_rect.texture = ICON_PLAY
+	arrow_rect.custom_minimum_size = Vector2(ARROW_ICON_SIZE, ARROW_ICON_SIZE)
+	arrow_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	arrow_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	arrow_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	arrow_rect.self_modulate = ThemeManager.current_theme.TEXT_PRIMARY
+	hbox.add_child(arrow_rect)
+
+	var lbl := Label.new()
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_register_cell(lbl, "header")
+	hbox.add_child(lbl)
+
+	var count_lbl := Label.new()
+	count_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	count_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_register_cell(count_lbl, "small")
+	hbox.add_child(count_lbl)
+
+	hbox.add_child(_make_trailing_spacer())
+
+	var entry: Dictionary = {
+		"shell": shell, "bound_index": -1, "label": lbl, "count_label": count_lbl,
+		"art_rect": art_rect, "art_path": "", "arrow": arrow_rect,
+	}
+
+	shell.button.pressed.connect(func() -> void:
 		# A long press already opened the "Add to Group" picker — the release
 		# ending it must not ALSO expand/collapse the section.
-		if header_row.button.suppress_next_click:
-			header_row.button.suppress_next_click = false
+		if shell.button.suppress_next_click:
+			shell.button.suppress_next_click = false
 			return
-		var expanded: bool = not contents.visible
-		if expanded and not contents.get_meta("built"):
-			contents.set_meta("built", true)
-			for row: Dictionary in rows:
-				contents.add_child(_make_track_row(row, group_key))
-		contents.visible = expanded
-		header_row.arrow.texture = _icon_arrow_expanded() if expanded else ICON_PLAY
+		if entry.bound_index < 0 or entry.bound_index >= _slot_plan.size():
+			return
+		var slot: Dictionary = _slot_plan[entry.bound_index]
+		var header: String = slot.header
+		var expanded: bool = not _expanded_groups.get(header, false)
 		if expanded:
 			_expanded_groups[header] = true
 		else:
 			_expanded_groups.erase(header)
 		if header != TrackIndex.UNKNOWN_HEADER:
-			if group_key == TrackIndex.GROUP_ARTIST:
+			if slot.group_key == TrackIndex.GROUP_ARTIST:
 				artist_focused.emit(header)
-			elif group_key == TrackIndex.GROUP_ALBUM:
+			elif slot.group_key == TrackIndex.GROUP_ALBUM:
 				album_focused.emit(header)
+		_render()
 	)
+
+	return entry
+
+
+func _bind_header_shell(entry: Dictionary, slot: Dictionary) -> void:
+	var header: String = slot.header
+	var group_key: String = slot.group_key
+	entry.label.text = header
+	entry.count_label.text = "%d" % slot.count
+	var expanded: bool = _expanded_groups.get(header, false)
+	entry.arrow.texture = _icon_arrow_expanded() if expanded else ICON_PLAY
+
+	var btn: Button = entry.shell.button
+	if group_key != TrackIndex.GROUP_NONE and header != TrackIndex.UNKNOWN_HEADER:
+		btn.entity_type = group_key
+		btn.entity_value = header
+	else:
+		btn.entity_type = ""
+		btn.entity_value = ""
+
+	if entry.art_rect != null:
+		if header != TrackIndex.UNKNOWN_HEADER:
+			var art_path: String = MetadataService.get_entity_image_path(group_key, header)
+			if art_path != entry.art_path:
+				entry.art_path = art_path
+				_request_art(entry.art_rect, art_path, 96, entry)
+		elif entry.art_path != "":
+			entry.art_path = ""
+			entry.art_rect.texture = null
 
 
 # ---------------------------------------------------------------------------
@@ -1031,83 +1392,22 @@ func _make_art_rect(size: int, circle: bool) -> TextureRect:
 ## Resolves `rect`'s texture from a cache-only local path. Empty path clears
 ## it (e.g. not enriched yet); a cache miss decodes in the background and
 ## fills in later, guarded against the row having been freed by a re-render.
-func _request_art(rect: TextureRect, path: String, max_size: int = 128) -> void:
+## `entry`, when given, is a pooled row/header's own data dict — since it's
+## rebound to different content across its lifetime (recycling), the decode
+## callback re-checks entry.art_path against what was actually requested
+## before applying the texture, so a slow decode for row A can't land on
+## row B's Control after the pool reused it for a different track/header.
+func _request_art(rect: TextureRect, path: String, max_size: int = 128, entry: Dictionary = {}) -> void:
 	if path.is_empty():
 		rect.texture = null
 		return
 	ThumbnailService.request(path, func(tex: Texture2D) -> void:
-		if is_instance_valid(rect):
-			rect.texture = tex
+		if not is_instance_valid(rect):
+			return
+		if not entry.is_empty() and entry.get("art_path", "") != path:
+			return
+		rect.texture = tex
 	, max_size)
-
-
-func _make_header_row(header: String, count: int, group_key: String = TrackIndex.GROUP_NONE) -> Dictionary:
-	var theme = ThemeManager.current_theme
-	var shell := _row_shell(28, theme.SPACE_3)
-
-	# Every header row gets the script — it no-ops (empty entity_type) for the
-	# unknown bucket and GROUP_NONE's single anonymous section. Where it's a
-	# real group, the whole group can be dragged onto a sidebar Dynamic Group
-	# to add it whole — e.g. drag "Björk" to add every Björk track as a
-	# live-resolving entity — or long-pressed/right-clicked for the same
-	# "Add to Group" picker the drag produces.
-	shell.button.set_script(GROUP_HEADER_DRAG_BUTTON)
-	shell.button._setup_gestures()
-	if group_key != TrackIndex.GROUP_NONE and header != TrackIndex.UNKNOWN_HEADER:
-		shell.button.entity_type = group_key
-		shell.button.entity_value = header
-		shell.button.long_pressed.connect(func(pos: Vector2) -> void:
-			AddToPicker.show_for_entity(self, group_key, header, pos)
-		)
-		shell.button.right_clicked.connect(func(pos: Vector2) -> void:
-			AddToPicker.show_for_entity(self, group_key, header, pos)
-		)
-
-	var hbox := HBoxContainer.new()
-	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_theme_constant_override("separation", 10)
-	shell.stack.add_child(hbox)
-	hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-
-	# Circle for an artist's photo, rounded-square for an album's art — shape
-	# follows what's pictured, not just "it's a header" (DESIGN_LANGUAGE §5.2).
-	if (group_key == TrackIndex.GROUP_ARTIST or group_key == TrackIndex.GROUP_ALBUM) and header != TrackIndex.UNKNOWN_HEADER:
-		var art := _make_art_rect(HEADER_ART_SIZE, group_key == TrackIndex.GROUP_ARTIST)
-		hbox.add_child(art)
-		_request_art(art, MetadataService.get_entity_image_path(group_key, header), 96)
-
-	var arrow_rect := TextureRect.new()
-	arrow_rect.texture = ICON_PLAY
-	arrow_rect.custom_minimum_size = Vector2(ARROW_ICON_SIZE, ARROW_ICON_SIZE)
-	arrow_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	arrow_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	arrow_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	arrow_rect.self_modulate = ThemeManager.current_theme.TEXT_PRIMARY
-	hbox.add_child(arrow_rect)
-
-	var lbl := Label.new()
-	lbl.text = header
-	# No clip_text: a clipped label without expand flags reports zero minimum
-	# width and vanishes. Headers take their natural width so the count sits
-	# beside them; the trailing spacer absorbs the rest.
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_register_cell(lbl, "header")
-	hbox.add_child(lbl)
-
-	var count_lbl := Label.new()
-	count_lbl.text = "%d" % count
-	count_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	count_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_register_cell(count_lbl, "small")
-	hbox.add_child(count_lbl)
-
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(spacer)
-
-	return {"container": shell.container, "button": shell.button, "label": lbl, "arrow": arrow_rect}
 
 
 func _cell_text(row: Dictionary, col_id: String) -> String:
@@ -1249,8 +1549,12 @@ func _set_col_width(col_id: String, width: int) -> void:
 	var header_cell: Control = _header_cells.get(col_id)
 	if header_cell and is_instance_valid(header_cell):
 		header_cell.custom_minimum_size.x = clamped
-	for href: String in _live_cells:
-		var width_nodes: Dictionary = _live_cells[href].get("width_nodes", {})
+	# Off-screen pooled rows pick up the new width from _col_widths the next
+	# time they're bound (_bind_track_shell re-applies every width_node on
+	# every bind) — this only needs to touch what's live right now.
+	var cell_map: Dictionary = _live_cells if manual_mode else _bound_cells
+	for href: String in cell_map:
+		var width_nodes: Dictionary = cell_map[href].get("width_nodes", {})
 		var node: Control = width_nodes.get(col_id)
 		if node and is_instance_valid(node):
 			node.custom_minimum_size.x = clamped
@@ -1473,6 +1777,200 @@ func _make_track_row(row: Dictionary, group_key: String) -> Control:
 	)
 
 	return shell.container
+
+
+# ---------------------------------------------------------------------------
+# Virtual row list — track-row shell (non-manual mode only; see _make_track_row
+# above for manual mode's unchanged, fully-materialized equivalent)
+# ---------------------------------------------------------------------------
+
+## Font-independent checkbox, wired once — reads its currently-bound href off
+## its own meta at click time rather than a captured value, since a pooled
+## checkbox is rebound to different hrefs across its lifetime.
+func _make_check_box_shell() -> Button:
+	var chk := Button.new()
+	chk.custom_minimum_size = Vector2(CHECK_W, CHECK_W)
+	chk.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	chk.focus_mode = Control.FOCUS_NONE
+	chk.set_meta("bound_href", "")
+	chk.pressed.connect(func() -> void: _toggle_checked(chk.get_meta("bound_href", "")))
+	return chk
+
+
+func _checkbox_bind(chk: Button, href: String) -> void:
+	chk.visible = _selecting
+	chk.set_meta("bound_href", href)
+	if _selecting:
+		_apply_check_visual(chk, _checked.has(href))
+		_row_checks[href] = chk
+
+
+func _create_track_shell(group_key: String) -> Dictionary:
+	var narrow := PlatformManager.is_mobile_layout()
+	var indent: int = ThemeManager.current_theme.SPACE_6 if group_key != TrackIndex.GROUP_NONE else ThemeManager.current_theme.SPACE_3
+	var shell := _row_shell(44 if narrow else 28, indent)
+
+	var btn: Button = shell.button
+	btn.set_script(TRACK_DRAG_BUTTON)
+	btn._setup_gestures()
+	btn.long_pressed.connect(func(pos: Vector2) -> void:
+		TrackContextMenu.show_for_track(self, btn.href, pos)
+	)
+	btn.right_clicked.connect(func(pos: Vector2) -> void:
+		TrackContextMenu.show_for_track(self, btn.href, pos)
+	)
+
+	var entry: Dictionary = {"shell": shell, "bound_index": -1, "href": "", "art_path": ""}
+	var checkbox := _make_check_box_shell()
+	entry["checkbox"] = checkbox
+
+	var cells: Dictionary = {}
+	var width_nodes: Dictionary = {}
+	var title_lbl: Label
+	var art_rect: TextureRect
+
+	if narrow:
+		var outer := HBoxContainer.new()
+		outer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		outer.add_theme_constant_override("separation", 8)
+		shell.stack.add_child(outer)
+		outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		outer.add_child(checkbox)
+
+		art_rect = _make_art_rect(ROW_ART_SIZE_NARROW, false)
+		outer.add_child(art_rect)
+
+		var vbox := VBoxContainer.new()
+		vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vbox.add_theme_constant_override("separation", 0)
+		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+		outer.add_child(vbox)
+
+		title_lbl = Label.new()
+		title_lbl.clip_text = true
+		title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_register_cell(title_lbl, "title")
+		vbox.add_child(title_lbl)
+
+		var sub := Label.new()
+		sub.clip_text = true
+		sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_register_cell(sub, "small")
+		vbox.add_child(sub)
+
+		cells = {"title": title_lbl, "sub": sub}
+	else:
+		var hbox := HBoxContainer.new()
+		hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hbox.add_theme_constant_override("separation", 10)
+		shell.stack.add_child(hbox)
+		hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		hbox.add_child(checkbox)
+
+		for col: Dictionary in _columns(group_key):
+			if col.get("collapsed", false):
+				var spacer := Control.new()
+				spacer.custom_minimum_size.x = COLLAPSED_W
+				spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				hbox.add_child(spacer)
+				continue
+			if col.id == "title":
+				var title_box := HBoxContainer.new()
+				title_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				title_box.add_theme_constant_override("separation", 6)
+				title_box.custom_minimum_size.x = col.width
+				hbox.add_child(title_box)
+				width_nodes[col.id] = title_box
+
+				art_rect = _make_art_rect(ROW_ART_SIZE_WIDE, false)
+				title_box.add_child(art_rect)
+
+				var title_cell := Label.new()
+				title_cell.clip_text = true
+				title_cell.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				title_cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				title_cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				_register_cell(title_cell, "title")
+				title_box.add_child(title_cell)
+				cells[col.id] = title_cell
+				hbox.add_child(_make_col_gap())
+				continue
+			var lbl := Label.new()
+			lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_apply_col_sizing(lbl, col)
+			_register_cell(lbl, "meta")
+			hbox.add_child(lbl)
+			cells[col.id] = lbl
+			width_nodes[col.id] = lbl
+			if col.has("width"):
+				hbox.add_child(_make_col_gap())
+		hbox.add_child(_make_trailing_spacer())
+		title_lbl = cells["title"]
+
+	entry["cells"] = cells
+	entry["width_nodes"] = width_nodes
+	entry["art_rect"] = art_rect
+	entry["title_lbl"] = title_lbl
+
+	btn.pressed.connect(func() -> void:
+		if btn.suppress_next_click:
+			btn.suppress_next_click = false
+			return
+		if _selecting:
+			_toggle_checked(btn.href)
+			return
+		if entry.bound_index >= 0 and entry.bound_index < _slot_plan.size():
+			var row: Dictionary = _slot_plan[entry.bound_index].row
+			play_requested.emit(row, _view_hrefs)
+	)
+	# Hover reads ThemeManager at call time and title_lbl is the SAME Label
+	# object across every rebind of this pooled shell, so this needs no
+	# live-read fix — only the row DATA varies per bind, not this reference.
+	btn.mouse_entered.connect(func() -> void:
+		title_lbl.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+	)
+	btn.mouse_exited.connect(func() -> void:
+		title_lbl.add_theme_color_override("font_color", _style_for_role("title").color)
+	)
+
+	return entry
+
+
+func _bind_track_shell(entry: Dictionary, slot: Dictionary) -> void:
+	var row: Dictionary = slot.row
+	var btn: Button = entry.shell.button
+	# Stop any long-press in flight against whatever this shell was PREVIOUSLY
+	# bound to — its release must not fire against the newly-bound row.
+	btn._press_timer.stop()
+	btn.suppress_next_click = false
+	btn.href = row.href
+	btn.track_title = row.title
+	entry.href = row.href
+
+	for col_id: String in entry.cells:
+		var lbl: Label = entry.cells[col_id]
+		if col_id == "sub":
+			lbl.text = _mobile_sub_text(row)
+		else:
+			lbl.text = _cell_text(row, col_id)
+			var role := _cell_role(row, col_id)
+			lbl.set_meta("role", role)
+			lbl.add_theme_color_override("font_color", _style_for_role(role).color)
+
+	for col_id: String in entry.width_nodes:
+		var node: Control = entry.width_nodes[col_id]
+		node.custom_minimum_size.x = _col_width(col_id)
+
+	var art_path: String = row.get("album_art_local", "")
+	if art_path.is_empty():
+		art_path = row.get("artist_image_local", "")
+	if art_path.is_empty():
+		art_path = MetadataService.get_entity_image_path(TrackIndex.GROUP_ARTIST, row.get("artist", ""))
+	if art_path != entry.art_path:
+		entry.art_path = art_path
+		_request_art(entry.art_rect, art_path, 128, entry)
 
 
 func _make_show_more_row(remaining: int) -> Control:

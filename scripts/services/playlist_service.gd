@@ -116,6 +116,27 @@ func add_track_to_playlist_at_index(playlist_id: String, track_href: String, ind
 			save_playlists()
 			playlist_tracks_updated.emit(playlist_id)
 
+## Batched multi-track add for the table's bulk-select "Add to..." action.
+## Unlike add_track_to_playlist, dedups against what's already in the
+## playlist (looping the single-track method for N hrefs would both create
+## duplicate entries and save+emit N times) and saves/emits exactly once.
+func add_tracks_to_playlist(playlist_id: String, hrefs: Array) -> void:
+	var playlist = get_playlist(playlist_id)
+	if playlist.is_empty():
+		return
+	var existing: Dictionary = {}
+	for href in playlist.tracks:
+		existing[href] = true
+	var added := false
+	for href in hrefs:
+		if not existing.has(href):
+			playlist.tracks.append(href)
+			existing[href] = true
+			added = true
+	if added:
+		save_playlists()
+		playlist_tracks_updated.emit(playlist_id)
+
 func remove_track_from_playlist(id: String, index: int) -> void:
 	if playlists.has(id):
 		var tracks = playlists[id]["tracks"]

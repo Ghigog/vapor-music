@@ -71,6 +71,29 @@ static func show_for_track(context: Node, href: String, at_position: Vector2) ->
 		list_items, is_checked, toggle_item, create_new)
 
 
+## Bulk variant for the table's multi-select "Add to..." action — one or more
+## tracks at once, into an EXISTING playlist. Deliberately not a checkbox
+## toggle like show_for_track: "is every one of these N tracks already in
+## this playlist" is a 3-state condition, not boolean, so is_checked always
+## reports false (every row always offers "+", never a misleading "✓") and
+## toggle_item only ever adds (add_tracks_to_playlist itself dedups, so
+## tapping the same playlist twice is a harmless no-op, not a duplicate).
+## The picker stays open after each tap (same as show_for_track) so the
+## selection can be added to more than one playlist in one sitting.
+static func show_for_tracks(context: Node, hrefs: Array, at_position: Vector2) -> void:
+	if hrefs.is_empty():
+		return
+	var list_items := func() -> Array: return PlaylistService.get_playlists()
+	var is_checked := func(_item: Dictionary) -> bool: return false
+	var toggle_item := func(item: Dictionary) -> void:
+		PlaylistService.add_tracks_to_playlist(item.id, hrefs)
+	var create_new := func(name: String) -> void:
+		var pl: Dictionary = PlaylistService.create_playlist(name)
+		PlaylistService.add_tracks_to_playlist(pl.id, hrefs)
+	_show(context, at_position, "Add %d Tracks to Playlist" % hrefs.size(), "New Playlist...",
+		list_items, is_checked, toggle_item, create_new)
+
+
 static func show_for_entity(context: Node, entity_type: String, value: String, at_position: Vector2) -> void:
 	var list_items := func() -> Array: return DynamicGroupService.get_dynamic_groups()
 	var is_checked := func(item: Dictionary) -> bool:

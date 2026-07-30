@@ -89,6 +89,39 @@ func test_add_and_remove_track() -> void:
 	updated = PlaylistService.get_playlist(playlist.id)
 	assert_eq(updated.tracks.size(), 0)
 
+func test_add_tracks_to_playlist_bulk_dedups_and_saves_once() -> void:
+	var watcher = watch_signals(PlaylistService)
+	var playlist = PlaylistService.create_playlist("Bulk Add FM")
+	PlaylistService.add_track_to_playlist(playlist.id, "track1")
+
+	PlaylistService.add_tracks_to_playlist(playlist.id, ["track1", "track2", "track3"])
+	assert_signal_emit_count(PlaylistService, "playlist_tracks_updated", 2, "1 from the setup add_track_to_playlist call + 1 from the bulk call")
+
+	var updated = PlaylistService.get_playlist(playlist.id)
+	assert_eq(updated.tracks.size(), 3, "track1 should not be duplicated")
+	assert_eq(updated.tracks[0], "track1")
+	assert_eq(updated.tracks[1], "track2")
+	assert_eq(updated.tracks[2], "track3")
+
+	# Verify persistence (single save, not one per href).
+	PlaylistService.load_playlists()
+	var loaded = PlaylistService.get_playlist(playlist.id)
+	assert_eq(loaded.tracks.size(), 3)
+
+
+func test_add_tracks_to_playlist_all_already_present_is_a_noop() -> void:
+	var playlist = PlaylistService.create_playlist("Already There FM")
+	PlaylistService.add_track_to_playlist(playlist.id, "track1")
+	PlaylistService.add_track_to_playlist(playlist.id, "track2")
+
+	var watcher = watch_signals(PlaylistService)
+	PlaylistService.add_tracks_to_playlist(playlist.id, ["track1", "track2"])
+	assert_signal_not_emitted(PlaylistService, "playlist_tracks_updated", "Nothing new to add, so no save/signal should fire")
+
+	var updated = PlaylistService.get_playlist(playlist.id)
+	assert_eq(updated.tracks.size(), 2)
+
+
 func test_reorder_tracks() -> void:
 	var playlist = PlaylistService.create_playlist("Reorder FM")
 	PlaylistService.add_track_to_playlist(playlist.id, "track1")

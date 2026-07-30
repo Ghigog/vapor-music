@@ -73,6 +73,10 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	var preview_icon = TextureRect.new()
 	preview_icon.texture = ICON_GROUP
 	preview_icon.custom_minimum_size = Vector2(16, 16)
+	# Without this, TextureRect's minimum size defaults to the texture's own
+	# native pixels (512x512 here), which wins over custom_minimum_size as a
+	# floor — the preview rendered at full source size instead of 16x16.
+	preview_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	preview_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	preview_icon.self_modulate = ThemeManager.current_theme.TEXT_PRIMARY
 

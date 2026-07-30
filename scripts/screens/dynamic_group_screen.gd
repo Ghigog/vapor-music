@@ -234,8 +234,10 @@ func _build_ui() -> void:
 
 	_table = TrackTable.new()
 	_table.manual_mode = false
+	_table.show_save_view = true
 	_table.visible = false
 	layout.add_child(_table)
+	_table.save_selection_requested.connect(_on_save_selection_requested)
 	# No separate "scope" call needed: AudioManager.play_track(href, queue) sets
 	# current_playlist = queue, and EVERY vibe/smart-mix feature (auto-transition
 	# matching, the Vibe screen's runner-up cards, harmonic shuffle) reads
@@ -258,6 +260,16 @@ func _build_ui() -> void:
 
 func _update_compact_header() -> void:
 	_compact_header.visible = not PlatformManager.should_show_sidebar()
+
+
+## The ✓ of selection mode: name the ticked tracks and freeze them, in view
+## order, into a normal playlist. Mirrors library_screen.gd's identical
+## handler — a Dynamic Group drill-in's rows are the same TrackTable
+## component, so "save what's ticked as a playlist" means the same thing here.
+func _on_save_selection_requested(hrefs: Array) -> void:
+	GlassModal.prompt_name(self, hrefs.size(), func(name: String) -> void:
+		PlaylistService.create_snapshot_playlist(name, hrefs)
+	)
 
 
 # ---------------------------------------------------------------------------
