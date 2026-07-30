@@ -5,3 +5,5 @@ compatibility_minimum = "4.1"
 [libraries]
 macos.debug = "res://bin/libaudio_dsp.macos.debug.dylib"
 macos.release = "res://bin/libaudio_dsp.macos.release.dylib"
+windows.debug.x86_64 = "res://bin/libaudio_dsp.windows.debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/libaudio_dsp.windows.release.x86_64.dll"

@@ -35,17 +35,27 @@ env.Append(LIBS=["essentia", "rubberband"])
 env.Append(CXXFLAGS=["-fexceptions"])
 
 # Configure macOS link flags and dynamic library naming
+sources = Glob("src/*.cpp")
+
 if env["platform"] == "macos":
     suffix = ".macos.debug.dylib" if env["target"] == "template_debug" else ".macos.release.dylib"
     # Ensure system dynamic linker searches local build and Homebrew directories for dependencies at runtime
     env.Append(LINKFLAGS=["-Wl,-rpath,@loader_path/../external/build/lib", "-Wl,-rpath,/opt/homebrew/lib", "-Wl,-rpath,/usr/local/lib"])
+    # Media Player framework backs the Now Playing / hardware media key bridge.
+    env.Append(LINKFLAGS=["-framework", "MediaPlayer", "-framework", "Foundation", "-framework", "AppKit"])
+    env.Append(CXXFLAGS=["-fobjc-arc"])
+    sources += Glob("src/platform/macos/*.mm")
+elif env["platform"] == "windows":
+    suffix = ".windows.debug.%s.dll" % env["arch"] if env["target"] == "template_debug" else ".windows.release.%s.dll" % env["arch"]
+    # windowsapp.lib is the umbrella import lib for C++/WinRT projection + activation.
+    env.Append(LIBS=["windowsapp"])
+    env.Append(CXXFLAGS=["/std:c++17", "/EHsc"])
+    sources += Glob("src/platform/windows/*.cpp")
 else:
     # Fallback suffix for other systems (development stubs)
-    suffix = env.gconf.get("SHLIBSUFFIX", ".so")
+    suffix = env["SHLIBSUFFIX"]
 
 library_name = "bin/libaudio_dsp" + suffix
 
-# Compile the source files
-sources = Glob("src/*.cpp")
 library = env.SharedLibrary(target=library_name, source=sources)
 Default(library)

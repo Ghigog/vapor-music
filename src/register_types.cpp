@@ -16,6 +16,9 @@ void audio_dsp_library_init(ModuleInitializationLevel p_level) {
 
 	essentia::init();
 	ClassDB::register_class<AudioDSP>();
+#ifdef VAPOR_HAS_MEDIA_CONTROLS
+	ClassDB::register_class<MediaControls>();
+#endif
 }
 
 void audio_dsp_library_terminate(ModuleInitializationLevel p_level) {
