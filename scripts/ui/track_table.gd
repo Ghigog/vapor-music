@@ -454,6 +454,7 @@ func _build_ui() -> void:
 	_h_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(_h_scroll)
 	var h_content := VBoxContainer.new()
+	h_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	h_content.add_theme_constant_override("separation", 0)
 	_h_scroll.add_child(h_content)
@@ -745,6 +746,16 @@ func _update_layout_mode() -> void:
 	var narrow := PlatformManager.is_mobile_layout()
 	_mobile_sort_btn.visible = narrow
 	_mobile_dir_btn.visible = narrow
+	# _h_scroll's horizontal scroll exists so a wide desktop table with many
+	# fixed-width columns can overflow sideways instead of squeezing the
+	# sidebar. Narrow layout collapses every row to one stacked art+label
+	# unit with nothing to overflow — left enabled there, the ScrollContainer
+	# sizes h_content (and everything inside it: toolbar, row list, its own
+	# scrollbar) to that unit's tiny natural width instead of the viewport,
+	# collapsing the whole table into a sliver down the left edge.
+	_h_scroll.horizontal_scroll_mode = (
+		ScrollContainer.SCROLL_MODE_DISABLED if narrow else ScrollContainer.SCROLL_MODE_AUTO
+	)
 	if narrow:
 		var idx: int = _sort_field_list().find(_sort_key)
 		if idx >= 0:

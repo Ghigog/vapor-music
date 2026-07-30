@@ -199,6 +199,29 @@ func test_bound_cells_reflects_only_the_currently_visible_window() -> void:
 	assert_true(table._bound_cells.has("href_100"), "The newly-scrolled-to row should now be bound")
 
 
+## Regression test for the narrow-layout bug where the whole table (toolbar,
+## row list, its own scrollbar) collapsed to a sliver at the left edge:
+## _h_scroll's horizontal scroll exists so a wide desktop table's fixed-width
+## columns can overflow sideways, but left enabled in narrow layout (where
+## rows are a single stacked art+label unit with nothing to overflow), the
+## ScrollContainer sized h_content to that unit's tiny natural width instead
+## of the viewport.
+func test_h_scroll_disables_horizontal_scrolling_in_narrow_layout() -> void:
+	var orig_bp = PlatformManager.current_breakpoint
+
+	PlatformManager.current_breakpoint = PlatformManager.BREAKPOINT_LG
+	table._update_layout_mode()
+	assert_eq(table._h_scroll.horizontal_scroll_mode, ScrollContainer.SCROLL_MODE_AUTO,
+		"Wide layout needs horizontal scroll for column overflow")
+
+	PlatformManager.current_breakpoint = PlatformManager.BREAKPOINT_XS
+	table._update_layout_mode()
+	assert_eq(table._h_scroll.horizontal_scroll_mode, ScrollContainer.SCROLL_MODE_DISABLED,
+		"Narrow layout has nothing to overflow — must stretch to full width instead")
+
+	PlatformManager.current_breakpoint = orig_bp
+
+
 func test_group_hrefs_populated_per_header_regardless_of_expand_state() -> void:
 	table._group_btn.select(table._group_keys.find(TrackIndex.GROUP_ARTIST))
 	table.set_rows([
