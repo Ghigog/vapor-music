@@ -31,7 +31,7 @@ func _ready() -> void:
 	# characters, inserted next to the existing "+" rather than a new scene node.
 	add_folder_btn = Button.new()
 	add_folder_btn.text = "▤+"
-	add_folder_btn.custom_minimum_size = Vector2(32, 32)
+	add_folder_btn.custom_minimum_size = ThemeManager.min_touch_size(Vector2(32, 32))
 	add_folder_btn.tooltip_text = "New Folder"
 	var header_hbox := add_btn.get_parent()
 	header_hbox.add_child(add_folder_btn)

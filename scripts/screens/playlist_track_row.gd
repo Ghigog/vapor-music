@@ -39,7 +39,10 @@ func _ready() -> void:
 	artist_label.add_theme_font_size_override("font_size", theme.TYPE_XS)
 	artist_label.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
 	
-	remove_btn.visible = false
+	# Hover-revealed on pointer input, but hover never fires on touch — always
+	# visible there instead (§14.6, matches dynamic_group_screen.gd's entity
+	# card remove button).
+	remove_btn.visible = PlatformManager.is_touch_primary()
 	# Scene bakes 24x24. Enforce the touch minimum on BOTH axes for icon buttons —
 	# this one removes a track, so a mis-tap is destructive and worth the space.
 	remove_btn.custom_minimum_size = ThemeManager.min_touch_size(remove_btn.custom_minimum_size)
@@ -67,16 +70,18 @@ func _on_remove_btn_pressed() -> void:
 
 func _on_mouse_entered() -> void:
 	add_theme_stylebox_override("panel", ThemeManager.make_nav_item_hover())
-	remove_btn.visible = true
+	if not PlatformManager.is_touch_primary():
+		remove_btn.visible = true
 
 func _on_mouse_exited() -> void:
 	var local_m_pos = get_local_mouse_position()
 	var rect = Rect2(Vector2.ZERO, size)
 	if rect.has_point(local_m_pos):
 		return # Hovering a child element like the remove button
-		
+
 	add_theme_stylebox_override("panel", ThemeManager.make_transparent())
-	remove_btn.visible = false
+	if not PlatformManager.is_touch_primary():
+		remove_btn.visible = false
 	
 	var node = get_parent()
 	var screen = null

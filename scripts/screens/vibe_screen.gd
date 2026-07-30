@@ -208,6 +208,7 @@ func _apply_styles() -> void:
 		help_button.add_theme_stylebox_override("hover", sb_btn_hover)
 		help_button.add_theme_stylebox_override("pressed", sb_btn_hover)
 		help_button.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+		help_button.custom_minimum_size = ThemeManager.min_touch_size(help_button.custom_minimum_size)
 
 	# Style help modal
 	if help_modal_panel:
@@ -240,6 +241,7 @@ func _apply_styles() -> void:
 		help_modal_close.add_theme_stylebox_override("hover", sb_close_hover)
 		help_modal_close.add_theme_stylebox_override("pressed", sb_close_hover)
 		help_modal_close.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+		help_modal_close.custom_minimum_size = ThemeManager.min_touch_size(help_modal_close.custom_minimum_size)
 		
 	if help_modal_text:
 		help_modal_text.add_theme_color_override("default_color", theme.TEXT_SECONDARY)

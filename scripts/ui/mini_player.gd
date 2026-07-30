@@ -10,6 +10,13 @@ const ICON_PLAY := preload("res://assets/icon/play-cropped.png")
 const ICON_PAUSE := preload("res://assets/icon/pause-cropped.png")
 const ICON_NEXT := preload("res://assets/icon/next-cropped.png")
 
+## Own-width threshold for collapsing nav labels to icon-only. Deliberately
+## NOT one of PlatformManager's canonical breakpoints (480/768/1080/1440) —
+## this bar packs 8 controls into its own full-window width, tighter than
+## the sidebar's tab-bar switch, so it needs to react earlier than the
+## general mobile-layout boundary.
+const ICON_ONLY_WIDTH_THRESHOLD := 540.0
+
 ## "Previous" is just "Next" mirrored — no separate asset. Cached lazily
 ## since flipping is a one-off cost, not something to redo per instance.
 static var _icon_prev_cache: ImageTexture = null
@@ -371,7 +378,7 @@ func _on_resized() -> void:
 	
 	var hbox: HBoxContainer = $VBox/HBox if has_node("VBox/HBox") else null
 	
-	if w < 540:
+	if w < ICON_ONLY_WIDTH_THRESHOLD:
 		if nav_library:   nav_library.text   = ""
 		if nav_vibe:      nav_vibe.text      = ""
 		if nav_playlists: nav_playlists.text = ""

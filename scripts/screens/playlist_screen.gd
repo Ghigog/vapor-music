@@ -88,15 +88,17 @@ func _ready() -> void:
 				_table.refresh_row(_row_builder.build_row(href))
 		)
 		
-	# Cover Hover & Edit Wiring
-	PencilBtn.visible = false
-	CoverContainer.mouse_entered.connect(func(): PencilBtn.visible = true)
-	CoverContainer.mouse_exited.connect(func():
-		var local_m_pos = CoverContainer.get_local_mouse_position()
-		var rect = Rect2(Vector2.ZERO, CoverContainer.size)
-		if not rect.has_point(local_m_pos):
-			PencilBtn.visible = false
-	)
+	# Cover Hover & Edit Wiring — hover never fires on touch, so the edit
+	# affordance stays permanently visible there instead (§14.6).
+	PencilBtn.visible = PlatformManager.is_touch_primary()
+	if not PlatformManager.is_touch_primary():
+		CoverContainer.mouse_entered.connect(func(): PencilBtn.visible = true)
+		CoverContainer.mouse_exited.connect(func():
+			var local_m_pos = CoverContainer.get_local_mouse_position()
+			var rect = Rect2(Vector2.ZERO, CoverContainer.size)
+			if not rect.has_point(local_m_pos):
+				PencilBtn.visible = false
+		)
 	PencilBtn.pressed.connect(func(): FileDialogNode.popup_centered_ratio(0.6))
 	FileDialogNode.file_selected.connect(_on_cover_file_selected)
 

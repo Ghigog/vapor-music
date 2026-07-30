@@ -773,19 +773,56 @@ func _update_lyrics_scroller(song_time: float) -> void:
 				label.remove_theme_color_override("font_outline_color")
 				label.remove_theme_constant_override("outline_size")
 
+## Mirrors track_drag_button.gd's long-press constants — kept local since
+## add_playlist_btn is the only sidebar control needing this (it isn't a
+## drag source, so reusing that whole script would be overkill).
+const _ADD_FOLDER_LONG_PRESS_SEC := 0.5
+const _ADD_FOLDER_MOVE_CANCEL_PX := 10.0
+
 func _setup_playlists_ui() -> void:
 	toggle_playlists_btn.pressed.connect(_on_toggle_playlists_pressed)
-	add_playlist_btn.pressed.connect(_on_add_playlist_pressed)
-	add_playlist_btn.tooltip_text = "New Playlist (right-click for a folder)"
+	add_playlist_btn.tooltip_text = "New Playlist (right-click, or long-press, for a folder)"
 	# One "+" — same as Dynamic Groups' — not two crowded side by side.
 	# Folder creation rides the same right-click/long-press vocabulary the
 	# app already uses for secondary actions elsewhere (track rows, group
-	# headers): right-click on desktop; touch still gets an explicit button
-	# in the mobile popup, since there's no hidden gesture there.
+	# headers): right-click on desktop, long-press on touch — needed even
+	# when the sidebar (not just the mobile popup) is visible, since a touch
+	# device can be wide enough to show it (§14.6: affordances follow input
+	# hardware, not layout width).
 	add_playlist_btn.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 			_on_add_folder_pressed()
 			get_viewport().set_input_as_handled()
+	)
+	var press_timer := Timer.new()
+	press_timer.one_shot = true
+	press_timer.wait_time = _ADD_FOLDER_LONG_PRESS_SEC
+	add_playlist_btn.add_child(press_timer)
+	var press_start_pos := Vector2.ZERO
+	# Checked-and-cleared at the top of the `pressed` handler below, same
+	# convention as track_drag_button.gd's suppress_next_click — the eventual
+	# release after a long-press must not ALSO create a new playlist.
+	var suppress_next_click := false
+	press_timer.timeout.connect(func() -> void:
+		suppress_next_click = true
+		_on_add_folder_pressed()
+	)
+	add_playlist_btn.pressed.connect(func() -> void:
+		if suppress_next_click:
+			suppress_next_click = false
+			return
+		_on_add_playlist_pressed()
+	)
+	add_playlist_btn.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				press_start_pos = event.position
+				press_timer.start()
+			else:
+				press_timer.stop()
+		elif event is InputEventMouseMotion and not press_timer.is_stopped():
+			if event.position.distance_to(press_start_pos) > _ADD_FOLDER_MOVE_CANCEL_PX:
+				press_timer.stop()
 	)
 
 	if PlaylistService:

@@ -24,9 +24,12 @@ var group_id: String = ""
 var group_name: String = ""
 
 func _ready() -> void:
-	icon = ICON_GROUP_ITEM
-	mouse_entered.connect(_on_mouse_entered)
-	mouse_exited.connect(_on_mouse_exited)
+	# Hover never fires on touch, so there's no other cue that this row is
+	# draggable there — show the grab icon permanently instead (§14.6).
+	icon = _icon_grab_rotated() if PlatformManager.is_touch_primary() else ICON_GROUP_ITEM
+	if not PlatformManager.is_touch_primary():
+		mouse_entered.connect(_on_mouse_entered)
+		mouse_exited.connect(_on_mouse_exited)
 
 func _on_mouse_entered() -> void:
 	icon = _icon_grab_rotated()
