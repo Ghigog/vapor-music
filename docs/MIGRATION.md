@@ -427,6 +427,68 @@ signals.
 
 Baseline confirmed restored at 78.7% / 0.754 after the revert.
 
+### MIG-006, MIG-007, MIG-001, MIG-005 — completed
+
+**MIG-006, clipping.** The three-band RMS guard was ported faithfully and did
+*not* fix the problem, which is worth recording because the original diagnosis
+in this document was wrong. Measured on the real Bass Swap transition:
+
+```
+  RMS  0.257    guard threshold 0.630   -> guard correctly does nothing
+  peak 1.000    crest factor 3.9x       -> the clipping is peak-domain
+```
+
+Modern masters run a crest factor near 4x, so two decks sum past full scale on
+transients while their combined RMS stays well under any sane threshold. No RMS
+guard catches that, and neither would the Godot original have. A master peak
+limiter (block look-ahead, 0.99 ceiling, instant attack, 250 ms release) is what
+actually fixes it. Both are kept: the RMS guard still prevents sustained
+low-end buildup, which is a different failure.
+
+| Transition | Before | After |
+|---|---|---|
+| Standard Crossfade | peak 0.869, 0 clipped | peak 0.869, 0 clipped |
+| Bass Swap | peak 1.000, **152 clipped** | peak 0.990, **0 clipped** |
+| Filter Sweep | peak 1.000, **1006 clipped** | peak 0.990, **0 clipped** |
+
+RMS is essentially unchanged (0.257 → 0.255), so the limiter is catching
+transients rather than squashing the mix.
+
+**MIG-007, tempo glide.** The incoming deck now eases back to its own tempo over
+6 s with sine easing instead of snapping. Tested for monotonicity — a ratio that
+wandered on the way back would be heard as wow and flutter.
+
+**MIG-001, key detection.** Two changes, each addressing an identified cause:
+
+| | Exact | Compatible |
+|---|---|---|
+| Baseline | 34.3% | 67.6% |
+| + harmonic-weighted chroma | 39.8% | 71.3% |
+| + per-frame normalisation | **48.1%** | **76.9%** |
+
+A harmonic pitch class profile fixes a real bias: a note at *f* also radiates at
+2*f*, 3*f* and 4*f*, whose classes are the octave, fifth and major third, so
+assigning each bin to its own class credits a plain C with energy at G and E and
+tilts every key toward major. Per-frame normalisation stops the loudest section
+deciding the key.
+
+Still short of shippable, and segmented analysis remains outstanding.
+
+**MIG-005, cue points and loudness.** `_analyze_samples_impl` was already pure
+portable code, so this is a translation rather than a reimplementation:
+
+| Metric | Mean abs error | Within tolerance |
+|---|---|---|
+| `cue_in` | 0.043 s | 99.1% within 0.5 s |
+| `cue_out` | 0.088 s | 96.3% within 0.5 s |
+| `lufs` | **0.003 LU** | **100%** within 1 LU |
+
+Agreement to 0.003 LU indicates the K-weighting and gating are faithful, not
+merely plausible. The LUFS test anchors on the standard rather than on Essentia
+— a −20 dBFS 1 kHz tone must read about −20 LUFS — so the port is checked
+against the specification too. These are load-bearing: `get_transition_trigger_time`
+schedules mixes from the cue points.
+
 ### MIG-002b, second attempt — and why this line of attack is closed
 
 A second attempt applied every lesson above: fractional stepping, only
@@ -656,12 +718,12 @@ resolved by, not when it must be started.
 
 | ID | Item | Phase | Source |
 |---|---|---|---|
-| MIG-001 | Key detection at 43.7% exact is too low to ship. Add segmented analysis producing `segment_keys` / `intro_key` / `outro_key`, and harmonic weighting in the chroma. | 1 | Spike results |
+| MIG-001 | Key detection. **Partly done** — harmonic-weighted chroma and per-frame normalisation took it from 34.3% to 48.1% exact on a 108-track subset. Segmented analysis (`segment_keys` / `intro_key` / `outro_key`) is still outstanding. | 1 | Spike results |
 | ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
 | MIG-002b | Resolve the ~10% tempo **metrical** errors. **Two attempts made and reverted; the beat-level approach is closed** — the signal is anti-correlated, and the errors are triple relations, not octaves. A third attempt means bar-level metre detection. Read *Phase 1 progress* first, and settle the product question before starting. | 1 | Phase 1 |
 | MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
 | MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
-| MIG-005 | Port the already-portable parts of `audio_dsp.cpp`: cue in/out, LUFS, dynamic range, transients, waveform peaks. | 1 | `audio_dsp.cpp` |
+| ~~MIG-005~~ | ~~Port the portable parts of `audio_dsp.cpp`.~~ **Mostly done** — cue in/out, LUFS and waveform peaks ported and validated (LUFS agrees to 0.003 LU). Dynamic range and transients still outstanding. | 1 | `audio_dsp.cpp` |
 | ~~MIG-006~~ | ~~Bass Swap clips.~~ **Done** — three-band RMS guard ported *and* a master peak limiter added. The RMS port alone did not fix it: the clipping is peak-domain (RMS 0.257 vs a 0.630 threshold, crest factor 3.9x), so the Godot original would not have caught it either. All three transitions now measure 0 clipped samples. | 2 | Mixer spike |
 | ~~MIG-007~~ | ~~Post-transition tempo snaps back to 1.0.~~ **Done** — eased over 6 s with sine easing, matching `_pitch_ramp_tween`. Tested for monotonicity, since a wandering ratio would be heard as wow and flutter. | 2 | Mixer spike |
 | MIG-008 | Implement the remaining transition types — Echo Out, Reverb Freeze, Tempo Morph — which need delay and reverb. | 2 | Mixer spike |
