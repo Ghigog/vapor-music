@@ -28,11 +28,40 @@ use crate::biquad::Sweep;
 use crate::clipping;
 use crate::deck::Deck;
 use crate::limiter::Limiter;
-use crate::transition::{Transition, TransitionType};
+use crate::transition::{sine_in_out, Transition, TransitionType};
 
 /// Maximum tempo adjustment. The Godot build ramps `_speed_scale_*` by 1–2%
 /// for beat sync and up to ~6% for a Tempo Morph.
 pub const MAX_STRETCH: f64 = 0.06;
+
+/// How long the incoming deck takes to return to its own tempo after a mix.
+///
+/// From `audio_manager.gd`, which glides `_speed_scale_*` back to 1.0 over 6 s
+/// with sine easing rather than snapping. Snapping is audible: the track jumps
+/// tempo the instant the mix ends, which is precisely the seam a beat-matched
+/// transition exists to hide.
+pub const TEMPO_GLIDE_SECS: f32 = 6.0;
+
+/// Ratio deviation below which no glide is worth scheduling.
+const GLIDE_EPSILON: f64 = 1e-4;
+
+/// Returns the incoming deck to its own tempo after a transition completes.
+struct TempoGlide {
+    from: f64,
+    elapsed: f32,
+    duration: f32,
+}
+
+impl TempoGlide {
+    fn ratio(&self) -> f64 {
+        let t = sine_in_out(self.elapsed / self.duration) as f64;
+        self.from + (1.0 - self.from) * t
+    }
+
+    fn is_complete(&self) -> bool {
+        self.elapsed >= self.duration
+    }
+}
 
 pub struct BeatGrid {
     pub bpm: f32,
@@ -71,6 +100,7 @@ pub struct Mixer {
     /// True when deck A is the outgoing deck.
     a_is_outgoing: bool,
     transition: Option<Transition>,
+    glide: Option<TempoGlide>,
     sample_rate: f32,
     scratch: Vec<[f32; 2]>,
     limiter: Limiter,
@@ -83,6 +113,7 @@ impl Mixer {
             deck_b: Deck::new(sample_rate),
             a_is_outgoing: true,
             transition: None,
+            glide: None,
             sample_rate,
             scratch: vec![[0.0; 2]; max_block],
             limiter: Limiter::new(sample_rate, max_block),
@@ -113,6 +144,11 @@ impl Mixer {
 
     pub fn is_transitioning(&self) -> bool {
         self.transition.is_some()
+    }
+
+    /// True while the active deck is easing back to its own tempo after a mix.
+    pub fn is_gliding(&self) -> bool {
+        self.glide.is_some()
     }
 
     pub fn transition_progress(&self) -> f32 {
@@ -232,9 +268,31 @@ impl Mixer {
                 now_playing.set_eq_db(0.0, 0.0, 0.0);
                 now_playing.set_clip_attenuation(crate::clipping::Bands::default());
                 now_playing.set_sweep(None);
-                // Tempo returns to the track's own after the mix completes —
-                // the "post-transition speed glide" in test_tempo_stretching.
-                now_playing.ratio = 1.0;
+
+                // Tempo returns to the track's own — but eased, not snapped.
+                // See TEMPO_GLIDE_SECS and test_post_transition_speed_glide.
+                let from = now_playing.ratio;
+                if (from - 1.0).abs() > GLIDE_EPSILON {
+                    self.glide = Some(TempoGlide {
+                        from,
+                        elapsed: 0.0,
+                        duration: TEMPO_GLIDE_SECS,
+                    });
+                } else {
+                    now_playing.ratio = 1.0;
+                }
+            }
+        }
+
+        // Advance the post-transition tempo glide. Runs after the transition
+        // has ended, so it is deliberately outside the transition branch above.
+        if let Some(g) = &mut self.glide {
+            g.elapsed = (g.elapsed + dt).min(g.duration);
+            let r = g.ratio();
+            let done = g.is_complete();
+            self.outgoing().ratio = if done { 1.0 } else { r };
+            if done {
+                self.glide = None;
             }
         }
 

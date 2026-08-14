@@ -222,7 +222,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 /// Godot `TRANS_SINE` with the default `EASE_IN_OUT`.
-fn sine_in_out(t: f32) -> f32 {
+pub(crate) fn sine_in_out(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     (1.0 - (std::f32::consts::PI * t).cos()) / 2.0
 }

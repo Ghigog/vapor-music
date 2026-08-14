@@ -194,16 +194,20 @@ fn implausible_tempo_pairs_are_refused_not_rendered() {
     assert!(!mixer.is_transitioning());
 }
 
-/// After the transition completes, the incoming deck becomes the active deck,
-/// at full level and back at its own tempo.
+/// After the transition completes, the incoming deck becomes the active deck at
+/// full level, and its tempo *eases* back to its own rather than snapping.
+///
+/// The snap was the original behaviour here and it is audible: the track jumps
+/// tempo the instant the mix ends, which is exactly the seam a beat-matched
+/// transition exists to hide. `audio_manager.gd` glides over 6 s.
 #[test]
-fn deck_roles_swap_and_tempo_returns_to_normal() {
+fn deck_roles_swap_and_tempo_glides_back() {
     let out_bpm = 128.0;
     let in_bpm = 126.0;
     let duration = 4.0;
 
-    let (out_samples, out_grid) = click_track(out_bpm, 90.0, 0.0);
-    let (in_samples, in_grid) = click_track(in_bpm, 90.0, 0.0);
+    let (out_samples, out_grid) = click_track(out_bpm, 120.0, 0.0);
+    let (in_samples, in_grid) = click_track(in_bpm, 120.0, 0.0);
 
     let mut mixer = Mixer::new(RATE, BLOCK);
     mixer.deck_a.load(out_samples);
@@ -221,14 +225,18 @@ fn deck_roles_swap_and_tempo_returns_to_normal() {
         )
         .unwrap();
 
-    // Deck B runs stretched during the mix.
-    assert!((mixer.deck_b.ratio - 1.0).abs() > 1e-6);
+    let stretched = mixer.deck_b.ratio;
+    assert!((stretched - 1.0).abs() > 1e-6, "deck B should be stretched");
 
     let mut block = [[0.0f32; 2]; BLOCK];
-    let blocks = ((duration + 0.5) * RATE / BLOCK as f32) as usize;
-    for _ in 0..blocks {
-        mixer.render(&mut block);
-    }
+    let render_secs = |m: &mut Mixer, b: &mut [[f32; 2]; BLOCK], secs: f32| {
+        for _ in 0..((secs * RATE / BLOCK as f32) as usize) {
+            m.render(b);
+        }
+    };
+
+    // Just past the end of the transition.
+    render_secs(&mut mixer, &mut block, duration + 0.2);
 
     assert!(
         !mixer.is_transitioning(),
@@ -239,11 +247,78 @@ fn deck_roles_swap_and_tempo_returns_to_normal() {
         "outgoing deck should have stopped"
     );
     assert!(mixer.deck_b.is_playing(), "incoming deck should still play");
+    assert!(mixer.is_gliding(), "tempo should be gliding, not snapped");
+
+    // Mid-glide: moved toward 1.0 but not arrived.
+    let mid = mixer.deck_b.ratio;
+    assert!(
+        (mid - 1.0).abs() < (stretched - 1.0).abs(),
+        "ratio should have moved toward 1.0 ({stretched:.5} -> {mid:.5})"
+    );
+    assert!(
+        (mid - 1.0).abs() > 1e-6,
+        "ratio snapped to 1.0 instead of gliding"
+    );
+
+    // Once the glide duration has elapsed it must land exactly on 1.0.
+    render_secs(
+        &mut mixer,
+        &mut block,
+        vapor_engine::mixer::TEMPO_GLIDE_SECS + 0.5,
+    );
+    assert!(!mixer.is_gliding(), "glide should have finished");
     assert!(
         (mixer.deck_b.ratio - 1.0).abs() < 1e-9,
-        "tempo should return to the track's own after the mix, got {}",
+        "tempo should end at exactly 1.0, got {}",
         mixer.deck_b.ratio
     );
+}
+
+/// The glide must be monotonic — a ratio that wanders on its way back would be
+/// heard as wow and flutter.
+#[test]
+fn tempo_glide_is_monotonic() {
+    let (out_samples, out_grid) = click_track(128.0, 120.0, 0.0);
+    let (in_samples, in_grid) = click_track(123.0, 120.0, 0.0);
+
+    let mut mixer = Mixer::new(RATE, BLOCK);
+    mixer.deck_a.load(out_samples);
+    mixer.deck_b.load(in_samples);
+    mixer.deck_a.seek_seconds(20.0);
+    mixer.deck_a.play();
+    mixer
+        .start_transition(
+            TransitionType::StandardCrossfade,
+            3.0,
+            &out_grid,
+            &in_grid,
+            20.0,
+            8.0,
+        )
+        .unwrap();
+
+    let mut block = [[0.0f32; 2]; BLOCK];
+    for _ in 0..((3.2 * RATE / BLOCK as f32) as usize) {
+        mixer.render(&mut block);
+    }
+
+    // Deck B is slower than deck A, so its ratio is above 1.0 and must fall.
+    let mut prev = mixer.deck_b.ratio;
+    assert!(prev > 1.0, "expected a ratio above 1.0, got {prev}");
+
+    let mut samples = 0;
+    while mixer.is_gliding() {
+        mixer.render(&mut block);
+        let r = mixer.deck_b.ratio;
+        assert!(
+            r <= prev + 1e-9,
+            "glide reversed direction: {prev:.6} -> {r:.6}"
+        );
+        prev = r;
+        samples += 1;
+        assert!(samples < 10_000, "glide did not terminate");
+    }
+    assert!((prev - 1.0).abs() < 1e-9);
 }
 
 /// The mix must never clip, across every transition type.

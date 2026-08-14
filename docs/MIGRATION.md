@@ -662,8 +662,8 @@ resolved by, not when it must be started.
 | MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
 | MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
 | MIG-005 | Port the already-portable parts of `audio_dsp.cpp`: cue in/out, LUFS, dynamic range, transients, waveform peaks. | 1 | `audio_dsp.cpp` |
-| MIG-006 | **Bass Swap clips** (152 clipped samples, 0.022%, measured). Port the three-band RMS clipping prevention from `calculate_chunk_rms` / `_clipping_attenuation_db`; the current hard clamp is only a safety net. | 2 | Mixer spike |
-| MIG-007 | Post-transition tempo snaps back to 1.0 instantly; the Godot build glides it via `_pitch_ramp_tween`. Implement the glide. | 2 | Mixer spike |
+| ~~MIG-006~~ | ~~Bass Swap clips.~~ **Done** — three-band RMS guard ported *and* a master peak limiter added. The RMS port alone did not fix it: the clipping is peak-domain (RMS 0.257 vs a 0.630 threshold, crest factor 3.9x), so the Godot original would not have caught it either. All three transitions now measure 0 clipped samples. | 2 | Mixer spike |
+| ~~MIG-007~~ | ~~Post-transition tempo snaps back to 1.0.~~ **Done** — eased over 6 s with sine easing, matching `_pitch_ramp_tween`. Tested for monotonicity, since a wandering ratio would be heard as wow and flutter. | 2 | Mixer spike |
 | MIG-008 | Implement the remaining transition types — Echo Out, Reverb Freeze, Tempo Morph — which need delay and reverb. | 2 | Mixer spike |
 | MIG-009 | Port the PLL drift correction, vocal-clash mid-cut and phrase-adaptive durations from `audio_manager.gd`. | 2 | Mixer spike |
 | ~~MIG-014~~ | ~~Octave-error detection must also cover metrical errors (3:4, 2:3).~~ **Done** — the class is 10.6%, not 4.4%. | 1 | Mixer spike |
