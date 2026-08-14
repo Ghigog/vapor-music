@@ -263,3 +263,76 @@ fn no_transition_clips_the_master() {
         assert!(peak > 0.05, "{kind:?} produced near-silence ({peak:.4})");
     }
 }
+
+/// MIG-006 regression. Bass Swap holds the outgoing deck at 0 dB while the
+/// incoming one reaches full level, so without the three-band guard their sum
+/// clips. Measured on a real transition before the fix: 152 clipped samples.
+///
+/// Each deck is a loud low tone that is safe *on its own* — only the sum can
+/// exceed unity. Click tracks are not used here: their 0.8 transients plus a
+/// loud tone would put a single deck over full scale, and the test would then
+/// be measuring its own fixture rather than the guard.
+#[test]
+fn bass_swap_does_not_clip_two_loud_decks() {
+    let bpm = 128.0;
+    let secs = 90.0;
+    let n = (secs * RATE) as usize;
+
+    let tone = |freq: f32, amp: f32| -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|i| {
+                let v = amp * (2.0 * std::f32::consts::PI * freq * i as f32 / RATE).sin();
+                [v, v]
+            })
+            .collect()
+    };
+
+    // 0.75 each: safe alone, and their sum reaches 1.5 without a guard.
+    let a_samples = tone(60.0, 0.75);
+    let b_samples = tone(55.0, 0.75);
+
+    let period = 60.0 / bpm;
+    let grid = |()| BeatGrid {
+        bpm,
+        beats: (0..((secs / period) as usize))
+            .map(|i| i as f32 * period)
+            .collect(),
+    };
+    let (a_grid, b_grid) = (grid(()), grid(()));
+
+    // Sanity: neither source clips on its own, so any clipping is the mix.
+    for src in [&a_samples, &b_samples] {
+        let peak = src
+            .iter()
+            .flat_map(|s| [s[0].abs(), s[1].abs()])
+            .fold(0.0f32, f32::max);
+        assert!(peak < 0.99, "fixture deck already peaks at {peak:.3}");
+    }
+
+    let mut mixer = Mixer::new(RATE, BLOCK);
+    mixer.deck_a.load(a_samples);
+    mixer.deck_b.load(b_samples);
+    mixer.deck_a.seek_seconds(20.0);
+    mixer.deck_a.play();
+    mixer
+        .start_transition(TransitionType::BassSwap, 6.0, &a_grid, &b_grid, 20.0, 8.0)
+        .unwrap();
+
+    let mut rendered = Vec::new();
+    let mut block = [[0.0f32; 2]; BLOCK];
+    for _ in 0..((7.0 * RATE / BLOCK as f32) as usize) {
+        mixer.render(&mut block);
+        rendered.extend_from_slice(&block);
+    }
+
+    let clipped = rendered
+        .iter()
+        .flat_map(|s| [s[0].abs(), s[1].abs()])
+        .filter(|&v| v >= 0.9995)
+        .count();
+
+    assert!(
+        clipped < 50,
+        "{clipped} clipped samples — the three-band guard is not holding the mix under unity"
+    );
+}

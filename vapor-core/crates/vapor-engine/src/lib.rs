@@ -18,7 +18,9 @@
 //! and wasm-compatible.
 
 pub mod biquad;
+pub mod clipping;
 pub mod deck;
+pub mod limiter;
 pub mod mixer;
 pub mod offline;
 pub mod stretch;

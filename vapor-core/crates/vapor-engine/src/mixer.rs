@@ -25,7 +25,9 @@
 //! the structural reason transitions there need drift correction at all.
 
 use crate::biquad::Sweep;
+use crate::clipping;
 use crate::deck::Deck;
+use crate::limiter::Limiter;
 use crate::transition::{Transition, TransitionType};
 
 /// Maximum tempo adjustment. The Godot build ramps `_speed_scale_*` by 1–2%
@@ -71,6 +73,7 @@ pub struct Mixer {
     transition: Option<Transition>,
     sample_rate: f32,
     scratch: Vec<[f32; 2]>,
+    limiter: Limiter,
 }
 
 impl Mixer {
@@ -82,7 +85,14 @@ impl Mixer {
             transition: None,
             sample_rate,
             scratch: vec![[0.0; 2]; max_block],
+            limiter: Limiter::new(sample_rate, max_block),
         }
+    }
+
+    /// Gain reduction currently applied by the master limiter, in dB.
+    /// Persistent large values mean the mix is being driven too hard.
+    pub fn limiter_reduction_db(&self) -> f32 {
+        self.limiter.reduction_db()
     }
 
     pub fn outgoing(&mut self) -> &mut Deck {
@@ -220,11 +230,39 @@ impl Mixer {
                 let now_playing = self.outgoing();
                 now_playing.set_gain_db(0.0);
                 now_playing.set_eq_db(0.0, 0.0, 0.0);
+                now_playing.set_clip_attenuation(crate::clipping::Bands::default());
                 now_playing.set_sweep(None);
                 // Tempo returns to the track's own after the mix completes —
                 // the "post-transition speed glide" in test_tempo_stretching.
                 now_playing.ratio = 1.0;
             }
+        }
+
+        // Clipping guard (MIG-006). Applied only during a transition, which is
+        // the only time two decks sum. Uses the previous block's measurement —
+        // the same one-block lag the Godot implementation has, since the level
+        // cannot be known until the block is rendered.
+        if self.transition.is_some() {
+            let a_out = self.a_is_outgoing;
+            let (o, i) = if a_out {
+                (&self.deck_a, &self.deck_b)
+            } else {
+                (&self.deck_b, &self.deck_a)
+            };
+            let atten = clipping::attenuation_db(
+                o.last_rms(),
+                i.last_rms(),
+                o.gain(),
+                i.gain(),
+                o.eq_db(),
+                i.eq_db(),
+            );
+            let outgoing = if a_out {
+                &mut self.deck_a
+            } else {
+                &mut self.deck_b
+            };
+            outgoing.set_clip_attenuation(atten);
         }
 
         let mut produced = 0;
@@ -237,9 +275,14 @@ impl Mixer {
             produced = produced.max(self.deck_b.render_additive(&mut out[..block], scratch));
         }
 
-        // Hard-clip guard. The Godot build runs three-band RMS clipping
-        // prevention on the master; this is only a safety net so a bug cannot
-        // produce a speaker-damaging spike.
+        // Master limiter. Two decks at full level sum past full scale on
+        // transients even when their combined RMS is modest — measured crest
+        // factor on real material is ~4x — so the three-band RMS guard above
+        // cannot catch this and neither could the Godot original.
+        self.limiter.process(&mut out[..block]);
+
+        // Hard clamp remains as a backstop only. If it ever engages, the
+        // limiter has been bypassed or a bug has produced a non-finite sample.
         for s in out[..block].iter_mut() {
             for v in s.iter_mut() {
                 *v = v.clamp(-1.0, 1.0);

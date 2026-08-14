@@ -10,6 +10,7 @@
 //! cannot drift from what was actually heard.
 
 use crate::biquad::{EqChain, Sweep};
+use crate::clipping::{BandRms, Bands};
 use crate::stretch::Stretcher;
 
 pub struct Deck {
@@ -24,6 +25,16 @@ pub struct Deck {
     /// Source frames consumed per output frame. 1.0 = original tempo.
     pub ratio: f64,
     playing: bool,
+
+    /// Three-band level meter, fed the raw signal before EQ and gain so the
+    /// clipping guard sees the source level rather than the result of its own
+    /// previous correction.
+    meter: BandRms,
+    last_rms: Bands,
+    /// Per-band ducking from the clipping guard, applied on top of the
+    /// transition's own EQ automation.
+    clip_atten: Bands,
+    eq_db: Bands,
 }
 
 impl Deck {
@@ -36,6 +47,10 @@ impl Deck {
             gain: 1.0,
             ratio: 1.0,
             playing: false,
+            meter: BandRms::default(),
+            last_rms: Bands::default(),
+            clip_atten: Bands::default(),
+            eq_db: Bands::default(),
         }
     }
 
@@ -43,7 +58,41 @@ impl Deck {
         self.samples = samples;
         self.stretcher.reset(0.0);
         self.eq.reset();
+        self.meter.reset();
+        self.last_rms = Bands::default();
+        self.clip_atten = Bands::default();
         self.playing = false;
+    }
+
+    /// Band levels of the most recently rendered block, before gain and EQ.
+    pub fn last_rms(&self) -> Bands {
+        self.last_rms
+    }
+
+    /// Linear gain currently applied, for the clipping guard.
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    /// EQ gains currently requested by the transition, before ducking.
+    pub fn eq_db(&self) -> Bands {
+        self.eq_db
+    }
+
+    /// Apply per-band ducking from the clipping guard.
+    pub fn set_clip_attenuation(&mut self, atten: Bands) {
+        self.clip_atten = atten;
+        self.refresh_eq();
+    }
+
+    fn refresh_eq(&mut self) {
+        // Ducking stacks on top of the transition's own EQ automation, matching
+        // `_apply_final_eq_gains` in audio_manager.gd.
+        self.eq.set_gains(
+            (self.eq_db.low + self.clip_atten.low).clamp(-40.0, 0.0),
+            (self.eq_db.mid + self.clip_atten.mid).clamp(-40.0, 0.0),
+            (self.eq_db.high + self.clip_atten.high).clamp(-40.0, 0.0),
+        );
     }
 
     pub fn play(&mut self) {
@@ -61,6 +110,7 @@ impl Deck {
     pub fn seek_seconds(&mut self, secs: f64) {
         self.stretcher.reset(secs * self.sample_rate as f64);
         self.eq.reset();
+        self.meter.reset();
     }
 
     pub fn position_seconds(&self) -> f64 {
@@ -82,7 +132,8 @@ impl Deck {
     }
 
     pub fn set_eq_db(&mut self, low: f32, mid: f32, high: f32) {
-        self.eq.set_gains(low, mid, high);
+        self.eq_db = Bands { low, mid, high };
+        self.refresh_eq();
     }
 
     pub fn set_sweep(&mut self, sweep: Option<Sweep>) {
@@ -109,6 +160,11 @@ impl Deck {
             self.playing = false;
             return 0;
         }
+
+        // Measure before EQ and gain: the guard needs the deck's source level,
+        // not the level after its own previous correction, or the ducking
+        // becomes a feedback loop.
+        self.last_rms = self.meter.measure(&scratch[..produced]);
 
         for i in 0..produced {
             for ch in 0..2 {
