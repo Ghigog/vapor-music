@@ -35,6 +35,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # cpal links ALSA on Linux, and `--all-targets` builds the `play` binary,
+      # so the dev headers are needed even though the library itself is
+      # platform-free. This is the system dependency cpal brings with it —
+      # relevant to MIG-011, which tracks validating cpal per platform.
+      - name: Install ALSA (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
