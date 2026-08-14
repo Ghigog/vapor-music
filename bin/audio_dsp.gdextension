@@ -5,5 +5,9 @@ compatibility_minimum = "4.1"
 [libraries]
 macos.debug = "res://bin/libaudio_dsp.macos.debug.dylib"
 macos.release = "res://bin/libaudio_dsp.macos.release.dylib"
-windows.debug.x86_64 = "res://bin/libaudio_dsp.windows.debug.x86_64.dll"
-windows.release.x86_64 = "res://bin/libaudio_dsp.windows.release.x86_64.dll"
+# Windows entries are intentionally absent: the DLL has never been built (no MSVC
+# environment here), and declaring a library Godot cannot find is a hard export
+# error. Windows falls back to audio_dsp_stub.gd. Re-add these two lines once
+# libaudio_dsp.windows.{debug,release}.x86_64.dll actually exist in bin/:
+#   windows.debug.x86_64 = "res://bin/libaudio_dsp.windows.debug.x86_64.dll"
+#   windows.release.x86_64 = "res://bin/libaudio_dsp.windows.release.x86_64.dll"

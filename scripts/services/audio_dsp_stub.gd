@@ -10,24 +10,36 @@ var _duration := 0.0
 var _playback_position := 0.0
 var _finished := false
 
+## One-shot guards so the per-chunk playback path doesn't spam the log.
+var _warned_stretch := false
+
+
+func _ready() -> void:
+	push_warning("AudioDSP stub active: no native DSP on this platform. BPM/key analysis and time-stretch are unavailable — tracks stay unanalyzed rather than showing fabricated values.")
+
+
 func get_library_version() -> String:
-	return "Stub (Essentia & Rubber Band fallback)"
+	return "Stub (no DSP — analysis and time-stretch unavailable)"
 
+## Returns empty — there is no analysis engine on this platform.
+##
+## This deliberately does NOT fabricate plausible-looking values. It previously
+## returned 120 BPM / "8A" / "Am" with a made-up intro/outro, which is
+## indistinguishable from a real Essentia result once it reaches the library
+## table or dj_pathfinder. Empty matches what AudioAnalyzer._perform_analysis()
+## already returns when `dsp` is null, so bpm stays 0.0 and the UI renders "—"
+## (track_table.gd _cell_text()) and the pathfinder skips the track.
 func analyze_file(_file_path_param: String) -> Dictionary:
-	# Return a basic default analysis dictionary
-	return {
-		"bpm": 120.0,
-		"camelot_key": "8A",
-		"key": "Am",
-		"beat_grid": [],
-		"segments": {
-			"intro": [0.0, 10.0],
-			"outro": [180.0, 190.0]
-		},
-		"transients": []
-	}
+	push_warning("AudioDSP stub: no analysis engine on this platform — returning no result.")
+	return {}
 
+## Passthrough — audio comes back at its original tempo, so `_ratio` is ignored
+## and beat-matched transitions will not actually sync. Warned once, not per
+## chunk, because this sits on the playback hot path.
 func stretch_buffer(input_samples: PackedFloat32Array, _ratio: float) -> PackedFloat32Array:
+	if not _warned_stretch:
+		_warned_stretch = true
+		push_warning("AudioDSP stub: time-stretch unavailable — audio passes through at original tempo.")
 	return input_samples
 
 func analyze_samples(_samples: PackedFloat32Array, _sample_rate: float) -> Dictionary:

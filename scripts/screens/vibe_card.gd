@@ -80,15 +80,17 @@ func setup(href: String, meta: Dictionary, cost: float, type: String, is_selecte
 	ksb.set_corner_radius_all(theme.RADIUS_XS)
 	key_badge.add_theme_stylebox_override("normal", ksb)
 	
-	# BPM Badge (including change)
-	var bpm = int(meta.get("bpm", 120.0))
-	var bpm_change_val = 0.0
-	if current_bpm > 0.0:
-		bpm_change_val = bpm - current_bpm
-		
-	var bpm_text = "%d BPM" % bpm
-	if bpm_change_val != 0.0:
-		bpm_text += " (%+d)" % int(bpm_change_val)
+	# BPM Badge (including change). Unanalyzed tracks show "--" to match the key
+	# badge above and the "—" the library table uses, rather than inventing 120.
+	var bpm = int(meta.get("bpm", 0.0))
+	var bpm_text = "-- BPM"
+	if bpm > 0:
+		bpm_text = "%d BPM" % bpm
+		var bpm_change_val = 0.0
+		if current_bpm > 0.0:
+			bpm_change_val = bpm - current_bpm
+		if bpm_change_val != 0.0:
+			bpm_text += " (%+d)" % int(bpm_change_val)
 		
 	bpm_label.text = bpm_text
 	bpm_label.add_theme_color_override("font_color", theme.TEXT_SECONDARY)
