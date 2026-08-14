@@ -427,6 +427,56 @@ signals.
 
 Baseline confirmed restored at 78.7% / 0.754 after the revert.
 
+### MIG-002b, second attempt — and why this line of attack is closed
+
+A second attempt applied every lesson above: fractional stepping, only
+dimensionless ratios (evenness of even/odd beats, midpoint energy over beat
+energy), octave candidates only, and an override margin so an ambiguous case
+keeps the autocorrelation answer.
+
+It scored **66.7% exact / 0.727 mean F** against the 78.7% / 0.754 baseline —
+better than the first attempt, still worse than doing nothing.
+
+Rather than tune the margin, a diagnostic measured the prior question: **does
+the fit signal separate correct estimates from metrical errors at all?** For
+each track it classified the unrefined estimate against Essentia and recorded
+the margin `fit(alternative) − fit(estimate)`.
+
+| Population | n | mean margin | median |
+|---|---|---|---|
+| Estimate already correct — margin must be **negative** | 135 | **+0.049** | +0.059 |
+| Estimate needs doubling — margin must be **positive** | 8 | +0.030 | +0.124 |
+| Estimate needs halving | 0 | — | — |
+
+The distributions overlap completely, and in the wrong direction: correct
+estimates score *higher* than ones needing correction. Sweeping the threshold
+confirms no separating value exists —
+
+```
+  margin 0.00:  fixes 5/8   breaks 84/135   net -79
+  margin 0.15:  fixes 3/8   breaks 47/135   net -44
+  margin 0.50:  fixes 0/8   breaks 15/135   net -15
+```
+
+**Two conclusions, both firm:**
+
+1. **The on-beat / midpoint / alternation signal is uninformative on real
+   music.** It is not weak or badly weighted — it is slightly *anti*-correlated
+   with the thing it is supposed to detect. No threshold and no reweighting
+   rescues it. This line of attack is closed.
+2. **Octave relations are not where the errors are.** Only 8 of ~200 tracks had
+   an octave error, and none needed halving. The residual ~10% is dominated by
+   **triple relations** (2:3, 3:4) — compound meter read as straight or vice
+   versa. A perfect octave corrector would fix roughly 4% of tracks.
+
+**What a third attempt would have to do**, if the error rate ever becomes worth
+paying for: work at the *bar* level rather than the beat level. Triple-versus-
+duple is a question about metre, so it needs downbeat detection and a metrical
+hierarchy (is the pattern grouping in 3s or 4s?), not a better beat-level
+statistic. That is a substantially larger piece of work than either attempt
+here, and it should not be started without first deciding whether ~90% tempo
+agreement is actually good enough for the product — see *Open questions*.
+
 ---
 
 ## Phased plan
@@ -608,7 +658,7 @@ resolved by, not when it must be started.
 |---|---|---|---|
 | MIG-001 | Key detection at 43.7% exact is too low to ship. Add segmented analysis producing `segment_keys` / `intro_key` / `outro_key`, and harmonic weighting in the chroma. | 1 | Spike results |
 | ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
-| MIG-002b | Resolve the 10.6% tempo **metrical** errors (half/double/three-quarter time). Highest-value remaining lever. **One attempt made and reverted** — read *Phase 1 progress* before retrying. | 1 | Phase 1 |
+| MIG-002b | Resolve the ~10% tempo **metrical** errors. **Two attempts made and reverted; the beat-level approach is closed** — the signal is anti-correlated, and the errors are triple relations, not octaves. A third attempt means bar-level metre detection. Read *Phase 1 progress* first, and settle the product question before starting. | 1 | Phase 1 |
 | MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
 | MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
 | MIG-005 | Port the already-portable parts of `audio_dsp.cpp`: cue in/out, LUFS, dynamic range, transients, waveform peaks. | 1 | `audio_dsp.cpp` |
