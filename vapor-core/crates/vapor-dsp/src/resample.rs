@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn handles_degenerate_input() {
         assert!(resample(&[], 44100, 48000).is_empty());
-        assert!(resample(&sine(440.0, 44100, 0.1), 0, 48000).len() > 0);
+        assert!(!resample(&sine(440.0, 44100, 0.1), 0, 48000).is_empty());
     }
 
     #[test]
