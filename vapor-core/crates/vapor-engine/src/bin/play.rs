@@ -10,15 +10,16 @@
 //!
 //! ## Real-time discipline (MIG-010)
 //!
-//! The whole mix is rendered into a buffer *before* the stream starts, and the
-//! callback only copies out of it. That is deliberate for a spike: it isolates
-//! "does audio output work" from "is the engine real-time safe", so a glitch
-//! here means a device or buffer-size problem and nothing else.
+//! The mixer renders **inside the audio callback**, not into a buffer
+//! beforehand. That is the arrangement a shipping player needs, and it is only
+//! safe because `Mixer::render` allocates nothing once set up — asserted by
+//! `tests/realtime_safety.rs`, which counts allocations through a custom global
+//! allocator rather than trusting inspection.
 //!
-//! A shipping player must render inside the callback, which means the audio
-//! thread may not allocate, lock or block. `Mixer::render` is already
-//! allocation-free after construction, but this binary does not yet prove that
-//! under a real callback — that is phase 2 work, not something to claim now.
+//! Everything that does allocate — decoding, analysis, loading, scheduling the
+//! transition — happens on this thread before the stream starts. That split
+//! between a control plane and a render path is the whole of real-time audio
+//! design.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -26,6 +27,13 @@ use std::sync::Arc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use vapor_engine::offline;
+
+/// Largest block the mixer will render in one callback.
+///
+/// Allocated once before the stream starts; the callback never grows it, since
+/// allocating on the audio thread is exactly what this design avoids. Devices
+/// ask for far less than this in practice.
+const MAX_CALLBACK_FRAMES: usize = 4096;
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
@@ -55,7 +63,8 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| kind.default_duration());
 
-    let mix = match offline::render_mix(
+    // All the allocating work happens here, before the stream exists.
+    let prepared = match offline::prepare_mix(
         std::path::Path::new(&args[0]),
         std::path::Path::new(&args[1]),
         kind,
@@ -69,13 +78,13 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let rate = mix.sample_rate;
-    let mixed = mix.samples;
+    let rate = prepared.sample_rate;
+    let total_frames = prepared.total_frames;
     println!(
-        "{kind:?}, tempo ratio {:.5} ({:+.2}%)\nrendered {:.1}s at {rate} Hz — starting playback",
-        mix.ratio,
-        (mix.ratio - 1.0) * 100.0,
-        mixed.len() as f32 / rate as f32
+        "{kind:?}, tempo ratio {:.5} ({:+.2}%)\n{:.1}s at {rate} Hz — rendering in the audio callback",
+        prepared.ratio,
+        (prepared.ratio - 1.0) * 100.0,
+        total_frames as f32 / rate as f32
     );
 
     let host = cpal::default_host();
@@ -91,24 +100,34 @@ fn main() {
     config.channels = 2;
     config.sample_rate = cpal::SampleRate(rate);
 
-    let cursor = Arc::new(AtomicUsize::new(0));
-    let total = mixed.len();
-    let buf = Arc::new(mixed);
-
-    let cb_buf = Arc::clone(&buf);
-    let cb_cursor = Arc::clone(&cursor);
+    // Scratch the callback renders into. Sized once, here, so the callback
+    // never needs to grow it.
+    let mut scratch = vec![[0.0f32; 2]; MAX_CALLBACK_FRAMES];
+    let rendered = Arc::new(AtomicUsize::new(0));
+    let cb_rendered = Arc::clone(&rendered);
+    let mut mixer = prepared.mixer;
 
     let stream = device
         .build_output_stream(
             &config,
             move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let frames = out.len() / 2;
-                let start = cb_cursor.fetch_add(frames, Ordering::Relaxed);
-                for i in 0..frames {
-                    let s = cb_buf.get(start + i).copied().unwrap_or([0.0; 2]);
-                    out[i * 2] = s[0];
-                    out[i * 2 + 1] = s[1];
+                let frames = (out.len() / 2).min(scratch.len());
+
+                // Everything below is allocation-free and lock-free. If the
+                // device asks for more frames than the scratch holds, the tail
+                // is filled with silence rather than allocating a larger buffer
+                // on the audio thread.
+                mixer.render(&mut scratch[..frames]);
+
+                for (i, frame) in scratch[..frames].iter().enumerate() {
+                    out[i * 2] = frame[0];
+                    out[i * 2 + 1] = frame[1];
                 }
+                for v in out[frames * 2..].iter_mut() {
+                    *v = 0.0;
+                }
+
+                cb_rendered.fetch_add(frames, Ordering::Relaxed);
             },
             |err| eprintln!("stream error: {err}"),
             None,
@@ -119,7 +138,7 @@ fn main() {
 
     // Wait for playback to drain. A poll loop is fine here — this is a CLI
     // tool, not the engine.
-    while cursor.load(Ordering::Relaxed) < total {
+    while rendered.load(Ordering::Relaxed) < total_frames {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     std::thread::sleep(std::time::Duration::from_millis(300));

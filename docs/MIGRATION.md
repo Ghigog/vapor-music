@@ -292,10 +292,9 @@ tests could not:
 
 ### What this spike does *not* prove
 
-* **Not real-time safe yet.** The `play` binary renders the whole mix *before*
-  starting the stream and the callback only copies. That deliberately separates
-  "does audio output work" from "is the engine real-time safe". Rendering inside
-  the callback — no allocation, no locks — is phase 2 work (MIG-010).
+* ~~Not real-time safe yet.~~ **Resolved (MIG-010).** `play` renders inside the
+  audio callback, and `Mixer::render` is proven allocation-free by a counting
+  global allocator rather than by inspection.
 * **Three transition types, not six.** Echo Out, Reverb Freeze and Tempo Morph
   need delay and reverb, which are not implemented.
 * **No PLL, no drift correction, no vocal-clash mid-cut, no phrase-adaptive
@@ -736,7 +735,7 @@ resolved by, not when it must be started.
 
 | ID | Item | Phase | Source |
 |---|---|---|---|
-| MIG-010 | Real-time-safe audio thread discipline: no allocation, locks or I/O in the callback. Keep the audio thread minimal, push everything else to a control plane. | 2 | Risks |
+| ~~MIG-010~~ | ~~Real-time-safe audio thread discipline.~~ **Done** — `Mixer::render` is allocation-free, *asserted* by a counting global allocator (0 allocations across a transition and glide) rather than by inspection. `play` now renders inside the audio callback. Transitions are scheduled ahead via `schedule_transition`, keeping the fallible decision off the audio thread. | 2 | Risks |
 | MIG-011 | Validate `cpal` on Android and iOS **early**, on device. Less battle-tested than desktop; discovering this in phase 4 is too late. | 2 | Risks |
 | MIG-012 | Choose the time-stretch library on measured quality: `signalsmith-stretch` (MIT) vs Rubber Band single-file (GPL). | 2 | Open decision 3 |
 | MIG-013 | Verify the wasm audio path end to end — the crate compiles for wasm, but AudioWorklet integration is unexercised. | 4 | Spike limits |

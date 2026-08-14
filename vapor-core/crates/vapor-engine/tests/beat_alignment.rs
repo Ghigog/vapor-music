@@ -411,3 +411,99 @@ fn bass_swap_does_not_clip_two_loud_decks() {
         "{clipped} clipped samples — the three-band guard is not holding the mix under unity"
     );
 }
+
+/// A scheduled transition must not begin until its lead-in has been rendered.
+///
+/// This is a regression test for a bug introduced while making `play` render
+/// inside the audio callback: `prepare_mix` stopped rendering the lead-in
+/// itself, and the transition then started at the very first frame instead of
+/// after it. Every unit test still passed — the mix was still beat-matched and
+/// still did not clip — and it was only caught by comparing rendered audio
+/// against a reference. Hence this test.
+#[test]
+fn a_scheduled_transition_waits_for_its_delay() {
+    let (a_samples, a_grid) = click_track(128.0, 120.0);
+    let (b_samples, b_grid) = click_track(126.0, 120.0);
+
+    let mut mixer = Mixer::new(RATE, BLOCK);
+    mixer.deck_a.load(a_samples);
+    mixer.deck_b.load(b_samples);
+    mixer.deck_a.seek_seconds(20.0);
+    mixer.deck_a.play();
+
+    let delay_secs = 3.0;
+    let delay_frames = (delay_secs * RATE) as usize;
+    mixer
+        .schedule_transition(
+            TransitionType::BassSwap,
+            4.0,
+            &a_grid,
+            &b_grid,
+            20.0,
+            8.0,
+            delay_frames,
+        )
+        .expect("should schedule");
+
+    assert!(mixer.has_pending_transition(), "should be pending");
+    assert!(!mixer.is_transitioning(), "should not have started");
+    assert!(
+        !mixer.deck_b.is_playing(),
+        "the incoming deck must stay silent during the lead-in"
+    );
+
+    let mut block = [[0.0f32; 2]; BLOCK];
+
+    // Render most of the lead-in; still nothing should have begun.
+    for _ in 0..((delay_secs - 0.5) * RATE / BLOCK as f32) as usize {
+        mixer.render(&mut block);
+    }
+    assert!(
+        !mixer.is_transitioning(),
+        "started before its delay elapsed"
+    );
+    assert!(!mixer.deck_b.is_playing(), "incoming deck started early");
+
+    // Render past the delay; now it must be running.
+    for _ in 0..(1.0 * RATE / BLOCK as f32) as usize {
+        mixer.render(&mut block);
+    }
+    assert!(
+        !mixer.has_pending_transition(),
+        "should no longer be pending"
+    );
+    assert!(
+        mixer.is_transitioning(),
+        "should have started after the delay"
+    );
+    assert!(mixer.deck_b.is_playing(), "incoming deck should now play");
+}
+
+/// Scheduling with no delay must behave exactly like starting immediately.
+#[test]
+fn zero_delay_starts_immediately() {
+    let (a_samples, a_grid) = click_track(128.0, 60.0);
+    let (b_samples, b_grid) = click_track(126.0, 60.0);
+
+    let mut mixer = Mixer::new(RATE, BLOCK);
+    mixer.deck_a.load(a_samples);
+    mixer.deck_b.load(b_samples);
+    mixer.deck_a.seek_seconds(20.0);
+    mixer.deck_a.play();
+
+    mixer
+        .schedule_transition(
+            TransitionType::StandardCrossfade,
+            3.0,
+            &a_grid,
+            &b_grid,
+            20.0,
+            8.0,
+            0,
+        )
+        .unwrap();
+
+    assert!(!mixer.has_pending_transition());
+    assert!(mixer.is_transitioning());
+    assert!(mixer.deck_b.is_playing());
+}

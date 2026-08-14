@@ -105,6 +105,24 @@ pub fn load_track(path: &Path, bpm_override: Option<f32>) -> Result<Track, Offli
     })
 }
 
+/// A mixer loaded, cued and with its transition scheduled, ready to render.
+///
+/// Exists so the `play` binary can render inside the audio callback rather than
+/// pre-rendering: every allocating step — decode, analyse, load, schedule —
+/// happens here, on the calling thread, before the stream starts.
+pub struct PreparedMix {
+    pub mixer: Mixer,
+    pub sample_rate: u32,
+    pub start_at: f32,
+    pub ratio: f64,
+    pub bpm_a: f32,
+    pub bpm_b: f32,
+    /// Frames of lead-in before the transition begins.
+    pub lead_in_frames: usize,
+    /// Total frames worth rendering: lead-in, mix and tail.
+    pub total_frames: usize,
+}
+
 pub struct MixResult {
     pub samples: Vec<[f32; 2]>,
     pub sample_rate: u32,
@@ -125,6 +143,41 @@ pub fn render_mix(
     bpm_a: Option<f32>,
     bpm_b: Option<f32>,
 ) -> Result<MixResult, OfflineError> {
+    let mut p = prepare_mix(a_path, b_path, kind, duration, bpm_a, bpm_b)?;
+
+    let mut out: Vec<[f32; 2]> = Vec::with_capacity(p.total_frames);
+    let mut block = [[0.0f32; 2]; BLOCK];
+    while out.len() < p.total_frames {
+        p.mixer.render(&mut block);
+        out.extend_from_slice(&block);
+    }
+    out.truncate(p.total_frames);
+
+    let peak = out
+        .iter()
+        .flat_map(|s| [s[0].abs(), s[1].abs()])
+        .fold(0.0f32, f32::max);
+
+    Ok(MixResult {
+        samples: out,
+        sample_rate: p.sample_rate,
+        start_at: p.start_at,
+        ratio: p.ratio,
+        peak,
+        bpm_a: p.bpm_a,
+        bpm_b: p.bpm_b,
+    })
+}
+
+/// Decode, analyse and schedule, returning a mixer ready to render.
+pub fn prepare_mix(
+    a_path: &Path,
+    b_path: &Path,
+    kind: TransitionType,
+    duration: f32,
+    bpm_a: Option<f32>,
+    bpm_b: Option<f32>,
+) -> Result<PreparedMix, OfflineError> {
     let a = load_track(a_path, bpm_a)?;
     let b = load_track(b_path, bpm_b)?;
 
@@ -163,43 +216,41 @@ pub fn render_mix(
     mixer.deck_a.seek_seconds(deck_a_from as f64);
     mixer.deck_a.play();
 
-    let mut out: Vec<[f32; 2]> = Vec::new();
-    let mut block = [[0.0f32; 2]; BLOCK];
-
-    let lead_blocks = ((start_at - deck_a_from) * rate as f32 / BLOCK as f32) as usize;
-    for _ in 0..lead_blocks {
-        mixer.render(&mut block);
-        out.extend_from_slice(&block);
-    }
+    // The transition is scheduled immediately, but its envelope only advances
+    // as blocks are rendered — so the lead-in is a frame count for the caller
+    // to render, not something consumed here.
+    let lead_frames = ((start_at - deck_a_from) * rate as f32) as usize;
 
     let cue_in = b.grid.beats.first().copied().unwrap_or(0.0).max(1.0);
+    // Scheduled, not started: the transition must begin after the lead-in has
+    // been rendered, not at the first frame. Rendering the lead-in here instead
+    // would defeat the point of `prepare_mix`, which exists so `play` can
+    // render everything inside the audio callback.
     mixer
-        .start_transition(kind, duration, &a.grid, &b.grid, start_at, cue_in)
+        .schedule_transition(
+            kind,
+            duration,
+            &a.grid,
+            &b.grid,
+            start_at,
+            cue_in,
+            lead_frames,
+        )
         .map_err(|err| OfflineError::NotMatchable {
             err,
             bpm_a: a.grid.bpm,
             bpm_b: b.grid.bpm,
         })?;
 
-    let mix_blocks = ((duration + TAIL_SECS) * rate as f32 / BLOCK as f32) as usize;
-    for _ in 0..mix_blocks {
-        mixer.render(&mut block);
-        out.extend_from_slice(&block);
-    }
-
-    let peak = out
-        .iter()
-        .flat_map(|s| [s[0].abs(), s[1].abs()])
-        .fold(0.0f32, f32::max);
-
-    Ok(MixResult {
-        samples: out,
+    Ok(PreparedMix {
+        mixer,
         sample_rate: rate,
         start_at,
         ratio,
-        peak,
         bpm_a: a_bpm,
         bpm_b: b_bpm,
+        lead_in_frames: lead_frames,
+        total_frames: lead_frames + ((duration + TAIL_SECS) * rate as f32) as usize,
     })
 }
 

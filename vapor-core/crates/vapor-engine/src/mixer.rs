@@ -45,6 +45,20 @@ pub const TEMPO_GLIDE_SECS: f32 = 6.0;
 /// Ratio deviation below which no glide is worth scheduling.
 const GLIDE_EPSILON: f64 = 1e-4;
 
+/// A transition that has been decided but has not begun.
+///
+/// Real transitions are scheduled ahead of time — the Godot build passes a
+/// `target_trigger_time` for the same reason. Deciding now and starting later
+/// also keeps the decision (which can fail, and which reads the beat grids) off
+/// the audio thread, leaving only the activation itself in the render path.
+struct PendingTransition {
+    kind: TransitionType,
+    duration: f32,
+    incoming_pos: f32,
+    ratio: f64,
+    delay_frames: usize,
+}
+
 /// Returns the incoming deck to its own tempo after a transition completes.
 struct TempoGlide {
     from: f64,
@@ -100,6 +114,7 @@ pub struct Mixer {
     /// True when deck A is the outgoing deck.
     a_is_outgoing: bool,
     transition: Option<Transition>,
+    pending: Option<PendingTransition>,
     glide: Option<TempoGlide>,
     sample_rate: f32,
     scratch: Vec<[f32; 2]>,
@@ -113,6 +128,7 @@ impl Mixer {
             deck_b: Deck::new(sample_rate),
             a_is_outgoing: true,
             transition: None,
+            pending: None,
             glide: None,
             sample_rate,
             scratch: vec![[0.0; 2]; max_block],
@@ -205,7 +221,7 @@ impl Mixer {
         Ok((in_beat - lead * ratio).max(0.0))
     }
 
-    /// Begin a beat-matched transition.
+    /// Begin a beat-matched transition immediately.
     #[allow(clippy::too_many_arguments)]
     pub fn start_transition(
         &mut self,
@@ -216,18 +232,66 @@ impl Mixer {
         start_time_out: f32,
         cue_in: f32,
     ) -> Result<(), MatchError> {
+        self.schedule_transition(
+            kind,
+            duration,
+            outgoing_grid,
+            incoming_grid,
+            start_time_out,
+            cue_in,
+            0,
+        )
+    }
+
+    /// Decide a beat-matched transition now and begin it after `delay_frames`.
+    ///
+    /// The decision — reading both grids, computing the ratio and the aligned
+    /// position, and failing if the tempi are too far apart — happens here, on
+    /// the calling thread. Only the activation runs later in the render path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn schedule_transition(
+        &mut self,
+        kind: TransitionType,
+        duration: f32,
+        outgoing_grid: &BeatGrid,
+        incoming_grid: &BeatGrid,
+        start_time_out: f32,
+        cue_in: f32,
+        delay_frames: usize,
+    ) -> Result<(), MatchError> {
         let ratio = Self::tempo_ratio(outgoing_grid, incoming_grid)?;
-        let pos =
+        let incoming_pos =
             Self::aligned_incoming_position(outgoing_grid, incoming_grid, start_time_out, cue_in)?;
 
+        let pending = PendingTransition {
+            kind,
+            duration,
+            incoming_pos,
+            ratio,
+            delay_frames,
+        };
+
+        if delay_frames == 0 {
+            self.activate(pending);
+        } else {
+            self.pending = Some(pending);
+        }
+        Ok(())
+    }
+
+    /// True when a transition has been decided but has not begun.
+    pub fn has_pending_transition(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Cue the incoming deck and start the envelope. Allocation-free.
+    fn activate(&mut self, p: PendingTransition) {
         let inc = self.incoming();
-        inc.seek_seconds(pos as f64);
-        inc.ratio = ratio;
+        inc.seek_seconds(p.incoming_pos as f64);
+        inc.ratio = p.ratio;
         inc.set_gain_db(-60.0);
         inc.play();
-
-        self.transition = Some(Transition::new(kind, duration));
-        Ok(())
+        self.transition = Some(Transition::new(p.kind, p.duration));
     }
 
     /// Render one block. Returns frames written.
@@ -281,6 +345,16 @@ impl Mixer {
                 } else {
                     now_playing.ratio = 1.0;
                 }
+            }
+        }
+
+        // Start a scheduled transition once its lead-in has been rendered.
+        if let Some(p) = &mut self.pending {
+            if p.delay_frames <= block {
+                let p = self.pending.take().expect("checked above");
+                self.activate(p);
+            } else {
+                p.delay_frames -= block;
             }
         }
 
