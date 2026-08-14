@@ -85,15 +85,23 @@ pub fn load_track(path: &Path, bpm_override: Option<f32>) -> Result<Track, Offli
     // this tooling simple. A real player keeps the stereo decode.
     let frames: Vec<[f32; 2]> = mono.samples.iter().map(|&s| [s, s]).collect();
 
-    // vapor-dsp does not emit a beat grid yet (MIG-002), so one is derived from
-    // the BPM with the first beat at zero. Real detected downbeats will replace
-    // this, and until they do, alignment on real music is only as good as that
-    // assumption — which is exactly why the automated tests use click tracks
-    // with known beat positions instead.
     let bpm = bpm_override.unwrap_or(analysis.bpm);
-    let period = 60.0 / bpm;
-    let count = (mono.duration_secs() as f32 / period) as usize;
-    let beats = (0..count).map(|i| i as f32 * period).collect();
+
+    // Prefer the tracked beat grid (MIG-002). It follows real tempo drift and
+    // real downbeat phase, neither of which a BPM alone can express.
+    //
+    // The synthesised fallback — beats every 60/bpm from t=0 — is only reached
+    // when tracking failed, or when a BPM override makes the tracked grid
+    // inconsistent with the requested tempo. It is a poor substitute: it
+    // assumes the first beat sits exactly at zero and the tempo never wavers,
+    // and both are false for real music.
+    let beats = if !analysis.beats.is_empty() && bpm_override.is_none() {
+        analysis.beats.clone()
+    } else {
+        let period = 60.0 / bpm;
+        let count = (mono.duration_secs() as f32 / period) as usize;
+        (0..count).map(|i| i as f32 * period).collect()
+    };
 
     Ok(Track {
         frames,

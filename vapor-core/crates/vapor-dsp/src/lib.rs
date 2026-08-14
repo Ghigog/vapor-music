@@ -9,6 +9,7 @@
 //! crate is `cargo test`-able on any CI runner, which is the property the
 //! current 224-test GUT suite lacks.
 
+pub mod beats;
 pub mod decode;
 pub mod key;
 pub mod spectrum;
@@ -19,6 +20,10 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct Analysis {
     pub bpm: f32,
+    /// Beat times in seconds, covering the whole track, so they index the
+    /// original file directly and can be handed to `vapor_engine::BeatGrid`.
+    /// Empty when the signal was too short or too sparse to track.
+    pub beats: Vec<f32>,
     pub camelot: String,
     pub key_name: String,
     pub key_confidence: f32,
@@ -45,9 +50,9 @@ impl std::fmt::Display for AnalysisError {
 
 /// Analyse a file end to end.
 ///
-/// Analysis runs on a downmixed mono signal. Long tracks are analysed from a
-/// bounded interior window: tempo and key are global properties, and reading
-/// every sample of a 10-minute track buys nothing but import time.
+/// Runs on a downmixed mono signal. Beat tracking covers the whole track;
+/// tempo and key are picked from a bounded interior window, since both are
+/// global properties and the window avoids fade-ins and run-outs.
 pub fn analyze_file(path: &Path) -> Result<Analysis, AnalysisError> {
     let audio = decode::decode_to_mono(path).map_err(AnalysisError::Decode)?;
     analyze_decoded(&audio)
@@ -60,11 +65,18 @@ pub fn analyze_bytes(bytes: Vec<u8>, ext_hint: Option<&str>) -> Result<Analysis,
     analyze_decoded(&audio)
 }
 
-/// Longest span actually fed to the FFT. Beyond this the estimate stops
-/// improving and import time keeps growing.
-const ANALYSIS_WINDOW_SECS: f64 = 120.0;
-/// Skipped at the start, to step over fade-ins, silence and spoken intros.
-const ANALYSIS_SKIP_SECS: f64 = 15.0;
+/// Span of the onset function used to pick the tempo. Beats still come from
+/// the whole track; only the tempo estimate is windowed.
+const TEMPO_WINDOW_SECS: f64 = 120.0;
+const TEMPO_SKIP_SECS: f64 = 15.0;
+
+/// Longest span fed to the *key* transform. Key is a global property, the
+/// 8192-point FFT it needs is the expensive one, and the estimate stops
+/// improving well before a whole track has been read.
+const KEY_WINDOW_SECS: f64 = 120.0;
+/// Skipped at the start of the key window, to step over fade-ins, silence and
+/// spoken intros.
+const KEY_SKIP_SECS: f64 = 15.0;
 
 pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, AnalysisError> {
     let rate = audio.sample_rate;
@@ -72,22 +84,40 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         return Err(AnalysisError::Insufficient);
     }
 
+    // Beats are tracked over the WHOLE track.
+    //
+    // Windowing them was a real defect, caught by measuring beat F-measure
+    // against Essentia: a 120 s window over a 289 s track caps recall at ~0.41
+    // however good the tracking is. The product consequence is worse than the
+    // metric — a windowed grid has no beats near the outro, which is precisely
+    // where transitions get scheduled.
+    //
+    // Tempo is picked from a representative middle span of the same onset
+    // function; see `tempo::estimate_windowed` for why the two differ.
+    let tempo_spec = spectrum::for_tempo(&audio.samples, rate);
+    let tempo = tempo::estimate_windowed(
+        &tempo_spec,
+        TEMPO_SKIP_SECS as f32,
+        TEMPO_WINDOW_SECS as f32,
+    )
+    .ok_or(AnalysisError::Insufficient)?;
+    let beats = beats::track(&tempo.odf, tempo.odf_rate, tempo.bpm)
+        .map(|g| g.beats)
+        .unwrap_or_default();
+
+    // Key keeps its window. Note this is a *different* transform anyway —
+    // tempo needs time resolution, key needs frequency resolution — so nothing
+    // is shared and nothing is wasted. See the `spectrum` module docs.
     let total = audio.samples.len();
-    let skip = ((ANALYSIS_SKIP_SECS * rate as f64) as usize).min(total / 8);
-    let want = (ANALYSIS_WINDOW_SECS * rate as f64) as usize;
+    let skip = ((KEY_SKIP_SECS * rate as f64) as usize).min(total / 8);
+    let want = (KEY_WINDOW_SECS * rate as f64) as usize;
     let end = (skip + want).min(total);
-    let slice = &audio.samples[skip..end];
-
-    // Two transforms, not one: tempo needs time resolution and key needs
-    // frequency resolution. See the `spectrum` module docs.
-    let tempo_spec = spectrum::for_tempo(slice, rate);
-    let tempo = tempo::estimate(&tempo_spec).ok_or(AnalysisError::Insufficient)?;
-
-    let key_spec = spectrum::for_key(slice, rate);
+    let key_spec = spectrum::for_key(&audio.samples[skip..end], rate);
     let key = key::estimate(&key_spec).ok_or(AnalysisError::Insufficient)?;
 
     Ok(Analysis {
         bpm: tempo.bpm,
+        beats,
         camelot: key.camelot,
         key_name: key.name,
         key_confidence: key.confidence,

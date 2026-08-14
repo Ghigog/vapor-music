@@ -309,6 +309,79 @@ tests could not:
 
 ---
 
+## Phase 1 progress
+
+### MIG-002 — beat grids (done) and MIG-014 — metrical errors (done)
+
+`vapor-dsp` now emits real beat positions via dynamic-programming beat tracking
+(Ellis 2007), not just a BPM. `vapor-engine` consumes them; the synthesised
+"beat every 60/bpm from zero" grid is now only a fallback for when tracking
+fails.
+
+Measured over the same 563-track set:
+
+| Metric | Result |
+|---|---|
+| Beat F-measure, mean | **0.763** |
+| Beat F-measure, median | **0.884** |
+| Tracks at F ≥ 0.8 | 324/540 (60.0%) |
+| Tempo exact | 437/540 (80.9%) |
+| Tempo metrical error | 57/540 (10.6%) |
+| Tempo periodic (either) | 494/540 (91.5%) |
+| Time per track | 0.51 s |
+
+**Two corrections to figures reported earlier in this document.**
+
+1. **The metrical-error class was undercounted.** The original check tested only
+   octave relations (½, 2, ⅓, 3) and reported 4.4%. Adding 2:3, 3:2, 3:4 and
+   4:3 raises it to **10.6%** — roughly 2.4× larger. Tempo *agreement* is
+   unchanged at ~81%; what changed is the honest accounting of the near-misses.
+   The encouraging read is that **91.5% of tracks land on a genuinely periodic
+   grid**: pulse detection is nearly always right, and it is the metrical level
+   that is wrong.
+2. **A 22% metrical-error figure quoted mid-work was subset-specific** — it came
+   from a 60-track sample that happened to be entirely `.m4a`. The full-library
+   number is 10.6%.
+
+### A defect this measurement caught
+
+The first beat-tracking run scored F=0.470, and the cause was not the tracker.
+Analysis ran over a 120 s window; Essentia's grids span the whole track, so
+recall was capped at roughly `120 / duration` — about 0.41 on a 289 s track —
+before tracking quality mattered at all.
+
+The product consequence was worse than the metric: **a windowed grid has no
+beats near the outro, which is exactly where transitions are scheduled.**
+
+Fixed by giving each stage the span it actually needs:
+
+| Stage | Span | Why |
+|---|---|---|
+| Beat tracking | whole track | Coverage at the outro is the point |
+| Tempo | 120 s interior window | Fade-ins and run-outs cost accuracy (76.7% → 73.3% without it) |
+| Key | 120 s interior window | Global property; its 8192-point FFT is the expensive one |
+
+Only one FFT runs per stage either way — the tempo window is applied to the
+onset function, not to the audio.
+
+| | Windowed (before) | Whole-track | Split (current) |
+|---|---|---|---|
+| Beat F, mean | 0.470 | 0.757 | **0.769** |
+| Beat F, median | 0.485 | 0.861 | **0.861** |
+| F ≥ 0.8 | 0/60 | 37/60 | **38/60** |
+| Tempo exact | 76.7% | 73.3% | **76.7%** |
+
+*(that comparison is the 60-track subset used while iterating; the table above
+is the full 563-track run)*
+
+### Next lever
+
+The metrical-level error is now the highest-value target: a half-time or
+double-time grid caps F-measure at about 0.67 however well phased it is, so
+fixing it lifts tempo accuracy **and** beat F-measure together.
+
+---
+
 ## Phased plan
 
 Each phase ends in something verifiable. Godot keeps running and shipping until
@@ -487,7 +560,8 @@ resolved by, not when it must be started.
 | ID | Item | Phase | Source |
 |---|---|---|---|
 | MIG-001 | Key detection at 43.7% exact is too low to ship. Add segmented analysis producing `segment_keys` / `intro_key` / `outro_key`, and harmonic weighting in the chroma. | 1 | Spike results |
-| MIG-002 | Resolve the 4.4% tempo octave errors; add beat-grid output so `beat_grid` and `downbeats` can be diffed against fixtures, not just BPM. | 1 | Spike results |
+| ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
+| MIG-002b | Resolve the 10.6% tempo **metrical** errors (half/double/three-quarter time). Highest-value remaining lever: it lifts tempo accuracy and beat F-measure together. | 1 | Phase 1 |
 | MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
 | MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
 | MIG-005 | Port the already-portable parts of `audio_dsp.cpp`: cue in/out, LUFS, dynamic range, transients, waveform peaks. | 1 | `audio_dsp.cpp` |
@@ -495,7 +569,7 @@ resolved by, not when it must be started.
 | MIG-007 | Post-transition tempo snaps back to 1.0 instantly; the Godot build glides it via `_pitch_ramp_tween`. Implement the glide. | 2 | Mixer spike |
 | MIG-008 | Implement the remaining transition types — Echo Out, Reverb Freeze, Tempo Morph — which need delay and reverb. | 2 | Mixer spike |
 | MIG-009 | Port the PLL drift correction, vocal-clash mid-cut and phrase-adaptive durations from `audio_manager.gd`. | 2 | Mixer spike |
-| MIG-014 | Tempo octave-error detection must also cover **metrical** errors (3:4, 2:3), not just ½/2×/⅓/3×. The current validator undercounts them. | 1 | Mixer spike |
+| ~~MIG-014~~ | ~~Octave-error detection must also cover metrical errors (3:4, 2:3).~~ **Done** — the class is 10.6%, not 4.4%. | 1 | Mixer spike |
 | MIG-015 | Decide whether Standard Crossfade should become equal-power. The Godot envelope is dB-linear and dips at the midpoint; the behaviour is currently replicated deliberately and pinned by a test. | 2 | Mixer spike |
 | MIG-016 | The engine has no resampler, so tracks at different sample rates cannot be mixed. `render_mix` refuses rather than mixing at the wrong pitch. | 2 | Mixer spike |
 

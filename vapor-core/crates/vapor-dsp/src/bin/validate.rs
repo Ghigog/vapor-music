@@ -21,7 +21,29 @@ struct Fixture {
     ext: String,
     bpm: f64,
     camelot: String,
+    #[serde(default)]
+    beat_grid: Vec<f32>,
 }
+
+/// Ratios that count as a *metrical* rather than an outright wrong tempo.
+///
+/// The original list held only octave relations (1/2, 2, 1/3, 3). Rendering a
+/// real transition surfaced a track detected at 83.4 BPM that Essentia calls
+/// 110.9 — a 3:4 relation, which was being counted as a plain failure and hid
+/// how large the metrical-error class really is (MIG-014).
+const METRICAL_RATIOS: [f64; 8] = [
+    0.5,
+    2.0,
+    1.0 / 3.0,
+    3.0,
+    2.0 / 3.0,
+    3.0 / 2.0,
+    3.0 / 4.0,
+    4.0 / 3.0,
+];
+
+/// Standard beat-tracking tolerance.
+const BEAT_TOLERANCE: f32 = 0.07;
 
 /// Tempo agreement tolerance. Essentia's own BPM is itself an estimate, and the
 /// app only uses BPM to choose transition types and pitch-adjust by 1-2%, so
@@ -52,9 +74,11 @@ fn main() {
     println!("Validating {n} tracks against Essentia ground truth\n");
 
     let mut bpm_ok = 0usize;
-    let mut bpm_octave = 0usize;
+    let mut bpm_metrical = 0usize;
     let mut key_exact = 0usize;
     let mut key_adjacent = 0usize;
+    let mut beat_f: Vec<f32> = Vec::new();
+    let mut beat_good = 0usize;
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut by_ext: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 
@@ -74,16 +98,26 @@ fn main() {
         };
         entry.0 += 1;
 
-        // Tempo, with octave errors counted separately: a half/double result
-        // still yields a usable beat grid, but it is not agreement.
+        // Tempo, with metrical errors counted separately: a half/double/three-
+        // quarter result still yields a periodic grid, but it is not agreement.
         let ratio = a.bpm as f64 / f.bpm;
         if (ratio - 1.0).abs() <= BPM_TOLERANCE {
             bpm_ok += 1;
-        } else if [0.5, 2.0, 1.0 / 3.0, 3.0]
+        } else if METRICAL_RATIOS
             .iter()
             .any(|m| (ratio / m - 1.0).abs() <= BPM_TOLERANCE)
         {
-            bpm_octave += 1;
+            bpm_metrical += 1;
+        }
+
+        // Beat grid. This is the measure that actually matters for mixing: the
+        // engine phase-locks to a beat position, not to a BPM.
+        if !f.beat_grid.is_empty() && !a.beats.is_empty() {
+            let score = vapor_dsp::beats::f_measure(&a.beats, &f.beat_grid, BEAT_TOLERANCE);
+            beat_f.push(score);
+            if score >= 0.8 {
+                beat_good += 1;
+            }
         }
 
         if a.camelot == f.camelot {
@@ -117,14 +151,35 @@ fn main() {
         pct(bpm_ok)
     );
     println!(
-        "  octave error      {bpm_octave:>4}/{decoded}  ({:.1}%)",
-        pct(bpm_octave)
+        "  metrical error    {bpm_metrical:>4}/{decoded}  ({:.1}%)   (1/2, 2, 1/3, 3, 2/3, 3/2, 3/4, 4/3)",
+        pct(bpm_metrical)
     );
     println!(
-        "  usable (either)   {:>4}/{decoded}  ({:.1}%)",
-        bpm_ok + bpm_octave,
-        pct(bpm_ok + bpm_octave)
+        "  periodic (either) {:>4}/{decoded}  ({:.1}%)",
+        bpm_ok + bpm_metrical,
+        pct(bpm_ok + bpm_metrical)
     );
+
+    println!(
+        "\n=== Beat grid (F-measure vs Essentia, +/-{:.0} ms) ===",
+        BEAT_TOLERANCE * 1000.0
+    );
+    if beat_f.is_empty() {
+        println!("  no comparable grids");
+    } else {
+        let mean: f32 = beat_f.iter().sum::<f32>() / beat_f.len() as f32;
+        let mut sorted = beat_f.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+        println!("  tracks compared   {:>4}", beat_f.len());
+        println!("  mean F-measure    {mean:>7.3}");
+        println!("  median F-measure  {median:>7.3}");
+        println!(
+            "  F >= 0.8          {beat_good:>4}/{}  ({:.1}%)",
+            beat_f.len(),
+            100.0 * beat_good as f64 / beat_f.len() as f64
+        );
+    }
 
     println!("\n=== Key (vs Essentia) ===");
     println!(

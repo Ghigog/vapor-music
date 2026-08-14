@@ -34,13 +34,49 @@ pub struct TempoResult {
 }
 
 pub fn estimate(spec: &Spectrogram) -> Option<TempoResult> {
+    estimate_windowed(spec, 0.0, f32::INFINITY)
+}
+
+/// Estimate tempo from a sub-span while returning the onset function for the
+/// **whole** signal.
+///
+/// The two have different needs, and measuring showed it. Beat tracking wants
+/// the full track: a windowed grid has no beats near the outro, which is
+/// exactly where transitions are scheduled. Tempo estimation wants a
+/// representative middle span: fade-ins, breakdowns and silent run-outs
+/// contribute onsets that are not the groove, and including them measurably
+/// cost tempo accuracy (76.7% -> 73.3% exact when the window was removed).
+///
+/// Only one FFT runs either way — the window is applied to the onset function,
+/// not to the audio.
+pub fn estimate_windowed(
+    spec: &Spectrogram,
+    skip_secs: f32,
+    window_secs: f32,
+) -> Option<TempoResult> {
     if spec.frames.len() < 32 {
         return None;
     }
 
     let odf = onset_detection_function(spec);
     let odf_rate = spec.frame_rate();
-    let bpm = pick_tempo(&odf, odf_rate)?;
+
+    // Clamp the tempo window into the available onset function; short tracks
+    // just use all of it.
+    let start = ((skip_secs * odf_rate) as usize).min(odf.len() / 8);
+    let len = if window_secs.is_finite() {
+        (window_secs * odf_rate) as usize
+    } else {
+        odf.len()
+    };
+    let end = (start + len).min(odf.len());
+    let span = if end > start + 32 {
+        &odf[start..end]
+    } else {
+        &odf[..]
+    };
+
+    let bpm = pick_tempo(span, odf_rate)?;
 
     Some(TempoResult { bpm, odf, odf_rate })
 }
