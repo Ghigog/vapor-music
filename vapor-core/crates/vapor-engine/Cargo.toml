@@ -1,0 +1,23 @@
+[package]
+name = "vapor-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vapor-dsp = { path = "../vapor-dsp" }
+
+# Audio output. Not a dependency of the library — the engine itself stays
+# platform-free and wasm-compatible; only the `play` binary needs a device.
+# MIG-011: cpal on Android/iOS is the least battle-tested part of this stack
+# and must be validated on device early.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal = "0.15"
+
+[[bin]]
+name = "render"
+path = "src/bin/render.rs"
+
+[[bin]]
+name = "play"
+path = "src/bin/play.rs"

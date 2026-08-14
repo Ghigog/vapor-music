@@ -13,12 +13,37 @@ and shelling out to Homebrew binaries) be reproduced in portable Rust?
 | Crate | Status | Purpose |
 |---|---|---|
 | `vapor-dsp` | spike | Decode, tempo estimation, key detection |
-| `vapor-engine` | not started | Two-deck mixer, EQ chain, transitions |
+| `vapor-engine` | spike | Two-deck mixer, EQ chain, time-stretch, transitions |
 | `vapor-library` | not started | Playlists, groups, pathfinder, metadata |
 
-`vapor-dsp` has no audio I/O, no engine and no platform code, so the whole crate
-runs under `cargo test` on any CI runner — the property the 224-test GUT suite
-lacks.
+Neither crate has audio I/O, an engine or platform code, so both run under
+`cargo test` on any CI runner — the property the 224-test GUT suite lacks — and
+both build for `wasm32-unknown-unknown`.
+
+## Listening to a transition
+
+Numbers prove alignment; ears judge whether a mix sounds right.
+
+```bash
+cargo run --release -p vapor-engine --bin render -- \
+    trackA.mp3 trackB.mp3 out.wav bassswap 8
+```
+
+Transitions: `crossfade`, `bassswap`, `filtersweep`. Add `--bpm-a=` / `--bpm-b=`
+to override the detector — useful while MIG-001/MIG-002 are open, since a wrong
+BPM estimate will refuse an otherwise fine transition.
+
+To play it through the default output device instead:
+
+```bash
+cargo run --release -p vapor-engine --bin play -- trackA.mp3 trackB.mp3 bassswap 8
+```
+
+> [!NOTE]
+> `play` renders the whole mix before starting the stream; the callback only
+> copies. That is deliberate for a spike — it separates "does output work" from
+> "is the engine real-time safe". Rendering inside the callback is phase 2
+> (MIG-010).
 
 ## Running the tests
 

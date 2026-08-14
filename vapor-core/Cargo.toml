@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vapor-dsp"]
+members = ["crates/vapor-dsp", "crates/vapor-engine"]
 
 [workspace.package]
 edition = "2021"

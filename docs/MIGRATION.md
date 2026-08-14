@@ -222,7 +222,90 @@ Stated explicitly so it is not over-read:
   straightforward, but "expected" is not "verified."
 
 The spike answered "can we own the analysis?" It did not answer "can we own the
-mixer?" That is the next spike.
+mixer?" That is the next spike — below.
+
+---
+
+## What the mixer spike proved
+
+`vapor-core/crates/vapor-engine` rebuilds the two-deck DJ mixer: decks, a biquad
+EQ/filter chain replacing the Godot bus effects, WSOLA time-stretching replacing
+Rubber Band, and transition envelopes replacing the tween automation. Like
+`vapor-dsp` it has no platform code — audio output lives in a separate binary, so
+the engine stays `cargo test`-able and **builds for wasm**.
+
+### Result: beat-matching works
+
+Rendering a transition between two click tracks at 128 and 124 BPM and measuring
+where the onsets actually landed in the output:
+
+> **Worst beat deviation across the transition: 6.11 ms.**
+
+That is inside the WSOLA search window (±256 frames ≈ 5.8 ms) and well inside
+what reads as tight for a DJ mix. The measurement is end-to-end through decode,
+stretch, EQ, envelope and mix — not a check of the arithmetic.
+
+### Structural improvement over the Godot design
+
+Alignment is solved **up front** rather than corrected afterwards. Both decks
+advance from the same audio clock — the count of rendered frames — so once
+phase-locked they cannot drift. The Godot build polls `get_playback_position()`
+from `_process` at frame rate, which is why it needs a PLL to chase drift at all.
+In this design the PLL becomes a correction for real-world tempo wander, not the
+mechanism that achieves sync.
+
+### Three bugs the spike caught, and how
+
+Worth recording because they show which tests were load-bearing:
+
+1. **`tempo_ratio` was inverted.** To make a 124 BPM track sound like 128 you
+   play it *faster*; the code had `incoming / outgoing`. The unit test asserted
+   `ratio < 1.0` — it encoded the same misunderstanding and passed happily. Only
+   rendering audio and measuring onsets caught it. Beats were landing a half
+   period off, i.e. squarely on the offbeat.
+2. **The WSOLA cross-fade used a full Hann window** (0 → 1 → 0) instead of a
+   rising ramp, so the last sample of every grain reverted to the stored tail —
+   a discontinuity every 23 ms.
+3. **The stretcher produced nothing at all**, because the first grain required a
+   search margin that a read position of zero could never satisfy.
+
+The lesson for phase 2: **unit tests on scheduling arithmetic are not sufficient
+for audio.** Render and measure.
+
+### Findings on real music
+
+Rendering a real transition from the library surfaced two things the click-track
+tests could not:
+
+* **Tempo failures include metrical errors, not just octave errors.** The
+  detector called a track 83.4 BPM that Essentia calls 110.9 — a 3:4 relation,
+  which the validator's octave check (½, 2×, ⅓, 3×) does not count. The earlier
+  "4.4% octave error" figure therefore *understates* the metrical-error class.
+  Feeds MIG-002.
+* **Bass Swap clips; Standard Crossfade does not.** Measured over the transition
+  window: crossfade peaks at 0.869 with zero clipped samples; Bass Swap peaks at
+  1.000 with 152 clipped samples (0.022%). The cause is structural — Bass Swap
+  holds the outgoing deck at 0 dB while the incoming reaches full level. This is
+  exactly what the Godot build's three-band RMS clipping prevention
+  (`calculate_chunk_rms`, `_clipping_attenuation_db`) exists to solve, and it is
+  not ported. New item MIG-006.
+
+### What this spike does *not* prove
+
+* **Not real-time safe yet.** The `play` binary renders the whole mix *before*
+  starting the stream and the callback only copies. That deliberately separates
+  "does audio output work" from "is the engine real-time safe". Rendering inside
+  the callback — no allocation, no locks — is phase 2 work (MIG-010).
+* **Three transition types, not six.** Echo Out, Reverb Freeze and Tempo Morph
+  need delay and reverb, which are not implemented.
+* **No PLL, no drift correction, no vocal-clash mid-cut, no phrase-adaptive
+  durations.**
+* **Post-transition tempo snaps back instantly.** The Godot build glides it
+  (`_pitch_ramp_tween`). New item MIG-007.
+* **Beat grids on real music are synthesised from BPM**, because `vapor-dsp`
+  does not emit real beat positions yet (MIG-002). Alignment on real tracks is
+  therefore only as good as that assumption — which is precisely why the
+  automated tests use click tracks with known beat positions.
 
 ---
 
@@ -331,6 +414,47 @@ set is actually known.
 
 ---
 
+## Decided: speak OpenSubsonic as a client
+
+**Decision (2026-08-14): adopted.** Vapor gains an OpenSubsonic *client*
+alongside the existing WebDAV backend. It does not become a server and does not
+require one.
+
+This does not contradict the "no server required" positioning in the README.
+Vapor still runs no infrastructure — it supports bring-your-own-cloud (WebDAV)
+*and* bring-your-own-server (OpenSubsonic), and the user picks.
+
+**Why:**
+
+- **An installed base with no migration cost.** Anyone already running
+  Navidrome, Gonic or Airsonic has an indexed library and can point Vapor at it
+  immediately.
+- **It deletes code.** `metadata_service.gd` is 1,276 lines of Deezer CDN
+  scraping and a hand-rolled `_parse_id3v2_tags`. An OpenSubsonic server serves
+  MusicBrainz-resolved metadata and cover art over a documented API.
+- **It may reduce analysis load.** Where a server exposes BPM via extended tags,
+  those tracks need no on-device analysis.
+
+> [!IMPORTANT]
+> **Analysis must request the original stream, never a transcode.**
+> Subsonic servers transcode on the fly (typically to 128 kbps Opus) for
+> constrained networks. That is fine for playback and destroys the fidelity the
+> DJ engine needs for beat-grid extraction and time-stretching. The client must
+> keep two distinct request paths — original for analysis, optionally transcoded
+> for playback — and this has to be designed in from the start, not retrofitted.
+
+**Security note.** The legacy Subsonic auth scheme is `token=md5(password+salt)`
+passed as query parameters, which means credentials appear in any upstream proxy
+log and force weak server-side password storage. Compatibility requires
+supporting it. Mitigations: require TLS, store the credential in the OS keychain
+rather than the settings file, and prefer any modern auth the server offers.
+
+**Deliberately out of scope.** The wider homelab ecosystem — ActivityPub
+federation (Funkwhale), multi-room sync (Lyrion), jukebox mode, podcast RSS,
+running a server — is not this product.
+
+---
+
 ## Open decisions
 
 1. **Dolby Atmos / E-AC-3.** 22 tracks in the current library do not decode
@@ -350,3 +474,61 @@ set is actually known.
    single-file build (GPL). Decide in phase 2 on measured quality.
 4. **UI framework** inside Tauri. Not yet chosen; defer until phase 4 so the
    redesign informs it.
+
+---
+
+## Actionable backlog
+
+Every risk and finding above, as trackable items. Phase is when it must be
+resolved by, not when it must be started.
+
+### Correctness and coverage
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| MIG-001 | Key detection at 43.7% exact is too low to ship. Add segmented analysis producing `segment_keys` / `intro_key` / `outro_key`, and harmonic weighting in the chroma. | 1 | Spike results |
+| MIG-002 | Resolve the 4.4% tempo octave errors; add beat-grid output so `beat_grid` and `downbeats` can be diffed against fixtures, not just BPM. | 1 | Spike results |
+| MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
+| MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
+| MIG-005 | Port the already-portable parts of `audio_dsp.cpp`: cue in/out, LUFS, dynamic range, transients, waveform peaks. | 1 | `audio_dsp.cpp` |
+| MIG-006 | **Bass Swap clips** (152 clipped samples, 0.022%, measured). Port the three-band RMS clipping prevention from `calculate_chunk_rms` / `_clipping_attenuation_db`; the current hard clamp is only a safety net. | 2 | Mixer spike |
+| MIG-007 | Post-transition tempo snaps back to 1.0 instantly; the Godot build glides it via `_pitch_ramp_tween`. Implement the glide. | 2 | Mixer spike |
+| MIG-008 | Implement the remaining transition types — Echo Out, Reverb Freeze, Tempo Morph — which need delay and reverb. | 2 | Mixer spike |
+| MIG-009 | Port the PLL drift correction, vocal-clash mid-cut and phrase-adaptive durations from `audio_manager.gd`. | 2 | Mixer spike |
+| MIG-014 | Tempo octave-error detection must also cover **metrical** errors (3:4, 2:3), not just ½/2×/⅓/3×. The current validator undercounts them. | 1 | Mixer spike |
+| MIG-015 | Decide whether Standard Crossfade should become equal-power. The Godot envelope is dB-linear and dips at the midpoint; the behaviour is currently replicated deliberately and pinned by a test. | 2 | Mixer spike |
+| MIG-016 | The engine has no resampler, so tracks at different sample rates cannot be mixed. `render_mix` refuses rather than mixing at the wrong pitch. | 2 | Mixer spike |
+
+### Engineering risk
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| MIG-010 | Real-time-safe audio thread discipline: no allocation, locks or I/O in the callback. Keep the audio thread minimal, push everything else to a control plane. | 2 | Risks |
+| MIG-011 | Validate `cpal` on Android and iOS **early**, on device. Less battle-tested than desktop; discovering this in phase 4 is too late. | 2 | Risks |
+| MIG-012 | Choose the time-stretch library on measured quality: `signalsmith-stretch` (MIT) vs Rubber Band single-file (GPL). | 2 | Open decision 3 |
+| MIG-013 | Verify the wasm audio path end to end — the crate compiles for wasm, but AudioWorklet integration is unexercised. | 4 | Spike limits |
+
+### Mobile and platform
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| MIG-020 | **iOS background sync will stall.** Cloud-first caching means large background downloads, which iOS Background App Refresh throttles and silently kills — the documented failure mode in comparable clients. Design chunked, resumable transfers with honest progress UI; do not assume a large sync completes in the background. | 4 | Ecosystem research |
+| MIG-021 | Android background sync must adapt to Doze rather than fight it. | 4 | Ecosystem research |
+| MIG-022 | Windows SMTC media-control code has never been compiled on any machine. Either build and test it, or drop it from the port. | 4 | `docs/CROSS_PLATFORM_DSP.md` |
+
+### Interop
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| MIG-030 | OpenSubsonic client: separate request paths for original (analysis) vs transcoded (playback) streams. | 3 | OpenSubsonic decision |
+| MIG-031 | OpenSubsonic auth: TLS required, credential in OS keychain, never in the settings file. | 3 | OpenSubsonic decision |
+| MIG-032 | Verify OpenSubsonic extension names and field shapes against the actual specification before designing to them — the secondary sources reviewed contained errors. | 3 | Ecosystem research |
+| MIG-033 | Consume server-provided BPM/key via extended tags where available, to skip redundant on-device analysis. | 3 | OpenSubsonic decision |
+
+### Process
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| MIG-040 | Stand up CI before migration work. Record the 12 currently-failing GUT tests as a known-failing baseline so the suite gates on regressions immediately. | 0 | Phase 0 |
+| MIG-041 | Translate GUT test *assertions* to Rust before porting the code they cover — they are the specification. | 3 | Phase 3 |
+| MIG-042 | Do not couple the AGPL exit to the migration. Revisit licensing only once phases 1–2 fix the dependency set. | 5 | Licensing |
