@@ -730,7 +730,7 @@ resolved by, not when it must be started.
 | MIG-009 | Port the PLL drift correction, vocal-clash mid-cut and phrase-adaptive durations from `audio_manager.gd`. | 2 | Mixer spike |
 | ~~MIG-014~~ | ~~Octave-error detection must also cover metrical errors (3:4, 2:3).~~ **Done** — the class is 10.6%, not 4.4%. | 1 | Mixer spike |
 | MIG-015 | Decide whether Standard Crossfade should become equal-power. The Godot envelope is dB-linear and dips at the midpoint; the behaviour is currently replicated deliberately and pinned by a test. | 2 | Mixer spike |
-| MIG-016 | The engine has no resampler, so tracks at different sample rates cannot be mixed. `render_mix` refuses rather than mixing at the wrong pitch. | 2 | Mixer spike |
+| ~~MIG-016~~ | ~~No resampler; mismatched sample rates were refused.~~ **Done** — windowed-sinc (32-tap, Blackman, 512 phases), converting at load rather than per block. Tested for level preservation and for anti-aliasing on downsampling, which is the failure that makes a naive resampler unusable. | 2 | Mixer spike |
 
 ### Engineering risk
 

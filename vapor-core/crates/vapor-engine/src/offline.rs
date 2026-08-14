@@ -22,7 +22,6 @@ pub const TAIL_SECS: f32 = 6.0;
 pub enum OfflineError {
     Decode(String),
     Analysis(String),
-    RateMismatch(u32, u32),
     /// Carries the two BPMs so the caller can see *why* — a bare
     /// "TempoTooFar" hides whether the tracks really are incompatible or the
     /// analysis simply got one of them wrong.
@@ -38,10 +37,6 @@ impl std::fmt::Display for OfflineError {
         match self {
             OfflineError::Decode(m) => write!(f, "cannot decode: {m}"),
             OfflineError::Analysis(m) => write!(f, "cannot analyse: {m}"),
-            OfflineError::RateMismatch(a, b) => write!(
-                f,
-                "sample rate mismatch ({a} vs {b}); resampling is not implemented yet"
-            ),
             OfflineError::NotMatchable { err, bpm_a, bpm_b } => write!(
                 f,
                 "cannot beat-match {bpm_a:.1} -> {bpm_b:.1} BPM ({:+.1}%): {err:?}\n\
@@ -133,10 +128,19 @@ pub fn render_mix(
     let a = load_track(a_path, bpm_a)?;
     let b = load_track(b_path, bpm_b)?;
 
-    if a.sample_rate != b.sample_rate {
-        return Err(OfflineError::RateMismatch(a.sample_rate, b.sample_rate));
-    }
+    // Mix at the outgoing deck's rate, converting the incoming one if needed
+    // (MIG-016). Previously this refused the pair outright, which meant a real
+    // library — where 44.1 and 48 kHz sit side by side — could not be mixed.
     let rate = a.sample_rate;
+    let b = if b.sample_rate != rate {
+        Track {
+            frames: vapor_dsp::resample::resample(&b.frames, b.sample_rate, rate),
+            sample_rate: rate,
+            grid: b.grid,
+        }
+    } else {
+        b
+    };
     let ratio = Mixer::tempo_ratio(&a.grid, &b.grid).map_err(|err| OfflineError::NotMatchable {
         err,
         bpm_a: a.grid.bpm,

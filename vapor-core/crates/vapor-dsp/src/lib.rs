@@ -13,6 +13,7 @@ pub mod beats;
 pub mod decode;
 pub mod key;
 pub mod loudness;
+pub mod resample;
 pub mod spectrum;
 pub mod tempo;
 
