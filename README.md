@@ -223,6 +223,17 @@ This means the compiled `.dylib` library is missing from the [bin/](file:///User
 > **Exporting / Bundling Tech Debt Note**
 > For local development and unit tests, the compiled dynamic library (`bin/libaudio_dsp.macos.debug.dylib`) links dynamically to Homebrew's paths (via `-Wl,-rpath,/opt/homebrew/lib`).
 > Before exporting a production app bundle (`.app`), these external `.dylib` dependencies (specifically `libessentia.dylib` and `librubberband.dylib`) must be copied directly into the app bundle's `Frameworks` directory and re-linked using `install_name_tool`, and then code-signed, to make the exported application self-contained.
+>
+> Phase 1 of the [Cross-Platform DSP plan](docs/CROSS_PLATFORM_DSP.md) removes this problem at the root by dropping the Essentia file loaders — and with them the entire ffmpeg/taglib/chromaprint dependency tail — rather than bundling them.
+
+> [!NOTE]
+> **Licensing.** Vapor Music is licensed under the **AGPL-3.0**, because it links Essentia (AGPL-3.0) and Rubber Band (GPL-2.0-or-later) for its analysis and time-stretching. See [License](#license) below and [Licensing & Compliance](docs/LICENSING.md).
+
+### Platform Support
+
+The `AudioDSP` GDExtension is currently **macOS-only**. On Windows and Android the app falls back to `scripts/services/audio_dsp_stub.gd`: playback, library, playlists and WebDAV all work, but BPM/key analysis and beat-matched time-stretching are unavailable, and tracks stay unanalyzed rather than showing fabricated values.
+
+[Cross-Platform DSP](docs/CROSS_PLATFORM_DSP.md) documents what it would take to close that gap, why the current `analyze_file()` design is the blocker, and a four-phase plan.
 
 ---
 
@@ -406,6 +417,29 @@ This means the compiled `.dylib` library is missing from the [bin/](file:///User
 > **v1.2 (2026-06-02):** Restructured playback controls. Replaced bottom horizontal mini-player on desktop with a top-to-bottom vertical progress bar running directly along the sidebar separator line, and square windows-style media control tiles in the sidebar footer. Repositioned mobile progress bar to sit horizontally at the top edge of the bottom panel. Implemented custom borderless window drag-to-move (via sidebar) and corner/edge drag-to-resize. All 23 unit tests passing.
 >
 > **v1.1 (2026-06-02):** Visual overhaul to Apple-inspired glassmorphism. New Vapor Dark and Vapor Light themes. Single-accent palette (`#007AFF` / `#0A84FF`). All 13 theme manager unit tests passing.
+
+---
+
+## License
+
+Vapor Music is free software, licensed under the
+**GNU Affero General Public License v3.0 or later**. The full text is in
+[`LICENSE`](LICENSE).
+
+This is a consequence of the audio analysis stack: Vapor Music links
+**Essentia** (AGPL-3.0) for BPM and key detection and the **Rubber Band
+Library** (GPL-2.0-or-later) for pitch-independent time-stretching. Both are
+strong copyleft, so the combined work is AGPL-3.0.
+
+In practice this means you may use, study, modify and redistribute Vapor Music,
+provided derivative works remain under the AGPL and their source is made
+available.
+
+- Third-party components and what they are used for: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+- Bundled license texts: [`licenses/`](licenses/)
+- Reasoning, obligations and alternatives considered: [`docs/LICENSING.md`](docs/LICENSING.md)
+
+Source: <https://github.com/Ghigog/vapor-music>
 
 ---
 

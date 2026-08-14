@@ -57,12 +57,32 @@ var _user_minimized_overlay := false
 const DIAGNOSTICS_INTERVAL := 0.25
 var _diagnostics_timer: Timer
 
+## About / Licenses section.
+##
+## Built in code rather than in settings_screen.tscn purely to keep the scene
+## file unchanged; it behaves like any other section in the Content VBox.
+##
+## This section is a licensing obligation, not decoration. The icons are CC BY,
+## which requires attribution visible to users of the work — a line in
+## THIRD_PARTY_NOTICES.md does not satisfy that. The AGPL likewise requires
+## recipients be told the license and where to get source. See docs/LICENSING.md.
+const SOURCE_URL := "https://github.com/Ghigog/vapor-music"
+const CONTENT_PATH := "ScrollContainer/Center/SettingsPanel/MarginContainer/Content"
+
+var _about_separator: HSeparator
+var _about_section: VBoxContainer
+var _about_title: Label
+var _about_body: RichTextLabel
+var _about_source_button: Button
+
 const THEME_MAP = {
 	"Vapor Dark" : "res://assets/themes/default_dark.tres",
 	"Vapor Light" : "res://assets/themes/default_light.tres"
 }
 
 func _ready() -> void:
+	# Built before _apply_styles() so the new nodes get themed on the first pass.
+	_build_about_section()
 	_apply_styles()
 	ThemeManager.theme_changed.connect(_apply_styles)
 
@@ -131,6 +151,58 @@ func _ready() -> void:
 	prefetch_button.pressed.connect(_on_prefetch_pressed)
 	minimize_cache_btn.pressed.connect(_on_minimize_cache_pressed)
 	stop_cache_btn.pressed.connect(_on_prefetch_pressed)
+## Appends the About section to the bottom of the settings Content VBox.
+func _build_about_section() -> void:
+	var content := get_node_or_null(CONTENT_PATH)
+	if content == null:
+		push_warning("SettingsScreen: Content container not found; About section skipped.")
+		return
+
+	_about_separator = HSeparator.new()
+	content.add_child(_about_separator)
+
+	_about_section = VBoxContainer.new()
+	_about_section.name = "AboutSection"
+	content.add_child(_about_section)
+
+	_about_title = Label.new()
+	_about_title.text = "About"
+	_about_section.add_child(_about_title)
+
+	_about_body = RichTextLabel.new()
+	_about_body.bbcode_enabled = true
+	_about_body.fit_content = true
+	_about_body.scroll_active = false
+	_about_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_about_body.text = _build_about_text()
+	_about_section.add_child(_about_body)
+
+	_about_source_button = Button.new()
+	_about_source_button.text = "View Source Code"
+	_about_source_button.pressed.connect(func() -> void: OS.shell_open(SOURCE_URL))
+	_about_section.add_child(_about_source_button)
+
+
+## Attribution text. Every credit here is a license requirement — see the note
+## on the section constants above before trimming anything.
+func _build_about_text() -> String:
+	var version: String = str(ProjectSettings.get_setting("application/config/version", ""))
+	var lines: PackedStringArray = []
+
+	if not version.is_empty():
+		lines.append("Vapor Music %s" % version)
+
+	lines.append("Free software under the [b]GNU Affero General Public License v3.0[/b] or later.")
+	lines.append("")
+	lines.append("Audio analysis by [b]Essentia[/b] (AGPL-3.0). Time-stretching by the [b]Rubber Band Library[/b] (GPL-2.0-or-later). Built with [b]Godot Engine[/b] and [b]godot-cpp[/b] (MIT).")
+	lines.append("")
+	lines.append("Icons by [b]Gregor Cresnar[/b] via the Noun Project, licensed CC BY.")
+	lines.append("")
+	lines.append("Full license texts are included with this application in the [i]licenses[/i] folder.")
+
+	return "\n".join(lines)
+
+
 func _apply_styles() -> void:
 	# Skin the Settings frosted glass card container
 	if is_instance_valid(settings_panel):
@@ -327,6 +399,31 @@ func _apply_styles() -> void:
 			btn.add_theme_stylebox_override("hover", ThemeManager.make_cta_button(true))
 			btn.add_theme_stylebox_override("pressed", ThemeManager.make_cta_button(true))
 			btn.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
+
+	# About Section styles. Guarded because _apply_styles() is also the
+	# theme_changed handler and may fire before the section is built.
+	if is_instance_valid(_about_title):
+		_about_title.add_theme_color_override("font_color", ThemeManager.current_theme.TEXT_PRIMARY)
+		_about_title.add_theme_font_override("font", ThemeManager.current_theme.font_display)
+		_about_title.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_MD)
+
+	if is_instance_valid(_about_body):
+		_about_body.add_theme_color_override("default_color", ThemeManager.current_theme.TEXT_SECONDARY)
+		_about_body.add_theme_font_override("normal_font", ThemeManager.current_theme.font_ui)
+		_about_body.add_theme_font_override("bold_font", ThemeManager.current_theme.font_ui)
+		_about_body.add_theme_font_size_override("normal_font_size", ThemeManager.current_theme.TYPE_XS)
+		_about_body.add_theme_font_size_override("bold_font_size", ThemeManager.current_theme.TYPE_XS)
+
+	if is_instance_valid(_about_source_button):
+		_about_source_button.add_theme_font_override("font", ThemeManager.current_theme.font_ui)
+		_about_source_button.add_theme_font_size_override("font_size", ThemeManager.current_theme.TYPE_SM)
+		_about_source_button.add_theme_color_override("font_color", ThemeManager.current_theme.ACCENT_BRIGHT)
+		_about_source_button.add_theme_color_override("font_hover_color", ThemeManager.current_theme.TEXT_INVERSE)
+		_about_source_button.add_theme_color_override("font_pressed_color", ThemeManager.current_theme.TEXT_INVERSE)
+		_about_source_button.add_theme_stylebox_override("normal", ThemeManager.make_cta_button(false))
+		_about_source_button.add_theme_stylebox_override("hover", ThemeManager.make_cta_button(true))
+		_about_source_button.add_theme_stylebox_override("pressed", ThemeManager.make_cta_button(true))
+		_about_source_button.add_theme_stylebox_override("focus", ThemeManager.make_transparent())
 
 
 func _on_theme_selected(index: int) -> void:
