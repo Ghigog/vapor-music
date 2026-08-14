@@ -42,11 +42,7 @@ pub fn estimate(spec: &Spectrogram) -> Option<TempoResult> {
     let odf_rate = spec.frame_rate();
     let bpm = pick_tempo(&odf, odf_rate)?;
 
-    Some(TempoResult {
-        bpm,
-        odf,
-        odf_rate,
-    })
+    Some(TempoResult { bpm, odf, odf_rate })
 }
 
 /// Spectral flux: summed positive frame-to-frame change in log magnitude.
@@ -216,8 +212,8 @@ mod tests {
             // Short decaying burst of noise-free tone as a transient.
             for k in 0..(rate as usize / 100).min(n - i) {
                 let t = k as f32 / rate as f32;
-                s[i + k] = (1.0 - t * 100.0).max(0.0)
-                    * (2.0 * std::f32::consts::PI * 1000.0 * t).sin();
+                s[i + k] =
+                    (1.0 - t * 100.0).max(0.0) * (2.0 * std::f32::consts::PI * 1000.0 * t).sin();
             }
             i += period;
         }

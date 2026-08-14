@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [main, godot-legacy]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first — CI should report on the
+# current state, not queue up stale runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build on warnings in CI without making local development noisy.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # The real gate. Everything new lands in Rust, and this runs everywhere with
+  # no external dependencies — no engine, no display server, no emulator.
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    defaults:
+      run:
+        working-directory: vapor-core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vapor-core
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+
+      - name: Test
+        run: cargo test --release
+
+  # Verifies the core stays platform-free. Only the library targets are built:
+  # `vapor-engine`'s cpal dependency is deliberately gated to non-wasm targets,
+  # and the CLI binaries are developer tooling that never ships to the browser.
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vapor-core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vapor-core
+          key: wasm
+
+      - name: Build vapor-dsp for wasm
+        run: cargo build --release --target wasm32-unknown-unknown -p vapor-dsp --lib
+
+      - name: Build vapor-engine for wasm
+        run: cargo build --release --target wasm32-unknown-unknown -p vapor-engine --lib
+
+  # Regression gate for the Godot app while it is still the shipping version.
+  #
+  # IMPORTANT: this runs WITHOUT the AudioDSP GDExtension, so the suite takes
+  # the audio_dsp_stub.gd path. That is a deliberate trade, not an oversight:
+  # building the extension needs Essentia from a HEAD-only third-party tap plus
+  # the whole ffmpeg / taglib / chromaprint / fftw closure — the exact
+  # dependency tail the migration exists to delete. Compiling it on every run
+  # would be slow and would break whenever that tap moves.
+  #
+  # The cost is real and must not be forgotten: DSP-dependent tests are NOT
+  # covered here. Run the full suite locally with the dylib present
+  # (211 pass / 12 fail) before trusting a change to analysis or transitions.
+  godot:
+    name: godot (stub path)
+    runs-on: macos-latest
+
+    env:
+      GODOT_VERSION: 4.7.1
+      # Baseline measured at godot-final-v1.78 on the stub path.
+      # These are pinned so the suite gates on *regressions* immediately rather
+      # than waiting for a green board. Lower them as failures get fixed.
+      EXPECTED_PASS: 190
+      EXPECTED_FAIL: 19
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-macos
+
+      - name: Download Godot
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot && cd ~/godot
+          url="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+          curl -fsSL -o godot.zip "$url"
+          unzip -q godot.zip
+
+      - name: Import project
+        # First run generates .godot/; it is expected to be noisy and may exit
+        # non-zero while resources are still importing.
+        run: |
+          GODOT=~/godot/Godot.app/Contents/MacOS/Godot
+          "$GODOT" --headless --path . --import || true
+
+      - name: Run GUT suite
+        id: gut
+        run: |
+          GODOT=~/godot/Godot.app/Contents/MacOS/Godot
+          # GUT exits non-zero when any test fails; the baseline comparison
+          # below is the actual gate, so do not let that abort the step.
+          "$GODOT" --headless --path . \
+            -s addons/gut/gut_cmdln.gd \
+            -gdir=res://tests/unit -ginclude_subdirs -gexit \
+            2>&1 | tee gut-output.txt || true
+
+      - name: Compare against baseline
+        run: python3 tools/check-gut-baseline.py gut-output.txt
+
+      - name: Upload GUT output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gut-output
+          path: gut-output.txt

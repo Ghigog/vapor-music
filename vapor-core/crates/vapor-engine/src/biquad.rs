@@ -172,8 +172,10 @@ impl EqChain {
     }
 
     pub fn set_gains(&mut self, low_db: f32, mid_db: f32, high_db: f32) {
-        self.low.set_peaking(self.sample_rate, LOW_FREQ, BAND_Q, low_db);
-        self.mid.set_peaking(self.sample_rate, MID_FREQ, BAND_Q, mid_db);
+        self.low
+            .set_peaking(self.sample_rate, LOW_FREQ, BAND_Q, low_db);
+        self.mid
+            .set_peaking(self.sample_rate, MID_FREQ, BAND_Q, mid_db);
         self.high
             .set_peaking(self.sample_rate, HIGH_FREQ, BAND_Q, high_db);
     }

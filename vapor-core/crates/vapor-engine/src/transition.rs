@@ -183,7 +183,11 @@ impl Transition {
         let out_gain = if t < fade_delay {
             0.0
         } else {
-            lerp(0.0, SILENCE_DB, sine_in_out((t - fade_delay) / fade_duration))
+            lerp(
+                0.0,
+                SILENCE_DB,
+                sine_in_out((t - fade_delay) / fade_duration),
+            )
         };
 
         // Linear in Hz with quad easing, matching the Godot `tween_property`
@@ -304,7 +308,10 @@ mod tests {
 
         t.advance(0.7); // 3.6 s: 0.6 s past the midpoint, swap is 0.5 s
         let a = t.automation();
-        assert!(a.outgoing.eq_low_db <= BASS_CUT_DB + 0.01, "outgoing bass cut");
+        assert!(
+            a.outgoing.eq_low_db <= BASS_CUT_DB + 0.01,
+            "outgoing bass cut"
+        );
         assert!(a.incoming.eq_low_db >= -0.01, "incoming bass restored");
     }
 
@@ -318,8 +325,14 @@ mod tests {
         let a = t.automation();
         let (end_lp, end_hp) = sweep_freqs(&a);
 
-        assert!(start_lp > 19_000.0 && end_lp < 200.0, "lowpass should close");
-        assert!(start_hp > 1_900.0 && end_hp < 20.0, "highpass should open down");
+        assert!(
+            start_lp > 19_000.0 && end_lp < 200.0,
+            "lowpass should close"
+        );
+        assert!(
+            start_hp > 1_900.0 && end_hp < 20.0,
+            "highpass should open down"
+        );
     }
 
     fn sweep_freqs(a: &Automation) -> (f32, f32) {

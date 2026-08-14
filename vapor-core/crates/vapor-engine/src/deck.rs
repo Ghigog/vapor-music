@@ -101,7 +101,9 @@ impl Deck {
         }
 
         let n = out.len().min(scratch.len());
-        let produced = self.stretcher.process(&self.samples, self.ratio, &mut scratch[..n]);
+        let produced = self
+            .stretcher
+            .process(&self.samples, self.ratio, &mut scratch[..n]);
 
         if produced == 0 {
             self.playing = false;

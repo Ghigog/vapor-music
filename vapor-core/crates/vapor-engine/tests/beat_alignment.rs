@@ -230,8 +230,14 @@ fn deck_roles_swap_and_tempo_returns_to_normal() {
         mixer.render(&mut block);
     }
 
-    assert!(!mixer.is_transitioning(), "transition should have completed");
-    assert!(!mixer.deck_a.is_playing(), "outgoing deck should have stopped");
+    assert!(
+        !mixer.is_transitioning(),
+        "transition should have completed"
+    );
+    assert!(
+        !mixer.deck_a.is_playing(),
+        "outgoing deck should have stopped"
+    );
     assert!(mixer.deck_b.is_playing(), "incoming deck should still play");
     assert!(
         (mixer.deck_b.ratio - 1.0).abs() < 1e-9,

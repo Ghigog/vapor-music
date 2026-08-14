@@ -171,12 +171,8 @@ impl Mixer {
         cue_in: f32,
     ) -> Result<(), MatchError> {
         let ratio = Self::tempo_ratio(outgoing_grid, incoming_grid)?;
-        let pos = Self::aligned_incoming_position(
-            outgoing_grid,
-            incoming_grid,
-            start_time_out,
-            cue_in,
-        )?;
+        let pos =
+            Self::aligned_incoming_position(outgoing_grid, incoming_grid, start_time_out, cue_in)?;
 
         let inc = self.incoming();
         inc.seek_seconds(pos as f64);
@@ -318,10 +314,7 @@ mod tests {
     fn refuses_musically_implausible_stretches() {
         let out = grid(128.0, 0.0, 100);
         let far = grid(175.0, 0.0, 100);
-        assert_eq!(
-            Mixer::tempo_ratio(&out, &far),
-            Err(MatchError::TempoTooFar)
-        );
+        assert_eq!(Mixer::tempo_ratio(&out, &far), Err(MatchError::TempoTooFar));
     }
 
     /// Unanalyzed tracks must be refused, not silently mixed at a guessed

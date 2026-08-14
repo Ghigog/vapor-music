@@ -79,7 +79,10 @@ pub fn decode_to_mono(path: &Path) -> Result<DecodedAudio, DecodeError> {
 /// response, never from a path. `ext_hint` is optional — Symphonia probes the
 /// actual container regardless, which matters because the cache names files
 /// after the remote href's extension and that is not guaranteed to match.
-pub fn decode_bytes_to_mono(bytes: Vec<u8>, ext_hint: Option<&str>) -> Result<DecodedAudio, DecodeError> {
+pub fn decode_bytes_to_mono(
+    bytes: Vec<u8>,
+    ext_hint: Option<&str>,
+) -> Result<DecodedAudio, DecodeError> {
     let source = std::io::Cursor::new(bytes);
     let mss = MediaSourceStream::new(Box::new(source), Default::default());
     decode_stream(mss, hint_from_extension(ext_hint))

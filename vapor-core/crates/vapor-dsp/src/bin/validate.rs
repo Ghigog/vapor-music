@@ -39,8 +39,8 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX);
 
-    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/essentia_ground_truth.json");
+    let fixture_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/essentia_ground_truth.json");
     let raw = std::fs::read_to_string(&fixture_path).unwrap_or_else(|e| {
         eprintln!("cannot read {}: {e}", fixture_path.display());
         eprintln!("regenerate it with: node vapor-core/tools/extract-fixtures.mjs");
@@ -108,8 +108,14 @@ fn main() {
         }
     }
 
-    println!("\n=== Tempo (vs Essentia, +/-{:.0}%) ===", BPM_TOLERANCE * 100.0);
-    println!("  exact agreement   {bpm_ok:>4}/{decoded}  ({:.1}%)", pct(bpm_ok));
+    println!(
+        "\n=== Tempo (vs Essentia, +/-{:.0}%) ===",
+        BPM_TOLERANCE * 100.0
+    );
+    println!(
+        "  exact agreement   {bpm_ok:>4}/{decoded}  ({:.1}%)",
+        pct(bpm_ok)
+    );
     println!(
         "  octave error      {bpm_octave:>4}/{decoded}  ({:.1}%)",
         pct(bpm_octave)
@@ -121,7 +127,10 @@ fn main() {
     );
 
     println!("\n=== Key (vs Essentia) ===");
-    println!("  exact Camelot     {key_exact:>4}/{decoded}  ({:.1}%)", pct(key_exact));
+    println!(
+        "  exact Camelot     {key_exact:>4}/{decoded}  ({:.1}%)",
+        pct(key_exact)
+    );
     println!(
         "  adjacent on wheel {key_adjacent:>4}/{decoded}  ({:.1}%)",
         pct(key_adjacent)

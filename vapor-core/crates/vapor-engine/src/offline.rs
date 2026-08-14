@@ -76,8 +76,8 @@ pub struct Track {
 /// rather than "the BPM estimate was wrong", and mixing quality can be judged
 /// before MIG-001/MIG-002 land.
 pub fn load_track(path: &Path, bpm_override: Option<f32>) -> Result<Track, OfflineError> {
-    let mono = vapor_dsp::decode::decode_to_mono(path)
-        .map_err(|e| OfflineError::Decode(e.to_string()))?;
+    let mono =
+        vapor_dsp::decode::decode_to_mono(path).map_err(|e| OfflineError::Decode(e.to_string()))?;
     let analysis =
         vapor_dsp::analyze_decoded(&mono).map_err(|e| OfflineError::Analysis(e.to_string()))?;
 
