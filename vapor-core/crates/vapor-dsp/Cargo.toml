@@ -1,0 +1,24 @@
+[package]
+name = "vapor-dsp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Pure-Rust decode. Replaces Essentia's MonoLoader and, with it, the ffmpeg /
+# taglib / chromaprint dependency tail and the popen("ffprobe") shell-out.
+# `isomp4` + `aac`/`alac` are the reason this handles the 58% of the library
+# that the current Godot fallback path cannot open at all.
+symphonia = { version = "0.5", default-features = false, features = [
+    "mp3", "isomp4", "aac", "alac", "flac", "vorbis", "ogg", "wav", "pcm",
+] }
+rustfft = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"
+
+[[bin]]
+name = "validate"
+path = "src/bin/validate.rs"

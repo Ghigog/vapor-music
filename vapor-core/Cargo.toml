@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/vapor-dsp"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+# Analysis runs over a whole library at import time; debug-speed DSP makes the
+# validation harness unusable, so optimise dependencies even in dev builds.
+[profile.dev.package."*"]
+opt-level = 3

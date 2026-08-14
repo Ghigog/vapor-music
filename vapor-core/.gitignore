@@ -1,0 +1,4 @@
+target/
+# Derived from the user's own library via tools/extract-fixtures.mjs.
+# Multi-megabyte and contains personal track paths — regenerate, don't commit.
+fixtures/*.json
