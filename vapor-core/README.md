@@ -12,13 +12,29 @@ and shelling out to Homebrew binaries) be reproduced in portable Rust?
 
 | Crate | Status | Purpose |
 |---|---|---|
-| `vapor-dsp` | spike | Decode, tempo estimation, key detection |
-| `vapor-engine` | spike | Two-deck mixer, EQ chain, time-stretch, transitions |
+| `vapor-dsp` | spike | Decode, tempo, beat grids, key, cue points, loudness |
+| `vapor-engine` | spike | Two-deck mixer, EQ chain, time-stretch, transitions, limiter |
 | `vapor-library` | not started | Playlists, groups, pathfinder, metadata |
 
 Neither crate has audio I/O, an engine or platform code, so both run under
 `cargo test` on any CI runner — the property the 224-test GUT suite lacks — and
-both build for `wasm32-unknown-unknown`.
+both build for `wasm32-unknown-unknown`. Audio output lives only in the `play`
+binary, which is why cpal is a target-gated dependency rather than a crate one.
+
+### Where things stand, measured
+
+Against 563 real tracks, using the Essentia results the Godot app already
+produced as ground truth. See `docs/MIGRATION.md` for how to read these — they
+are agreement with another estimator, not a correctness score.
+
+| | Result |
+|---|---|
+| Decode | 540/563 (E-AC-3 / Dolby Atmos is the gap) |
+| Tempo, exact | ~81% |
+| Beat grid, F-measure | 0.763 mean / 0.884 median |
+| Key, exact Camelot | ~48% — **not yet shippable** |
+| `lufs` | agrees to 0.003 LU |
+| Beat-match accuracy | 6.11 ms worst deviation, rendered |
 
 ## Listening to a transition
 
