@@ -76,38 +76,74 @@ fn chroma_vector(spec: &Spectrogram) -> Option<[f32; 12]> {
     let f_min = 130.0f32;
     let f_max = 1760.0f32;
 
-    // Precompute each bin's pitch class and a leakage weight.
+    // Each bin contributes to the pitch classes of the fundamentals that could
+    // have produced it, not just to its own — a harmonic pitch class profile.
     //
-    // Hard-assigning every bin to its nearest pitch class is what made the
-    // first version report F minor for a C major triad: a windowed sinusoid
-    // spreads over several bins, and the skirts land in adjacent semitones.
-    // Weighting by distance from the semitone centre suppresses those skirts
-    // without needing a full constant-Q transform.
-    let mut bin_pc = vec![usize::MAX; bins];
-    let mut bin_w = vec![0.0f32; bins];
-    for k in 1..bins {
+    // A note at f also radiates at 2f, 3f, 4f, 5f…, whose pitch classes are the
+    // octave, the fifth, the octave again and the major third. Assigning every
+    // bin to its own class therefore credits a plain C note with energy at G
+    // and E, which inflates the fifth and third of every key and biases the
+    // correlation toward major. Folding each bin back onto its candidate
+    // fundamentals returns that energy where it belongs.
+    //
+    // Sub-weighting by harmonic index rather than treating them equally: a
+    // fourth harmonic is much weaker evidence of a fundamental than the first,
+    // and equal weighting simply moves the bias rather than removing it.
+    const HARMONICS: usize = 4;
+    let harmonic_weight = |h: usize| 0.6f32.powi(h as i32 - 1);
+
+    // Precompute, per bin, the (pitch class, weight) pairs it contributes to.
+    //
+    // The leakage weight is retained from the earlier fix: a windowed sinusoid
+    // spreads across several bins and the skirts land in adjacent semitones,
+    // which is what made the first version read a C major triad as F minor.
+    let mut contributions: Vec<Vec<(usize, f32)>> = vec![Vec::new(); bins];
+    for (k, slot) in contributions.iter_mut().enumerate().take(bins).skip(1) {
         let f = spec.bin_freq(k);
-        if f < f_min || f > f_max {
+        if f < f_min || f > f_max * HARMONICS as f32 {
             continue;
         }
-        // MIDI note number, then fold to pitch class: A4=440 -> 69 -> class 9,
-        // which puts C at 0.
-        let midi = 69.0 + 12.0 * (f / 440.0).log2();
-        let nearest = midi.round();
-        let dev = (midi - nearest).abs(); // 0.0 at centre, 0.5 midway
-        bin_pc[k] = (nearest as i32).rem_euclid(12) as usize;
-        // Raised cosine: full weight on centre, zero halfway to the next
-        // semitone.
-        bin_w[k] = (std::f32::consts::PI * dev).cos().powi(2);
+        for h in 1..=HARMONICS {
+            let fundamental = f / h as f32;
+            if fundamental < f_min || fundamental > f_max {
+                continue;
+            }
+            let midi = 69.0 + 12.0 * (fundamental / 440.0).log2();
+            let nearest = midi.round();
+            let dev = (midi - nearest).abs(); // 0.0 at centre, 0.5 midway
+            let pc = (nearest as i32).rem_euclid(12) as usize;
+            // Raised cosine: full weight on centre, zero halfway to the next
+            // semitone.
+            let leakage = (std::f32::consts::PI * dev).cos().powi(2);
+            let w = leakage * harmonic_weight(h);
+            if w > 1e-4 {
+                slot.push((pc, w));
+            }
+        }
     }
 
+    // Per-frame normalisation: every moment contributes equally to the profile.
+    //
+    // Without it the loudest section decides the key. A track whose chorus is
+    // 12 dB above its verses is effectively analysed on the chorus alone, and a
+    // modulation or a loud non-tonal drop drags the whole estimate with it.
     for frame in &spec.frames {
+        let mut frame_chroma = [0.0f32; 12];
         for (k, &mag) in frame.iter().enumerate() {
-            let pc = bin_pc[k];
-            if pc != usize::MAX {
-                // Energy, not amplitude — matches how the profiles were derived
-                // and makes strong tonal content dominate.
-                chroma[pc] += mag * mag * bin_w[k];
+            if contributions[k].is_empty() {
+                continue;
+            }
+            // Energy, not amplitude — matches how the profiles were derived
+            // and makes strong tonal content dominate within the frame.
+            let energy = mag * mag;
+            for &(pc, w) in &contributions[k] {
+                frame_chroma[pc] += energy * w;
+            }
+        }
+        let sum: f32 = frame_chroma.iter().sum();
+        if sum > 1e-12 {
+            for (c, f) in chroma.iter_mut().zip(frame_chroma.iter()) {
+                *c += f / sum;
             }
         }
     }

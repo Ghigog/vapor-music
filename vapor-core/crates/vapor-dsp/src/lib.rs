@@ -12,6 +12,7 @@
 pub mod beats;
 pub mod decode;
 pub mod key;
+pub mod loudness;
 pub mod spectrum;
 pub mod tempo;
 
@@ -27,6 +28,13 @@ pub struct Analysis {
     pub camelot: String,
     pub key_name: String,
     pub key_confidence: f32,
+    /// First and last audible moments, in seconds. `get_transition_trigger_time`
+    /// in the Godot build schedules mixes from these, so they are load-bearing
+    /// rather than informational.
+    pub cue_in: f32,
+    pub cue_out: f32,
+    /// Integrated loudness, EBU R128 / ITU-R BS.1770.
+    pub lufs: f32,
     pub duration_secs: f64,
     pub sample_rate: u32,
     pub channels: usize,
@@ -115,9 +123,15 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
     let key_spec = spectrum::for_key(&audio.samples[skip..end], rate);
     let key = key::estimate(&key_spec).ok_or(AnalysisError::Insufficient)?;
 
+    let (cue_in, cue_out) = loudness::cue_points(&audio.samples, rate as f32);
+    let lufs = loudness::integrated_lufs(&audio.samples, rate as f32);
+
     Ok(Analysis {
         bpm: tempo.bpm,
         beats,
+        cue_in,
+        cue_out,
+        lufs,
         camelot: key.camelot,
         key_name: key.name,
         key_confidence: key.confidence,

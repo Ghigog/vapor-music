@@ -23,6 +23,12 @@ struct Fixture {
     camelot: String,
     #[serde(default)]
     beat_grid: Vec<f32>,
+    #[serde(default)]
+    cue_in: f32,
+    #[serde(default)]
+    cue_out: f32,
+    #[serde(default)]
+    lufs: f32,
 }
 
 /// Ratios that count as a *metrical* rather than an outright wrong tempo.
@@ -79,6 +85,9 @@ fn main() {
     let mut key_adjacent = 0usize;
     let mut beat_f: Vec<f32> = Vec::new();
     let mut beat_good = 0usize;
+    let mut cue_in_err: Vec<f32> = Vec::new();
+    let mut cue_out_err: Vec<f32> = Vec::new();
+    let mut lufs_err: Vec<f32> = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut by_ext: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 
@@ -118,6 +127,15 @@ fn main() {
             if score >= 0.8 {
                 beat_good += 1;
             }
+        }
+
+        // Cue points and loudness (MIG-005). Ground truth comes from the same
+        // Essentia-era run, and the C++ that produced it was already portable
+        // code — so these should agree closely, not merely correlate.
+        cue_in_err.push((a.cue_in - f.cue_in).abs());
+        cue_out_err.push((a.cue_out - f.cue_out).abs());
+        if f.lufs < 0.0 && f.lufs > -70.0 {
+            lufs_err.push((a.lufs - f.lufs).abs());
         }
 
         if a.camelot == f.camelot {
@@ -195,6 +213,28 @@ fn main() {
         key_exact + key_adjacent,
         pct(key_exact + key_adjacent)
     );
+
+    println!("\n=== Cue points and loudness (vs Essentia) ===");
+    let summarise = |label: &str, v: &[f32], unit: &str, tol: f32| {
+        if v.is_empty() {
+            println!("  {label}: no data");
+            return;
+        }
+        let mut s = v.to_vec();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean: f32 = s.iter().sum::<f32>() / s.len() as f32;
+        let within = s.iter().filter(|&&e| e <= tol).count();
+        println!(
+            "  {label:<10} mean |err| {mean:>7.3}{unit}  median {:>7.3}{unit}  within {tol}{unit}: {}/{} ({:.1}%)",
+            s[s.len() / 2],
+            within,
+            s.len(),
+            100.0 * within as f64 / s.len() as f64
+        );
+    };
+    summarise("cue_in", &cue_in_err, "s", 0.5);
+    summarise("cue_out", &cue_out_err, "s", 0.5);
+    summarise("lufs", &lufs_err, "LU", 1.0);
 
     println!(
         "\n{:.1}s total, {:.2}s/track",
