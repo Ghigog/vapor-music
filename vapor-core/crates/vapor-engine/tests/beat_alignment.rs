@@ -422,8 +422,8 @@ fn bass_swap_does_not_clip_two_loud_decks() {
 /// against a reference. Hence this test.
 #[test]
 fn a_scheduled_transition_waits_for_its_delay() {
-    let (a_samples, a_grid) = click_track(128.0, 120.0);
-    let (b_samples, b_grid) = click_track(126.0, 120.0);
+    let (a_samples, a_grid) = click_track(128.0, 120.0, 0.0);
+    let (b_samples, b_grid) = click_track(126.0, 120.0, 0.0);
 
     let mut mixer = Mixer::new(RATE, BLOCK);
     mixer.deck_a.load(a_samples);
@@ -482,8 +482,8 @@ fn a_scheduled_transition_waits_for_its_delay() {
 /// Scheduling with no delay must behave exactly like starting immediately.
 #[test]
 fn zero_delay_starts_immediately() {
-    let (a_samples, a_grid) = click_track(128.0, 60.0);
-    let (b_samples, b_grid) = click_track(126.0, 60.0);
+    let (a_samples, a_grid) = click_track(128.0, 60.0, 0.0);
+    let (b_samples, b_grid) = click_track(126.0, 60.0, 0.0);
 
     let mut mixer = Mixer::new(RATE, BLOCK);
     mixer.deck_a.load(a_samples);
