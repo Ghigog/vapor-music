@@ -4,3 +4,12 @@
 .aider*
 external/
 bin/libaudio_dsp.*
+
+# Build artifacts — SCons object files and its build database.
+# These churn on every compile and .sconsign.dblite is multi-megabyte.
+*.os
+*.o
+.sconsign.dblite
+
+# macOS Finder metadata
+.DS_Store
