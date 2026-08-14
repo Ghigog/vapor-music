@@ -374,11 +374,58 @@ onset function, not to the audio.
 *(that comparison is the 60-track subset used while iterating; the table above
 is the full 563-track run)*
 
-### Next lever
+### MIG-002b — metrical level: attempted and reverted
 
-The metrical-level error is now the highest-value target: a half-time or
+The metrical-level error is the highest-value remaining target: a half- or
 double-time grid caps F-measure at about 0.67 however well phased it is, so
 fixing it lifts tempo accuracy **and** beat F-measure together.
+
+A first attempt was made and **reverted**. Recorded here so the next one does
+not repeat it.
+
+**The approach.** Replace the perceptual prior's blunt pull toward 120 BPM with
+two measurements that say which *direction* is wrong:
+
+* **Alternation** — at double time every other "beat" lands on an offbeat, so
+  even and odd beat strengths diverge.
+* **Midpoint energy** — at half time the skipped real beats sit exactly at the
+  midpoints, so the gaps are as strong as the beats.
+
+Candidates at ×1, ×½, ×2, ×⅔, ×³⁄₂, ×¾ and ×⁴⁄₃ were scored on those two
+signals.
+
+**The result, A/B on 108 identical tracks:**
+
+| | Refinement off | Refinement on | After drift fix |
+|---|---|---|---|
+| Tempo exact | **78.7%** | 40.7% | 54.6% |
+| Metrical error | **20.4%** | 53.7% | 43.5% |
+| Beat F, mean | **0.754** | 0.586 | 0.653 |
+| F ≥ 0.8 | **56.5%** | 26.9% | 37.0% |
+
+**What was learned, and it is worth keeping:**
+
+1. **Integer period stepping accumulates fatal drift.** The scorer rounded the
+   beat period to whole frames and added it repeatedly. A period of 57.42
+   stepped as 57 loses 0.42 frames per beat — about 190 frames over a
+   five-minute onset function, far more than a whole beat — so the grid samples
+   effectively random positions and the score becomes noise. Fixing this
+   recovered 40.7% → 54.6%, which is why the mechanism looked plausible. **Any
+   future work here must step in fractional frames and round at use.** The same
+   mistake first appeared in a *test fixture*, where it was harmless; in
+   production over long signals it was not.
+2. **Even with the drift fixed, the scorer is systematically biased.** The guard
+   test "a correct tempo must be left alone" fails: it moves tempos that were
+   already right. The likely cause is that `on_mean` is not comparable across
+   candidates — a slower candidate samples fewer, more selective points and
+   scores higher for that reason alone, which biases toward halving.
+3. **Do not tune the weights against the fixture set.** Two constants against
+   563 tracks is a straight path to overfitting a number that will not
+   generalise. The next attempt needs a formulation that is *scale-free by
+   construction* — judging only metrical level, with the existing comb score
+   left to judge which period has energy — rather than better-chosen weights.
+
+Baseline confirmed restored at 78.7% / 0.754 after the revert.
 
 ---
 
@@ -561,7 +608,7 @@ resolved by, not when it must be started.
 |---|---|---|---|
 | MIG-001 | Key detection at 43.7% exact is too low to ship. Add segmented analysis producing `segment_keys` / `intro_key` / `outro_key`, and harmonic weighting in the chroma. | 1 | Spike results |
 | ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
-| MIG-002b | Resolve the 10.6% tempo **metrical** errors (half/double/three-quarter time). Highest-value remaining lever: it lifts tempo accuracy and beat F-measure together. | 1 | Phase 1 |
+| MIG-002b | Resolve the 10.6% tempo **metrical** errors (half/double/three-quarter time). Highest-value remaining lever. **One attempt made and reverted** — read *Phase 1 progress* before retrying. | 1 | Phase 1 |
 | MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
 | MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
 | MIG-005 | Port the already-portable parts of `audio_dsp.cpp`: cue in/out, LUFS, dynamic range, transients, waveform peaks. | 1 | `audio_dsp.cpp` |
