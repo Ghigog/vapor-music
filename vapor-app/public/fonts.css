@@ -1,0 +1,13 @@
+/*
+ * Font loading.
+ *
+ * Deliberately empty of @font-face for now: the design specifies Outfit, Inter
+ * and JetBrains Mono, and shipping them means adding ~400 KB of woff2 to the
+ * bundle. Until the files are vendored, tokens.css falls back to the system UI
+ * font, which is close enough to Inter to build against and honest about what
+ * is actually loaded.
+ *
+ * To vendor: drop the woff2 files in public/fonts/ and declare them here.
+ * Do not link Google Fonts — the CSP blocks remote origins and the app is
+ * meant to work offline.
+ */

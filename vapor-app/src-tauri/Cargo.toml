@@ -1,0 +1,23 @@
+[package]
+name = "vapor-app"
+version = "2.0.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[lib]
+# Tauri 2 builds the app as a library so the mobile targets can link it.
+name = "vapor_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The whole point of the migration: the shell is a thin adapter over these.
+vapor-dsp = { path = "../../vapor-core/crates/vapor-dsp" }
+vapor-engine = { path = "../../vapor-core/crates/vapor-engine" }
+vapor-library = { path = "../../vapor-core/crates/vapor-library" }

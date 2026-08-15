@@ -1,0 +1,227 @@
+/**
+ * Vapor Music — Daylight design tokens.
+ *
+ * Extracted from `Vapor Music v2 - Daylight.dc.html`, which is the source of
+ * truth for the visual design. Values here are transcribed, not invented; when
+ * the design changes, re-extract rather than hand-editing both.
+ *
+ * The design's thesis, worth stating because it constrains everything below:
+ * every other music app is dark and says "stay in here with us". Daylight says
+ * the opposite — warm paper, sky at the horizon, and exactly one green that
+ * means one thing: this is on your device and it is yours.
+ */
+
+:root {
+  /* ---- Brand ------------------------------------------------------- */
+
+  /* Interactive accent. `-rgb` variants exist because the design composes
+     translucent fills as rgba(var(--accent-rgb), a). */
+  --accent: #007aff;
+  --accent-rgb: 0, 122, 255;
+  --accent-bright: #3396ff;
+  --accent-dim: #0062d6;
+
+  /* Sovereignty green. Reserved: this colour means "local, yours, not
+     leaving the device" and must never be used for ordinary emphasis. */
+  --sov: #2e9e6b;
+  --sov-rgb: 46, 158, 107;
+  --sov-ink: #237a52;
+
+  /* Iridescence, used by the generative mark and blend states. */
+  --iri-a: #7b6ef6;
+  --iri-b: #3dd6c8;
+
+  /* ---- Ink (text) --------------------------------------------------- */
+  --ink: #14161a;
+  --ink-2: #676c75;
+  --ink-3: #9ba1aa;
+  --ink-4: #8b9099;
+
+  /* ---- Surfaces ----------------------------------------------------- */
+  --page: #eceef1;
+  /* The horizon: sky at the top, warm paper at the bottom. */
+  --page-gradient: linear-gradient(180deg, #dfe9f5 0%, #eef0ef 30%, #f2f1ec 100%);
+  /* Inside a device frame. */
+  --screen-gradient: linear-gradient(180deg, #dcebfa 0%, #eef2f2 38%, #f8f6f0 100%);
+
+  /* ---- Glass -------------------------------------------------------- */
+  /* Frutiger Aero, restrained. Real blur plus saturation, not a flat white
+     overlay — the saturation boost is what stops it reading as fog. */
+  --glass-a: 0.62;
+  --glass-blur: 30px;
+  --glass-blur-heavy: 40px;
+  --glass-saturate: 170%;
+  --rim: 0.85;
+  --glass-fill: rgba(255, 255, 255, var(--glass-a));
+  --glass-rim: rgba(255, 255, 255, var(--rim));
+
+  /* ---- Radii -------------------------------------------------------- */
+  --r-hair: 3px;   /* meters, bars, waveform columns */
+  --r-sm: 8px;
+  --r-md: 16px;
+  --r-lg: 22px;    /* cards */
+  --r-xl: 26px;    /* panels */
+  --r-screen: 35px;
+  --r-device: 46px;
+  --r-pill: 999px;
+
+  /* ---- Type --------------------------------------------------------- */
+  /* Outfit for display, Inter for body, JetBrains Mono for anything
+     numeric or label-like. The mono is used heavily and deliberately:
+     tabular figures for BPM, keys, timecodes and section labels. */
+  --font-display: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --fs-micro: 9px;
+  --fs-label: 11px;   /* the mono label size, most common in the design */
+  --fs-sm: 13px;
+  --fs-body: 14px;    /* joint most common */
+  --fs-md: 16px;
+  --fs-lg: 22px;
+  --fs-xl: 26px;
+  --fs-display: 46px;
+  --fs-hero: 66px;
+
+  --fw-thin: 200;
+  --fw-light: 300;
+  --fw-regular: 400;
+  --fw-medium: 500;   /* the workhorse */
+  --fw-semibold: 600;
+
+  /* Display type is set tight; body is not. */
+  --ls-hero: -0.032em;
+  --ls-display: -0.03em;
+  --ls-tight: -0.015em;
+  --ls-label: 0.14em; /* mono labels are tracked out and uppercased */
+
+  /* ---- Elevation ---------------------------------------------------- */
+  /* Shadows are blue-tinted rather than neutral black — on warm paper a
+     grey shadow reads as dirt. */
+  --shadow-sm: 0 2px 6px rgba(38, 62, 116, 0.08);
+  --shadow-md: 0 12px 28px -8px rgba(38, 58, 104, 0.22);
+  --shadow-lg: 0 46px 84px -26px rgba(38, 58, 104, 0.4);
+
+  /* ---- Motion ------------------------------------------------------- */
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 420ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/**
+ * Dark theme.
+ *
+ * Daylight is the identity, so dark is a deliberate alternate rather than the
+ * default. Only the surfaces and ink invert; brand hues are unchanged so the
+ * sovereignty green keeps meaning the same thing in both.
+ */
+:root[data-theme="dark"] {
+  --ink: #f2f4f7;
+  --ink-2: #a8aeb8;
+  --ink-3: #767c86;
+  --ink-4: #6a707a;
+
+  --page: #0f1115;
+  --page-gradient: linear-gradient(180deg, #12161d 0%, #0f1115 40%, #131518 100%);
+  --screen-gradient: linear-gradient(180deg, #161b24 0%, #111419 45%, #14161a 100%);
+
+  --glass-a: 0.10;
+  --rim: 0.16;
+  --glass-fill: rgba(255, 255, 255, var(--glass-a));
+  --glass-rim: rgba(255, 255, 255, var(--rim));
+
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 12px 28px -8px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 46px 84px -26px rgba(0, 0, 0, 0.7);
+}
+
+/* Honour the OS preference unless the app has set an explicit theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #f2f4f7;
+    --ink-2: #a8aeb8;
+    --ink-3: #767c86;
+    --ink-4: #6a707a;
+
+    --page: #0f1115;
+    --page-gradient: linear-gradient(180deg, #12161d 0%, #0f1115 40%, #131518 100%);
+    --screen-gradient: linear-gradient(180deg, #161b24 0%, #111419 45%, #14161a 100%);
+
+    --glass-a: 0.10;
+    --rim: 0.16;
+    --glass-fill: rgba(255, 255, 255, var(--glass-a));
+    --glass-rim: rgba(255, 255, 255, var(--rim));
+
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 12px 28px -8px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 46px 84px -26px rgba(0, 0, 0, 0.7);
+  }
+}
+
+/* ---- Primitives ------------------------------------------------------ */
+
+/**
+ * The glass panel.
+ *
+ * One rule rather than repeated inline styles, because the design uses this
+ * treatment on almost every surface and the three parts — fill, blur with
+ * saturation, and a light rim — only read correctly together.
+ */
+.glass {
+  background: var(--glass-fill);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-md);
+}
+
+.glass--heavy {
+  backdrop-filter: blur(var(--glass-blur-heavy)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-heavy)) saturate(180%);
+}
+
+/** Mono label: tracked out, uppercase, used for section headers and data. */
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+/** Numeric data — BPM, keys, timecodes. Tabular figures so columns align. */
+.numeric {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+
+/** The sovereignty marker. Reserved for "this is local and yours". */
+.sovereign {
+  color: var(--sov-ink);
+  background: rgba(var(--sov-rgb), 0.1);
+  border: 1px solid rgba(var(--sov-rgb), 0.28);
+  border-radius: var(--r-pill);
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  /* cv02–cv04 are Inter's single-storey alternates; tnum aligns figures. */
+  font-feature-settings: "cv02", "cv03", "cv04", "tnum";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
