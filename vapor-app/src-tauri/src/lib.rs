@@ -16,10 +16,11 @@
 //! same core crates directly, so anything implemented here rather than in the
 //! core would have to be written twice.
 
+mod analysis;
 mod store;
 mod webdav;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use store::Store;
 
@@ -42,6 +43,11 @@ struct AppState {
     queue: Queue,
     /// The library table's rows, rebuilt on scan.
     rows: Vec<Row>,
+    /// Analysis results, keyed by href. Persisted so a library is analysed
+    /// once rather than on every launch.
+    analysis: analysis::Cache,
+    /// Cancels a running analysis pass.
+    cancel: analysis::Cancel,
     store: Store,
 }
 
@@ -54,12 +60,39 @@ impl AppState {
     fn load(store: Store) -> Self {
         let settings = store.load("settings").unwrap_or(None).unwrap_or_default();
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
+        let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
         AppState {
             settings,
             playlists,
             queue: Queue::default(),
             rows: Vec::new(),
+            analysis,
+            cancel: analysis::Cancel::new(),
             store,
+        }
+    }
+
+    fn save_analysis(&self) -> Result<()> {
+        self.store.save("analysis", &self.analysis)?;
+        Ok(())
+    }
+
+    /// Copy analysis onto a row, so the table shows what is known.
+    ///
+    /// A manual BPM override wins over the detected value: it exists precisely
+    /// because detection lands a metrical relative on roughly 10% of a real
+    /// library, and a correction that the table ignored would be useless.
+    fn apply_analysis(&self, row: &mut Row) {
+        if let Some(a) = self.analysis.get(&row.href) {
+            row.bpm = self
+                .settings
+                .bpm_override(&row.href)
+                .unwrap_or(a.bpm);
+            row.key = a.key.clone();
+        } else if let Some(bpm) = self.settings.bpm_override(&row.href) {
+            // A person can correct a track that was never successfully
+            // analysed, and that correction must still show.
+            row.bpm = bpm;
         }
     }
 
@@ -76,7 +109,12 @@ impl AppState {
     }
 }
 
-type Shared = Mutex<AppState>;
+/// Shared state.
+///
+/// An `Arc` rather than a bare `Mutex` because the analysis pass moves a handle
+/// onto a worker thread that outlives the command that started it — a borrow
+/// from `State` cannot.
+type Shared = Arc<Mutex<AppState>>;
 
 /// Errors crossing the IPC boundary.
 ///
@@ -135,6 +173,9 @@ fn library_view(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<Libra
         .into_iter()
         .cloned()
         .collect();
+    for row in rows.iter_mut() {
+        app.apply_analysis(row);
+    }
 
     if let Some(key) = view.sort_key.as_deref().and_then(parse_sort_key) {
         vapor_library::sort_rows(&mut rows, key, view.ascending);
@@ -408,6 +449,112 @@ fn build_row(href: &str, base_folder: &str) -> Row {
 }
 
 // ---------------------------------------------------------------------------
+// Analysis
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisStatus {
+    analysed: usize,
+    total: usize,
+}
+
+#[tauri::command]
+fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
+    let outstanding = analysis::pending(&hrefs, &app.analysis).len();
+    Ok(AnalysisStatus {
+        analysed: hrefs.len().saturating_sub(outstanding),
+        total: hrefs.len(),
+    })
+}
+
+#[tauri::command]
+fn cancel_analysis(state: State<'_, Shared>) -> Result<()> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.cancel.stop();
+    Ok(())
+}
+
+/// Analyse everything not already done, emitting progress as it goes.
+///
+/// Runs on a blocking thread rather than the async runtime: analysis is
+/// CPU-bound, and occupying an async worker for ten minutes starves every other
+/// task sharing it.
+#[tauri::command]
+async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>) -> Result<()> {
+    use tauri::Emitter;
+
+    // Snapshot what needs doing and release the lock: the pass takes minutes,
+    // and holding the lock would block every other command for its duration.
+    let (todo, cache_dir, cancel) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
+        app.cancel.reset();
+        (
+            analysis::pending(&hrefs, &app.analysis),
+            app.store.dir().join("audio"),
+            app.cancel.clone(),
+        )
+    };
+
+    if todo.is_empty() {
+        return Ok(());
+    }
+
+    let state_arc: Shared = Arc::clone(&state);
+    let handle = app_handle.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        analysis::run(
+            &todo,
+            |href| resolve_cached(&cache_dir, href),
+            &cancel,
+            |progress| {
+                // Persist as each track lands rather than at the end: quitting
+                // halfway then loses only the track in flight.
+                if let Some(a) = &progress.analysis {
+                    if let Ok(mut app) = state_arc.lock() {
+                        app.analysis.insert(progress.href.clone(), a.clone());
+                        let _ = app.save_analysis();
+                    }
+                }
+                let _ = handle.emit("analysis-progress", &progress);
+            },
+        );
+    });
+
+    Ok(())
+}
+
+/// Where a track's bytes are cached locally.
+///
+/// Analysis needs local bytes; fetching them is the cache layer's job, which
+/// does not exist yet — so this returns None for anything not already present
+/// and the pass reports "not available locally" rather than pretending.
+fn resolve_cached(cache_dir: &std::path::Path, href: &str) -> Option<std::path::PathBuf> {
+    let ext = href.rsplit('.').next().unwrap_or("mp3");
+    let name = format!("{:x}.{ext}", md5_like(href));
+    let path = cache_dir.join(name);
+    path.exists().then_some(path)
+}
+
+/// Stable filename hash.
+///
+/// Not a cryptographic hash and not trying to be — it names cache files, and
+/// the only requirements are determinism and a low collision rate.
+fn md5_like(s: &str) -> u64 {
+    // FNV-1a.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+// ---------------------------------------------------------------------------
 // Your Data
 // ---------------------------------------------------------------------------
 
@@ -467,7 +614,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("no app data directory available");
-            app.manage(Mutex::new(AppState::load(Store::new(dir))));
+            app.manage(Arc::new(Mutex::new(AppState::load(Store::new(dir)))));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -486,6 +633,9 @@ pub fn run() {
             delete_all_data,
             save_webdav_password,
             scan_library,
+            analyse_library,
+            cancel_analysis,
+            analysis_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vapor Music");

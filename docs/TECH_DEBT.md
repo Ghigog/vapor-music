@@ -21,14 +21,15 @@ Things that would be a defect if the app shipped today.
 | ~~TD-02~~ | ~~No persistence.~~ **Done** — playlists and settings persist via atomic write-and-rename in `store.rs`. The queue is still in memory, which is arguably correct (a stale queue on relaunch is worse than none) but was not a considered decision. | `vapor-app/src-tauri/src/store.rs` |
 | TD-03 | **No audio output in the app.** `vapor-engine` plays correctly from the `play` binary, but the Tauri shell has no audio path wired at all — the buttons move queue state and nothing is heard. | `vapor-app/src-tauri` |
 | ~~TD-04~~ | ~~No library scan.~~ **Done** — `webdav.rs` walks the tree and rebuilds the index; the password lives in the OS keychain. Rows carry no analysis yet (see TD-06). | `vapor-app/src-tauri/src/webdav.rs` |
-| TD-06 | **Scanned rows carry no analysis.** A scan fills in artist/album/title from the path, but BPM, key and genre stay empty because nothing runs `vapor-dsp` over the library yet. The table renders "—" honestly, but the Vibe DJ has nothing to work with. | `vapor-app/src-tauri` |
+| ~~TD-06~~ | ~~Scanned rows carry no analysis.~~ **Done** — `analysis.rs` runs `vapor-dsp` over scanned tracks, caches results and applies them to rows. Blocked in practice by TD-07. | `vapor-app/src-tauri/src/analysis.rs` |
+| TD-07 | **No audio cache layer.** Analysis needs local bytes and nothing downloads them, so a pass over a remote library reports "not available locally" for every track. The scan finds files; nothing fetches them. | `vapor-app/src-tauri` |
 | TD-05 | **Dolby Atmos does not decode.** 22 tracks in a real library are E-AC-3, which Symphonia cannot read. Shipping on macOS without a decision here is a silent regression against the Godot build, which handled them via ffmpeg. Recommendation stands: transcode on import. | MIG-003 |
 
 ## Correctness
 
 | ID | Item | Notes |
 |---|---|---|
-| TD-10 | **Tempo detection lands a metrical relative ~10% of the time.** Accepted deliberately; `bpm_overrides` exists so a person can correct it, but **no UI exposes it yet**, so the escape hatch is currently unreachable. | MIG-002b |
+| TD-10 | **Tempo detection lands a metrical relative ~10% of the time.** Accepted deliberately. `bpm_overrides` is now honoured by the table and the pathfinder, but **no UI sets it**, so the escape hatch is still unreachable. | MIG-002b |
 | TD-11 | **Key detection is 56% exact / 81% harmonically compatible.** Good enough to port with, not good enough to be proud of. Segmented analysis is the remaining lever. | MIG-001 |
 | TD-12 | **One malformed AAC file decodes to zero samples** where ffmpeg tolerates it. Unhandled — it will present as a track that silently fails. | MIG-004 |
 | TD-13 | **`vapor-dsp` does not emit segment keys.** `TrackMeta` has `intro_key`/`outro_key` and the pathfinder prefers them, but nothing populates them, so every transition is judged on the whole-track key. | — |
