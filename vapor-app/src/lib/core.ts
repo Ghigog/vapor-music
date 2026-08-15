@@ -239,8 +239,12 @@ export interface QueueEntry {
   current: boolean;
 }
 
+export type RepeatMode = "off" | "all" | "one";
+
 export interface QueueView {
   entries: QueueEntry[];
+  repeat: RepeatMode;
+  shuffled: boolean;
   current: number | null;
   /** Seconds still to come. Unanalysed tracks contribute nothing rather than
    *  a guess, so this is a floor, not an estimate. */
@@ -263,6 +267,18 @@ export function moveInQueue(from: number, to: number): Promise<boolean> {
 /** Put a track next without disturbing the rest of the order. */
 export function playNext(href: string): Promise<boolean> {
   return invoke<boolean>("play_next", { href });
+}
+
+/** What happens at the end of the queue. Default is "all", the behaviour the
+ *  queue had before there was any choice. */
+export function setRepeat(mode: RepeatMode): Promise<void> {
+  return invoke<void>("set_repeat", { mode });
+}
+
+/** Shuffle or restore the order. Returns false when there was nothing to do —
+ *  a queue of fewer than two tracks, or an unshuffle when not shuffled. */
+export function setShuffled(shuffled: boolean): Promise<boolean> {
+  return invoke<boolean>("set_shuffled", { shuffled });
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +319,8 @@ export interface BlendPreview {
   matchable: boolean;
   /** Why not, when it would not. */
   reason: string;
+  /** Which of the three mixes this pair would get (TD-27). */
+  transition: string;
 }
 
 /** Describe the mix between what is playing and what is next, or null when

@@ -200,3 +200,43 @@
 .queue__action--remove:hover {
   color: #b3261e;
 }
+
+/* ---- Repeat and shuffle ---------------------------------------------- */
+
+.queue__head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.queue__modes {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.queue__mode {
+  padding: 7px 13px;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.queue__mode:hover {
+  background: #fff;
+  color: var(--ink);
+}
+
+/* On means "not the default", so the marked state is whichever choice a person
+   actually made rather than whichever is currently active. */
+.queue__mode--on {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.34);
+  color: var(--accent-dim);
+}

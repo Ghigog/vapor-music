@@ -51,7 +51,10 @@ impl CamelotKey {
 /// Penalty applied when either key is missing or unparseable.
 const UNKNOWN_KEY_COST: f32 = 3.0;
 /// Cost of a pair with no usable harmonic relation.
-const CLASH_COST: f32 = 8.0;
+///
+/// Public because the shell compares against it to decide whether two tracks
+/// can be *overlapped* at all, which is the same question priced here.
+pub const CLASH_COST: f32 = 8.0;
 
 /// Plain wheel distance, used for ranking rather than for mixing decisions.
 ///

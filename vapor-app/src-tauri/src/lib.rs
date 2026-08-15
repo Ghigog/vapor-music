@@ -615,15 +615,41 @@ fn set_volume(volume: f32, state: State<'_, Shared>) -> Result<()> {
 /// whole of every song (TD-09).
 const TRANSITION_ARM_LEAD: f64 = 30.0;
 
-/// The mix used when nothing has chosen one.
+/// Choose the mix for a given pair of tracks (TD-27).
 ///
-/// Choosing per pair is what the Godot build did from context and what
-/// `dj_pathfinder` is eventually for; until that is ported, one neutral choice
-/// beats a random one. Standard Crossfade is the least opinionated of the
-/// three — Bass Swap and Filter Sweep both alter the sound of the outgoing
-/// track on the way out.
-const DEFAULT_TRANSITION: vapor_engine::TransitionType =
-    vapor_engine::TransitionType::StandardCrossfade;
+/// The engine has three and the shell used to pick one for everything, which
+/// meant every mix inherited Standard Crossfade's ~3 dB midpoint dip (TD-23)
+/// whether or not it suited the pair.
+///
+/// The rule is the harmonic relation between the two keys, because that is what
+/// decides whether the two can be heard *together* at all:
+///
+/// * **Compatible keys** — the tracks can overlap, so Bass Swap does the
+///   characteristic DJ move: hold the outgoing low end, bring the incoming in
+///   over it, swap the bass at the midpoint. It is the longest of the three and
+///   the most musical when it fits.
+/// * **Clashing keys** — overlapping two dissonant tonalities is exactly what a
+///   filter hides, so Filter Sweep rolls the outgoing off as the incoming opens
+///   up and the clash never sounds.
+/// * **Unknown key** — no basis to choose, so the least opinionated option.
+///   Standard Crossfade alters neither track's character on the way past.
+///
+/// `harmonic_relation_cost` is the same function the pathfinder prices
+/// transitions with, so the choice here and the ordering there cannot form
+/// different opinions about the same pair.
+fn choose_transition(from_key: &str, to_key: &str) -> vapor_engine::TransitionType {
+    use vapor_engine::TransitionType;
+
+    if from_key.is_empty() || to_key.is_empty() {
+        return TransitionType::StandardCrossfade;
+    }
+    // Below the clash threshold the relation is one a DJ would actually play.
+    if vapor_library::harmonic_relation_cost(from_key, to_key) < vapor_library::CLASH_COST {
+        TransitionType::BassSwap
+    } else {
+        TransitionType::FilterSweep
+    }
+}
 
 /// Build the mixer's beat grid for a track, honouring a manual tempo.
 ///
@@ -651,6 +677,7 @@ fn beat_grid(analysis: &analysis::Analysis, override_bpm: Option<f32>) -> vapor_
 /// Everything a beat-matched mix needs, once it is known to be possible.
 struct ArmedMix {
     next: String,
+    kind: vapor_engine::TransitionType,
     duration: f32,
     incoming_pos: f32,
     ratio: f64,
@@ -675,7 +702,20 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
     let outgoing = app.analysis.get(current)?;
     let incoming = app.analysis.get(&next)?;
 
-    let duration = DEFAULT_TRANSITION.default_duration();
+    // The keys at the seam, where analysis produced them — an outro that
+    // modulates is what the incoming track actually meets (TD-13).
+    let out_key = if outgoing.outro_key.is_empty() {
+        &outgoing.key
+    } else {
+        &outgoing.outro_key
+    };
+    let in_key = if incoming.intro_key.is_empty() {
+        &incoming.key
+    } else {
+        &incoming.intro_key
+    };
+    let kind = choose_transition(out_key, in_key);
+    let duration = kind.default_duration();
     // Start early enough that the mix finishes as the outgoing track's audible
     // content ends, rather than after it has already fallen silent.
     let start_at = (outgoing.cue_out - duration).max(0.0) as f64;
@@ -699,6 +739,7 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
 
     Some(ArmedMix {
         next,
+        kind,
         duration,
         incoming_pos,
         ratio,
@@ -747,7 +788,7 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
             Ok(frames) if !frames.is_empty() => {
                 link.preload(frames);
                 link.schedule_transition(
-                    DEFAULT_TRANSITION,
+                    mix.kind,
                     mix.duration,
                     mix.incoming_pos,
                     mix.ratio,
@@ -941,6 +982,9 @@ struct QueueEntry {
 #[serde(rename_all = "camelCase")]
 struct QueueView {
     entries: Vec<QueueEntry>,
+    /// "off" | "all" | "one".
+    repeat: String,
+    shuffled: bool,
     /// Index of the playing track, so the screen can scroll to it.
     current: Option<usize>,
     /// Minutes of music still to come, from the analysed durations. Tracks
@@ -996,6 +1040,13 @@ fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
 
     Ok(QueueView {
         entries,
+        repeat: match app.queue.repeat() {
+            vapor_library::Repeat::Off => "off",
+            vapor_library::Repeat::All => "all",
+            vapor_library::Repeat::One => "one",
+        }
+        .to_string(),
+        shuffled: app.queue.is_shuffled(),
         current,
         remaining_secs,
     })
@@ -1011,6 +1062,52 @@ fn remove_from_queue(href: String, state: State<'_, Shared>) -> Result<bool> {
 fn move_in_queue(from: usize, to: usize, state: State<'_, Shared>) -> Result<bool> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     Ok(app.queue.move_track(from, to))
+}
+
+#[tauri::command]
+fn set_repeat(mode: String, state: State<'_, Shared>) -> Result<()> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.queue.set_repeat(match mode.as_str() {
+        "off" => vapor_library::Repeat::Off,
+        "one" => vapor_library::Repeat::One,
+        _ => vapor_library::Repeat::All,
+    });
+    Ok(())
+}
+
+/// Shuffle the queue, or put it back.
+///
+/// The permutation is generated here rather than in the core, which owns no
+/// randomness on purpose — `randi()` inside a library is what made the
+/// GDScript's mood paths reshuffle for no reason.
+#[tauri::command]
+fn set_shuffled(shuffled: bool, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if !shuffled {
+        return Ok(app.queue.unshuffle());
+    }
+
+    let n = app.queue.tracks().len();
+    if n < 2 {
+        return Ok(false);
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    // Fisher-Yates over a cheap PRNG. Nothing here is security-sensitive and
+    // pulling in `rand` for one shuffle is not worth the dependency.
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x2545F4914F6CDD1D)
+        | 1;
+    for i in (1..n).rev() {
+        // xorshift64*
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        let j = (seed.wrapping_mul(0x2545F4914F6CDD1D) >> 33) as usize % (i + 1);
+        order.swap(i, j);
+    }
+    Ok(app.queue.shuffle(&order))
 }
 
 /// Put a track next without disturbing the rest of the order.
@@ -1060,6 +1157,15 @@ fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<Strin
         // dislikes rather than a lookup that silently returns nothing.
         &std::collections::HashMap::new(),
     ))
+}
+
+fn transition_name(kind: vapor_engine::TransitionType) -> String {
+    match kind {
+        vapor_engine::TransitionType::StandardCrossfade => "crossfade",
+        vapor_engine::TransitionType::BassSwap => "bass swap",
+        vapor_engine::TransitionType::FilterSweep => "filter sweep",
+    }
+    .to_string()
 }
 
 /// Everything the pathfinder needs about the library, built from what has
@@ -1166,6 +1272,8 @@ struct BlendPreview {
     matchable: bool,
     /// Why not, when it would not — the same distinction the mixer draws.
     reason: String,
+    /// Which of the three mixes this pair would get (TD-27).
+    transition: String,
 }
 
 /// Describe the mix between what is playing and what is next.
@@ -1207,6 +1315,7 @@ fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
             gain_delta: 0.0,
             matchable: false,
             reason: "Not analysed yet".to_string(),
+            transition: "crossfade".to_string(),
         }));
     };
 
@@ -1242,6 +1351,18 @@ fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
         gain_delta: inc.lufs - out.lufs,
         matchable,
         reason,
+        transition: transition_name(choose_transition(
+            if out.outro_key.is_empty() {
+                &out.key
+            } else {
+                &out.outro_key
+            },
+            if inc.intro_key.is_empty() {
+                &inc.key
+            } else {
+                &inc.intro_key
+            },
+        )),
     }))
 }
 
@@ -1963,6 +2084,8 @@ pub fn run() {
             queue_view,
             remove_from_queue,
             move_in_queue,
+            set_repeat,
+            set_shuffled,
             play_next,
             vibe_path,
             blend_preview,

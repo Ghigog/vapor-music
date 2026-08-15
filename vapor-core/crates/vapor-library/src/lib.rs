@@ -23,7 +23,7 @@ pub mod settings;
 pub mod track;
 pub mod webdav;
 
-pub use camelot::{harmonic_relation_cost, key_distance, CamelotKey};
+pub use camelot::{harmonic_relation_cost, key_distance, CamelotKey, CLASH_COST};
 pub use genre::{genre_distance, is_similar_genre};
 pub use group::{DynamicGroup, Entity, EntityType, Folder, FolderStore, GroupStore};
 pub use index::{
@@ -32,7 +32,7 @@ pub use index::{
 pub use naming::{clean_segment, parse_path, strip_track_number, TrackInfo};
 pub use pathfinder::{generate_mood_path, transition_duration, Curve};
 pub use playlist::{CoverSource, Playlist, PlaylistStore};
-pub use queue::Queue;
+pub use queue::{Queue, Repeat};
 pub use settings::{
     RemoteConfig, Settings, ThemeMode, MAX_CACHE_BYTES_DEFAULT, MAX_MANUAL_BPM, MIN_CACHE_BYTES,
     MIN_MANUAL_BPM,

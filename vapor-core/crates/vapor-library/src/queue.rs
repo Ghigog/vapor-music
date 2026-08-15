@@ -16,6 +16,23 @@ use serde::{Deserialize, Serialize};
 /// Longest trail kept. From `audio_manager.gd`.
 const MAX_HISTORY: usize = 100;
 
+/// What happens at the end of the queue.
+///
+/// Inherited behaviour was `All` with no way to change it, so a queue silently
+/// restarted and a one-track queue repeated forever. That is a reasonable
+/// default and a poor only option.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Repeat {
+    /// Stop when the queue runs out.
+    Off,
+    /// Wrap to the beginning.
+    #[default]
+    All,
+    /// Play the same track again.
+    One,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Queue {
     tracks: Vec<String>,
@@ -29,6 +46,17 @@ pub struct Queue {
 
     /// One-shot override for the next track, set by "play this next".
     override_next: Option<String>,
+
+    #[serde(default)]
+    repeat: Repeat,
+    /// The order before shuffling, so it can be given back.
+    ///
+    /// Shuffling by reordering `tracks` rather than by keeping a permutation
+    /// means everything that walks the queue — next, previous, lookahead,
+    /// remove, move — needs no knowledge of shuffle at all. The cost is this
+    /// one snapshot.
+    #[serde(default)]
+    unshuffled: Option<Vec<String>>,
 }
 
 impl Queue {
@@ -90,6 +118,79 @@ impl Queue {
         self.override_next.as_deref()
     }
 
+    pub fn repeat(&self) -> Repeat {
+        self.repeat
+    }
+
+    pub fn set_repeat(&mut self, mode: Repeat) {
+        self.repeat = mode;
+    }
+
+    pub fn is_shuffled(&self) -> bool {
+        self.unshuffled.is_some()
+    }
+
+    /// Reorder the queue by a caller-supplied permutation.
+    ///
+    /// The permutation comes from outside because the core generates no
+    /// randomness — `randi()` inside a library is what made the GDScript's mood
+    /// paths reshuffle for no reason and its tests non-deterministic. The
+    /// caller owns the entropy; this owns the bookkeeping.
+    ///
+    /// `permutation[i]` is the index of the track that should end up at
+    /// position `i`. Refused unless it is a genuine permutation of the queue,
+    /// since a malformed one would drop or duplicate tracks.
+    pub fn shuffle(&mut self, permutation: &[usize]) -> bool {
+        if permutation.len() != self.tracks.len() || self.tracks.is_empty() {
+            return false;
+        }
+        let mut seen = vec![false; self.tracks.len()];
+        for &i in permutation {
+            if i >= self.tracks.len() || seen[i] {
+                return false;
+            }
+            seen[i] = true;
+        }
+
+        // Only the first shuffle snapshots: shuffling twice must still give
+        // back the order the person started with, not the previous shuffle.
+        if self.unshuffled.is_none() {
+            self.unshuffled = Some(self.tracks.clone());
+        }
+
+        let playing = self.current().map(str::to_string);
+        self.tracks = permutation
+            .iter()
+            .map(|&i| self.tracks[i].clone())
+            .collect();
+        // The playhead follows the track, so shuffling does not change what is
+        // currently playing — only what comes after it.
+        self.current = playing.and_then(|h| self.tracks.iter().position(|t| *t == h));
+        true
+    }
+
+    /// Restore the order from before the first shuffle.
+    pub fn unshuffle(&mut self) -> bool {
+        let Some(original) = self.unshuffled.take() else {
+            return false;
+        };
+        let playing = self.current().map(str::to_string);
+        // Tracks removed while shuffled must stay removed, and any added must
+        // survive — the snapshot is an order, not a membership list.
+        let mut restored: Vec<String> = original
+            .into_iter()
+            .filter(|t| self.tracks.contains(t))
+            .collect();
+        for track in &self.tracks {
+            if !restored.contains(track) {
+                restored.push(track.clone());
+            }
+        }
+        self.tracks = restored;
+        self.current = playing.and_then(|h| self.tracks.iter().position(|t| *t == h));
+        true
+    }
+
     /// What plays after the current track.
     ///
     /// `smart_choice` is the pathfinder's suggestion; it is consulted only when
@@ -102,6 +203,15 @@ impl Queue {
         if let Some(o) = &self.override_next {
             return Some(o);
         }
+        // Repeat-one answers before anything else consults the ordering: the
+        // next track is this track, and neither a smart choice nor the end of
+        // the queue is relevant.
+        if self.repeat == Repeat::One {
+            return self.current();
+        }
+        if self.repeat == Repeat::Off && self.at_end() {
+            return None;
+        }
         if let Some(s) = smart_choice {
             // Return the queue's own copy, not the caller's reference: the
             // result borrows from `self`, and they are the same string anyway.
@@ -113,11 +223,25 @@ impl Queue {
             .map(|i| self.tracks[(i + 1) % self.tracks.len()].as_str())
     }
 
+    /// True when the playhead is on the last track.
+    fn at_end(&self) -> bool {
+        self.current.is_some_and(|c| c + 1 >= self.tracks.len())
+    }
+
     /// Advance, preferring the forward history branch if one exists.
     ///
-    /// Returns the new current track.
+    /// Returns the new current track, or `None` when [`Repeat::Off`] has
+    /// reached the end — which leaves the playhead where it is rather than
+    /// resetting it, so pressing play again resumes rather than restarting the
+    /// whole queue.
     pub fn next(&mut self, smart_choice: Option<&str>) -> Option<&str> {
         if self.tracks.is_empty() {
+            return None;
+        }
+        if self.repeat == Repeat::One && self.override_next.is_none() {
+            return self.current();
+        }
+        if self.repeat == Repeat::Off && self.at_end() && self.override_next.is_none() {
             return None;
         }
 
@@ -508,6 +632,141 @@ mod tests {
         assert!(!q.move_track(0, 0), "a move to itself");
         assert!(!q.move_track(9, 0));
         assert!(!q.move_track(0, 9));
+        assert_eq!(q.tracks(), &["a", "b", "c", "d"]);
+    }
+
+    // ---- Repeat ---------------------------------------------------------
+
+    /// The inherited behaviour, now one option among three rather than the
+    /// only one.
+    #[test]
+    fn repeat_all_wraps_as_it_always_did() {
+        let mut q = queue();
+        assert_eq!(q.repeat(), Repeat::All, "wrapping stays the default");
+        q.next(None);
+        q.next(None);
+        q.next(None);
+        assert_eq!(q.next(None), Some("a"));
+    }
+
+    /// The actual bug: a queue that ran out silently started again, with no way
+    /// to say "stop when you reach the end".
+    #[test]
+    fn repeat_off_stops_at_the_end() {
+        let mut q = queue();
+        q.set_repeat(Repeat::Off);
+        assert_eq!(q.next(None), Some("b"));
+        assert_eq!(q.next(None), Some("c"));
+        assert_eq!(q.next(None), Some("d"));
+        assert_eq!(q.next(None), None, "the queue wrapped with repeat off");
+        assert_eq!(q.peek_next(None), None);
+    }
+
+    /// Stopping must not rewind: pressing play again resumes the last track
+    /// rather than restarting the whole queue.
+    #[test]
+    fn repeat_off_leaves_the_playhead_where_it_stopped() {
+        let mut q = queue();
+        q.set_repeat(Repeat::Off);
+        while q.next(None).is_some() {}
+        assert_eq!(q.current(), Some("d"));
+    }
+
+    #[test]
+    fn repeat_one_replays_the_same_track() {
+        let mut q = queue();
+        q.next(None); // b
+        q.set_repeat(Repeat::One);
+        assert_eq!(q.peek_next(None), Some("b"));
+        assert_eq!(q.next(None), Some("b"));
+        assert_eq!(q.next(None), Some("b"));
+    }
+
+    /// An explicit choice outranks a repeat mode — otherwise "play this next"
+    /// would silently do nothing while repeat-one was on.
+    #[test]
+    fn an_override_beats_repeat_one() {
+        let mut q = queue();
+        q.set_repeat(Repeat::One);
+        assert!(q.set_next("d"));
+        assert_eq!(q.next(None), Some("d"));
+    }
+
+    #[test]
+    fn an_override_beats_repeat_off_at_the_end() {
+        let mut q = queue();
+        q.set_repeat(Repeat::Off);
+        while q.next(None).is_some() {}
+        assert!(q.set_next("a"));
+        assert_eq!(q.next(None), Some("a"));
+    }
+
+    // ---- Shuffle --------------------------------------------------------
+
+    #[test]
+    fn shuffling_reorders_without_losing_a_track() {
+        let mut q = queue();
+        assert!(q.shuffle(&[3, 1, 0, 2]));
+        assert_eq!(q.tracks(), &["d", "b", "a", "c"]);
+        assert!(q.is_shuffled());
+    }
+
+    /// Shuffling changes what comes next, never what is playing now.
+    #[test]
+    fn shuffling_keeps_the_current_track_playing() {
+        let mut q = queue();
+        q.next(None); // b
+        q.shuffle(&[3, 2, 1, 0]);
+        assert_eq!(q.current(), Some("b"));
+    }
+
+    #[test]
+    fn unshuffling_restores_the_original_order() {
+        let mut q = queue();
+        q.shuffle(&[3, 1, 0, 2]);
+        assert!(q.unshuffle());
+        assert_eq!(q.tracks(), &["a", "b", "c", "d"]);
+        assert!(!q.is_shuffled());
+    }
+
+    /// Shuffling twice must still give back the order the person started with,
+    /// not the previous shuffle.
+    #[test]
+    fn shuffling_twice_still_restores_the_true_original() {
+        let mut q = queue();
+        q.shuffle(&[3, 1, 0, 2]);
+        q.shuffle(&[1, 0, 3, 2]);
+        q.unshuffle();
+        assert_eq!(q.tracks(), &["a", "b", "c", "d"]);
+    }
+
+    /// The snapshot is an order, not a membership list: what was removed while
+    /// shuffled stays removed, and what was added survives.
+    #[test]
+    fn unshuffling_respects_changes_made_while_shuffled() {
+        let mut q = queue();
+        q.shuffle(&[3, 1, 0, 2]);
+        q.remove("b");
+        q.unshuffle();
+        assert_eq!(q.tracks(), &["a", "c", "d"], "a removed track came back");
+    }
+
+    /// A malformed permutation would drop or duplicate tracks, so it is refused
+    /// rather than applied and half-corrected afterwards.
+    #[test]
+    fn a_malformed_permutation_is_refused() {
+        let mut q = queue();
+        for bad in [vec![0, 0, 1, 2], vec![0, 1, 2], vec![0, 1, 2, 9]] {
+            assert!(!q.shuffle(&bad), "accepted {bad:?}");
+        }
+        assert_eq!(q.tracks(), &["a", "b", "c", "d"]);
+        assert!(!q.is_shuffled());
+    }
+
+    #[test]
+    fn unshuffling_when_not_shuffled_is_harmless() {
+        let mut q = queue();
+        assert!(!q.unshuffle());
         assert_eq!(q.tracks(), &["a", "b", "c", "d"]);
     }
 

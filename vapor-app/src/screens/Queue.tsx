@@ -91,11 +91,53 @@ export function Queue({ onOpen }: { onOpen: (href: string) => void }) {
   return (
     <div className="queue">
       <header className="queue__head">
-        <h1 className="queue__title">Queue</h1>
-        <p className="queue__sub label">
-          {upNext.length} to come
-          {view.remainingSecs > 0 && ` · ${minutes(view.remainingSecs)}`}
-        </p>
+        <div className="queue__head-row">
+          <div>
+            <h1 className="queue__title">Queue</h1>
+            <p className="queue__sub label">
+              {upNext.length} to come
+              {view.remainingSecs > 0 && ` · ${minutes(view.remainingSecs)}`}
+            </p>
+          </div>
+          <div className="queue__modes">
+            <button
+              className={
+                "queue__mode" + (view.shuffled ? " queue__mode--on" : "")
+              }
+              aria-pressed={view.shuffled}
+              title={view.shuffled ? "Back to the original order" : "Shuffle"}
+              onClick={() => {
+                void core.setShuffled(!view.shuffled).then(refresh);
+              }}
+            >
+              ⤨ Shuffle
+            </button>
+            {/* Cycles rather than three buttons: it is one setting with three
+                values, and the label says which. */}
+            <button
+              className={
+                "queue__mode" +
+                (view.repeat !== "all" ? " queue__mode--on" : "")
+              }
+              title="What happens at the end of the queue"
+              onClick={() => {
+                const next: core.RepeatMode =
+                  view.repeat === "all"
+                    ? "one"
+                    : view.repeat === "one"
+                      ? "off"
+                      : "all";
+                void core.setRepeat(next).then(refresh);
+              }}
+            >
+              {view.repeat === "one"
+                ? "↻ Repeat one"
+                : view.repeat === "off"
+                  ? "→ Play to end"
+                  : "↻ Repeat all"}
+            </button>
+          </div>
+        </div>
       </header>
 
       {current && (

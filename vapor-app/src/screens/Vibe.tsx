@@ -137,7 +137,7 @@ export function Vibe() {
                 }
               >
                 <span className="vibe__verdict label">
-                  {blend.matchable ? "beat-matched" : blend.reason}
+                  {blend.matchable ? blend.transition : blend.reason}
                 </span>
                 <span aria-hidden="true">→</span>
               </div>
