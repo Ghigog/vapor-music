@@ -596,6 +596,48 @@ The 5,155 lines of GUT tests do not port as a harness, but their **assertions
 are the specification** and should be translated first, before the code they
 cover.
 
+### Phase 3 status — pure logic ported
+
+`vapor-library` now carries the whole pure-logic layer. **178 tests** across the
+workspace; all three crates build for wasm.
+
+| Module | Replaces |
+|---|---|
+| `camelot`, `genre`, `track`, `pathfinder` | `dj_pathfinder.gd` |
+| `playlist` | `playlist_service.gd` |
+| `group` | `dynamic_group_service.gd`, `playlist_folder_service.gd` |
+| `webdav` | `webdav_service.gd` (parsing only) |
+| `naming` | `metadata_service.gd` (parsing only) |
+| `index` | `track_index.gd` |
+| `queue` | `audio_manager.gd` (control plane only) |
+| `settings` | `settings_manager.gd` (model only) |
+
+**The consistent shape: these own data and logic, nothing else.** Persistence,
+HTTP, signals and cross-service calls all belong to the shell. That is what
+makes them testable without an engine and reusable unchanged in the browser.
+
+Largest deletion was WebDAV: the hand-rolled TCP client, chunked-transfer
+decoder and header splitting all go, leaving only the PROPFIND parsing that is
+genuinely ours.
+
+**Deliberate departures from the GDScript**, each flagged in the code:
+
+| Change | Why |
+|---|---|
+| Mood-path output is deterministic | The GDScript iterated a `Dictionary`, so the same pool could reshuffle for no reason |
+| Ids are caller-supplied | `Time.get_ticks_usec()` and `randi()` inside a library make tests non-deterministic |
+| An explicit "play next" beats retracing history | The GDScript checked history first, so asking for a track then pressing next gave you something else |
+| Settings carry no password field | The `ConfigFile` encryption used an in-process key — obfuscation, not security. Belongs in the keychain (MIG-031) |
+| `bpm_overrides` added | Required by the decision to accept ~81% tempo agreement; the residual is metrical error a person must be able to correct |
+
+### Still in GDScript
+
+Everything remaining is UI or shell: screens, the table, the sidebar, theming,
+navigation, plus the I/O those services used to do inline. The UI is being
+replaced rather than ported, so it waits on the redesign.
+
+---
+
 ### Phase 4 — The new shell
 
 - Tauri 2 app, TypeScript UI, Claude Design redesign.
