@@ -634,10 +634,21 @@ fn settings(state: State<'_, Shared>) -> Result<Settings> {
     Ok(app.settings.clone())
 }
 
+/// Correct a track's tempo by hand, or clear the correction with 0.
+///
+/// A refused value is an error rather than a silent no-op: the person is
+/// looking at the number they just typed, and a correction that appeared to be
+/// accepted but was not is worse than no correction at all.
 #[tauri::command]
 fn set_bpm_override(href: String, bpm: f32, state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.set_bpm_override(&href, bpm);
+    if !app.settings.set_bpm_override(&href, bpm) {
+        return Err(Error(format!(
+            "A BPM has to be between {} and {}.",
+            vapor_library::MIN_MANUAL_BPM as u32,
+            vapor_library::MAX_MANUAL_BPM as u32
+        )));
+    }
     app.save_settings()?;
     Ok(())
 }

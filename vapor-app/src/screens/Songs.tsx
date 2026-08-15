@@ -56,6 +56,15 @@ export function Songs() {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
+  /** Which hrefs carry a manual tempo, so a correction can be marked as one.
+   *  The table shows a number; this is what says where it came from. */
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
+  /** The href whose BPM cell is being edited, if any. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [bpmError, setBpmError] = useState<string | null>(null);
+  /** Bumped after a correction lands, to re-read rows with it applied. */
+  const [revision, setRevision] = useState(0);
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -76,7 +85,40 @@ export function Songs() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query, sortKey, ascending]);
+  }, [query, sortKey, ascending, revision]);
+
+  useEffect(() => {
+    core
+      .settings()
+      .then((s) => setOverrides(s.bpmOverrides ?? {}))
+      // Not worth surfacing: without this the corrections still apply, they
+      // just are not marked as corrections.
+      .catch(() => setOverrides({}));
+  }, [revision]);
+
+  /**
+   * Commit a hand-typed tempo. An empty box clears the correction.
+   *
+   * The rows are re-read rather than patched in place: the backend decides
+   * whether an override wins over a detected value, and a table that applied
+   * that rule itself would be a second opinion waiting to disagree.
+   */
+  async function commitBpm(href: string, raw: string) {
+    setEditing(null);
+    const trimmed = raw.trim();
+    const bpm = trimmed === "" ? 0 : Number(trimmed);
+    if (!Number.isFinite(bpm)) {
+      setBpmError("That is not a number.");
+      return;
+    }
+    try {
+      await core.setBpmOverride(href, bpm);
+      setBpmError(null);
+      setRevision((r) => r + 1);
+    } catch (e: unknown) {
+      setBpmError(String(e));
+    }
+  }
 
   const rows = useMemo(() => (load.kind === "ready" ? load.rows : []), [load]);
 
@@ -165,6 +207,22 @@ export function Songs() {
         ))}
       </div>
 
+      {bpmError && (
+        // Dismissed by fixing it or by clicking away, not by a timer: a
+        // message about the number you just typed should not vanish while you
+        // are still reading it.
+        <div className="songs__notice" role="status">
+          <span>{bpmError}</span>
+          <button
+            className="songs__notice-close"
+            onClick={() => setBpmError(null)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {selected.size > 0 && (
         <SelectionBar
           count={selected.size}
@@ -216,7 +274,14 @@ export function Songs() {
                   else setSelected(new Set([row.href]));
                 }}
               >
-                <SongRow row={row} />
+                <SongRow
+                  row={row}
+                  overridden={row.href in overrides}
+                  editing={editing === row.href}
+                  onEdit={() => setEditing(row.href)}
+                  onCommit={(raw) => void commitBpm(row.href, raw)}
+                  onCancel={() => setEditing(null)}
+                />
               </div>
             );
           })}
@@ -226,7 +291,21 @@ export function Songs() {
   );
 }
 
-function SongRow({ row }: { row: Row }) {
+function SongRow({
+  row,
+  overridden,
+  editing,
+  onEdit,
+  onCommit,
+  onCancel,
+}: {
+  row: Row;
+  overridden: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onCommit: (raw: string) => void;
+  onCancel: () => void;
+}) {
   const artist = row.artistSource === "unknown" ? "—" : row.artist;
   const album = row.albumSource === "unknown" ? "—" : row.album;
 
@@ -246,17 +325,133 @@ function SongRow({ row }: { row: Row }) {
       <span className="songrow__album" title={album}>
         {album}
       </span>
+      <BpmCell
+        bpm={row.bpm}
+        overridden={overridden}
+        editing={editing}
+        onEdit={onEdit}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+      <span className="songrow__key numeric">{row.key || "—"}</span>
+    </>
+  );
+}
+
+/**
+ * The BPM cell, which is also where a tempo gets corrected (TD-10).
+ *
+ * Detection lands a metrical relative — half, double or three-quarter time — on
+ * roughly 10% of a real library. That was accepted rather than solved, on the
+ * condition that a person could fix it; `bpm_overrides` has been honoured by
+ * the table and the pathfinder for a while, but nothing set it, so the escape
+ * hatch was unreachable. This is the hatch.
+ *
+ * Double-click to edit, matching the table's existing "double-click acts"
+ * idiom, and `stopPropagation` so it does not also start playing the row.
+ * An unanalysed track shows "—" and is still editable — a person can correct a
+ * tempo that was never detected at all, which the backend explicitly supports.
+ */
+function BpmCell({
+  bpm,
+  overridden,
+  editing,
+  onEdit,
+  onCommit,
+  onCancel,
+}: {
+  bpm: number;
+  overridden: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onCommit: (raw: string) => void;
+  onCancel: () => void;
+}) {
+  if (editing) {
+    return <BpmEditor bpm={bpm} onCommit={onCommit} onCancel={onCancel} />;
+  }
+
+  return (
+    <span
+      className={
+        "songrow__bpm numeric" + (overridden ? " songrow__bpm--manual" : "")
+      }
+      title={
+        overridden
+          ? "Corrected by hand. Double-click to change, or clear the box to go back to the detected tempo."
+          : "Double-click to correct the tempo"
+      }
+      onDoubleClick={(e) => {
+        // Without this the row's own double-click starts playing the track.
+        e.stopPropagation();
+        onEdit();
+      }}
+    >
       {/*
         Unknown analysis renders as a dash, never as 0 or 120. The Godot stub
         used to fabricate 120 BPM / 8A, which is indistinguishable from a real
         result once it reaches the table — the whole point of showing "—" is
         that a person can tell the difference.
       */}
-      <span className="songrow__bpm numeric">
-        {row.bpm > 0 ? Math.round(row.bpm) : "—"}
-      </span>
-      <span className="songrow__key numeric">{row.key || "—"}</span>
-    </>
+      {bpm > 0 ? Math.round(bpm) : "—"}
+    </span>
+  );
+}
+
+/**
+ * The open editor.
+ *
+ * Separate from `BpmCell` because it needs a ref, and a hook cannot live behind
+ * the conditional that decides whether the editor is open at all.
+ *
+ * Finishing is one-shot. Enter and Escape both unmount the input, and removing
+ * a focused element can fire `blur` on the way out — so without the guard,
+ * Escape would cancel and then immediately commit the value it was meant to
+ * discard, which is the opposite of what was asked for. The same guard stops
+ * Enter committing twice.
+ */
+function BpmEditor({
+  bpm,
+  onCommit,
+  onCancel,
+}: {
+  bpm: number;
+  onCommit: (raw: string) => void;
+  onCancel: () => void;
+}) {
+  const done = useRef(false);
+  const finish = (action: () => void) => {
+    if (done.current) return;
+    done.current = true;
+    action();
+  };
+
+  return (
+    <input
+      className="songrow__bpm-input numeric"
+      type="text"
+      inputMode="decimal"
+      defaultValue={bpm > 0 ? String(Math.round(bpm)) : ""}
+      placeholder="BPM"
+      aria-label="Corrected BPM"
+      autoFocus
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onFocus={(e) => e.currentTarget.select()}
+      // Blur commits rather than discards: clicking away from a box you have
+      // typed into should keep what you typed, not throw it away silently.
+      onBlur={(e) => {
+        const value = e.currentTarget.value;
+        finish(() => onCommit(value));
+      }}
+      onKeyDown={(e) => {
+        const value = e.currentTarget.value;
+        if (e.key === "Enter") finish(() => onCommit(value));
+        else if (e.key === "Escape") finish(onCancel);
+        // Arrow keys belong to the box while it has focus, not to the table.
+        e.stopPropagation();
+      }}
+    />
   );
 }
 

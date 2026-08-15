@@ -121,19 +121,44 @@ impl Default for Settings {
     }
 }
 
+/// Slowest tempo a manual correction may claim.
+pub const MIN_MANUAL_BPM: f32 = 20.0;
+/// Fastest tempo a manual correction may claim.
+///
+/// Comfortably past drum and bass, and past double-time corrections of it. The
+/// band is not there to police taste — it is there because a value outside it
+/// is a typo or a wrong unit, and because one such value is genuinely
+/// dangerous: `f32::INFINITY` passes a `> 0.0` check, and `serde_json` writes
+/// it as `null` and then fails to read it back. That loses the whole settings
+/// file — every playlist preference and server setting — to a mistyped BPM.
+pub const MAX_MANUAL_BPM: f32 = 300.0;
+
 impl Settings {
     /// Corrected BPM for a track, if the user set one.
     pub fn bpm_override(&self, href: &str) -> Option<f32> {
-        self.bpm_overrides.get(href).copied().filter(|b| *b > 0.0)
+        self.bpm_overrides
+            .get(href)
+            .copied()
+            .filter(|b| b.is_finite() && *b > 0.0)
     }
 
-    /// Set or clear a manual BPM. A non-positive value clears it.
-    pub fn set_bpm_override(&mut self, href: &str, bpm: f32) {
-        if bpm > 0.0 {
-            self.bpm_overrides.insert(href.to_string(), bpm);
-        } else {
+    /// Set or clear a manual BPM.
+    ///
+    /// A non-positive value clears the override. A value that is not finite, or
+    /// falls outside [`MIN_MANUAL_BPM`]–[`MAX_MANUAL_BPM`], is **refused** and
+    /// returns `false` — leaving any existing correction alone. Refusing rather
+    /// than clamping matters: someone who types 1280 meant 128, and silently
+    /// storing 300 would be a wrong answer presented as an accepted one.
+    pub fn set_bpm_override(&mut self, href: &str, bpm: f32) -> bool {
+        if bpm <= 0.0 && bpm.is_finite() {
             self.bpm_overrides.remove(href);
+            return true;
         }
+        if !bpm.is_finite() || !(MIN_MANUAL_BPM..=MAX_MANUAL_BPM).contains(&bpm) {
+            return false;
+        }
+        self.bpm_overrides.insert(href.to_string(), bpm);
+        true
     }
 
     /// Clamp values that would break the UI if a config file were hand-edited.
@@ -202,10 +227,58 @@ mod tests {
     fn bpm_overrides_can_be_set_and_cleared() {
         let mut s = Settings::default();
         assert_eq!(s.bpm_override("/a.mp3"), None);
-        s.set_bpm_override("/a.mp3", 128.0);
+        assert!(s.set_bpm_override("/a.mp3", 128.0));
         assert_eq!(s.bpm_override("/a.mp3"), Some(128.0));
-        s.set_bpm_override("/a.mp3", 0.0);
+        assert!(s.set_bpm_override("/a.mp3", 0.0));
         assert_eq!(s.bpm_override("/a.mp3"), None, "non-positive clears");
+    }
+
+    /// A mistyped tempo must not silently become a plausible one. Someone who
+    /// types 1280 meant 128, and clamping to 300 would present a wrong answer
+    /// as an accepted one.
+    #[test]
+    fn an_implausible_bpm_is_refused_rather_than_clamped() {
+        let mut s = Settings::default();
+        s.set_bpm_override("/a.mp3", 128.0);
+
+        for bad in [1280.0, 301.0, 19.0, 0.5] {
+            assert!(!s.set_bpm_override("/a.mp3", bad), "accepted {bad}");
+        }
+        assert_eq!(
+            s.bpm_override("/a.mp3"),
+            Some(128.0),
+            "a refused value disturbed the correction already there"
+        );
+    }
+
+    /// The dangerous one. `INFINITY` passes a `> 0.0` check, and serde_json
+    /// writes it as `null` and then cannot read it back — so accepting it would
+    /// lose the entire settings file to one mistyped BPM.
+    #[test]
+    fn a_non_finite_bpm_cannot_reach_the_settings_file() {
+        let mut s = Settings::default();
+
+        for bad in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            assert!(!s.set_bpm_override("/a.mp3", bad), "accepted {bad}");
+        }
+        assert!(s.bpm_overrides.is_empty());
+
+        // The failure this prevents, demonstrated rather than described.
+        let json = serde_json::to_string(&s).expect("serialise");
+        let back: std::result::Result<Settings, _> = serde_json::from_str(&json);
+        assert!(
+            back.is_ok(),
+            "settings did not survive a round trip: {json}"
+        );
+    }
+
+    /// The band's edges are inclusive, so a legitimate 300 BPM correction works.
+    #[test]
+    fn the_plausible_band_includes_its_own_edges() {
+        let mut s = Settings::default();
+        assert!(s.set_bpm_override("/a.mp3", MIN_MANUAL_BPM));
+        assert!(s.set_bpm_override("/b.mp3", MAX_MANUAL_BPM));
+        assert_eq!(s.bpm_override("/b.mp3"), Some(MAX_MANUAL_BPM));
     }
 
     #[test]

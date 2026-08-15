@@ -1,6 +1,6 @@
 # Vapor Music — Tech debt
 
-**Last reviewed:** 2026-08-15 (TD-03 closed)
+**Last reviewed:** 2026-08-15 (TD-01, TD-03 and TD-10 closed)
 
 Known shortcuts, deferred work and things that are wrong but not yet worth
 fixing. Kept separate from `docs/MIGRATION.md`, which tracks the *plan*; this
@@ -31,7 +31,7 @@ Things that would be a defect if the app shipped today.
 
 | ID | Item | Notes |
 |---|---|---|
-| TD-10 | **Tempo detection lands a metrical relative ~10% of the time.** Accepted deliberately. `bpm_overrides` is now honoured by the table and the pathfinder, but **no UI sets it**, so the escape hatch is still unreachable. | MIG-002b |
+| ~~TD-10~~ | ~~Tempo detection lands a metrical relative ~10% of the time; no UI sets `bpm_overrides`.~~ **Partly done** — the detection rate is unchanged and still accepted deliberately, but the escape hatch is now reachable: double-click a BPM cell in Songs to correct it, clear the box to go back to the detected value, and a corrected tempo is marked in the table so it reads as a person's claim rather than the detector's. Implausible values are refused rather than clamped. | MIG-002b |
 | TD-11 | **Key detection is 56% exact / 81% harmonically compatible.** Good enough to port with, not good enough to be proud of. Segmented analysis is the remaining lever. | MIG-001 |
 | TD-12 | **One malformed AAC file decodes to zero samples** where ffmpeg tolerates it. Unhandled — it will present as a track that silently fails. | MIG-004 |
 | TD-13 | **`vapor-dsp` does not emit segment keys.** `TrackMeta` has `intro_key`/`outro_key` and the pathfinder prefers them, but nothing populates them, so every transition is judged on the whole-track key. | — |
