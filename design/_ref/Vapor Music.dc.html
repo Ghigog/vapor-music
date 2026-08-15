@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --accent:#0A84FF; --accent-bright:#42A4FF; --accent-dim:#0066DE;
+    --iri-a:#7B6EF6; --iri-b:#3DD6C8;
+    --accent-rgb:10,132,255; --glass-a:0.07; --glass-blur:34px; --glass-blur-heavy:40px; --rim:0.15;
+  }
+  body{margin:0;background:#0a0a0c;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:'cv02','cv03','cv04','tnum'}
+  a{color:var(--accent);text-decoration:none} a:hover{color:var(--accent-bright)}
+  ::-webkit-scrollbar{width:0;height:0}
+  @keyframes vp-glow{0%,100%{opacity:.55;transform:scale(.97)}50%{opacity:1;transform:scale(1.03)}}
+  @keyframes vp-shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+  @keyframes vp-drift{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(-3%,2%,0) scale(1.08)}}
+  @keyframes vp-spin{to{transform:rotate(360deg)}}
+</style>
+</helmet>
+
+<section style="padding:72px 80px 120px; display:flex; flex-direction:column; gap:52px; background:radial-gradient(140% 100% at 15% -10%, #1a1a22 0%, #0a0a0c 55%); box-sizing:border-box">
+
+  <!-- ============ HEADER ============ -->
+  <div id="1a" style="display:flex; flex-direction:column; gap:20px; max-width:900px">
+    <div style="display:flex; align-items:center; gap:14px">
+      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:500; letter-spacing:0.14em; padding:5px 10px; border-radius:6px; background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.12); color:rgba(255,255,255,0.7)">1a</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.35)">Redesign · mobile first · liquid glass</span>
+    </div>
+    <div style="display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap">
+      <img src="assets/vapor-logo.png" alt="Vapor Music" style="width:96px; height:96px; display:block; filter:drop-shadow(0 8px 28px rgba(123,110,246,0.35))">
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="font-family:'Outfit',sans-serif; font-weight:200; font-size:68px; line-height:0.95; letter-spacing:-0.03em; color:#fff">Vapor</div>
+        <div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:22px; letter-spacing:-0.01em; color:rgba(255,255,255,0.5)">Own your music. Own your vibe.</div>
+      </div>
+    </div>
+    <div style="font-size:16px; line-height:1.65; color:rgba(255,255,255,0.62); max-width:760px; text-wrap:pretty">Ten screens, phone-first. Three tabs, one persistent player, everything else a sheet. The library is browsed by <span style="color:#fff">artwork at a size you can actually see</span>; the player has <span style="color:#fff">one obvious play button</span>; the AI DJ gets its own room instead of eight equal buttons in a 374px bar.</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px">
+      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; padding:6px 11px; border-radius:999px; background:rgba(var(--accent-rgb),0.14); border:1px solid rgba(var(--accent-rgb),0.3); color:var(--accent-bright)">3 tabs, not 8 buttons</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; padding:6px 11px; border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.11); color:rgba(255,255,255,0.6)">art-led library</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; padding:6px 11px; border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.11); color:rgba(255,255,255,0.6)">progressive DJ data</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:11px; padding:6px 11px; border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.11); color:rgba(255,255,255,0.6)">44px minimum everywhere</span>
+    </div>
+  </div>
+
+  <!-- ============ ROW 1 — CORE LOOP ============ -->
+  <div style="display:flex; flex-direction:column; gap:20px">
+    <div style="display:flex; align-items:baseline; gap:14px">
+      <div style="font-family:'Outfit',sans-serif; font-weight:400; font-size:26px; letter-spacing:-0.015em; color:#fff">The core loop</div>
+      <div style="font-size:14px; color:rgba(255,255,255,0.4)">Browse → play → let the DJ take over</div>
+    </div>
+    <div style="display:flex; gap:40px; flex-wrap:wrap; align-items:flex-start">
+
+      <!-- ---------- LIBRARY / ALBUMS ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">01</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Library — home</span></div>
+        <div data-screen-label="Library" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0e0e11; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:-20% -30% 40%; background:radial-gradient(60% 55% at 25% 12%, rgba(123,110,246,0.34), transparent 70%),radial-gradient(55% 50% at 85% 5%, rgba(61,214,200,0.22), transparent 70%); filter:blur(46px); animation:vp-drift 22s ease-in-out infinite; pointer-events:none"></div>
+
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:1; overflow:hidden; display:flex; flex-direction:column">
+              <div style="flex:none; padding:6px 20px 14px; display:flex; align-items:flex-end; justify-content:space-between">
+                <div style="display:flex; flex-direction:column; gap:3px">
+                  <div style="font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(255,255,255,0.38)">1,284 tracks · offline</div>
+                  <div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:38px; line-height:1.05; letter-spacing:-0.025em; color:#fff">Your library</div>
+                </div>
+                <div style="width:44px; height:44px; border-radius:22px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.14); box-shadow:inset 0 1px 0 rgba(255,255,255,0.22); backdrop-filter:blur(24px) saturate(180%)"><span style="width:19px; height:19px; display:block; background:rgba(255,255,255,0.75); mask:url('assets/icon/artist.png') center/contain no-repeat; -webkit-mask:url('assets/icon/artist.png') center/contain no-repeat"></span></div>
+              </div>
+
+              <div style="flex:none; padding:0 20px 14px"><div style="height:46px; border-radius:23px; display:flex; align-items:center; gap:10px; padding:0 16px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.16); backdrop-filter:blur(24px)"><span style="width:16px; height:16px; border:2px solid rgba(255,255,255,0.4); border-radius:50%; display:block; flex:none"></span><span style="font-size:16px; color:rgba(255,255,255,0.4)">Search 1,284 tracks</span></div></div>
+
+              <div style="flex:none; padding:0 20px 16px; display:flex; gap:7px; overflow:hidden">
+                <sc-for list="{{ libTabs }}" as="t" hint-placeholder-count="4">
+                  <div style="height:36px; padding:0 16px; border-radius:18px; display:flex; align-items:center; font-size:14px; font-weight:500; white-space:nowrap; background:{{ t.bg }}; border:1px solid {{ t.bd }}; color:{{ t.fg }}">{{ t.label }}</div>
+                </sc-for>
+              </div>
+
+              <div style="flex:1; overflow:hidden; padding:0 20px">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px 14px">
+                  <sc-for list="{{ albums }}" as="a" hint-placeholder-count="6">
+                    <div style="display:flex; flex-direction:column; gap:9px">
+                      <div style="width:100%; aspect-ratio:1/1; border-radius:18px; position:relative; overflow:hidden; background:{{ a.art }}; box-shadow:0 10px 26px -8px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.18)">
+                        <div style="position:absolute; inset:0; background:linear-gradient(140deg, rgba(255,255,255,0.16) 0%, transparent 42%)"></div>
+                        <div style="position:absolute; left:9px; bottom:9px; height:22px; padding:0 8px; border-radius:11px; display:flex; align-items:center; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.04em; color:rgba(255,255,255,0.92); background:rgba(0,0,0,0.34); border:1px solid rgba(255,255,255,0.2); backdrop-filter:blur(12px)">{{ a.badge }}</div>
+                      </div>
+                      <div style="display:flex; flex-direction:column; gap:1px; padding:0 2px">
+                        <span style="font-size:15px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ a.title }}</span>
+                        <span style="font-size:13px; color:rgba(255,255,255,0.5); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ a.artist }}</span>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+
+            <!-- floating player + tab pill -->
+            <div style="position:absolute; left:12px; right:12px; bottom:12px; display:flex; flex-direction:column; gap:9px; pointer-events:none">
+              <div style="height:64px; border-radius:26px; display:flex; align-items:center; gap:12px; padding:0 10px 0 8px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.26), inset 0 -1px 0 rgba(0,0,0,0.3), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%); position:relative; overflow:hidden">
+                <div style="position:absolute; inset:0; background:linear-gradient(130deg, rgba(255,255,255,0.13) 0%, transparent 46%); pointer-events:none"></div>
+                <div style="width:48px; height:48px; border-radius:18px; flex:none; background:linear-gradient(150deg,#5b6fd8,#2a3f7a 55%,#101a35); box-shadow:0 6px 16px -4px rgba(0,0,0,0.6)"></div>
+                <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; position:relative">
+                  <span style="font-size:15px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Coastal Drift</span>
+                  <span style="font-size:13px; color:rgba(255,255,255,0.52); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Aeriform</span>
+                </div>
+                <div style="width:46px; height:46px; border-radius:23px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(var(--accent-rgb),0.16); border:1px solid rgba(var(--accent-rgb),0.34); box-shadow:0 0 18px rgba(var(--accent-rgb),0.28)"><span style="width:15px; height:15px; display:block; background:var(--accent-bright); mask:url('assets/icon/pause.png') center/contain no-repeat; -webkit-mask:url('assets/icon/pause.png') center/contain no-repeat"></span></div>
+                <div style="position:absolute; left:0; right:0; bottom:0; height:2px; background:rgba(255,255,255,0.1)"><div style="width:38%; height:100%; background:linear-gradient(90deg,var(--accent-dim),var(--accent-bright))"></div></div>
+              </div>
+              <div style="height:62px; border-radius:26px; display:flex; padding:5px; gap:4px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%)">
+                <sc-for list="{{ tabsLibrary }}" as="t" hint-placeholder-count="3">
+                  <div style="flex:1; border-radius:21px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:{{ t.bg }}; border:1px solid {{ t.bd }}">
+                    <span style="width:21px; height:21px; display:block; background:{{ t.fg }}; mask:url('{{ t.icon }}') center/contain no-repeat; -webkit-mask:url('{{ t.icon }}') center/contain no-repeat"></span>
+                    <span style="font-size:11px; font-weight:500; letter-spacing:0.01em; color:{{ t.fg }}">{{ t.label }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- NOW PLAYING ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">02</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Now Playing — the crown jewel</span></div>
+        <div data-screen-label="Now Playing" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0b0b0f; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:0; background:linear-gradient(150deg,#5b6fd8,#2a3f7a 55%,#101a35); filter:blur(70px) saturate(150%); opacity:0.5; transform:scale(1.4); pointer-events:none"></div>
+            <div style="position:absolute; inset:0; background:radial-gradient(70% 50% at 50% 22%, rgba(91,111,216,0.4), transparent 72%), linear-gradient(180deg, transparent 30%, rgba(8,8,12,0.86) 78%); pointer-events:none"></div>
+
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:none; padding:6px 22px 0; display:flex; align-items:center; justify-content:space-between">
+              <div style="width:44px; height:44px; border-radius:22px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); backdrop-filter:blur(20px)"><span style="font-size:17px; color:rgba(255,255,255,0.8); line-height:1">⌄</span></div>
+              <div style="display:flex; flex-direction:column; align-items:center; gap:1px"><span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.45)">from playlist</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.85)">Late Ferry</span></div>
+              <div style="width:44px; height:44px; border-radius:22px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); backdrop-filter:blur(20px)"><span style="font-size:16px; color:rgba(255,255,255,0.8); line-height:1; letter-spacing:2px">···</span></div>
+            </div>
+
+            <div style="position:relative; flex:none; padding:22px 30px 0">
+              <div style="width:100%; aspect-ratio:1/1; border-radius:34px; position:relative; overflow:hidden; background:linear-gradient(150deg,#6b7fe8,#2a3f7a 52%,#0d1428); box-shadow:0 34px 70px -18px rgba(0,0,0,0.85), 0 0 60px -10px rgba(91,111,216,0.45), inset 0 1px 0 rgba(255,255,255,0.24)">
+                <div style="position:absolute; inset:0; background:linear-gradient(138deg, rgba(255,255,255,0.22) 0%, transparent 40%)"></div>
+                <div style="position:absolute; left:-10%; top:34%; width:130%; height:22%; background:linear-gradient(90deg, transparent, rgba(255,255,255,0.13), transparent); transform:rotate(-14deg); filter:blur(14px)"></div>
+              </div>
+            </div>
+
+            <div style="position:relative; flex:none; padding:26px 26px 0; display:flex; align-items:flex-start; justify-content:space-between; gap:14px">
+              <div style="min-width:0; display:flex; flex-direction:column; gap:5px">
+                <div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:34px; line-height:1.06; letter-spacing:-0.025em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Coastal Drift</div>
+                <div style="font-size:17px; color:rgba(255,255,255,0.58); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Aeriform · Tidal Register</div>
+              </div>
+              <div style="width:46px; height:46px; flex:none; border-radius:23px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); backdrop-filter:blur(20px)"><span style="font-size:19px; line-height:1; color:rgba(255,255,255,0.75)">♥</span></div>
+            </div>
+
+            <div style="position:relative; flex:none; padding:24px 26px 0">
+              <div style="height:44px; display:flex; align-items:flex-end; gap:2px">
+                <sc-for list="{{ npWave }}" as="b" hint-placeholder-count="52">
+                  <span style="flex:1; border-radius:2px; height:{{ b.h }}; background:{{ b.c }}"></span>
+                </sc-for>
+              </div>
+              <div style="display:flex; justify-content:space-between; padding-top:9px; font-family:'JetBrains Mono',monospace; font-size:12px; color:rgba(255,255,255,0.45)"><span>2:31</span><span>−3:47</span></div>
+            </div>
+
+            <div style="position:relative; flex:none; padding:16px 26px 0; display:flex; align-items:center; justify-content:space-between">
+              <div style="width:52px; height:52px; border-radius:26px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12)"><span style="width:17px; height:17px; display:block; background:rgba(255,255,255,0.8); transform:scaleX(-1); mask:url('assets/icon/next.png') center/contain no-repeat; -webkit-mask:url('assets/icon/next.png') center/contain no-repeat"></span></div>
+              <div style="width:84px; height:84px; border-radius:42px; position:relative; display:flex; align-items:center; justify-content:center; background:rgba(var(--accent-rgb),0.2); border:1px solid rgba(var(--accent-rgb),0.42); box-shadow:0 0 34px rgba(var(--accent-rgb),0.42), inset 0 1px 0 rgba(255,255,255,0.3); backdrop-filter:blur(24px) saturate(200%)">
+                <div style="position:absolute; inset:0; border-radius:42px; background:linear-gradient(140deg, rgba(255,255,255,0.2), transparent 48%)"></div>
+                <span style="width:26px; height:26px; display:block; position:relative; background:var(--accent-bright); mask:url('assets/icon/pause.png') center/contain no-repeat; -webkit-mask:url('assets/icon/pause.png') center/contain no-repeat"></span>
+              </div>
+              <div style="width:52px; height:52px; border-radius:26px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12)"><span style="width:17px; height:17px; display:block; background:rgba(255,255,255,0.8); mask:url('assets/icon/next.png') center/contain no-repeat; -webkit-mask:url('assets/icon/next.png') center/contain no-repeat"></span></div>
+            </div>
+
+            <div style="position:relative; flex:1"></div>
+
+            <!-- next blend chip: the whole AI DJ, compressed to one line -->
+            <div style="position:relative; flex:none; padding:0 16px 16px">
+              <div style="border-radius:24px; padding:13px 14px; display:flex; align-items:center; gap:12px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.22), 0 12px 34px -8px rgba(0,0,0,0.65); backdrop-filter:blur(var(--glass-blur)) saturate(190%); position:relative; overflow:hidden">
+                <div style="position:absolute; inset:0; background:linear-gradient(130deg, rgba(255,255,255,0.12), transparent 44%); pointer-events:none"></div>
+                <div style="width:38px; height:38px; border-radius:19px; flex:none; position:relative; display:flex; align-items:center; justify-content:center; background:conic-gradient(from 200deg, var(--iri-a), var(--iri-b), var(--accent), var(--iri-a)); box-shadow:0 0 20px rgba(123,110,246,0.5)">
+                  <span style="position:absolute; inset:3px; border-radius:16px; background:rgba(11,11,15,0.72); backdrop-filter:blur(6px)"></span>
+                  <span style="width:16px; height:16px; display:block; position:relative; background:#fff; mask:url('assets/icon/vibe.png') center/contain no-repeat; -webkit-mask:url('assets/icon/vibe.png') center/contain no-repeat"></span>
+                </div>
+                <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; position:relative">
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.45)">blending in 1:12 · bass swap</span>
+                  <span style="font-size:15px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Salt Flats — Halcyon Bay</span>
+                </div>
+                <span style="font-size:19px; color:rgba(255,255,255,0.4); position:relative; flex:none">›</span>
+              </div>
+            </div>
+
+            <div style="position:relative; flex:none; height:5px; margin:0 auto 9px; width:134px; border-radius:3px; background:rgba(255,255,255,0.32)"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- VIBE DJ ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">03</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Vibe — the AI DJ</span></div>
+        <div data-screen-label="Vibe DJ" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0b0b10; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:-25% -30% 30%; background:radial-gradient(50% 50% at 30% 15%, rgba(123,110,246,0.42), transparent 70%),radial-gradient(50% 45% at 80% 8%, rgba(61,214,200,0.3), transparent 70%); filter:blur(50px); animation:vp-drift 18s ease-in-out infinite; pointer-events:none"></div>
+
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:none; padding:6px 20px 16px; display:flex; align-items:center; justify-content:space-between">
+              <div style="display:flex; flex-direction:column; gap:3px">
+                <div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:36px; line-height:1.05; letter-spacing:-0.025em; color:#fff">Vibe</div>
+                <div style="display:flex; align-items:center; gap:6px"><span style="width:6px; height:6px; border-radius:3px; background:#34D399; box-shadow:0 0 8px #34D399; display:block; animation:vp-glow 2.4s ease-in-out infinite"></span><span style="font-size:13px; color:rgba(255,255,255,0.55)">Conducting · 1,284 analyzed</span></div>
+              </div>
+              <div style="height:38px; padding:0 5px 0 12px; border-radius:19px; display:flex; align-items:center; gap:9px; background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.14); backdrop-filter:blur(24px)"><span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.1em; color:rgba(255,255,255,0.6)">DJ</span><span style="width:44px; height:26px; border-radius:13px; background:rgba(var(--accent-rgb),0.85); position:relative; display:block; box-shadow:0 0 14px rgba(var(--accent-rgb),0.5)"><span style="position:absolute; right:2px; top:2px; width:22px; height:22px; border-radius:11px; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,0.4)"></span></span></div>
+            </div>
+
+            <div style="position:relative; flex:1; overflow:hidden; padding:0 16px; display:flex; flex-direction:column; gap:14px">
+
+              <!-- the blend: one hero card -->
+              <div style="flex:none; border-radius:30px; padding:18px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 18px 44px -12px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(190%); position:relative; overflow:hidden">
+                <div style="position:absolute; inset:0; background:linear-gradient(132deg, rgba(255,255,255,0.11), transparent 45%); pointer-events:none"></div>
+                <div style="position:relative; display:flex; align-items:center; justify-content:space-between; margin-bottom:16px">
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.45)">next blend · in 1:12</span>
+                  <span style="height:24px; padding:0 9px; border-radius:12px; display:flex; align-items:center; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.06em; color:#34D399; background:rgba(52,211,153,0.14); border:1px solid rgba(52,211,153,0.35)">PERFECT MATCH</span>
+                </div>
+
+                <div style="position:relative; display:flex; align-items:center; gap:12px; margin-bottom:16px">
+                  <div style="width:62px; height:62px; border-radius:20px; flex:none; background:linear-gradient(150deg,#5b6fd8,#2a3f7a 55%,#101a35); box-shadow:0 8px 20px -6px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.2)"></div>
+                  <div style="flex:none; display:flex; flex-direction:column; align-items:center; gap:3px; padding:0 2px">
+                    <span style="font-size:17px; color:rgba(255,255,255,0.45); line-height:1">→</span>
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.06em; color:rgba(255,255,255,0.4)">8 bars</span>
+                  </div>
+                  <div style="width:62px; height:62px; border-radius:20px; flex:none; background:linear-gradient(150deg,#d8a05b,#7a4f2a 55%,#301a10); box-shadow:0 8px 20px -6px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.2)"></div>
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px">
+                    <span style="font-size:16px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Salt Flats</span>
+                    <span style="font-size:13px; color:rgba(255,255,255,0.52); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Halcyon Bay</span>
+                  </div>
+                </div>
+
+                <!-- overlapping transition waveforms -->
+                <div style="position:relative; height:82px; border-radius:16px; overflow:hidden; background:rgba(0,0,0,0.28); border:1px solid rgba(255,255,255,0.08); margin-bottom:12px">
+                  <div style="position:absolute; left:0; right:0; top:20px; bottom:0; display:flex; align-items:center; gap:1px; padding:0 6px">
+                    <sc-for list="{{ blendWaveA }}" as="b" hint-placeholder-count="46">
+                      <span style="flex:1; border-radius:1px; height:{{ b.h }}; background:{{ b.c }}"></span>
+                    </sc-for>
+                  </div>
+                  <div style="position:absolute; left:52%; right:0; top:0; bottom:0; background:linear-gradient(90deg, rgba(61,214,200,0.14), rgba(61,214,200,0.05)); border-left:1px solid rgba(61,214,200,0.4)"></div>
+                  <div style="position:absolute; left:52%; right:0; top:20px; bottom:0; display:flex; align-items:center; gap:1px; padding:0 4px">
+                    <sc-for list="{{ blendWaveB }}" as="b" hint-placeholder-count="22">
+                      <span style="flex:1; border-radius:1px; height:{{ b.h }}; background:rgba(61,214,200,0.62)"></span>
+                    </sc-for>
+                  </div>
+                  <div style="position:absolute; left:38%; top:0; bottom:0; width:2px; background:#fff; box-shadow:0 0 10px rgba(255,255,255,0.8)"></div>
+                  <div style="position:absolute; left:8px; top:7px; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.08em; color:rgba(255,255,255,0.4)">OUT · 122</div>
+                  <div style="position:absolute; right:8px; top:7px; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.08em; color:rgba(61,214,200,0.75)">128 · IN</div>
+                </div>
+
+                <div style="position:relative; display:flex; gap:7px; flex-wrap:wrap">
+                  <sc-for list="{{ blendStats }}" as="s" hint-placeholder-count="4">
+                    <div style="height:30px; padding:0 10px; border-radius:15px; display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1)">
+                      <span style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(255,255,255,0.4)">{{ s.k }}</span>
+                      <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:{{ s.c }}">{{ s.v }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <!-- phase lock -->
+                <div style="position:relative; margin-top:14px; display:flex; align-items:center; gap:10px">
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(255,255,255,0.4); flex:none">phase</span>
+                  <div style="flex:1; height:22px; border-radius:11px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); position:relative; overflow:hidden">
+                    <div style="position:absolute; left:calc(50% - 14px); right:calc(50% - 14px); top:0; bottom:0; background:rgba(52,211,153,0.16)"></div>
+                    <div style="position:absolute; left:50%; top:3px; bottom:3px; width:1px; background:rgba(255,255,255,0.2)"></div>
+                    <div style="position:absolute; left:calc(50% - 2px); top:4px; bottom:4px; width:4px; border-radius:2px; background:#34D399; box-shadow:0 0 12px #34D399"></div>
+                  </div>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#34D399; flex:none">+1.2ms</span>
+                </div>
+              </div>
+
+              <div style="flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 4px">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.4)">or blend into</span>
+                <span style="font-size:13px; color:var(--accent-bright)">See path</span>
+              </div>
+
+              <div style="flex:1; overflow:hidden; display:flex; flex-direction:column; gap:9px">
+                <sc-for list="{{ alternates }}" as="a" hint-placeholder-count="3">
+                  <div style="flex:none; height:70px; border-radius:22px; display:flex; align-items:center; gap:12px; padding:0 14px 0 10px; background:rgba(255,255,255,0.045); border:1px solid rgba(255,255,255,0.1); backdrop-filter:blur(20px)">
+                    <div style="width:50px; height:50px; border-radius:16px; flex:none; background:{{ a.art }}; box-shadow:inset 0 1px 0 rgba(255,255,255,0.16)"></div>
+                    <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px">
+                      <span style="font-size:15px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ a.title }}</span>
+                      <span style="display:flex; align-items:center; gap:7px; font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.45)"><span>{{ a.bpm }}</span><span style="opacity:0.4">·</span><span>{{ a.key }}</span><span style="opacity:0.4">·</span><span>{{ a.fx }}</span></span>
+                    </div>
+                    <span style="height:24px; padding:0 8px; border-radius:12px; flex:none; display:flex; align-items:center; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.06em; color:{{ a.tagFg }}; background:{{ a.tagBg }}; border:1px solid {{ a.tagBd }}">{{ a.tag }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="position:absolute; left:12px; right:12px; bottom:12px">
+              <div style="height:62px; border-radius:26px; display:flex; padding:5px; gap:4px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%)">
+                <sc-for list="{{ tabsVibe }}" as="t" hint-placeholder-count="3">
+                  <div style="flex:1; border-radius:21px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:{{ t.bg }}; border:1px solid {{ t.bd }}">
+                    <span style="width:21px; height:21px; display:block; background:{{ t.fg }}; mask:url('{{ t.icon }}') center/contain no-repeat; -webkit-mask:url('{{ t.icon }}') center/contain no-repeat"></span>
+                    <span style="font-size:11px; font-weight:500; color:{{ t.fg }}">{{ t.label }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ROW 2 — FINDING THINGS ============ -->
+  <div style="display:flex; flex-direction:column; gap:20px">
+    <div style="display:flex; align-items:baseline; gap:14px">
+      <div style="font-family:'Outfit',sans-serif; font-weight:400; font-size:26px; letter-spacing:-0.015em; color:#fff">Finding things</div>
+      <div style="font-size:14px; color:rgba(255,255,255,0.4)">Songs, playlists, search, queue</div>
+    </div>
+    <div style="display:flex; gap:40px; flex-wrap:wrap; align-items:flex-start">
+
+      <!-- ---------- SONGS + PLAYLISTS ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">04</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Songs + Playlists</span></div>
+        <div data-screen-label="Songs" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0e0e11; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:-20% -30% 55%; background:radial-gradient(55% 50% at 30% 10%, rgba(91,111,216,0.26), transparent 70%); filter:blur(46px); pointer-events:none"></div>
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:none; padding:6px 20px 14px"><div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:34px; line-height:1.05; letter-spacing:-0.025em; color:#fff">Songs</div></div>
+
+            <div style="position:relative; flex:none; padding:0 20px 14px; display:flex; gap:7px">
+              <sc-for list="{{ libTabs2 }}" as="t" hint-placeholder-count="4">
+                <div style="height:36px; padding:0 16px; border-radius:18px; display:flex; align-items:center; font-size:14px; font-weight:500; white-space:nowrap; background:{{ t.bg }}; border:1px solid {{ t.bd }}; color:{{ t.fg }}">{{ t.label }}</div>
+              </sc-for>
+            </div>
+
+            <div style="position:relative; flex:none; padding:0 20px 12px; display:flex; align-items:center; justify-content:space-between">
+              <div style="height:34px; padding:0 12px; border-radius:17px; display:flex; align-items:center; gap:7px; background:rgba(255,255,255,0.055); border:1px solid rgba(255,255,255,0.11)"><span style="font-size:13px; color:rgba(255,255,255,0.7)">Recently added</span><span style="font-size:9px; color:rgba(255,255,255,0.4)">▼</span></div>
+              <div style="height:34px; padding:0 13px; border-radius:17px; display:flex; align-items:center; gap:7px; background:rgba(var(--accent-rgb),0.14); border:1px solid rgba(var(--accent-rgb),0.32)"><span style="width:13px; height:13px; display:block; background:var(--accent-bright); mask:url('assets/icon/vibe.png') center/contain no-repeat; -webkit-mask:url('assets/icon/vibe.png') center/contain no-repeat"></span><span style="font-size:13px; font-weight:500; color:var(--accent-bright)">Blend all</span></div>
+            </div>
+
+            <div style="position:relative; flex:1; overflow:hidden; padding:0 12px; display:flex; flex-direction:column; gap:4px">
+              <sc-for list="{{ songs }}" as="s" hint-placeholder-count="8">
+                <div style="flex:none; height:66px; border-radius:20px; display:flex; align-items:center; gap:13px; padding:0 12px; background:{{ s.rowBg }}">
+                  <div style="width:48px; height:48px; border-radius:15px; flex:none; position:relative; background:{{ s.art }}; box-shadow:inset 0 1px 0 rgba(255,255,255,0.16), 0 4px 12px -4px rgba(0,0,0,0.6)">
+                    <div style="position:absolute; inset:0; border-radius:15px; background:linear-gradient(140deg, rgba(255,255,255,0.16), transparent 45%)"></div>
+                  </div>
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px">
+                    <span style="font-size:16px; font-weight:500; color:{{ s.titleFg }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.title }}</span>
+                    <span style="font-size:14px; color:rgba(255,255,255,0.48); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.artist }}</span>
+                  </div>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:rgba(255,255,255,0.35); flex:none">{{ s.right }}</span>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="position:absolute; left:12px; right:12px; bottom:12px; display:flex; flex-direction:column; gap:9px">
+              <div style="height:64px; border-radius:26px; display:flex; align-items:center; gap:12px; padding:0 10px 0 8px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.26), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%); position:relative; overflow:hidden">
+                <div style="position:absolute; inset:0; background:linear-gradient(130deg, rgba(255,255,255,0.13), transparent 46%); pointer-events:none"></div>
+                <div style="width:48px; height:48px; border-radius:18px; flex:none; background:linear-gradient(150deg,#5b6fd8,#2a3f7a 55%,#101a35)"></div>
+                <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; position:relative"><span style="font-size:15px; font-weight:600; color:#fff">Coastal Drift</span><span style="font-size:13px; color:rgba(255,255,255,0.52)">Aeriform</span></div>
+                <div style="width:46px; height:46px; border-radius:23px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(var(--accent-rgb),0.16); border:1px solid rgba(var(--accent-rgb),0.34)"><span style="width:15px; height:15px; display:block; background:var(--accent-bright); mask:url('assets/icon/pause.png') center/contain no-repeat; -webkit-mask:url('assets/icon/pause.png') center/contain no-repeat"></span></div>
+                <div style="position:absolute; left:0; right:0; bottom:0; height:2px; background:rgba(255,255,255,0.1)"><div style="width:38%; height:100%; background:linear-gradient(90deg,var(--accent-dim),var(--accent-bright))"></div></div>
+              </div>
+              <div style="height:62px; border-radius:26px; display:flex; padding:5px; gap:4px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%)">
+                <sc-for list="{{ tabsLibrary }}" as="t" hint-placeholder-count="3">
+                  <div style="flex:1; border-radius:21px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:{{ t.bg }}; border:1px solid {{ t.bd }}">
+                    <span style="width:21px; height:21px; display:block; background:{{ t.fg }}; mask:url('{{ t.icon }}') center/contain no-repeat; -webkit-mask:url('{{ t.icon }}') center/contain no-repeat"></span>
+                    <span style="font-size:11px; font-weight:500; color:{{ t.fg }}">{{ t.label }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- SEARCH ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">05</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Search — with a keyboard up</span></div>
+        <div data-screen-label="Search" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0e0e11; position:relative; display:flex; flex-direction:column">
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:none; padding:6px 16px 14px; display:flex; align-items:center; gap:10px">
+              <div style="flex:1; height:46px; border-radius:23px; display:flex; align-items:center; gap:10px; padding:0 15px; background:rgba(255,255,255,0.08); border:1px solid rgba(var(--accent-rgb),0.5); box-shadow:inset 0 1px 0 rgba(255,255,255,0.18), 0 0 0 3px rgba(var(--accent-rgb),0.14); backdrop-filter:blur(24px)">
+                <span style="width:16px; height:16px; border:2px solid rgba(255,255,255,0.45); border-radius:50%; display:block; flex:none"></span>
+                <span style="font-size:16px; color:#fff">salt</span><span style="width:1.5px; height:19px; background:var(--accent-bright); display:block"></span>
+              </div>
+              <span style="font-size:15px; color:var(--accent-bright); flex:none">Cancel</span>
+            </div>
+
+            <div style="position:relative; flex:1; overflow:hidden; padding:0 16px; display:flex; flex-direction:column; gap:18px">
+              <div style="display:flex; flex-direction:column; gap:9px">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.38)">top result</span>
+                <div style="border-radius:24px; padding:14px; display:flex; align-items:center; gap:14px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.22); backdrop-filter:blur(var(--glass-blur)) saturate(180%)">
+                  <div style="width:66px; height:66px; border-radius:19px; flex:none; position:relative; background:linear-gradient(150deg,#d8a05b,#7a4f2a 55%,#301a10); box-shadow:0 8px 20px -6px rgba(0,0,0,0.7)"><div style="position:absolute; inset:0; border-radius:19px; background:linear-gradient(140deg, rgba(255,255,255,0.18), transparent 45%)"></div></div>
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px">
+                    <span style="font-size:18px; font-weight:600; color:#fff"><span style="background:rgba(var(--accent-rgb),0.3); border-radius:3px">Salt</span> Flats</span>
+                    <span style="font-size:14px; color:rgba(255,255,255,0.5)">Halcyon Bay · Tidewater</span>
+                    <span style="display:flex; gap:7px; font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.4)"><span>128 BPM</span><span style="opacity:0.4">·</span><span>8A</span><span style="opacity:0.4">·</span><span>FLAC</span></span>
+                  </div>
+                  <div style="width:44px; height:44px; border-radius:22px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(var(--accent-rgb),0.16); border:1px solid rgba(var(--accent-rgb),0.34)"><span style="width:14px; height:14px; display:block; background:var(--accent-bright); mask:url('assets/icon/play.png') center/contain no-repeat; -webkit-mask:url('assets/icon/play.png') center/contain no-repeat"></span></div>
+                </div>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:9px">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.38)">tracks · 4</span>
+                <sc-for list="{{ searchTracks }}" as="s" hint-placeholder-count="4">
+                  <div style="height:60px; border-radius:18px; display:flex; align-items:center; gap:12px; padding:0 10px">
+                    <div style="width:44px; height:44px; border-radius:14px; flex:none; background:{{ s.art }}; box-shadow:inset 0 1px 0 rgba(255,255,255,0.14)"></div>
+                    <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px"><span style="font-size:15px; font-weight:500; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.title }}</span><span style="font-size:13px; color:rgba(255,255,255,0.45)">{{ s.artist }}</span></div>
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:rgba(255,255,255,0.32)">{{ s.dur }}</span>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:9px">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.38)">also matching</span>
+                <div style="display:flex; gap:8px; flex-wrap:wrap">
+                  <sc-for list="{{ searchChips }}" as="c" hint-placeholder-count="3">
+                    <div style="height:38px; padding:0 14px; border-radius:19px; display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.11)"><span style="width:15px; height:15px; display:block; background:rgba(255,255,255,0.5); mask:url('{{ c.icon }}') center/contain no-repeat; -webkit-mask:url('{{ c.icon }}') center/contain no-repeat"></span><span style="font-size:14px; color:rgba(255,255,255,0.8)">{{ c.label }}</span></div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+
+            <!-- keyboard -->
+            <div style="position:relative; flex:none; padding:8px 4px 6px; background:rgba(255,255,255,0.045); border-top:1px solid rgba(255,255,255,0.1); backdrop-filter:blur(30px) saturate(180%)">
+              <sc-for list="{{ keyboard }}" as="row" hint-placeholder-count="3">
+                <div style="display:flex; gap:5px; padding:0 4px 7px; justify-content:center">
+                  <sc-for list="{{ row.keys }}" as="k" hint-placeholder-count="10">
+                    <div style="flex:{{ k.flex }}; height:42px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:20px; color:#fff; background:{{ k.bg }}; box-shadow:0 1px 0 rgba(0,0,0,0.5)">{{ k.label }}</div>
+                  </sc-for>
+                </div>
+              </sc-for>
+              <div style="display:flex; gap:5px; padding:0 4px; justify-content:center">
+                <div style="flex:2; height:42px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#fff; background:rgba(255,255,255,0.1)">123</div>
+                <div style="flex:6; height:42px; border-radius:7px; background:rgba(255,255,255,0.22); box-shadow:0 1px 0 rgba(0,0,0,0.5)"></div>
+                <div style="flex:2.4; height:42px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#fff; background:rgba(var(--accent-rgb),0.8)">search</div>
+              </div>
+              <div style="height:5px; width:134px; margin:9px auto 2px; border-radius:3px; background:rgba(255,255,255,0.32)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- QUEUE SHEET ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">06</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Queue — bottom sheet</span></div>
+        <div data-screen-label="Queue" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0b0b0f; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:0; background:linear-gradient(150deg,#5b6fd8,#2a3f7a 55%,#101a35); filter:blur(64px) saturate(140%); opacity:0.34; transform:scale(1.4)"></div>
+            <div style="position:absolute; inset:0; background:rgba(6,6,10,0.5)"></div>
+
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <!-- collapsed now playing peeking above the sheet -->
+            <div style="position:relative; flex:none; padding:14px 30px 0; display:flex; align-items:center; gap:14px; opacity:0.55">
+              <div style="width:56px; height:56px; border-radius:18px; flex:none; background:linear-gradient(150deg,#6b7fe8,#2a3f7a 52%,#0d1428)"></div>
+              <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px"><span style="font-family:'Outfit',sans-serif; font-weight:300; font-size:22px; letter-spacing:-0.02em; color:#fff">Coastal Drift</span><span style="font-size:14px; color:rgba(255,255,255,0.55)">Aeriform</span></div>
+            </div>
+
+            <div style="position:relative; flex:1"></div>
+
+            <!-- the sheet -->
+            <div style="position:relative; flex:none; border-radius:36px 36px 35px 35px; padding:0 0 12px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); border-bottom:none; box-shadow:inset 0 1px 0 rgba(255,255,255,0.28), 0 -22px 60px -12px rgba(0,0,0,0.75); backdrop-filter:blur(var(--glass-blur-heavy)) saturate(200%); overflow:hidden">
+              <div style="position:absolute; inset:0; background:linear-gradient(160deg, rgba(255,255,255,0.11), transparent 34%); pointer-events:none"></div>
+              <div style="position:relative; height:5px; width:44px; margin:10px auto 0; border-radius:3px; background:rgba(255,255,255,0.3)"></div>
+
+              <div style="position:relative; padding:16px 20px 14px; display:flex; align-items:center; justify-content:space-between">
+                <div style="display:flex; flex-direction:column; gap:2px"><span style="font-family:'Outfit',sans-serif; font-weight:400; font-size:24px; letter-spacing:-0.02em; color:#fff">Up next</span><span style="font-size:13px; color:rgba(255,255,255,0.48)">Conducted by Vibe · 47 min</span></div>
+                <div style="height:34px; padding:0 12px; border-radius:17px; display:flex; align-items:center; gap:7px; background:rgba(123,110,246,0.16); border:1px solid rgba(123,110,246,0.36)"><span style="width:13px; height:13px; display:block; background:#9B8EFF; mask:url('assets/icon/vibe.png') center/contain no-repeat; -webkit-mask:url('assets/icon/vibe.png') center/contain no-repeat"></span><span style="font-size:13px; font-weight:500; color:#9B8EFF">Re-conduct</span></div>
+              </div>
+
+              <div style="position:relative; padding:0 12px; display:flex; flex-direction:column; gap:2px">
+                <sc-for list="{{ queue }}" as="q" hint-placeholder-count="6">
+                  <div style="height:64px; border-radius:20px; display:flex; align-items:center; gap:12px; padding:0 10px; background:{{ q.bg }}">
+                    <span style="width:20px; flex:none; display:flex; flex-direction:column; align-items:center; gap:3px; opacity:0.4"><span style="width:14px; height:1.5px; background:#fff; display:block"></span><span style="width:14px; height:1.5px; background:#fff; display:block"></span><span style="width:14px; height:1.5px; background:#fff; display:block"></span></span>
+                    <div style="width:44px; height:44px; border-radius:14px; flex:none; background:{{ q.art }}; box-shadow:inset 0 1px 0 rgba(255,255,255,0.14)"></div>
+                    <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px">
+                      <span style="font-size:15px; font-weight:500; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ q.title }}</span>
+                      <span style="font-size:13px; color:rgba(255,255,255,0.45); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ q.artist }}</span>
+                    </div>
+                    <span style="height:22px; padding:0 8px; border-radius:11px; flex:none; display:flex; align-items:center; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.06em; color:{{ q.fxFg }}; background:{{ q.fxBg }}">{{ q.fx }}</span>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="position:relative; height:5px; width:134px; margin:16px auto 2px; border-radius:3px; background:rgba(255,255,255,0.32)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ROW 3 — DEPTH & EDGES ============ -->
+  <div style="display:flex; flex-direction:column; gap:20px">
+    <div style="display:flex; align-items:baseline; gap:14px">
+      <div style="font-family:'Outfit',sans-serif; font-weight:400; font-size:26px; letter-spacing:-0.015em; color:#fff">Depth &amp; edges</div>
+      <div style="font-size:14px; color:rgba(255,255,255,0.4)">Liner notes, settings, onboarding, empty &amp; loading</div>
+    </div>
+    <div style="display:flex; gap:40px; flex-wrap:wrap; align-items:flex-start">
+
+      <!-- ---------- LINER NOTES ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">07</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Liner notes — digital vinyl sleeve</span></div>
+        <div data-screen-label="Liner Notes" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0c0b0a; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:0 0 55%; background:linear-gradient(150deg,#d8a05b,#7a4f2a 55%,#301a10)"></div>
+            <div style="position:absolute; inset:0; background:linear-gradient(180deg, rgba(12,11,10,0.25) 0%, rgba(12,11,10,0.6) 34%, #0c0b0a 52%)"></div>
+
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:none; padding:4px 20px 0; display:flex; align-items:center; justify-content:space-between">
+              <div style="width:44px; height:44px; border-radius:22px; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.28); border:1px solid rgba(255,255,255,0.18); backdrop-filter:blur(20px)"><span style="font-size:19px; color:#fff; line-height:1">‹</span></div>
+              <div style="height:38px; padding:0 14px; border-radius:19px; display:flex; align-items:center; gap:8px; background:rgba(0,0,0,0.28); border:1px solid rgba(255,255,255,0.18); backdrop-filter:blur(20px)"><span style="font-size:14px; color:#fff">Edit tags</span></div>
+            </div>
+
+            <div style="position:relative; flex:1; overflow:hidden; padding:24px 22px 0; display:flex; flex-direction:column; gap:20px">
+              <div style="display:flex; align-items:flex-end; gap:16px">
+                <div style="width:112px; height:112px; border-radius:22px; flex:none; position:relative; background:linear-gradient(150deg,#e8b06b,#8a5f3a 52%,#3a2416); box-shadow:0 20px 44px -12px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.24)"><div style="position:absolute; inset:0; border-radius:22px; background:linear-gradient(140deg, rgba(255,255,255,0.2), transparent 44%)"></div></div>
+                <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:5px">
+                  <span style="font-family:'Outfit',sans-serif; font-weight:300; font-size:28px; line-height:1.08; letter-spacing:-0.025em; color:#fff">Salt Flats</span>
+                  <span style="font-size:15px; color:rgba(255,255,255,0.6)">Halcyon Bay</span>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.06em; color:rgba(255,255,255,0.4)">Tidewater · 2019</span>
+                </div>
+              </div>
+
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px">
+                <sc-for list="{{ linerStats }}" as="s" hint-placeholder-count="6">
+                  <div style="border-radius:16px; padding:11px 10px; display:flex; flex-direction:column; gap:3px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1)">
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(255,255,255,0.38)">{{ s.k }}</span>
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:16px; color:#fff">{{ s.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:9px">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.38)">notes</span>
+                <div style="font-size:15px; line-height:1.65; color:rgba(255,255,255,0.68); text-wrap:pretty">Cut to tape at Longwater in three nights, mostly at 4am. The organ line is a Juno through a broken spring reverb the engineer refused to replace — you can hear the tank rattle on the second chorus.</div>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:9px">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.38)">credits</span>
+                <sc-for list="{{ credits }}" as="c" hint-placeholder-count="4">
+                  <div style="display:flex; justify-content:space-between; align-items:baseline; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06)">
+                    <span style="font-size:14px; color:rgba(255,255,255,0.45)">{{ c.role }}</span>
+                    <span style="font-size:14px; color:#fff">{{ c.name }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="position:relative; flex:none; padding:14px 16px 16px">
+              <div style="height:54px; border-radius:27px; display:flex; align-items:center; justify-content:center; gap:10px; background:rgba(var(--accent-rgb),0.18); border:1px solid rgba(var(--accent-rgb),0.4); box-shadow:0 0 26px rgba(var(--accent-rgb),0.28), inset 0 1px 0 rgba(255,255,255,0.24); backdrop-filter:blur(28px)"><span style="width:15px; height:15px; display:block; background:var(--accent-bright); mask:url('assets/icon/play.png') center/contain no-repeat; -webkit-mask:url('assets/icon/play.png') center/contain no-repeat"></span><span style="font-size:16px; font-weight:600; color:#fff">Play album</span></div>
+            </div>
+            <div style="position:relative; flex:none; height:5px; width:134px; margin:0 auto 9px; border-radius:3px; background:rgba(255,255,255,0.3)"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- SETTINGS ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">08</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Settings</span></div>
+        <div data-screen-label="Settings" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0e0e11; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:-20% -30% 65%; background:radial-gradient(55% 50% at 70% 10%, rgba(91,111,216,0.24), transparent 70%); filter:blur(46px)"></div>
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:none; padding:6px 20px 16px"><div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:34px; line-height:1.05; letter-spacing:-0.025em; color:#fff">Settings</div></div>
+
+            <div style="position:relative; flex:1; overflow:hidden; padding:0 16px; display:flex; flex-direction:column; gap:14px">
+              <!-- sync card, the one thing that matters -->
+              <div style="flex:none; border-radius:26px; padding:16px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.22), 0 14px 36px -10px rgba(0,0,0,0.6); backdrop-filter:blur(var(--glass-blur)) saturate(190%); position:relative; overflow:hidden">
+                <div style="position:absolute; inset:0; background:linear-gradient(132deg, rgba(255,255,255,0.1), transparent 44%); pointer-events:none"></div>
+                <div style="position:relative; display:flex; align-items:center; gap:12px; margin-bottom:14px">
+                  <div style="width:42px; height:42px; border-radius:21px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(52,211,153,0.16); border:1px solid rgba(52,211,153,0.36)"><span style="font-size:16px; color:#34D399; line-height:1">✓</span></div>
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px"><span style="font-size:16px; font-weight:600; color:#fff">Proton Drive</span><span style="font-size:13px; color:rgba(255,255,255,0.5)">Synced 4 min ago · 1,284 tracks</span></div>
+                </div>
+                <div style="position:relative; display:flex; gap:8px">
+                  <div style="flex:1; height:42px; border-radius:21px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#fff; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14)">Sync now</div>
+                  <div style="flex:1; height:42px; border-radius:21px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:rgba(255,255,255,0.7); background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1)">Manage</div>
+                </div>
+              </div>
+
+              <sc-for list="{{ settingsGroups }}" as="g" hint-placeholder-count="3">
+                <div style="flex:none; display:flex; flex-direction:column; gap:8px">
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.36); padding:0 6px">{{ g.title }}</span>
+                  <div style="border-radius:22px; overflow:hidden; background:rgba(255,255,255,0.045); border:1px solid rgba(255,255,255,0.1)">
+                    <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="3">
+                      <div style="height:54px; display:flex; align-items:center; gap:12px; padding:0 15px; border-bottom:1px solid rgba(255,255,255,0.05)">
+                        <span style="flex:1; font-size:16px; color:#fff">{{ r.label }}</span>
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:rgba(255,255,255,0.45)">{{ r.value }}</span>
+                        <sc-if value="{{ r.toggle }}" hint-placeholder-val="{{ false }}">
+                          <span style="width:46px; height:28px; border-radius:14px; flex:none; background:rgba(var(--accent-rgb),0.85); position:relative; display:block; box-shadow:0 0 12px rgba(var(--accent-rgb),0.45)"><span style="position:absolute; right:2px; top:2px; width:24px; height:24px; border-radius:12px; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,0.4)"></span></span>
+                        </sc-if>
+                        <sc-if value="{{ r.chevron }}" hint-placeholder-val="{{ false }}">
+                          <span style="font-size:18px; color:rgba(255,255,255,0.3); flex:none">›</span>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+
+              <div style="flex:none; display:flex; align-items:center; gap:10px; padding:2px 6px 0">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">v1.78 · AGPL-3.0 · no account, no telemetry</span>
+              </div>
+            </div>
+
+            <div style="position:absolute; left:12px; right:12px; bottom:12px">
+              <div style="height:62px; border-radius:26px; display:flex; padding:5px; gap:4px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%)">
+                <sc-for list="{{ tabsSettings }}" as="t" hint-placeholder-count="3">
+                  <div style="flex:1; border-radius:21px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:{{ t.bg }}; border:1px solid {{ t.bd }}">
+                    <span style="width:21px; height:21px; display:block; background:{{ t.fg }}; mask:url('{{ t.icon }}') center/contain no-repeat; -webkit-mask:url('{{ t.icon }}') center/contain no-repeat"></span>
+                    <span style="font-size:11px; font-weight:500; color:{{ t.fg }}">{{ t.label }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- ONBOARDING ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">09</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Onboarding — bring your own cloud</span></div>
+        <div data-screen-label="Onboarding" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+          <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#08080c; position:relative; display:flex; flex-direction:column">
+            <div style="position:absolute; inset:-30% -40% 20%; background:radial-gradient(50% 50% at 40% 25%, rgba(123,110,246,0.5), transparent 70%),radial-gradient(45% 40% at 75% 15%, rgba(61,214,200,0.34), transparent 70%),radial-gradient(40% 40% at 20% 45%, rgba(var(--accent-rgb),0.34), transparent 70%); filter:blur(52px); animation:vp-drift 20s ease-in-out infinite"></div>
+
+            <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+            <div style="position:relative; flex:1; padding:0 26px; display:flex; flex-direction:column; justify-content:center; gap:0">
+              <img src="assets/vapor-logo.png" alt="" style="width:92px; height:92px; display:block; margin-bottom:26px; filter:drop-shadow(0 12px 36px rgba(123,110,246,0.55))">
+              <div style="font-family:'Outfit',sans-serif; font-weight:200; font-size:46px; line-height:1.02; letter-spacing:-0.03em; color:#fff; margin-bottom:14px">Point Vapor<br>at your music.</div>
+              <div style="font-size:16px; line-height:1.6; color:rgba(255,255,255,0.58); margin-bottom:32px; text-wrap:pretty">Your files stay yours. Vapor reads them from a cloud drive you already own, analyzes them on this device, and never phones home.</div>
+
+              <div style="display:flex; flex-direction:column; gap:9px">
+                <sc-for list="{{ providers }}" as="p" hint-placeholder-count="4">
+                  <div style="height:62px; border-radius:22px; display:flex; align-items:center; gap:14px; padding:0 16px; background:{{ p.bg }}; border:1px solid {{ p.bd }}; box-shadow:inset 0 1px 0 rgba(255,255,255,0.2); backdrop-filter:blur(var(--glass-blur)) saturate(180%)">
+                    <span style="width:34px; height:34px; border-radius:11px; flex:none; display:flex; align-items:center; justify-content:center; font-family:'Outfit',sans-serif; font-weight:600; font-size:15px; color:#fff; background:{{ p.mark }}">{{ p.initial }}</span>
+                    <span style="flex:1; min-width:0; display:flex; flex-direction:column; gap:1px"><span style="font-size:16px; font-weight:500; color:#fff">{{ p.name }}</span><span style="font-size:13px; color:rgba(255,255,255,0.45)">{{ p.note }}</span></span>
+                    <span style="font-size:18px; color:rgba(255,255,255,0.3); flex:none">›</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="position:relative; flex:none; padding:14px 26px 0; display:flex; flex-direction:column; gap:12px">
+              <div style="display:flex; align-items:center; gap:10px"><span style="flex:1; height:1px; background:rgba(255,255,255,0.1); display:block"></span><span style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.3)">or</span><span style="flex:1; height:1px; background:rgba(255,255,255,0.1); display:block"></span></div>
+              <div style="height:54px; border-radius:27px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:rgba(255,255,255,0.85); background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12)">Use files on this phone</div>
+              <div style="font-size:13px; text-align:center; color:rgba(255,255,255,0.35)">You can add more sources later.</div>
+            </div>
+            <div style="position:relative; flex:none; height:5px; width:134px; margin:14px auto 9px; border-radius:3px; background:rgba(255,255,255,0.3)"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- EMPTY + LOADING ---------- -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:flex; align-items:center; gap:9px"><span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.28)">10</span><span style="font-size:13px; font-weight:500; color:rgba(255,255,255,0.72)">Empty &amp; loading</span></div>
+        <div style="display:flex; gap:24px">
+          <div data-screen-label="Empty" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+            <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0e0e11; position:relative; display:flex; flex-direction:column">
+              <div style="position:absolute; inset:-20% -30% 60%; background:radial-gradient(50% 50% at 50% 20%, rgba(91,111,216,0.2), transparent 70%); filter:blur(50px)"></div>
+              <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+              <div style="position:relative; flex:none; padding:6px 20px 0"><div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:34px; letter-spacing:-0.025em; color:#fff">Your library</div></div>
+              <div style="position:relative; flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0; padding:0 40px">
+                <div style="width:96px; height:96px; border-radius:32px; display:flex; align-items:center; justify-content:center; margin-bottom:26px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.11); backdrop-filter:blur(24px)"><span style="width:42px; height:42px; display:block; background:rgba(255,255,255,0.28); mask:url('assets/icon/song.png') center/contain no-repeat; -webkit-mask:url('assets/icon/song.png') center/contain no-repeat"></span></div>
+                <div style="font-family:'Outfit',sans-serif; font-weight:400; font-size:24px; letter-spacing:-0.02em; color:#fff; text-align:center; margin-bottom:10px">Nothing here yet</div>
+                <div style="font-size:15px; line-height:1.6; color:rgba(255,255,255,0.5); text-align:center; margin-bottom:26px; text-wrap:pretty">Connect a drive or drop files in, and Vapor will start listening for BPM, key and energy.</div>
+                <div style="height:50px; padding:0 26px; border-radius:25px; display:flex; align-items:center; gap:9px; background:rgba(var(--accent-rgb),0.18); border:1px solid rgba(var(--accent-rgb),0.4); box-shadow:0 0 26px rgba(var(--accent-rgb),0.26), inset 0 1px 0 rgba(255,255,255,0.22)"><span style="font-size:16px; font-weight:600; color:#fff">Add music</span></div>
+              </div>
+              <div style="position:absolute; left:12px; right:12px; bottom:12px">
+                <div style="height:62px; border-radius:26px; display:flex; padding:5px; gap:4px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%)">
+                  <sc-for list="{{ tabsLibrary }}" as="t" hint-placeholder-count="3">
+                    <div style="flex:1; border-radius:21px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:{{ t.bg }}; border:1px solid {{ t.bd }}">
+                      <span style="width:21px; height:21px; display:block; background:{{ t.fg }}; mask:url('{{ t.icon }}') center/contain no-repeat; -webkit-mask:url('{{ t.icon }}') center/contain no-repeat"></span>
+                      <span style="font-size:11px; font-weight:500; color:{{ t.fg }}">{{ t.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div data-screen-label="Loading" style="width:390px; height:844px; border-radius:46px; padding:11px; background:linear-gradient(155deg,#33333c 0%,#15151a 60%); box-shadow:0 50px 90px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.08)">
+            <div style="width:100%; height:100%; border-radius:35px; overflow:hidden; background:#0e0e11; position:relative; display:flex; flex-direction:column">
+              <div style="position:absolute; inset:-20% -30% 55%; background:radial-gradient(55% 50% at 30% 10%, rgba(123,110,246,0.26), transparent 70%); filter:blur(46px)"></div>
+              <div style="position:relative; flex:none; height:52px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 28px 8px; font-size:14px; font-weight:600; color:#fff"><span style="font-family:'JetBrains Mono',monospace; font-weight:500">9:41</span><span style="display:flex; gap:6px; align-items:center; opacity:0.9"><span style="width:16px; height:10px; border:1.5px solid #fff; border-radius:2px; display:block"></span><span style="width:22px; height:10px; border:1.5px solid rgba(255,255,255,0.5); border-radius:3px; padding:1.5px; display:block; box-sizing:border-box"><span style="display:block; width:74%; height:100%; background:#fff; border-radius:1px"></span></span></span></div>
+
+              <div style="position:relative; flex:none; padding:6px 20px 18px; display:flex; flex-direction:column; gap:3px">
+                <div style="font-family:'Outfit',sans-serif; font-weight:300; font-size:34px; letter-spacing:-0.025em; color:#fff">Your library</div>
+                <div style="display:flex; align-items:center; gap:8px"><span style="width:14px; height:14px; border-radius:50%; border:2px solid rgba(255,255,255,0.15); border-top-color:var(--accent-bright); display:block; animation:vp-spin 0.9s linear infinite"></span><span style="font-size:14px; color:rgba(255,255,255,0.55)">Listening to 214 new tracks · 34 done</span></div>
+              </div>
+
+              <div style="position:relative; flex:none; padding:0 20px 20px">
+                <div style="height:4px; border-radius:2px; background:rgba(255,255,255,0.09); overflow:hidden"><div style="width:16%; height:100%; border-radius:2px; background:linear-gradient(90deg,var(--iri-a),var(--iri-b))"></div></div>
+              </div>
+
+              <div style="position:relative; flex:1; overflow:hidden; padding:0 20px">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px 14px">
+                  <sc-for list="{{ skeletons }}" as="s" hint-placeholder-count="6">
+                    <div style="display:flex; flex-direction:column; gap:9px">
+                      <div style="width:100%; aspect-ratio:1/1; border-radius:18px; background:linear-gradient(90deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.04) 100%); background-size:200% 100%; animation:vp-shimmer 1.6s ease-in-out infinite"></div>
+                      <div style="display:flex; flex-direction:column; gap:6px; padding:0 2px">
+                        <div style="height:12px; border-radius:6px; width:{{ s.w1 }}; background:linear-gradient(90deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.04) 100%); background-size:200% 100%; animation:vp-shimmer 1.6s ease-in-out infinite"></div>
+                        <div style="height:10px; border-radius:5px; width:{{ s.w2 }}; background:linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 100%); background-size:200% 100%; animation:vp-shimmer 1.6s ease-in-out infinite"></div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+
+              <div style="position:absolute; left:12px; right:12px; bottom:12px">
+                <div style="height:62px; border-radius:26px; display:flex; padding:5px; gap:4px; background:rgba(255,255,255,var(--glass-a)); border:1px solid rgba(255,255,255,var(--rim)); box-shadow:inset 0 1px 0 rgba(255,255,255,0.24), 0 14px 40px -8px rgba(0,0,0,0.7); backdrop-filter:blur(var(--glass-blur)) saturate(200%)">
+                  <sc-for list="{{ tabsLibrary }}" as="t" hint-placeholder-count="3">
+                    <div style="flex:1; border-radius:21px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:{{ t.bg }}; border:1px solid {{ t.bd }}">
+                      <span style="width:21px; height:21px; display:block; background:{{ t.fg }}; mask:url('{{ t.icon }}') center/contain no-repeat; -webkit-mask:url('{{ t.icon }}') center/contain no-repeat"></span>
+                      <span style="font-size:11px; font-weight:500; color:{{ t.fg }}">{{ t.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SYSTEM NOTES ============ -->
+  <div style="display:flex; gap:24px; flex-wrap:wrap; max-width:1240px">
+    <div style="flex:1 1 380px; padding:24px 26px; border-radius:24px; background:rgba(255,255,255,0.035); border:1px solid rgba(255,255,255,0.09); display:flex; flex-direction:column; gap:14px">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.35)">What changed, and why</div>
+      <div style="display:flex; flex-direction:column; gap:11px; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.68)">
+        <div><span style="color:#fff; font-weight:500">Eight buttons became three.</span> Library · Vibe · Settings in a floating glass pill. Search moved into Library, Playlists became a filter chip, Queue became a sheet. Transport lives with the music, not with navigation.</div>
+        <div><span style="color:#fff; font-weight:500">The library is browsed by artwork.</span> Two-column tiles at 163px instead of 15 rows at 44px — six albums per screen you can recognise at a glance. Songs view keeps a list, but at 66px with 48px art.</div>
+        <div><span style="color:#fff; font-weight:500">Play is 84px and glowing.</span> Prev/next are 52px and quiet. One thing is obviously the primary action.</div>
+        <div><span style="color:#fff; font-weight:500">The AI DJ has a room.</span> On Now Playing it is a one-line chip: what's next, when, how. Tap it for the workbench — overlapping waveforms, phase lock, alternates. The DJ toggle is the progressive-disclosure switch for everything technical.</div>
+        <div><span style="color:#fff; font-weight:500">Glass earns its keep.</span> Only floating layers are glass: pill, mini player, sheets, blend card. Content sits on the void so text always clears 4.5:1.</div>
+      </div>
+    </div>
+    <div style="flex:1 1 300px; padding:24px 26px; border-radius:24px; background:rgba(255,255,255,0.035); border:1px solid rgba(255,255,255,0.09); display:flex; flex-direction:column; gap:16px">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.35)">Liquid glass recipe</div>
+      <div style="font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.9; color:rgba(255,255,255,0.6)">
+        <div>bg &nbsp;&nbsp;&nbsp;rgba(255,255,255,.065)</div>
+        <div>blur &nbsp;34px saturate(200%)</div>
+        <div>rim &nbsp;&nbsp;1px rgba(255,255,255,.15)</div>
+        <div>spec &nbsp;inset 0 1px 0 white .24</div>
+        <div>base &nbsp;inset 0 -1px 0 black .30</div>
+        <div>lift &nbsp;0 14px 40px -8px black .7</div>
+        <div>sheen 130° white .13 → 46%</div>
+      </div>
+      <div style="height:1px; background:rgba(255,255,255,0.08)"></div>
+      <div style="display:flex; flex-direction:column; gap:10px">
+        <div style="font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.35)">Colour discipline</div>
+        <div style="display:flex; align-items:center; gap:10px"><span style="width:26px; height:26px; border-radius:8px; background:#0A84FF; display:block; flex:none"></span><span style="font-size:13px; color:rgba(255,255,255,0.6)">System blue — every interactive state</span></div>
+        <div style="display:flex; align-items:center; gap:10px"><span style="width:26px; height:26px; border-radius:8px; background:conic-gradient(from 200deg,#7B6EF6,#3DD6C8,#0A84FF,#7B6EF6); display:block; flex:none"></span><span style="font-size:13px; color:rgba(255,255,255,0.6)">Iridescent — the AI DJ, and nothing else</span></div>
+        <div style="display:flex; align-items:center; gap:10px"><span style="width:26px; height:26px; border-radius:8px; background:#34D399; display:block; flex:none"></span><span style="font-size:13px; color:rgba(255,255,255,0.6)">Green — analysis done, phase locked</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#0A84FF&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#0A84FF&quot;,&quot;#7B6EF6&quot;,&quot;#3DD6C8&quot;,&quot;#FF6B4A&quot;],&quot;section&quot;:&quot;Theme&quot;},&quot;glass&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;Standard&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;Restrained&quot;,&quot;Standard&quot;,&quot;Maximal&quot;],&quot;section&quot;:&quot;Theme&quot;},&quot;djMode&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behaviour&quot;}}">
+class Component extends DCLogic {
+  componentDidMount() { this._applyTheme(); }
+  componentDidUpdate() { this._applyTheme(); }
+
+  _applyTheme() {
+    const r = document.documentElement.style;
+    const accent = this.props.accent || '#0A84FF';
+    r.setProperty('--accent', accent);
+    r.setProperty('--accent-bright', this._lift(accent, 0.26));
+    r.setProperty('--accent-dim', this._lift(accent, -0.2));
+    r.setProperty('--accent-rgb', this._rgb(accent));
+    const g = this.props.glass || 'Standard';
+    const map = {
+      Restrained: {a:0.040, blur:'16px', heavy:'22px', rim:0.09},
+      Standard:   {a:0.070, blur:'34px', heavy:'40px', rim:0.15},
+      Maximal:    {a:0.115, blur:'54px', heavy:'64px', rim:0.30},
+    }[g] || {a:0.07, blur:'34px', heavy:'40px', rim:0.15};
+    r.setProperty('--glass-a', String(map.a));
+    r.setProperty('--glass-blur', map.blur);
+    r.setProperty('--glass-blur-heavy', map.heavy);
+    r.setProperty('--rim', String(map.rim));
+  }
+
+  _rgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+    if (!m) return '10,132,255';
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255].join(',');
+  }
+
+  _lift(hex, amt) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v =>
+      Math.max(0, Math.min(255, Math.round(amt >= 0 ? v + (255 - v) * amt : v * (1 + amt))))
+    );
+    return '#' + ch.map(v => v.toString(16).padStart(2, '0')).join('');
+  }
+
+  _tabs(active) {
+    const dj = this.props.djMode !== false;
+    return [
+      {key:'library',  label:'Library',  icon:'assets/icon/library.png'},
+      {key:'vibe',     label:dj ? 'Vibe' : 'Shuffle', icon:'assets/icon/vibe.png'},
+      {key:'settings', label:'Settings', icon:'assets/icon/settings.png'},
+    ].map(t => ({
+      ...t,
+      fg: t.key === active ? 'var(--accent-bright)' : 'rgba(255,255,255,0.42)',
+      bg: t.key === active ? 'rgba(var(--accent-rgb),0.16)' : 'transparent',
+      bd: t.key === active ? 'rgba(var(--accent-rgb),0.3)'  : 'transparent',
+    }));
+  }
+
+  _chips(list, active) {
+    return list.map(label => ({
+      label,
+      fg: label === active ? '#fff' : 'rgba(255,255,255,0.6)',
+      bg: label === active ? 'rgba(255,255,255,0.13)' : 'rgba(255,255,255,0.045)',
+      bd: label === active ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.09)',
+    }));
+  }
+
+  renderVals() {
+    const dj = this.props.djMode !== false;
+    const art = (a, b, c) => `linear-gradient(150deg,${a},${b} 55%,${c})`;
+    const arts = {
+      blue:   art('#5b6fd8', '#2a3f7a', '#101a35'),
+      amber:  art('#d8a05b', '#7a4f2a', '#301a10'),
+      teal:   art('#4fbfae', '#1f6f66', '#0b2a28'),
+      violet: art('#8a6fd8', '#4a2f7a', '#1a1030'),
+      rose:   art('#d86f8a', '#7a2f4a', '#301018'),
+      slate:  art('#7d8595', '#3d4450', '#171a20'),
+      moss:   art('#8fb06b', '#4c6238', '#1a2412'),
+      ink:    art('#5d6fa8', '#2c3550', '#101420'),
+    };
+
+    const npWave = Array.from({length: 54}, (_, i) => {
+      const env = Math.sin((i / 53) * Math.PI) * 0.5 + 0.5;
+      const v = (0.24 + Math.abs(Math.sin(i * 0.72) * Math.cos(i * 0.29)) * 0.76) * env;
+      const played = i / 53 < 0.4;
+      return {
+        h: Math.max(4, v * 44).toFixed(1) + 'px',
+        c: played ? 'var(--accent-bright)' : 'rgba(255,255,255,0.24)',
+      };
+    });
+
+    const blendWaveA = Array.from({length: 48}, (_, i) => {
+      const v = 0.2 + Math.abs(Math.sin(i * 0.61) * Math.cos(i * 0.23)) * 0.8;
+      const tail = i > 25 ? 1 - (i - 25) / 30 : 1;
+      return {
+        h: Math.max(3, v * tail * 62).toFixed(1) + 'px',
+        c: i / 47 < 0.38 ? 'rgba(255,255,255,0.66)' : 'rgba(255,255,255,0.3)',
+      };
+    });
+    const blendWaveB = Array.from({length: 22}, (_, i) => {
+      const v = 0.18 + Math.abs(Math.sin(i * 0.83 + 1.4) * Math.cos(i * 0.31)) * 0.82;
+      const ramp = Math.min(1, i / 8);
+      return {h: Math.max(3, v * ramp * 58).toFixed(1) + 'px'};
+    });
+
+    return {
+      npWave, blendWaveA, blendWaveB,
+      tabsLibrary: this._tabs('library'),
+      tabsVibe: this._tabs('vibe'),
+      tabsSettings: this._tabs('settings'),
+      libTabs: this._chips(['Albums', 'Songs', 'Artists', 'Playlists'], 'Albums'),
+      libTabs2: this._chips(['Albums', 'Songs', 'Artists', 'Playlists'], 'Songs'),
+
+      albums: [
+        {title:'Tidal Register', artist:'Aeriform',    badge:'FLAC · 9A',   art:arts.blue},
+        {title:'Tidewater',      artist:'Halcyon Bay', badge:'FLAC · 8A',   art:arts.amber},
+        {title:'Understudy',     artist:'Kessel Rowe', badge:'FLAC · 11A',  art:arts.teal},
+        {title:'Pale Machine',   artist:'Ondawave',    badge:'ALAC · 2A',   art:arts.violet},
+        {title:'Second Sun',     artist:'Aeriform',    badge:'FLAC · 4A',   art:arts.rose},
+        {title:'Longwater',      artist:'Mirrorline',  badge:'FLAC · 6A',   art:arts.moss},
+      ],
+
+      songs: [
+        {title:'Coastal Drift',       artist:'Aeriform',      right: dj ? '122 · 9A'  : '4:18', art:arts.blue,   rowBg:'rgba(var(--accent-rgb),0.1)', titleFg:'var(--accent-bright)'},
+        {title:'Salt Flats',          artist:'Halcyon Bay',   right: dj ? '128 · 8A'  : '6:02', art:arts.amber,  rowBg:'transparent', titleFg:'#fff'},
+        {title:'Vermilion Hours',     artist:'Kessel Rowe',   right: dj ? '138 · 11A' : '5:11', art:arts.teal,   rowBg:'transparent', titleFg:'#fff'},
+        {title:'Pale Machine',        artist:'Ondawave',      right: dj ? '96 · 2A'   : '3:47', art:arts.violet, rowBg:'transparent', titleFg:'#fff'},
+        {title:'Low Tide, High Beam', artist:'Halcyon Bay',   right: dj ? '128 · 8B'  : '5:34', art:arts.amber,  rowBg:'transparent', titleFg:'#fff'},
+        {title:'Glasshouse',          artist:'Aeriform',      right: dj ? '124 · 9A'  : '4:52', art:arts.blue,   rowBg:'transparent', titleFg:'#fff'},
+        {title:'Static Bloom',        artist:'Kessel Rowe',   right: dj ? '142 · 6A'  : '6:29', art:arts.teal,   rowBg:'transparent', titleFg:'#fff'},
+        {title:'Longwater',           artist:'Mirrorline',    right: dj ? '118 · 6A'  : '7:03', art:arts.moss,   rowBg:'transparent', titleFg:'#fff'},
+      ],
+
+      blendStats: [
+        {k:'bpm',    v:'122 → 128',  c:'#fff'},
+        {k:'key',    v:'9A → 8A',    c:'#34D399'},
+        {k:'shift',  v:'+1.4%',      c:'rgba(255,255,255,0.75)'},
+        {k:'gain',   v:'−2.1 LU',    c:'rgba(255,255,255,0.75)'},
+      ],
+
+      alternates: [
+        {title:'Vermilion Hours', bpm:'138', key:'11A', fx:'Filter Sweep',  art:arts.teal,   tag:'FRESH',  tagFg:'var(--accent-bright)', tagBg:'rgba(var(--accent-rgb),0.14)',  tagBd:'rgba(var(--accent-rgb),0.34)'},
+        {title:'Longwater',       bpm:'118', key:'6A',  fx:'Bass Swap',     art:arts.moss,   tag:'MATCH',  tagFg:'#34D399',              tagBg:'rgba(52,211,153,0.14)',  tagBd:'rgba(52,211,153,0.34)'},
+        {title:'Pale Machine',    bpm:'96',  key:'2A',  fx:'Reverb Freeze', art:arts.violet, tag:'SWITCH', tagFg:'#FBBF24',              tagBg:'rgba(251,191,36,0.14)',  tagBd:'rgba(251,191,36,0.34)'},
+      ],
+
+      searchTracks: [
+        {title:'Salt Flats (Reprise)', artist:'Halcyon Bay', dur:'2:14', art:arts.amber},
+        {title:'Saltwater Kid',        artist:'Mirrorline',  dur:'4:31', art:arts.moss},
+        {title:'Basalt',               artist:'Ondawave',    dur:'5:08', art:arts.violet},
+        {title:'Asphalt Sunday',       artist:'Kessel Rowe', dur:'3:56', art:arts.teal},
+      ],
+      searchChips: [
+        {label:'Halcyon Bay', icon:'assets/icon/artist.png'},
+        {label:'Tidewater',   icon:'assets/icon/song.png'},
+        {label:'Late Ferry',  icon:'assets/icon/playlist.png'},
+      ],
+
+      keyboard: [
+        {keys:'qwertyuiop'.split('').map(c => ({label:c, flex:1, bg:'rgba(255,255,255,0.22)'}))},
+        {keys:'asdfghjkl'.split('').map(c => ({label:c, flex:1, bg:'rgba(255,255,255,0.22)'}))},
+        {keys:[{label:'⇧', flex:1.5, bg:'rgba(255,255,255,0.1)'}]
+          .concat('zxcvbnm'.split('').map(c => ({label:c, flex:1, bg:'rgba(255,255,255,0.22)'})))
+          .concat([{label:'⌫', flex:1.5, bg:'rgba(255,255,255,0.1)'}])},
+      ],
+
+      queue: [
+        {title:'Salt Flats',          artist:'Halcyon Bay', art:arts.amber,  fx:'BASS SWAP',  fxFg:'#34D399',              fxBg:'rgba(52,211,153,0.14)', bg:'rgba(255,255,255,0.06)'},
+        {title:'Low Tide, High Beam', artist:'Halcyon Bay', art:arts.amber,  fx:'BLEND',      fxFg:'rgba(255,255,255,0.5)', fxBg:'rgba(255,255,255,0.06)', bg:'transparent'},
+        {title:'Longwater',           artist:'Mirrorline',  art:arts.moss,   fx:'FILTER',     fxFg:'rgba(255,255,255,0.5)', fxBg:'rgba(255,255,255,0.06)', bg:'transparent'},
+        {title:'Vermilion Hours',     artist:'Kessel Rowe', art:arts.teal,   fx:'ECHO OUT',   fxFg:'rgba(255,255,255,0.5)', fxBg:'rgba(255,255,255,0.06)', bg:'transparent'},
+        {title:'Static Bloom',        artist:'Kessel Rowe', art:arts.teal,   fx:'BLEND',      fxFg:'rgba(255,255,255,0.5)', fxBg:'rgba(255,255,255,0.06)', bg:'transparent'},
+        {title:'Pale Machine',        artist:'Ondawave',    art:arts.violet, fx:'REVERB',     fxFg:'rgba(255,255,255,0.5)', fxBg:'rgba(255,255,255,0.06)', bg:'transparent'},
+      ],
+
+      linerStats: dj
+        ? [{k:'bpm',v:'128'},{k:'key',v:'8A'},{k:'energy',v:'64%'},{k:'lufs',v:'−9.2'},{k:'format',v:'FLAC'},{k:'rate',v:'44.1'}]
+        : [{k:'length',v:'6:02'},{k:'year',v:'2019'},{k:'plays',v:'41'},{k:'format',v:'FLAC'},{k:'size',v:'42MB'},{k:'added',v:'Mar'}],
+
+      credits: [
+        {role:'Written by',   name:'J. Ferrow'},
+        {role:'Produced by',  name:'Halcyon Bay'},
+        {role:'Engineered by',name:'M. Osei'},
+        {role:'Mastered at',  name:'Longwater'},
+      ],
+
+      settingsGroups: [
+        {title:'Sound', rows:[
+          {label:'Gapless blending', value:'', toggle:true,  chevron:false},
+          {label:'Harmonic shuffle', value:'', toggle:true,  chevron:false},
+          {label:'Normalise to',     value:'−14 LUFS', toggle:false, chevron:true},
+        ]},
+        {title:'Library', rows:[
+          {label:'Analyse on import', value:'', toggle:true, chevron:false},
+          {label:'Offline cache',     value:'8.2 GB', toggle:false, chevron:true},
+          {label:'Local network sync',value:'', toggle:true, chevron:false},
+        ]},
+        {title:'Appearance', rows:[
+          {label:'Theme',            value:'Vapor Dark', toggle:false, chevron:true},
+          {label:'Reduce glass',     value:'', toggle:false, chevron:true},
+          {label:'Show DJ readouts', value:'', toggle:true,  chevron:false},
+        ]},
+      ],
+
+      providers: [
+        {name:'Proton Drive',  note:'End-to-end encrypted', initial:'P', mark:'linear-gradient(150deg,#8a6fd8,#4a2f7a)', bg:'rgba(255,255,255,0.075)', bd:'rgba(255,255,255,0.16)'},
+        {name:'WebDAV',        note:'Any server, any NAS',  initial:'W', mark:'linear-gradient(150deg,#5b6fd8,#2a3f7a)', bg:'rgba(255,255,255,0.055)', bd:'rgba(255,255,255,0.12)'},
+        {name:'Google Drive',  note:'Bring your own folder',initial:'G', mark:'linear-gradient(150deg,#4fbfae,#1f6f66)', bg:'rgba(255,255,255,0.055)', bd:'rgba(255,255,255,0.12)'},
+        {name:'Dropbox',       note:'Bring your own folder',initial:'D', mark:'linear-gradient(150deg,#5d6fa8,#2c3550)', bg:'rgba(255,255,255,0.055)', bd:'rgba(255,255,255,0.12)'},
+      ],
+
+      skeletons: [
+        {w1:'78%', w2:'52%'}, {w1:'62%', w2:'44%'},
+        {w1:'85%', w2:'58%'}, {w1:'70%', w2:'48%'},
+        {w1:'56%', w2:'40%'}, {w1:'80%', w2:'54%'},
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

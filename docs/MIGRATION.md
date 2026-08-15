@@ -640,6 +640,14 @@ replaced rather than ported, so it waits on the redesign.
 
 ### Phase 4 — The new shell
 
+**The design has landed** — see `design/README.md`. Twelve screens, light
+theme ("Daylight"), plus a generative logo that is a dependency-free custom
+element rather than an image. Tokens are extracted to `design/tokens.css`.
+
+The logo exposes `state` (idle/playing/blending/thinking) and `energy`, which
+map onto real engine state: `thinking` during pathfinding, `blending` during a
+transition, `energy` from the deck level. Wire it as a readout, not decoration.
+
 - Tauri 2 app, TypeScript UI, Claude Design redesign.
 - Web build via wasm + AudioWorklet + OPFS.
 - Feature parity checklist against the current app, then cut over.
@@ -767,7 +775,8 @@ it, match it.
 3. **Time-stretch library.** WSOLA is in place and works; `signalsmith-stretch`
    vs Rubber Band is a quality question, so it falls under *later*.
 4. **UI framework** inside Tauri. Not yet chosen; defer until phase 4 so the
-   redesign informs it.
+   redesign informs it. The design is now in `design/` — it is plain HTML and
+   CSS with one custom element, so it does not force a framework either way.
 
 ---
 
