@@ -1,0 +1,202 @@
+/* Queue. Layout only. */
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  min-height: 0;
+}
+
+.queue__head {
+  flex: none;
+}
+
+.queue__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-display);
+  letter-spacing: var(--ls-display);
+  color: var(--ink);
+}
+
+.queue__sub {
+  margin: 4px 0 0;
+}
+
+.queue__now {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border-radius: var(--r-lg);
+  flex: none;
+}
+
+.queue__now-art {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border-radius: var(--r-md);
+  background: linear-gradient(150deg, #8fadf0, #3a58a8 52%, #16224a);
+}
+
+.queue__now-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue__now-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+}
+
+.queue__now-artist {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.queue__heading {
+  margin: 6px 0 0;
+  flex: none;
+}
+
+.queue__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.queue__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-md);
+  padding-right: 6px;
+}
+
+.queue__item:hover {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.queue__item--dragging {
+  opacity: 0.4;
+}
+
+/* The drop target, marked on its top edge so the line sits where the row will
+   land rather than filling the row it will displace. */
+.queue__item--over {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.queue__grip {
+  flex: none;
+  padding: 0 4px 0 8px;
+  cursor: grab;
+  color: var(--ink-4);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.queue__grip:active {
+  cursor: grabbing;
+}
+
+.queue__row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.queue__row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue__row-title,
+.queue__row-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue__row-title {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.queue__row-artist {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.queue__row-facts {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.queue__actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  /* Revealed on hover or focus so a queue at rest is a list of songs rather
+     than a grid of buttons — but never hidden from the keyboard. */
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.queue__item:hover .queue__actions,
+.queue__actions:focus-within {
+  opacity: 1;
+}
+
+.queue__action {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.queue__action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+}
+
+.queue__action:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.queue__action--remove:hover {
+  color: #b3261e;
+}

@@ -197,6 +197,62 @@ impl Queue {
         self.history_pos = Some(self.history.len() - 1);
     }
 
+    /// Drop a track from the queue.
+    ///
+    /// Removing the track that is playing does **not** stop it: the audio keeps
+    /// running and `current` slides onto whatever took its place, so the effect
+    /// is "do not come back to this", not "stop". Stopping is a separate thing a
+    /// person asks for separately.
+    ///
+    /// Returns whether anything was removed.
+    pub fn remove(&mut self, href: &str) -> bool {
+        let Some(index) = self.tracks.iter().position(|t| t == href) else {
+            return false;
+        };
+        self.tracks.remove(index);
+
+        // A one-shot "play this next" pointing at a track that no longer exists
+        // would silently do nothing at the worst possible moment.
+        if self.override_next.as_deref() == Some(href) {
+            self.override_next = None;
+        }
+
+        self.current = match self.current {
+            _ if self.tracks.is_empty() => None,
+            // Everything after the hole shifts down, including the playhead.
+            Some(c) if c > index => Some(c - 1),
+            // The playing track went. `current` now names its successor, which
+            // is the next thing anyone would expect to hear.
+            Some(c) if c == index => Some(c.min(self.tracks.len() - 1)),
+            other => other,
+        };
+        true
+    }
+
+    /// Reorder the queue, moving the track at `from` to sit at `to`.
+    ///
+    /// The playhead follows the *track*, not the index — dragging the song you
+    /// are listening to somewhere else must not change what is playing, and
+    /// dragging another song past it must not either.
+    pub fn move_track(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.tracks.len() || to >= self.tracks.len() || from == to {
+            return false;
+        }
+
+        // Remembered by identity and looked up again afterwards, which is
+        // shorter and far harder to get wrong than reasoning about which of the
+        // four index cases shifts the playhead and by how much.
+        let playing = self.current.map(|c| self.tracks[c].clone());
+
+        let track = self.tracks.remove(from);
+        self.tracks.insert(to, track);
+
+        if let Some(href) = playing {
+            self.current = self.tracks.iter().position(|t| *t == href);
+        }
+        true
+    }
+
     /// Up to three tracks to prefetch and analyse: now playing, next, and the
     /// one after.
     pub fn lookahead(&self, smart_choice: Option<&str>) -> Vec<String> {
@@ -346,6 +402,113 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), ahead.len(), "duplicates in {ahead:?}");
+    }
+
+    // ---- Removing -------------------------------------------------------
+
+    #[test]
+    fn removing_a_later_track_leaves_the_playhead_alone() {
+        let mut q = queue();
+        q.next(None); // b
+        assert!(q.remove("d"));
+        assert_eq!(q.current(), Some("b"));
+        assert_eq!(q.tracks(), &["a", "b", "c"]);
+    }
+
+    /// Everything after the hole shifts down, and the playhead has to shift
+    /// with it or it starts naming a different song.
+    #[test]
+    fn removing_an_earlier_track_keeps_the_same_song_playing() {
+        let mut q = queue();
+        q.next(None); // b
+        q.next(None); // c
+        assert!(q.remove("a"));
+        assert_eq!(q.current(), Some("c"), "the playhead followed the index");
+    }
+
+    /// Removing what is playing means "do not come back to this", not "stop".
+    #[test]
+    fn removing_the_playing_track_moves_to_its_successor() {
+        let mut q = queue();
+        q.next(None); // b
+        assert!(q.remove("b"));
+        assert_eq!(q.current(), Some("c"));
+        assert_eq!(q.tracks(), &["a", "c", "d"]);
+    }
+
+    /// The last track is the awkward one: there is no successor to slide onto.
+    #[test]
+    fn removing_the_last_track_while_it_plays_falls_back_to_the_new_end() {
+        let mut q = Queue::new();
+        q.set_tracks(vec!["a".into(), "b".into()], Some("b"));
+        assert!(q.remove("b"));
+        assert_eq!(q.current(), Some("a"));
+    }
+
+    #[test]
+    fn removing_the_only_track_empties_the_queue() {
+        let mut q = Queue::new();
+        q.set_tracks(vec!["a".into()], Some("a"));
+        assert!(q.remove("a"));
+        assert!(q.is_empty());
+        assert_eq!(q.current(), None);
+        assert_eq!(q.peek_next(None), None);
+    }
+
+    /// A one-shot override pointing at a removed track would silently do
+    /// nothing at the moment it was supposed to matter.
+    #[test]
+    fn removing_a_track_clears_an_override_pointing_at_it() {
+        let mut q = queue();
+        q.set_next("d");
+        assert!(q.remove("d"));
+        assert!(q.pending_next().is_none());
+        assert_eq!(q.peek_next(None), Some("b"), "normal ordering resumed");
+    }
+
+    #[test]
+    fn removing_something_absent_changes_nothing() {
+        let mut q = queue();
+        assert!(!q.remove("zzz"));
+        assert_eq!(q.tracks().len(), 4);
+    }
+
+    // ---- Reordering -----------------------------------------------------
+
+    #[test]
+    fn moving_a_track_reorders_the_queue() {
+        let mut q = queue();
+        assert!(q.move_track(3, 0));
+        assert_eq!(q.tracks(), &["d", "a", "b", "c"]);
+    }
+
+    /// Dragging the song you are listening to must not change what is playing.
+    #[test]
+    fn moving_the_playing_track_keeps_it_playing() {
+        let mut q = queue();
+        q.next(None); // b
+        assert!(q.move_track(1, 3));
+        assert_eq!(q.current(), Some("b"));
+        assert_eq!(q.tracks(), &["a", "c", "d", "b"]);
+    }
+
+    /// Nor must dragging a different song past it.
+    #[test]
+    fn moving_another_track_past_the_playhead_keeps_it_playing() {
+        let mut q = queue();
+        q.next(None); // b
+        assert!(q.move_track(3, 0), "move d to the front, over b");
+        assert_eq!(q.current(), Some("b"));
+        assert_eq!(q.tracks(), &["d", "a", "b", "c"]);
+    }
+
+    #[test]
+    fn an_out_of_range_or_pointless_move_is_refused() {
+        let mut q = queue();
+        assert!(!q.move_track(0, 0), "a move to itself");
+        assert!(!q.move_track(9, 0));
+        assert!(!q.move_track(0, 9));
+        assert_eq!(q.tracks(), &["a", "b", "c", "d"]);
     }
 
     #[test]

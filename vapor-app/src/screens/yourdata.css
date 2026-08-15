@@ -1,0 +1,187 @@
+/* Your Data. Layout only. */
+
+.data {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding-bottom: 16px;
+}
+
+.data__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-display);
+  letter-spacing: var(--ls-display);
+  color: var(--ink);
+}
+
+.data__lede {
+  margin: 6px 0 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.data__card {
+  padding: 18px 20px;
+  border-radius: var(--r-xl);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.data__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.data__total {
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+
+.data__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.data__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-top: 1px solid var(--glass-rim);
+}
+
+.data__row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.data__row-label {
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+/* The path is the evidence, so it wraps rather than truncating — a "…" in the
+   middle of a path proves nothing. */
+.data__row-path {
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+  word-break: break-all;
+  user-select: text;
+}
+
+.data__row-size {
+  flex: none;
+  font-size: var(--fs-label);
+  color: var(--ink-2);
+}
+
+.data__meter {
+  height: 6px;
+  border-radius: var(--r-hair);
+  background: rgba(var(--accent-rgb), 0.15);
+  overflow: hidden;
+}
+
+.data__meter-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-hair);
+}
+
+.data__nevers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.data__never {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.data__never-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  border-radius: var(--r-pill);
+}
+
+.data__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.data__button {
+  padding: 9px 16px;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.data__button:hover {
+  background: #fff;
+}
+
+.data__button--danger {
+  color: #b3261e;
+  border-color: rgba(179, 38, 30, 0.3);
+}
+
+.data__note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.data__footnote {
+  margin: 0;
+  font-size: var(--fs-micro);
+  color: var(--ink-4);
+  word-break: break-all;
+  user-select: text;
+}
+
+.data__error {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: rgba(179, 38, 30, 0.08);
+  border: 1px solid rgba(179, 38, 30, 0.22);
+  color: #8c1d18;
+  font-size: var(--fs-sm);
+}

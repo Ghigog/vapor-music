@@ -315,3 +315,40 @@
   border: 1px solid var(--glass-rim);
   cursor: pointer;
 }
+
+/* ---- Liner notes affordance ------------------------------------------ */
+
+/*
+ * Absolutely positioned over the artwork rather than added as a sixth grid
+ * child: the row grid and the header grid share one column definition, so an
+ * extra cell in the row would silently push every column out of step with its
+ * own heading. Out of flow, it cannot.
+ *
+ * The artwork is decorative, so covering it on hover costs nothing.
+ */
+.songrow__info {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  background: rgba(20, 22, 26, 0.55);
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: var(--fs-md);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+/* Never hidden from the keyboard, only from a resting pointer. */
+.songrow:hover .songrow__info,
+.songrow__info:focus-visible {
+  opacity: 1;
+}

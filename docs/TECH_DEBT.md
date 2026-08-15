@@ -1,6 +1,6 @@
 # Vapor Music — Tech debt
 
-**Last reviewed:** 2026-08-15 (TD-01, TD-03, TD-08, TD-10, TD-25, TD-36, TD-37, TD-38 closed)
+**Last reviewed:** 2026-08-15 (TD-01, TD-03, TD-08, TD-10, TD-25, TD-30, TD-36, TD-37, TD-38 closed)
 
 Known shortcuts, deferred work and things that are wrong but not yet worth
 fixing. Kept separate from `docs/MIGRATION.md`, which tracks the *plan*; this
@@ -54,13 +54,16 @@ Things that would be a defect if the app shipped today.
 
 | ID | Item | Notes |
 |---|---|---|
-| TD-30 | **Five screens of twelve.** Onboarding, Library, Songs, Now Playing and Settings, plus the transport bar. Missing: Search, Queue, Vibe DJ, Liner Notes, Your Data, Loading, Empty. Settings carries Your Data's content as a card. | — |
+| ~~TD-30~~ | ~~Two screens of twelve.~~ **Done** — all twelve exist: Onboarding, Library, Songs, Search, Now Playing, Queue, Vibe DJ, Liner Notes, Your Data, Settings, plus Loading and Empty as shared components rather than routes, since they are states every screen falls into. | — |
 | ~~TD-36~~ | ~~The transport is a bar, not the Now Playing screen.~~ **Done** — Now Playing has the artwork, the real waveform from analysis, click-to-seek, and the mark driven as an actual readout: `blending` while a mix is armed, `energy` from the measured output level. Artwork is absent (no cover art anywhere yet) and the design's ♥ and playlist header are not built. | `NowPlaying.tsx` |
 | ~~TD-37~~ | ~~Nine backend commands had no frontend binding.~~ **Done** — `tests/command_bindings.rs` reads the `generate_handler!` list and `core.ts` and fails if a command cannot be called. Verified to fail by removing a binding. It cannot check argument shapes; that would need real type extraction. | `core.ts` |
 | ~~TD-38~~ | ~~Changing the username orphans the old keychain entry.~~ **Done** — `set_remote_config` deletes the previous entry when the name changes. Best effort: a keychain that will not release an entry is not a reason to refuse the rename. | `webdav.rs` |
+| TD-41b | **Liner Notes has no written notes or credits.** The design shows both; nothing reads embedded tags and there is nowhere to type them, so the screen shows what the app genuinely derived instead. Needs `lofty` or the OpenSubsonic client. | TD-39, MIG-030 |
+| TD-42b | **Energy is estimated from loudness.** The pathfinder wants a 0–1 energy axis and analysis produces LUFS, so `energy_from_lufs` maps one onto the other. A loud ballad and a quiet banger are not the same thing and this cannot tell them apart. Real energy is spectral. | `lib.rs` |
+| TD-43b | **Vibe DJ conducts from what is analysed, silently.** Tracks without a tempo are excluded from the path — correct, since the cost model cannot place them — but the screen reports only how many *were* considered, not how many were skipped. | `Vibe.tsx` |
 | TD-39 | **No cover art anywhere.** Now Playing and the Songs rows draw a gradient placeholder. WebDAV has no art API, so this needs either embedded-tag extraction (`lofty`) or the OpenSubsonic client, which serves it over a documented endpoint. | MIG-030 |
 | TD-40b | **Onboarding's second path does not exist.** "Use files on this device" is shown disabled: a local-folder library needs a file picker, a watcher and a filesystem scanner, none of which are written. Shown rather than hidden so the intended choice is visible and honest. | — |
-| TD-31 | **No drag and drop.** The Godot build supported dragging tracks onto playlists and reordering within one. `dnd-kit` is the intended answer; nothing is wired. | — |
+| ~~TD-31~~ | ~~No drag and drop.~~ **Partly done** — the Queue reorders by dragging, using the platform's own HTML5 drag events rather than `dnd-kit`; explicit up/down buttons cover the keyboard, which a pointer-only implementation would have needed anyway. Dragging tracks *onto* playlists is still not wired. | — |
 | TD-32 | **Songs column header layout is a compromise.** Artist shares a grid cell with the title, so its header is hidden rather than aligned. Works, but the header row and the data row agree by convention rather than by construction. | `songs.css` |
 | TD-33 | **No keyboard navigation.** Rows are click-only; a table this size needs arrow keys, and the Godot version did not have this either. | — |
 | TD-34 | **No error surface.** IPC failures render as a raw string. Fine for a scaffold, wrong for a person. | — |

@@ -1,0 +1,169 @@
+/* Liner Notes. Layout only. */
+
+.liner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  padding-bottom: 16px;
+}
+
+.liner__back {
+  align-self: flex-start;
+  padding: 6px 12px 6px 8px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.liner__back:hover {
+  color: var(--ink);
+  background: #fff;
+}
+
+.liner__head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.liner__art {
+  width: 108px;
+  height: 108px;
+  flex: none;
+  border-radius: var(--r-lg);
+  background: linear-gradient(150deg, #8fadf0, #3a58a8 52%, #16224a);
+  box-shadow: var(--shadow-sm);
+}
+
+.liner__names {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.liner__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-xl);
+  letter-spacing: var(--ls-tight);
+  color: var(--ink);
+}
+
+.liner__artist {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--ink-2);
+}
+
+.liner__album {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+.liner__where {
+  margin: 4px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Green means it is here. A remote track gets a neutral dot rather than a
+   green one, because the claim would not be true. */
+.liner__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sov);
+  flex: none;
+}
+
+.liner__dot--remote {
+  background: var(--ink-4);
+}
+
+.liner__wave {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 40px;
+}
+
+.liner__bar {
+  flex: 1;
+  border-radius: 2px;
+  background: rgba(var(--accent-rgb), 0.3);
+  min-height: 2px;
+}
+
+.liner__card {
+  padding: 18px 20px;
+  border-radius: var(--r-xl);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.liner__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 14px 18px;
+  margin: 0;
+}
+
+.liner__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.liner__stat dd {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* A hand-corrected tempo says so here too, matching the table's accent. */
+.liner__stat-note {
+  font-family: var(--font-ui);
+  font-size: var(--fs-micro);
+  color: var(--accent);
+}
+
+.liner__note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.liner__path {
+  margin: 0;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  word-break: break-all;
+  user-select: text;
+}
+
+.liner__error {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: rgba(179, 38, 30, 0.08);
+  border: 1px solid rgba(179, 38, 30, 0.22);
+  color: #8c1d18;
+  font-size: var(--fs-sm);
+}

@@ -226,6 +226,145 @@ export function setVolume(volume: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Queue
+// ---------------------------------------------------------------------------
+
+export interface QueueEntry {
+  href: string;
+  title: string;
+  artist: string;
+  /** 0 when unknown — not "0 BPM". */
+  bpm: number;
+  key: string;
+  current: boolean;
+}
+
+export interface QueueView {
+  entries: QueueEntry[];
+  current: number | null;
+  /** Seconds still to come. Unanalysed tracks contribute nothing rather than
+   *  a guess, so this is a floor, not an estimate. */
+  remainingSecs: number;
+}
+
+export function queueView(): Promise<QueueView> {
+  return invoke<QueueView>("queue_view");
+}
+
+export function removeFromQueue(href: string): Promise<boolean> {
+  return invoke<boolean>("remove_from_queue", { href });
+}
+
+/** Reorder by index. Returns false for an out-of-range or pointless move. */
+export function moveInQueue(from: number, to: number): Promise<boolean> {
+  return invoke<boolean>("move_in_queue", { from, to });
+}
+
+/** Put a track next without disturbing the rest of the order. */
+export function playNext(href: string): Promise<boolean> {
+  return invoke<boolean>("play_next", { href });
+}
+
+// ---------------------------------------------------------------------------
+// Vibe DJ
+// ---------------------------------------------------------------------------
+
+export interface VibePath {
+  hrefs: string[];
+  /** Library tracks eligible to be planned with — analysed, with a tempo. */
+  considered: number;
+}
+
+/**
+ * Order the library along an energy and tempo curve, starting from one track.
+ *
+ * Built from the analysis the backend already holds, rather than from a map the
+ * frontend would have to assemble — see `moodPath`, which takes the map and is
+ * kept for tests.
+ */
+export function vibePath(start: string, curve: Curve): Promise<VibePath> {
+  return invoke<VibePath>("vibe_path", { start, curve });
+}
+
+export interface BlendPreview {
+  fromTitle: string;
+  toTitle: string;
+  fromBpm: number;
+  toBpm: number;
+  fromKey: string;
+  toKey: string;
+  /** Tempo stretch the incoming deck takes, as a percentage. */
+  shiftPercent: number;
+  /** Loudness difference in LU. */
+  gainDelta: number;
+  /** Whether the engine would actually accept this as a beat-matched mix. */
+  matchable: boolean;
+  /** Why not, when it would not. */
+  reason: string;
+}
+
+/** Describe the mix between what is playing and what is next, or null when
+ *  there is no pair to describe. */
+export function blendPreview(): Promise<BlendPreview | null> {
+  return invoke<BlendPreview | null>("blend_preview");
+}
+
+// ---------------------------------------------------------------------------
+// Liner notes
+// ---------------------------------------------------------------------------
+
+export interface TrackDetails {
+  href: string;
+  title: string;
+  artist: string;
+  album: string;
+  year: number;
+  genre: string;
+  /** False until analysed — show that rather than a column of zeroes. */
+  analysed: boolean;
+  bpm: number;
+  bpmIsManual: boolean;
+  key: string;
+  lufs: number;
+  duration: number;
+  cueIn: number;
+  cueOut: number;
+  energy: number;
+  beats: number;
+  waveform: number[];
+  hrefPath: string;
+  cached: boolean;
+}
+
+export function trackDetails(href: string): Promise<TrackDetails> {
+  return invoke<TrackDetails>("track_details", { href });
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+export interface Facet {
+  label: string;
+  count: number;
+}
+
+export interface SearchResults {
+  /** The single best row, shown larger. Excluded from `tracks`. */
+  top: Row | null;
+  tracks: Row[];
+  artists: Facet[];
+  albums: Facet[];
+  playlists: Playlist[];
+  /** Total matches before truncation. */
+  total: number;
+}
+
+export function search(query: string): Promise<SearchResults> {
+  return invoke<SearchResults>("search", { query });
+}
+
+// ---------------------------------------------------------------------------
 // Connecting a library
 // ---------------------------------------------------------------------------
 
@@ -332,6 +471,25 @@ export function evictTrack(href: string): Promise<void> {
 /** Where the app keeps everything — the claim "your data is local", shown. */
 export function dataLocation(): Promise<string> {
   return invoke<string>("data_location");
+}
+
+export interface DataRow {
+  label: string;
+  path: string;
+  bytes: number;
+  /** False for anything on the server rather than this device. */
+  local: boolean;
+}
+
+/** Itemise what is stored, so the sovereignty claim can be checked rather than
+ *  taken on trust. */
+export function dataBreakdown(): Promise<DataRow[]> {
+  return invoke<DataRow[]>("data_breakdown");
+}
+
+/** Open the data directory in the system file manager. */
+export function revealDataFolder(): Promise<void> {
+  return invoke<void>("reveal_data_folder");
 }
 
 /** Delete everything stored, including the keychain entry. */

@@ -1,37 +1,64 @@
 /**
  * App shell.
  *
- * Routing is a piece of state rather than a router: there are four screens and
- * no URLs to be back-buttoned through. When there are twelve, revisit.
+ * Routing is a piece of state rather than a router. There are no URLs to be
+ * back-buttoned through, and the one place a real router would earn its keep —
+ * drilling into a track and coming back — is handled by remembering which
+ * screen asked. When there is a second level of drill-down, revisit.
  *
- * Onboarding is the exception to the layout. It takes the whole window with no
+ * Onboarding is the exception to the layout: it takes the whole window with no
  * sidebar and no transport, because there is nothing to navigate to and nothing
- * to play — offering a disabled transport to someone who has not yet connected
- * anything is clutter posing as consistency.
+ * to play, and a disabled transport on a first run is clutter posing as
+ * consistency.
  */
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
 import { Songs } from "./screens/Songs";
-import { Settings } from "./screens/Settings";
+import { Search } from "./screens/Search";
+import { Queue } from "./screens/Queue";
+import { Vibe } from "./screens/Vibe";
 import { NowPlaying } from "./screens/NowPlaying";
+import { LinerNotes } from "./screens/LinerNotes";
+import { YourData } from "./screens/YourData";
+import { Settings } from "./screens/Settings";
 import { Onboarding } from "./screens/Onboarding";
 import * as core from "./lib/core";
 import "./components/transport.css";
+import "./components/states.css";
 import "./screens/library.css";
 import "./screens/songs.css";
+import "./screens/search.css";
+import "./screens/queue.css";
+import "./screens/vibe.css";
 import "./screens/settings.css";
 import "./screens/nowplaying.css";
 import "./screens/onboarding.css";
+import "./screens/liner.css";
+import "./screens/yourdata.css";
 
-type Screen = "library" | "songs" | "playing" | "settings";
+type Screen =
+  | "library"
+  | "songs"
+  | "search"
+  | "playing"
+  | "queue"
+  | "vibe"
+  | "data"
+  | "settings";
 
-const SCREENS: { id: Screen; label: string }[] = [
-  { id: "library", label: "Library" },
-  { id: "songs", label: "Songs" },
-  { id: "playing", label: "Now Playing" },
-  { id: "settings", label: "Settings" },
+/** Grouped the way a person moves through the app: find something, then hear
+ *  it, then the things about the app itself. */
+const NAV: { id: Screen; label: string; group: number }[] = [
+  { id: "library", label: "Library", group: 0 },
+  { id: "songs", label: "Songs", group: 0 },
+  { id: "search", label: "Search", group: 0 },
+  { id: "playing", label: "Now Playing", group: 1 },
+  { id: "queue", label: "Queue", group: 1 },
+  { id: "vibe", label: "Vibe DJ", group: 1 },
+  { id: "data", label: "Your Data", group: 2 },
+  { id: "settings", label: "Settings", group: 2 },
 ];
 
 type Status =
@@ -43,6 +70,11 @@ type Status =
 export function App() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [screen, setScreen] = useState<Screen>("library");
+  /** The track being read about, and the screen to return to. Liner Notes is a
+   *  drill-down rather than a destination, so it is not in the nav. */
+  const [liner, setLiner] = useState<{ href: string; from: Screen } | null>(
+    null,
+  );
 
   useEffect(() => {
     // Settings is the round trip worth making at boot: it decides where to
@@ -58,6 +90,10 @@ export function App() {
         setStatus({ kind: "error", message: String(e) });
       });
   }, []);
+
+  function openLiner(href: string) {
+    setLiner({ href, from: screen });
+  }
 
   if (status.kind === "onboarding") {
     return (
@@ -78,22 +114,52 @@ export function App() {
     return (
       <div className="shell">
         <nav className="shell__sidebar">
-          {SCREENS.map((s) => (
-            <button
-              key={s.id}
-              className={"nav__item" + (screen === s.id ? " nav__item--on" : "")}
-              onClick={() => setScreen(s.id)}
-            >
-              {s.label}
-            </button>
+          {NAV.map((item, i) => (
+            <div key={item.id}>
+              {/* A rule between groups rather than headings: three labels over
+                  eight items is more furniture than navigation. */}
+              {i > 0 && NAV[i - 1]?.group !== item.group && (
+                <div className="nav__rule" />
+              )}
+              <button
+                className={
+                  "nav__item" +
+                  (screen === item.id && !liner ? " nav__item--on" : "")
+                }
+                onClick={() => {
+                  setLiner(null);
+                  setScreen(item.id);
+                }}
+              >
+                {item.label}
+              </button>
+            </div>
           ))}
         </nav>
+
         <main className="shell__content">
-          {screen === "library" && <Library />}
-          {screen === "songs" && <Songs />}
-          {screen === "playing" && <NowPlaying />}
-          {screen === "settings" && <Settings />}
+          {liner ? (
+            <LinerNotes
+              href={liner.href}
+              onBack={() => {
+                setScreen(liner.from);
+                setLiner(null);
+              }}
+            />
+          ) : (
+            <>
+              {screen === "library" && <Library />}
+              {screen === "songs" && <Songs onOpen={openLiner} />}
+              {screen === "search" && <Search onOpen={openLiner} />}
+              {screen === "playing" && <NowPlaying />}
+              {screen === "queue" && <Queue onOpen={openLiner} />}
+              {screen === "vibe" && <Vibe />}
+              {screen === "data" && <YourData />}
+              {screen === "settings" && <Settings />}
+            </>
+          )}
         </main>
+
         {/* Outside the content column: the shell grid spans it across both, and
             playback outlives whichever screen started it. */}
         <Transport />

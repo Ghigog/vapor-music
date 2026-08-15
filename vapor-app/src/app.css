@@ -130,3 +130,11 @@
   grid-template-rows: 1fr;
   place-items: center;
 }
+
+/* Separates nav groups. A rule rather than three headings: eight items do not
+   need labelling, they need grouping. */
+.nav__rule {
+  height: 1px;
+  margin: 10px 12px;
+  background: var(--glass-rim);
+}

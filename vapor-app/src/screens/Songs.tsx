@@ -49,7 +49,11 @@ type Load =
   | { kind: "ready"; rows: Row[] }
   | { kind: "error"; message: string };
 
-export function Songs() {
+export function Songs({
+  onOpen,
+}: {
+  onOpen?: ((href: string) => void) | undefined;
+}) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [ascending, setAscending] = useState(true);
@@ -276,6 +280,7 @@ export function Songs() {
               >
                 <SongRow
                   row={row}
+                  onOpen={onOpen}
                   overridden={row.href in overrides}
                   editing={editing === row.href}
                   onEdit={() => setEditing(row.href)}
@@ -293,6 +298,7 @@ export function Songs() {
 
 function SongRow({
   row,
+  onOpen,
   overridden,
   editing,
   onEdit,
@@ -300,6 +306,7 @@ function SongRow({
   onCancel,
 }: {
   row: Row;
+  onOpen?: ((href: string) => void) | undefined;
   overridden: boolean;
   editing: boolean;
   onEdit: () => void;
@@ -325,6 +332,21 @@ function SongRow({
       <span className="songrow__album" title={album}>
         {album}
       </span>
+      {onOpen && (
+        <button
+          className="songrow__info"
+          aria-label={`Liner notes for ${row.title}`}
+          title="Liner notes"
+          onClick={(e) => {
+            // The row's own click plays and selects; this is a different verb.
+            e.stopPropagation();
+            onOpen(row.href);
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          i
+        </button>
+      )}
       <BpmCell
         bpm={row.bpm}
         overridden={overridden}

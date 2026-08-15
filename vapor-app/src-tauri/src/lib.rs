@@ -892,6 +892,106 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
     }
 }
 
+/// A queued track with enough about it to draw a row.
+///
+/// The queue itself holds hrefs and nothing else — deliberately, so the core
+/// stays free of presentation — which means the shell is where an href becomes
+/// something a person can read.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueEntry {
+    href: String,
+    title: String,
+    artist: String,
+    bpm: f32,
+    key: String,
+    /// True for the track currently playing.
+    current: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueView {
+    entries: Vec<QueueEntry>,
+    /// Index of the playing track, so the screen can scroll to it.
+    current: Option<usize>,
+    /// Minutes of music still to come, from the analysed durations. Tracks
+    /// with no analysis contribute nothing rather than a guess.
+    remaining_secs: f64,
+}
+
+#[tauri::command]
+fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let current = app.queue.current_index();
+
+    let entries: Vec<QueueEntry> = app
+        .queue
+        .tracks()
+        .iter()
+        .enumerate()
+        .map(|(i, href)| {
+            let row = app.rows.iter().find(|r| &r.href == href);
+            let analysis = app.analysis.get(href);
+            QueueEntry {
+                href: href.clone(),
+                title: row
+                    .map(|r| r.title.clone())
+                    // A track queued from a playlist whose scan has since been
+                    // replaced still deserves a name, so fall back to the file.
+                    .unwrap_or_else(|| href.rsplit('/').next().unwrap_or(href).to_string()),
+                artist: row
+                    .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
+                    .map(|r| r.artist.clone())
+                    .unwrap_or_default(),
+                bpm: app
+                    .settings
+                    .bpm_override(href)
+                    .or_else(|| analysis.map(|a| a.bpm))
+                    .unwrap_or(0.0),
+                key: analysis.map(|a| a.key.clone()).unwrap_or_default(),
+                current: Some(i) == current,
+            }
+        })
+        .collect();
+
+    // Only what is still ahead: a "47 min" that included what you have already
+    // heard would be describing the wrong thing.
+    let remaining_secs = app
+        .queue
+        .tracks()
+        .iter()
+        .skip(current.map_or(0, |c| c))
+        .filter_map(|href| app.analysis.get(href))
+        .map(|a| a.duration)
+        .sum();
+
+    Ok(QueueView {
+        entries,
+        current,
+        remaining_secs,
+    })
+}
+
+#[tauri::command]
+fn remove_from_queue(href: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.queue.remove(&href))
+}
+
+#[tauri::command]
+fn move_in_queue(from: usize, to: usize, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.queue.move_track(from, to))
+}
+
+/// Put a track next without disturbing the rest of the order.
+#[tauri::command]
+fn play_next(href: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.queue.set_next(&href))
+}
+
 // ---------------------------------------------------------------------------
 // Vibe DJ
 // ---------------------------------------------------------------------------
@@ -932,6 +1032,388 @@ fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<Strin
         // dislikes rather than a lookup that silently returns nothing.
         &std::collections::HashMap::new(),
     ))
+}
+
+/// Everything the pathfinder needs about the library, built from what has
+/// actually been analysed.
+///
+/// The `mood_path` command takes this map from the caller, which suited a test
+/// harness and suits no real screen — the frontend would have to hold a copy of
+/// the whole library's analysis to ask a question about it. Building it here
+/// keeps that where it already lives.
+fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMeta> {
+    app.rows
+        .iter()
+        .filter_map(|row| {
+            let analysis = app.analysis.get(&row.href)?;
+            // An unanalysed track has no tempo and no key, so the cost model
+            // cannot place it. Including it with zeros would not make the path
+            // longer, it would make it wrong.
+            if analysis.bpm <= 0.0 {
+                return None;
+            }
+            Some((
+                row.href.clone(),
+                TrackMeta {
+                    href: row.href.clone(),
+                    bpm: app.settings.bpm_override(&row.href).unwrap_or(analysis.bpm),
+                    musical_key: analysis.key.clone(),
+                    // Segment keys are not produced yet (TD-13), so the whole
+                    // track key stands in for both ends.
+                    intro_key: analysis.key.clone(),
+                    outro_key: analysis.key.clone(),
+                    energy_level: energy_from_lufs(analysis.lufs),
+                    genre: row.genre.clone(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Map loudness onto the pathfinder's 0–1 energy axis.
+///
+/// A stand-in. Real energy is spectral — a loud ballad and a quiet banger are
+/// not the same thing — but LUFS is what analysis produces today and it
+/// correlates well enough to order a set. Anchored on the range a mastered
+/// library actually occupies: about −20 LUFS for something gentle, about −6 for
+/// something relentless.
+fn energy_from_lufs(lufs: f32) -> f32 {
+    const QUIET: f32 = -20.0;
+    const LOUD: f32 = -6.0;
+    if !lufs.is_finite() {
+        return 0.5;
+    }
+    ((lufs - QUIET) / (LOUD - QUIET)).clamp(0.0, 1.0)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VibePath {
+    hrefs: Vec<String>,
+    /// How many library tracks were eligible — analysed, with a tempo. The
+    /// screen says "1,284 read", and it should be the true number.
+    considered: usize,
+}
+
+/// Order a set of tracks along an energy and tempo curve, from what is known.
+#[tauri::command]
+fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<VibePath> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let pool = track_meta_pool(&app);
+
+    if !pool.contains_key(&start) {
+        return Err(Error(
+            "That track has not been analysed yet, so the DJ has nothing to plan from.".to_string(),
+        ));
+    }
+
+    let considered = pool.len();
+    Ok(VibePath {
+        hrefs: vapor_library::generate_mood_path(
+            &pool,
+            &start,
+            Curve::parse(&curve),
+            vapor_library::DEFAULT_ENERGY_THRESHOLD,
+            // Skip history is still not persisted (TD-14).
+            &std::collections::HashMap::new(),
+        ),
+        considered,
+    })
+}
+
+/// What the next blend will do, in the terms the Vibe screen states them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlendPreview {
+    from_title: String,
+    to_title: String,
+    from_bpm: f32,
+    to_bpm: f32,
+    from_key: String,
+    to_key: String,
+    /// Tempo change the incoming deck will be stretched by, as a percentage.
+    shift_percent: f32,
+    /// Loudness difference, in LU, which is what a gain trim would correct.
+    gain_delta: f32,
+    /// Whether the engine would actually accept this as a beat-matched mix.
+    matchable: bool,
+    /// Why not, when it would not — the same distinction the mixer draws.
+    reason: String,
+}
+
+/// Describe the mix between what is playing and what is next.
+///
+/// Read-only: this asks the same questions `plan_mix` asks and answers them for
+/// a person instead of for the audio thread, so the screen cannot claim a blend
+/// the engine would refuse.
+#[tauri::command]
+fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    let Some(current) = app.playing.clone() else {
+        return Ok(None);
+    };
+    let Some(next) = app.queue.peek_next(None).map(str::to_string) else {
+        return Ok(None);
+    };
+    if next == current {
+        return Ok(None);
+    }
+
+    let title_of = |href: &str| {
+        app.rows
+            .iter()
+            .find(|r| r.href == href)
+            .map(|r| r.title.clone())
+            .unwrap_or_default()
+    };
+
+    let (Some(out), Some(inc)) = (app.analysis.get(&current), app.analysis.get(&next)) else {
+        return Ok(Some(BlendPreview {
+            from_title: title_of(&current),
+            to_title: title_of(&next),
+            from_bpm: 0.0,
+            to_bpm: 0.0,
+            from_key: String::new(),
+            to_key: String::new(),
+            shift_percent: 0.0,
+            gain_delta: 0.0,
+            matchable: false,
+            reason: "Not analysed yet".to_string(),
+        }));
+    };
+
+    let from_bpm = app.settings.bpm_override(&current).unwrap_or(out.bpm);
+    let to_bpm = app.settings.bpm_override(&next).unwrap_or(inc.bpm);
+
+    let out_grid = beat_grid(out, app.settings.bpm_override(&current));
+    let in_grid = beat_grid(inc, app.settings.bpm_override(&next));
+    let matched = vapor_engine::Mixer::tempo_ratio(&out_grid, &in_grid);
+
+    let (matchable, reason, shift_percent) = match matched {
+        Ok(ratio) => (true, String::new(), ((ratio - 1.0) * 100.0) as f32),
+        Err(vapor_engine::MatchError::TempoTooFar) => (
+            false,
+            "Too far apart to beat-match".to_string(),
+            if to_bpm > 0.0 {
+                (from_bpm / to_bpm - 1.0) * 100.0
+            } else {
+                0.0
+            },
+        ),
+        Err(vapor_engine::MatchError::NoGrid) => (false, "No usable beat grid".to_string(), 0.0),
+    };
+
+    Ok(Some(BlendPreview {
+        from_title: title_of(&current),
+        to_title: title_of(&next),
+        from_bpm,
+        to_bpm,
+        from_key: out.key.clone(),
+        to_key: inc.key.clone(),
+        shift_percent,
+        gain_delta: inc.lufs - out.lufs,
+        matchable,
+        reason,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Liner notes
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackDetails {
+    href: String,
+    title: String,
+    artist: String,
+    album: String,
+    year: u32,
+    genre: String,
+    /// Absent until the track has been analysed, so the screen can say so
+    /// rather than print a column of zeroes.
+    analysed: bool,
+    bpm: f32,
+    bpm_is_manual: bool,
+    key: String,
+    lufs: f32,
+    duration: f64,
+    cue_in: f32,
+    cue_out: f32,
+    energy: f32,
+    beats: usize,
+    waveform: Vec<f32>,
+    /// Where the file is, and whether it is here — the sovereignty claim, per
+    /// track.
+    href_path: String,
+    cached: bool,
+}
+
+#[tauri::command]
+fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    let row = app
+        .rows
+        .iter()
+        .find(|r| r.href == href)
+        .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
+    let analysis = app.analysis.get(&href);
+    let manual = app.settings.bpm_override(&href);
+
+    Ok(TrackDetails {
+        href: href.clone(),
+        title: row.title.clone(),
+        artist: if row.artist_source == vapor_library::index::Source::Unknown {
+            String::new()
+        } else {
+            row.artist.clone()
+        },
+        album: if row.album_source == vapor_library::index::Source::Unknown {
+            String::new()
+        } else {
+            row.album.clone()
+        },
+        year: row.year,
+        genre: row.genre.clone(),
+        analysed: analysis.is_some(),
+        bpm: manual.or_else(|| analysis.map(|a| a.bpm)).unwrap_or(0.0),
+        bpm_is_manual: manual.is_some(),
+        key: analysis.map(|a| a.key.clone()).unwrap_or_default(),
+        lufs: analysis.map_or(0.0, |a| a.lufs),
+        duration: analysis.map_or(0.0, |a| a.duration),
+        cue_in: analysis.map_or(0.0, |a| a.cue_in),
+        cue_out: analysis.map_or(0.0, |a| a.cue_out),
+        energy: analysis.map_or(0.0, |a| energy_from_lufs(a.lufs)),
+        beats: analysis.map_or(0, |a| a.beats.len()),
+        waveform: analysis.map(|a| a.waveform.clone()).unwrap_or_default(),
+        href_path: href.clone(),
+        cached: app.cache.contains(&href),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResults {
+    /// The single best row, shown larger. Absent when nothing matched.
+    top: Option<Row>,
+    tracks: Vec<Row>,
+    /// Distinct artists and albums among the matches, for the "also matching"
+    /// chips. Counted so the screen can rank them by weight of evidence.
+    artists: Vec<Facet>,
+    albums: Vec<Facet>,
+    playlists: Vec<vapor_library::Playlist>,
+    /// Total matches before the track list was truncated.
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Facet {
+    label: String,
+    count: usize,
+}
+
+/// How many tracks a search returns. Beyond this the list stops being a result
+/// and starts being the library again.
+const SEARCH_LIMIT: usize = 40;
+
+#[tauri::command]
+fn search(query: String, state: State<'_, Shared>) -> Result<SearchResults> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    if query.trim().is_empty() {
+        return Ok(SearchResults {
+            top: None,
+            tracks: Vec::new(),
+            artists: Vec::new(),
+            albums: Vec::new(),
+            playlists: Vec::new(),
+            total: 0,
+        });
+    }
+
+    // The same predicate the table and smart playlists use, so a search and a
+    // filter cannot disagree about what matches.
+    let matched: Vec<Row> = vapor_library::filter(&app.rows, &query)
+        .into_iter()
+        .cloned()
+        .map(|mut row| {
+            app.apply_analysis(&mut row);
+            row
+        })
+        .collect();
+
+    let needle = query.trim().to_lowercase();
+    let facet = |pick: fn(&Row) -> &String| {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for row in &matched {
+            let value = pick(row);
+            if !value.is_empty() {
+                *counts.entry(value.as_str()).or_default() += 1;
+            }
+        }
+        let mut facets: Vec<Facet> = counts
+            .into_iter()
+            .map(|(label, count)| Facet {
+                label: label.to_string(),
+                count,
+            })
+            .collect();
+        // Most evidence first, then alphabetically so the order is stable
+        // between identical searches rather than following a hash.
+        facets.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.label.cmp(&b.label)));
+        facets.truncate(6);
+        facets
+    };
+
+    let artists = facet(|r| &r.artist);
+    let albums = facet(|r| &r.album);
+
+    // The best row is the one whose title starts with what was typed; failing
+    // that, the one that merely contains it. Someone typing "salt" wants
+    // "Salt Flats" above "Asphalt Sunday".
+    let top = matched
+        .iter()
+        .find(|r| r.title.to_lowercase().starts_with(&needle))
+        .or_else(|| {
+            matched
+                .iter()
+                .find(|r| r.title.to_lowercase().contains(&needle))
+        })
+        .or(matched.first())
+        .cloned();
+
+    let playlists: Vec<vapor_library::Playlist> = app
+        .playlists
+        .all()
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&needle))
+        .cloned()
+        .collect();
+
+    let total = matched.len();
+    let tracks: Vec<Row> = matched
+        .into_iter()
+        // The top result is shown separately; repeating it immediately below
+        // reads as a duplicate rather than as emphasis.
+        .filter(|r| top.as_ref().is_none_or(|t| t.href != r.href))
+        .take(SEARCH_LIMIT)
+        .collect();
+
+    Ok(SearchResults {
+        top,
+        tracks,
+        artists,
+        albums,
+        playlists,
+        total,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1257,6 +1739,109 @@ fn data_location(state: State<'_, Shared>) -> Result<String> {
     Ok(app.store.dir().display().to_string())
 }
 
+/// One line of the Your Data table: what it is, where it sits, how big.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataRow {
+    label: String,
+    path: String,
+    bytes: u64,
+    /// False for anything that lives on the server rather than here. The
+    /// screen's whole claim is about what is on *this* device, so the
+    /// distinction has to be visible rather than implied.
+    local: bool,
+}
+
+/// Itemise what the app is storing.
+///
+/// The Your Data screen is where the sovereignty claim gets proved instead of
+/// asserted, and a single total proves nothing — a person has to be able to see
+/// which file is which, open it, and find it is plain JSON.
+#[tauri::command]
+fn data_breakdown(state: State<'_, Shared>) -> Result<Vec<DataRow>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let dir = app.store.dir();
+
+    let size_of = |name: &str| -> u64 {
+        std::fs::metadata(dir.join(name))
+            .map(|m| m.len())
+            .unwrap_or(0)
+    };
+
+    Ok(vec![
+        DataRow {
+            label: "Music files".to_string(),
+            path: if app.settings.remote.is_configured() {
+                format!(
+                    "{} / {}",
+                    app.settings.remote.url.trim_end_matches('/'),
+                    app.settings.remote.folder
+                )
+            } else {
+                "No server connected".to_string()
+            },
+            // The library is the one thing not measured: asking a WebDAV server
+            // for the size of every file is a scan, and a scan is not something
+            // to run because a screen was opened.
+            bytes: 0,
+            local: false,
+        },
+        DataRow {
+            label: "Offline cache".to_string(),
+            path: app.cache.dir().display().to_string(),
+            bytes: app.cache.size(),
+            local: true,
+        },
+        DataRow {
+            label: "Library catalogue".to_string(),
+            path: dir.join("analysis.json").display().to_string(),
+            bytes: size_of("analysis.json"),
+            local: true,
+        },
+        DataRow {
+            label: "Playlists".to_string(),
+            path: dir.join("playlists.json").display().to_string(),
+            bytes: size_of("playlists.json"),
+            local: true,
+        },
+        DataRow {
+            label: "Settings".to_string(),
+            path: dir.join("settings.json").display().to_string(),
+            bytes: size_of("settings.json"),
+            local: true,
+        },
+    ])
+}
+
+/// Open the data directory in the system file manager.
+///
+/// "Your data is local" is a claim until a person can go and look at it. No
+/// Tauri plugin for this, and shelling out to the platform's own opener is
+/// three lines — the path is one the app itself chose, never user input, so
+/// there is nothing here to inject into.
+#[tauri::command]
+fn reveal_data_folder(state: State<'_, Shared>) -> Result<()> {
+    let dir = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        app.store.dir().to_path_buf()
+    };
+    std::fs::create_dir_all(&dir)?;
+
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+
+    std::process::Command::new(opener)
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| Error(format!("Could not open the folder: {e}")))?;
+    Ok(())
+}
+
 /// Delete everything the app has stored.
 ///
 /// In-memory state is reset too, so the UI reflects the deletion immediately
@@ -1333,6 +1918,16 @@ pub fn run() {
             create_playlist,
             add_tracks_to_playlist,
             queue_state,
+            queue_view,
+            remove_from_queue,
+            move_in_queue,
+            play_next,
+            vibe_path,
+            blend_preview,
+            track_details,
+            search,
+            data_breakdown,
+            reveal_data_folder,
             play_tracks,
             next_track,
             previous_track,
