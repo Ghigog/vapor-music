@@ -7,7 +7,9 @@
  */
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
+import { Library } from "./screens/Library";
 import * as core from "./lib/core";
+import "./screens/library.css";
 
 type Status =
   | { kind: "loading" }
@@ -31,6 +33,18 @@ export function App() {
       });
   }, []);
 
+  // The boot screen exists only until the core answers. A person should not
+  // see a splash for a round trip that takes single-digit milliseconds.
+  if (status.kind === "ready") {
+    return (
+      <div className="shell">
+        <main className="shell__content">
+          <Library />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="boot">
       <VaporMark
@@ -50,9 +64,7 @@ export function App() {
         Vapor Music
       </div>
       <div className="label">
-        {status.kind === "loading" && "connecting to core"}
-        {status.kind === "ready" && `core connected · ${status.tracks} tracks`}
-        {status.kind === "error" && "core unreachable"}
+        {status.kind === "loading" ? "connecting to core" : "core unreachable"}
       </div>
       {status.kind === "error" && (
         <div className="boot__error">{status.message}</div>

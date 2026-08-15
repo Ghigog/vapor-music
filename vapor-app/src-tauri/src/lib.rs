@@ -227,16 +227,31 @@ struct MoodPathRequest {
     curve: String,
 }
 
+/// Order a set of tracks along an energy and tempo curve.
+///
+/// The BPM overrides in settings are applied before pathfinding rather than
+/// after: tempo detection lands a metrical relative on roughly 10% of a real
+/// library, and a wrong BPM does not merely mislabel a track — it changes
+/// which transitions the pathfinder believes are cheap, so a correction has to
+/// reach the cost model to be worth anything.
 #[tauri::command]
 fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<String>> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let threshold = vapor_library::DEFAULT_ENERGY_THRESHOLD;
-    let _ = &app;
+
+    let mut tracks = req.tracks;
+    for (href, meta) in tracks.iter_mut() {
+        if let Some(bpm) = app.settings.bpm_override(href) {
+            meta.bpm = bpm;
+        }
+    }
+
     Ok(vapor_library::generate_mood_path(
-        &req.tracks,
+        &tracks,
         &req.start,
         Curve::parse(&req.curve),
-        threshold,
+        vapor_library::DEFAULT_ENERGY_THRESHOLD,
+        // Skip history is not persisted yet; an empty map means no learned
+        // dislikes rather than a lookup that silently returns nothing.
         &std::collections::HashMap::new(),
     ))
 }

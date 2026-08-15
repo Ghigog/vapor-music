@@ -1,0 +1,253 @@
+/*
+ * Library screen. Values come from tokens.css; only layout lives here.
+ */
+
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* ---- Header ---------------------------------------------------------- */
+
+.library__head {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/*
+ * The sovereignty line. The one place --sov appears on this screen: it means
+ * "local, yours, not leaving the device" and spending it elsewhere would
+ * dilute the only colour the product has an argument attached to.
+ */
+.library__sov {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: 0.07em;
+  color: #5c8f76;
+}
+
+.library__sov-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--sov);
+  /* The halo reads as a live indicator rather than a bullet point. */
+  box-shadow: 0 0 0 3px rgba(var(--sov-rgb), 0.18);
+  flex: none;
+}
+
+.library__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: 38px;
+  line-height: 1.04;
+  letter-spacing: -0.028em;
+  color: var(--ink);
+}
+
+/* ---- Search ---------------------------------------------------------- */
+
+.library__search {
+  height: 46px;
+  border-radius: 23px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  color: var(--ink-3);
+}
+
+.library__search-input {
+  flex: 1;
+  border: 0;
+  background: none;
+  outline: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--ink);
+  min-width: 0;
+}
+
+.library__search-input::placeholder {
+  color: var(--ink-3);
+}
+
+/* Safari renders a proprietary clear button that ignores the design. */
+.library__search-input::-webkit-search-decoration,
+.library__search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+/* ---- Tabs ------------------------------------------------------------ */
+
+.library__tabs {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.library__tab {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--glass-rim);
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.library__tab:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.library__tab--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.library__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- Body ------------------------------------------------------------ */
+
+.library__body {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  padding-bottom: 24px;
+}
+
+.library__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.library__section-head {
+  margin: 0;
+}
+
+.library__grid {
+  display: grid;
+  /* Auto-fill rather than a fixed count: the same grid serves the 390px
+     mobile layout and a wide desktop window without a breakpoint per size. */
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px 14px;
+}
+
+.library__empty {
+  padding: 48px 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.library__empty-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+
+.library__empty-body {
+  margin: 0 auto;
+  max-width: 46ch;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+/* ---- Card ------------------------------------------------------------ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.card__art {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  position: relative;
+  overflow: hidden;
+  /* Placeholder until artwork loads. Blue-tinted shadow, per the design —
+     a neutral grey shadow reads as dirt against warm paper. */
+  background: linear-gradient(150deg, #cfe0f2 0%, #dfe3ea 55%, #efe9de 100%);
+  box-shadow: 0 10px 24px -8px rgba(38, 58, 104, 0.34),
+    0 1px 2px rgba(38, 58, 104, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.card__art-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(142deg, rgba(255, 255, 255, 0.24) 0%, transparent 44%);
+  pointer-events: none;
+}
+
+.card__badge {
+  position: absolute;
+  left: 9px;
+  bottom: 9px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(20, 22, 26, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card__title,
+.card__sub {
+  /* Titles are long and the grid is narrow; truncation is the norm here. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card__title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.card__sub {
+  font-size: 12px;
+  color: var(--ink-3);
+}
