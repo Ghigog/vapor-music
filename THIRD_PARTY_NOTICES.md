@@ -72,6 +72,38 @@ builds.
 
 ## Assets
 
+### Fonts — SIL Open Font License 1.1
+
+Vendored as woff2 in `vapor-app/public/fonts/` and declared in
+`vapor-app/public/fonts.css`. Bundled rather than fetched: the app must work
+offline and its CSP blocks remote origins. Only the `latin` and `latin-ext`
+subsets ship; each is the variable font, covering the whole weight axis in one
+file.
+
+| Font | Copyright | Upstream |
+|---|---|---|
+| **Inter** | Copyright (c) 2016 The Inter Project Authors | <https://github.com/rsms/inter> |
+| **Outfit** | Copyright 2021 The Outfit Project Authors | <https://github.com/Outfitio/Outfit-Fonts> |
+| **JetBrains Mono** | Copyright 2020 The JetBrains Mono Project Authors | <https://github.com/JetBrains/JetBrainsMono> |
+
+License texts ship in `licenses/Inter-OFL-1.1.txt`, `licenses/Outfit-OFL-1.1.txt`
+and `licenses/JetBrainsMono-OFL-1.1.txt`, taken from each project's own
+repository rather than transcribed.
+
+> [!NOTE]
+> The OFL is permissive for this use — bundling in an application is explicitly
+> allowed, it imposes no obligation on Vapor Music's own license, and its
+> condition here is simply that the license and copyright notices travel with
+> the fonts, which they do.
+>
+> These files are Google Fonts' subsetted builds rather than the upstream
+> originals, so they *are* modified versions in the license's sense. That
+> matters only for the renaming clause, and none of the three declares a
+> Reserved Font Name — no copyright line carries the "with Reserved Font Name"
+> phrase, so the clause has nothing to bite on and the families keep their
+> names. Check that again before vendoring a fourth font: it is a per-font
+> fact, not a general one.
+
 ### Icons — CC BY (Creative Commons Attribution)
 
 The icons in `assets/icon/` (library, vibe, playlist, settings, group, play,

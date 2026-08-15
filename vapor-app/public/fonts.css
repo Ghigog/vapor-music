@@ -1,13 +1,111 @@
 /*
- * Font loading.
+ * Font loading (TD-01).
  *
- * Deliberately empty of @font-face for now: the design specifies Outfit, Inter
- * and JetBrains Mono, and shipping them means adding ~400 KB of woff2 to the
- * bundle. Until the files are vendored, tokens.css falls back to the system UI
- * font, which is close enough to Inter to build against and honest about what
- * is actually loaded.
+ * The design specifies Outfit for display, Inter for UI and JetBrains Mono for
+ * data. All three ship as woff2 in `fonts/` and are declared here. Nothing is
+ * fetched at run time: the app must work with no network, which is the entire
+ * premise, and the CSP blocks remote origins anyway.
  *
- * To vendor: drop the woff2 files in public/fonts/ and declare them here.
- * Do not link Google Fonts — the CSP blocks remote origins and the app is
- * meant to work offline.
+ * ## Variable, not static
+ *
+ * `tokens.css` uses five weights (200, 300, 400, 500, 600). As static files
+ * that is five downloads per family; as a variable font it is one covering the
+ * whole axis. The three families together come to 236 KB — less than the
+ * ~400 KB the static estimate assumed, for more weights rather than fewer.
+ *
+ * The practical consequence: a weight the design has not used yet costs
+ * nothing to start using, and no text is ever rendered with a synthesised
+ * bold, which is what a browser does when asked for a weight it does not have.
+ *
+ * ## Two subsets, and what happens outside them
+ *
+ * Only `latin` and `latin-ext` are vendored. Together they cover Western and
+ * Central European text — Björk and Sigur Rós as readily as Beyoncé — which is
+ * what a `unicode-range` split then makes cheap: a library with no accented
+ * characters never loads `latin-ext` at all.
+ *
+ * Cyrillic, Greek and Vietnamese are deliberately absent. An artist named in
+ * one of those scripts falls back to the system font for those characters,
+ * which is a small typographic inconsistency and renders correctly. Adding
+ * them is three more files per family if a real library ever needs it.
+ *
+ * ## font-display
+ *
+ * `swap` rather than `block`. The files are local, so the load is a filesystem
+ * read and the fallback is unlikely to be seen at all — but if something does
+ * go wrong with a font, text a person can read in the wrong typeface beats no
+ * text at all.
  */
+
+/* ---- Inter — UI ------------------------------------------------------- */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/inter-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/inter-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---- Outfit — display ------------------------------------------------- */
+
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/outfit-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/outfit-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---- JetBrains Mono — data ------------------------------------------- */
+/* The axis stops at 800 here; the design's heaviest mono use is 500. */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
