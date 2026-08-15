@@ -18,7 +18,7 @@ Things that would be a defect if the app shipped today.
 | ID | Item | Where |
 |---|---|---|
 | TD-01 | **Fonts are not vendored.** The design specifies Outfit, Inter and JetBrains Mono; `public/fonts.css` is an empty placeholder and the UI falls back to the system font, so nothing currently matches the design's typography. The CSP correctly blocks remote origins, so they must be shipped as woff2 in `public/fonts/`. | `vapor-app/public/fonts.css` |
-| TD-02 | **No persistence.** The shell holds playlists, settings and the queue in memory and writes nothing. Closing the app loses everything. The core deliberately owns no I/O, so this is the shell's job and has not been done. | `vapor-app/src-tauri/src/lib.rs` |
+| ~~TD-02~~ | ~~No persistence.~~ **Done** — playlists and settings persist via atomic write-and-rename in `store.rs`. The queue is still in memory, which is arguably correct (a stale queue on relaunch is worse than none) but was not a considered decision. | `vapor-app/src-tauri/src/store.rs` |
 | TD-03 | **No audio output in the app.** `vapor-engine` plays correctly from the `play` binary, but the Tauri shell has no audio path wired at all — the buttons move queue state and nothing is heard. | `vapor-app/src-tauri` |
 | TD-04 | **No library scan.** `AppState::rows` is always empty; nothing populates it. The WebDAV client (transport, not parsing) has not been written. | `vapor-app/src-tauri` |
 | TD-05 | **Dolby Atmos does not decode.** 22 tracks in a real library are E-AC-3, which Symphonia cannot read. Shipping on macOS without a decision here is a silent regression against the Godot build, which handled them via ffmpeg. Recommendation stands: transcode on import. | MIG-003 |

@@ -16,7 +16,11 @@
 //! same core crates directly, so anything implemented here rather than in the
 //! core would have to be written twice.
 
+mod store;
+
 use std::sync::Mutex;
+
+use store::Store;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
@@ -31,13 +35,44 @@ use vapor_library::{
 /// One lock rather than one per collection: commands are user-driven and
 /// short, so contention is not a concern, and a single lock cannot deadlock
 /// against itself the way a set of finer ones can.
-#[derive(Default)]
 struct AppState {
     settings: Settings,
     playlists: PlaylistStore,
     queue: Queue,
     /// The library table's rows, rebuilt on scan.
     rows: Vec<Row>,
+    store: Store,
+}
+
+impl AppState {
+    /// Load what exists; start empty for anything that does not.
+    ///
+    /// A corrupt file is surfaced rather than swallowed — see `Store::load`.
+    /// Starting empty on a read failure would show a person an empty library
+    /// while their data sits unreadable on disk.
+    fn load(store: Store) -> Self {
+        let settings = store.load("settings").unwrap_or(None).unwrap_or_default();
+        let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
+        AppState {
+            settings,
+            playlists,
+            queue: Queue::default(),
+            rows: Vec::new(),
+            store,
+        }
+    }
+
+    /// Persist playlists. Called after every mutation, which is why the write
+    /// has to be atomic.
+    fn save_playlists(&self) -> Result<()> {
+        self.store.save("playlists", &self.playlists)?;
+        Ok(())
+    }
+
+    fn save_settings(&self) -> Result<()> {
+        self.store.save("settings", &self.settings)?;
+        Ok(())
+    }
 }
 
 type Shared = Mutex<AppState>;
@@ -159,7 +194,9 @@ fn create_playlist(name: String, state: State<'_, Shared>) -> Result<vapor_libra
     // Ids are generated here rather than in the core so the core stays
     // deterministic and testable — see the note on PlaylistStore::create.
     let id = new_id("playlist");
-    Ok(app.playlists.create(id, name).clone())
+    let created = app.playlists.create(id, name).clone();
+    app.save_playlists()?;
+    Ok(created)
 }
 
 #[tauri::command]
@@ -169,7 +206,13 @@ fn add_tracks_to_playlist(
     state: State<'_, Shared>,
 ) -> Result<usize> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.playlists.add_tracks(&id, &hrefs))
+    let added = app.playlists.add_tracks(&id, &hrefs);
+    // Only write when something changed — the core returns a count precisely so
+    // a no-op bulk add does not cost a disk write.
+    if added > 0 {
+        app.save_playlists()?;
+    }
+    Ok(added)
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +313,36 @@ fn settings(state: State<'_, Shared>) -> Result<Settings> {
 fn set_bpm_override(href: String, bpm: f32, state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.settings.set_bpm_override(&href, bpm);
+    app.save_settings()?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Your Data
+// ---------------------------------------------------------------------------
+
+/// Where the app keeps everything, so the Your Data screen can show it.
+///
+/// Naming the directory is part of the claim: "your data is local" is an
+/// assertion until a person can see the path and open it.
+#[tauri::command]
+fn data_location(state: State<'_, Shared>) -> Result<String> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.store.dir().display().to_string())
+}
+
+/// Delete everything the app has stored.
+///
+/// In-memory state is reset too, so the UI reflects the deletion immediately
+/// rather than continuing to show data that no longer exists on disk.
+#[tauri::command]
+fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.store.clear()?;
+    app.settings = Settings::default();
+    app.playlists = PlaylistStore::default();
+    app.queue = Queue::default();
+    app.rows.clear();
     Ok(())
 }
 
@@ -293,7 +366,13 @@ fn new_id(prefix: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            app.manage(Shared::default());
+            // Tauri resolves this per platform: ~/Library/Application Support
+            // on macOS, %APPDATA% on Windows, ~/.local/share on Linux.
+            let dir = app
+                .path()
+                .app_data_dir()
+                .expect("no app data directory available");
+            app.manage(Mutex::new(AppState::load(Store::new(dir))));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -308,6 +387,8 @@ pub fn run() {
             mood_path,
             settings,
             set_bpm_override,
+            data_location,
+            delete_all_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vapor Music");
