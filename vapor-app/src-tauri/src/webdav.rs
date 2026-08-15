@@ -82,6 +82,43 @@ pub fn delete_password(username: &str) -> Result<(), DavError> {
     }
 }
 
+/// Fetch one file's bytes.
+///
+/// Blocking, because its only caller is the analysis pass, which already runs
+/// on a blocking thread. Driving an async client from there would mean nesting
+/// runtimes for no benefit.
+pub fn fetch_blocking(
+    remote: &vapor_library::RemoteConfig,
+    href: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let password = load_password(&remote.username).map_err(|e| e.to_string())?;
+    let auth = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", remote.username, password))
+    );
+    let origin = remote.url.trim_end_matches('/');
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("VaporMusic/2.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .get(format!("{origin}{href}"))
+        .header("Authorization", auth)
+        .send()
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("server returned {}", response.status()));
+    }
+    response
+        .bytes()
+        .map(|b| b.to_vec())
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {

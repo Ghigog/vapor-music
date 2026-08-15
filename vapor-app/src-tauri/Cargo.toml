@@ -19,7 +19,7 @@ serde_json = "1"
 
 # WebDAV transport. rustls rather than the system TLS stack so the same code
 # builds on every desktop target without a platform TLS dependency.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 base64 = "0.22"
 keyring = "3"

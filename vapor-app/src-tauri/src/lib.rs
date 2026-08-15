@@ -17,6 +17,7 @@
 //! core would have to be written twice.
 
 mod analysis;
+mod cache;
 mod store;
 mod webdav;
 
@@ -48,6 +49,7 @@ struct AppState {
     analysis: analysis::Cache,
     /// Cancels a running analysis pass.
     cancel: analysis::Cancel,
+    cache: cache::Cache,
     store: Store,
 }
 
@@ -68,6 +70,10 @@ impl AppState {
             rows: Vec::new(),
             analysis,
             cancel: analysis::Cancel::new(),
+            // The bound is what stops the cache filling a phone. Configurable
+            // later; the default is generous on a desktop and finite anywhere.
+            cache: cache::Cache::new(store.dir().join("audio"))
+                .with_max_bytes(cache::DEFAULT_MAX_BYTES),
             store,
         }
     }
@@ -488,14 +494,15 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
 
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
-    let (todo, cache_dir, cancel) = {
+    let (todo, cache_dir, cancel, remote) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
         let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
         app.cancel.reset();
         (
             analysis::pending(&hrefs, &app.analysis),
-            app.store.dir().join("audio"),
+            app.cache.dir().to_path_buf(),
             app.cancel.clone(),
+            app.settings.remote.clone(),
         )
     };
 
@@ -507,9 +514,16 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
+        let cache = cache::Cache::new(cache_dir);
         analysis::run(
             &todo,
-            |href| resolve_cached(&cache_dir, href),
+            // Fetch on demand. Analysis needs local bytes; this is where they
+            // come from, and a cached track costs nothing.
+            |href| {
+                cache
+                    .store(href, || webdav::fetch_blocking(&remote, href))
+                    .ok()
+            },
             &cancel,
             |progress| {
                 // Persist as each track lands rather than at the end: quitting
@@ -528,30 +542,49 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
     Ok(())
 }
 
-/// Where a track's bytes are cached locally.
-///
-/// Analysis needs local bytes; fetching them is the cache layer's job, which
-/// does not exist yet — so this returns None for anything not already present
-/// and the pass reports "not available locally" rather than pretending.
-fn resolve_cached(cache_dir: &std::path::Path, href: &str) -> Option<std::path::PathBuf> {
-    let ext = href.rsplit('.').next().unwrap_or("mp3");
-    let name = format!("{:x}.{ext}", md5_like(href));
-    let path = cache_dir.join(name);
-    path.exists().then_some(path)
+// ---------------------------------------------------------------------------
+// Cache
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheStatus {
+    bytes: u64,
+    max_bytes: u64,
+    /// How many of the library's tracks are held locally, so the Your Data
+    /// screen can state what is actually on the device rather than implying
+    /// the whole library is.
+    tracks_cached: usize,
+    tracks_total: usize,
+    location: String,
 }
 
-/// Stable filename hash.
+#[tauri::command]
+fn cache_status(state: State<'_, Shared>) -> Result<CacheStatus> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let cached = app
+        .rows
+        .iter()
+        .filter(|r| app.cache.contains(&r.href))
+        .count();
+    Ok(CacheStatus {
+        bytes: app.cache.size(),
+        max_bytes: cache::DEFAULT_MAX_BYTES,
+        tracks_cached: cached,
+        tracks_total: app.rows.len(),
+        location: app.cache.dir().display().to_string(),
+    })
+}
+
+/// Drop one track's local copy, keeping its analysis.
 ///
-/// Not a cryptographic hash and not trying to be — it names cache files, and
-/// the only requirements are determinism and a low collision rate.
-fn md5_like(s: &str) -> u64 {
-    // FNV-1a.
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+/// Analysis is small and expensive; the audio is large and cheap to re-fetch.
+/// Evicting them together would throw away ten minutes of work to reclaim
+/// space that the audio alone accounts for.
+#[tauri::command]
+fn evict_track(href: String, state: State<'_, Shared>) -> Result<()> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.cache.remove(&href).map_err(|e| Error(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +609,7 @@ fn data_location(state: State<'_, Shared>) -> Result<String> {
 fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.store.clear()?;
+    app.cache.clear().map_err(|e| Error(e.to_string()))?;
     // The password lives in the keychain, not the data directory, so clearing
     // one does not clear the other. "Delete my data" must mean both.
     if !app.settings.remote.username.is_empty() {
@@ -636,6 +670,8 @@ pub fn run() {
             analyse_library,
             cancel_analysis,
             analysis_status,
+            cache_status,
+            evict_track,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vapor Music");

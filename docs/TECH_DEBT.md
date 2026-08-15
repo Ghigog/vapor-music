@@ -22,7 +22,8 @@ Things that would be a defect if the app shipped today.
 | TD-03 | **No audio output in the app.** `vapor-engine` plays correctly from the `play` binary, but the Tauri shell has no audio path wired at all — the buttons move queue state and nothing is heard. | `vapor-app/src-tauri` |
 | ~~TD-04~~ | ~~No library scan.~~ **Done** — `webdav.rs` walks the tree and rebuilds the index; the password lives in the OS keychain. Rows carry no analysis yet (see TD-06). | `vapor-app/src-tauri/src/webdav.rs` |
 | ~~TD-06~~ | ~~Scanned rows carry no analysis.~~ **Done** — `analysis.rs` runs `vapor-dsp` over scanned tracks, caches results and applies them to rows. Blocked in practice by TD-07. | `vapor-app/src-tauri/src/analysis.rs` |
-| TD-07 | **No audio cache layer.** Analysis needs local bytes and nothing downloads them, so a pass over a remote library reports "not available locally" for every track. The scan finds files; nothing fetches them. | `vapor-app/src-tauri` |
+| ~~TD-07~~ | ~~No audio cache layer.~~ **Done** — `cache.rs` fetches on demand, writes atomically, and evicts LRU under a byte bound. Tested with synthetic WAVs, never anyone's library. | `vapor-app/src-tauri/src/cache.rs` |
+| TD-08 | **The cache bound is not configurable and prefetch does not exist.** 8 GB is hardcoded, and tracks are only fetched when analysis or playback asks — nothing warms the queue's lookahead, so the next track downloads at the moment it is needed. | `vapor-app/src-tauri/src/cache.rs` |
 | TD-05 | **Dolby Atmos does not decode.** 22 tracks in a real library are E-AC-3, which Symphonia cannot read. Shipping on macOS without a decision here is a silent regression against the Godot build, which handled them via ffmpeg. Recommendation stands: transcode on import. | MIG-003 |
 
 ## Correctness
