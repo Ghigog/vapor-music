@@ -50,6 +50,12 @@ struct AppState {
     /// Analysis results, keyed by href. Persisted so a library is analysed
     /// once rather than on every launch.
     analysis: analysis::Cache,
+    /// Tracks that were read and could not be used, and why (TD-12).
+    ///
+    /// Persisted, because the answer does not change between launches and the
+    /// alternative is downloading a broken file again to rediscover it. Only
+    /// permanent failures land here — "not downloaded yet" is not one.
+    failures: std::collections::HashMap<String, String>,
     /// Cancels a running analysis pass.
     cancel: analysis::Cancel,
     cache: cache::Cache,
@@ -95,12 +101,14 @@ impl AppState {
         let cache_max_bytes = settings.cache_max_bytes;
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
         let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
+        let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
         AppState {
             settings,
             playlists,
             queue: Queue::default(),
             rows: Vec::new(),
             analysis,
+            failures,
             cancel: analysis::Cancel::new(),
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
@@ -127,6 +135,11 @@ impl AppState {
 
     fn save_analysis(&self) -> Result<()> {
         self.store.save("analysis", &self.analysis)?;
+        Ok(())
+    }
+
+    fn save_failures(&self) -> Result<()> {
+        self.store.save("failures", &self.failures)?;
         Ok(())
     }
 
@@ -419,6 +432,16 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
         return;
     };
 
+    // Already known to be unusable, so say so now rather than after fetching it
+    // again and failing in the same way (TD-12). The record is cleared the
+    // moment a later analysis pass succeeds on it.
+    if let Some(reason) = app.failures.get(&href) {
+        app.playback_error = Some(format!("This track cannot be played: {reason}"));
+        app.playing = None;
+        app.loading = false;
+        return;
+    }
+
     // A person who double-clicks a second track while the first is still
     // downloading expects the second one. The generation is what lets the
     // abandoned load recognise that it lost and drop its result.
@@ -476,6 +499,11 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
             Ok(_) => {
                 app.playback_error = Some("That track contains no playable audio.".to_string());
                 app.playing = None;
+                // Learned the hard way; remember it so the next attempt is
+                // instant rather than another download (TD-12).
+                app.failures
+                    .insert(href.clone(), "decodes to no audio".to_string());
+                let _ = app.save_failures();
             }
             Err(e) => {
                 app.playback_error = Some(e);
@@ -1058,32 +1086,25 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
                     href: row.href.clone(),
                     bpm: app.settings.bpm_override(&row.href).unwrap_or(analysis.bpm),
                     musical_key: analysis.key.clone(),
-                    // Segment keys are not produced yet (TD-13), so the whole
-                    // track key stands in for both ends.
-                    intro_key: analysis.key.clone(),
-                    outro_key: analysis.key.clone(),
-                    energy_level: energy_from_lufs(analysis.lufs),
+                    // Real segment keys where analysis produced them (TD-13);
+                    // the whole-track key only where the track was too short
+                    // for its ends to differ from its middle.
+                    intro_key: if analysis.intro_key.is_empty() {
+                        analysis.key.clone()
+                    } else {
+                        analysis.intro_key.clone()
+                    },
+                    outro_key: if analysis.outro_key.is_empty() {
+                        analysis.key.clone()
+                    } else {
+                        analysis.outro_key.clone()
+                    },
+                    energy_level: analysis.energy,
                     genre: row.genre.clone(),
                 },
             ))
         })
         .collect()
-}
-
-/// Map loudness onto the pathfinder's 0–1 energy axis.
-///
-/// A stand-in. Real energy is spectral — a loud ballad and a quiet banger are
-/// not the same thing — but LUFS is what analysis produces today and it
-/// correlates well enough to order a set. Anchored on the range a mastered
-/// library actually occupies: about −20 LUFS for something gentle, about −6 for
-/// something relentless.
-fn energy_from_lufs(lufs: f32) -> f32 {
-    const QUIET: f32 = -20.0;
-    const LOUD: f32 = -6.0;
-    if !lufs.is_finite() {
-        return 0.5;
-    }
-    ((lufs - QUIET) / (LOUD - QUIET)).clamp(0.0, 1.0)
 }
 
 #[derive(Debug, Serialize)]
@@ -1093,6 +1114,10 @@ struct VibePath {
     /// How many library tracks were eligible — analysed, with a tempo. The
     /// screen says "1,284 read", and it should be the true number.
     considered: usize,
+    /// How many were passed over for want of analysis. Reported rather than
+    /// quietly dropped: a set built from a tenth of the library looks the same
+    /// as one built from all of it (TD-43b).
+    skipped: usize,
 }
 
 /// Order a set of tracks along an energy and tempo curve, from what is known.
@@ -1108,6 +1133,7 @@ fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<V
     }
 
     let considered = pool.len();
+    let skipped = app.rows.len().saturating_sub(considered);
     Ok(VibePath {
         hrefs: vapor_library::generate_mood_path(
             &pool,
@@ -1118,6 +1144,7 @@ fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<V
             &std::collections::HashMap::new(),
         ),
         considered,
+        skipped,
     })
 }
 
@@ -1248,6 +1275,8 @@ struct TrackDetails {
     /// track.
     href_path: String,
     cached: bool,
+    /// Why this track cannot be played, when it cannot (TD-12).
+    unplayable: Option<String>,
 }
 
 #[tauri::command]
@@ -1285,11 +1314,12 @@ fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails>
         duration: analysis.map_or(0.0, |a| a.duration),
         cue_in: analysis.map_or(0.0, |a| a.cue_in),
         cue_out: analysis.map_or(0.0, |a| a.cue_out),
-        energy: analysis.map_or(0.0, |a| energy_from_lufs(a.lufs)),
+        energy: analysis.map_or(0.0, |a| a.energy),
         beats: analysis.map_or(0, |a| a.beats.len()),
         waveform: analysis.map(|a| a.waveform.clone()).unwrap_or_default(),
         href_path: href.clone(),
         cached: app.cache.contains(&href),
+        unplayable: app.failures.get(&href).cloned(),
     })
 }
 
@@ -1643,10 +1673,22 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
             |progress| {
                 // Persist as each track lands rather than at the end: quitting
                 // halfway then loses only the track in flight.
-                if let Some(a) = &progress.analysis {
-                    if let Ok(mut app) = state_arc.lock() {
+                if let Ok(mut app) = state_arc.lock() {
+                    if let Some(a) = &progress.analysis {
                         app.analysis.insert(progress.href.clone(), a.clone());
                         let _ = app.save_analysis();
+                        // It worked this time, so whatever was wrong before is
+                        // no longer true.
+                        if app.failures.remove(&progress.href).is_some() {
+                            let _ = app.save_failures();
+                        }
+                    } else if let Some(reason) = &progress.error {
+                        // Only the permanent kind. A track that simply was not
+                        // downloaded when the pass ran must not be condemned.
+                        if !progress.retryable {
+                            app.failures.insert(progress.href.clone(), reason.clone());
+                            let _ = app.save_failures();
+                        }
                     }
                 }
                 let _ = handle.emit("analysis-progress", &progress);

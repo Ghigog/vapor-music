@@ -95,6 +95,17 @@ export function LinerNotes({
         </div>
       )}
 
+      {track.unplayable && (
+        <section className="liner__card liner__card--warn">
+          <h2 className="label">cannot be played</h2>
+          <p className="liner__note">
+            {track.unplayable}. Vapor read this file and could not use it —
+            ffmpeg tolerates some files Symphonia will not. Re-encoding it on
+            the server is the fix.
+          </p>
+        </section>
+      )}
+
       {track.analysed ? (
         <>
           <section className="liner__card glass">

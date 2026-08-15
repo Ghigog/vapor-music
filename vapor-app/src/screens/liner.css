@@ -167,3 +167,15 @@
   color: #8c1d18;
   font-size: var(--fs-sm);
 }
+
+/* An unplayable track is stated plainly rather than left for the moment a
+   person presses play and hears nothing. */
+.liner__card--warn {
+  background: rgba(214, 158, 32, 0.1);
+  border: 1px solid rgba(214, 158, 32, 0.34);
+  padding: 18px 20px;
+  border-radius: var(--r-xl);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

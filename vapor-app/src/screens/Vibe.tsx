@@ -13,7 +13,8 @@
  * two numbers and then playing a hard cut. `matchable` comes from
  * `Mixer::tempo_ratio`, not from a comparison invented here.
  *
- * Energy is derived from loudness, which is a stand-in and labelled as one.
+ * Energy is loudness, brightness and tempo in equal parts — enough to keep a
+ * loud ballad and a quiet banger apart, which loudness alone could not.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -73,7 +74,12 @@ export function Vibe() {
       // reorders what comes next without interrupting the current track.
       await core.playTracks(path.hrefs, playback.href);
       setResult(
-        `${path.hrefs.length} tracks, chosen from ${path.considered.toLocaleString()} the DJ has listened to.`,
+        `${path.hrefs.length} tracks, chosen from ${path.considered.toLocaleString()} the DJ has listened to.` +
+          // Silence about the rest would make a set built from a tenth of the
+          // library look identical to one built from all of it.
+          (path.skipped > 0
+            ? ` ${path.skipped.toLocaleString()} were passed over — not analysed yet.`
+            : ""),
       );
       await refresh();
     } catch (e: unknown) {
@@ -200,8 +206,8 @@ export function Vibe() {
         {result && <p className="vibe__result">{result}</p>}
         {error && <p className="vibe__error">{error}</p>}
         <p className="vibe__note">
-          Energy is estimated from loudness for now — a loud ballad and a quiet
-          banger are not the same thing, and this cannot yet tell them apart.
+          Energy is loudness, brightness and tempo in equal parts — enough to
+          tell a loud ballad from a quiet banger, which loudness alone cannot.
         </p>
       </section>
     </div>

@@ -273,6 +273,8 @@ export interface VibePath {
   hrefs: string[];
   /** Library tracks eligible to be planned with — analysed, with a tempo. */
   considered: number;
+  /** How many were passed over for want of analysis. */
+  skipped: number;
 }
 
 /**
@@ -334,6 +336,8 @@ export interface TrackDetails {
   waveform: number[];
   hrefPath: string;
   cached: boolean;
+  /** Why this track cannot be played, when it cannot (TD-12). */
+  unplayable: string | null;
 }
 
 export function trackDetails(href: string): Promise<TrackDetails> {
@@ -382,6 +386,10 @@ export interface AnalysisStatus {
 export interface Analysis {
   bpm: number;
   key: string;
+  introKey: string;
+  outroKey: string;
+  /** Perceived energy, 0–1 — loudness, brightness and tempo. */
+  energy: number;
   beats: number[];
   cueIn: number;
   cueOut: number;

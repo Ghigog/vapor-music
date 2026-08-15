@@ -45,6 +45,15 @@ pub struct Analysis {
     /// Envelope peaks for drawing a waveform. See `vapor_dsp::WAVEFORM_BINS`.
     #[serde(default)]
     pub waveform: Vec<f32>,
+    /// Camelot key at each end of the track (TD-13). Empty on a track too
+    /// short for a segment to differ from the whole.
+    #[serde(default)]
+    pub intro_key: String,
+    #[serde(default)]
+    pub outro_key: String,
+    /// Perceived energy, 0–1 — loudness, brightness and tempo (TD-42b).
+    #[serde(default)]
+    pub energy: f32,
     /// Schema version, so a future change to what analysis produces can
     /// invalidate stale entries instead of silently mixing formats.
     #[serde(default)]
@@ -54,12 +63,12 @@ pub struct Analysis {
 /// Bump when the meaning of any field changes. Entries at a lower version are
 /// re-analysed rather than trusted.
 ///
-/// 2 added the waveform. A `#[serde(default)]` empty vector would have avoided
+/// 3 added segment keys and a real energy figure; 2 added the waveform. A `#[serde(default)]` empty vector would have avoided
 /// the re-analysis, and would have left a library where some tracks draw a
 /// waveform and others cannot, with no way to tell why or to fix it short of
 /// deleting everything. Invalidating is what this constant is for — the pass is
 /// resumable, cached per track, and now has a progress bar and a stop button.
-pub const ANALYSIS_VERSION: u32 = 2;
+pub const ANALYSIS_VERSION: u32 = 3;
 
 /// Analysis results keyed by href.
 pub type Cache = HashMap<String, Analysis>;
@@ -77,6 +86,13 @@ pub struct Progress {
     /// Present when this track failed. The pass continues either way — one
     /// unreadable file must not stop a library-wide analysis.
     pub error: Option<String>,
+    /// Whether trying again could plausibly succeed.
+    ///
+    /// "Not downloaded yet" is retryable; "decodes to zero samples" is not. The
+    /// distinction is what lets the shell remember the second kind and refuse
+    /// to play it, without also condemning every track that simply had not been
+    /// fetched when the pass ran (TD-12).
+    pub retryable: bool,
 }
 
 /// Analyse one decoded file.
@@ -91,6 +107,9 @@ pub fn analyse_file(path: &Path) -> Result<Analysis, String> {
         lufs: result.lufs,
         duration: result.duration_secs,
         waveform: result.waveform,
+        intro_key: result.intro_key,
+        outro_key: result.outro_key,
+        energy: result.energy,
         version: ANALYSIS_VERSION,
     })
 }
@@ -154,11 +173,12 @@ pub fn run<F>(
             return;
         }
 
-        let outcome = match resolve(href) {
-            Some(path) => analyse_file(&path),
-            // Not an error worth stopping for: the file simply is not cached
-            // locally yet.
-            None => Err("not available locally".to_string()),
+        // Resolved separately from analysed, because the two failures mean
+        // opposite things: one is "come back later", the other is "this file
+        // will never work".
+        let (outcome, retryable) = match resolve(href) {
+            Some(path) => (analyse_file(&path), false),
+            None => (Err("not available locally".to_string()), true),
         };
 
         let (analysis, error) = match outcome {
@@ -172,6 +192,7 @@ pub fn run<F>(
             href: href.clone(),
             analysis,
             error,
+            retryable,
         });
     }
 }
@@ -225,6 +246,32 @@ mod tests {
 
         assert_eq!(seen.len(), 3, "the pass stopped early: {seen:?}");
         assert!(seen.iter().all(|(_, failed)| *failed));
+    }
+
+    /// A file that is merely not downloaded yet must not be remembered as
+    /// broken — otherwise a pass run before the cache warmed would condemn the
+    /// whole library.
+    #[test]
+    fn a_missing_file_is_retryable_and_a_broken_one_is_not() {
+        let mut seen = Vec::new();
+        run(
+            &["/absent.mp3".to_string()],
+            |_| None,
+            &Cancel::new(),
+            |p| seen.push(p.retryable),
+        );
+        assert_eq!(seen, vec![true], "an uncached file was condemned");
+
+        // A file that resolves but cannot be analysed is the other case: the
+        // path exists, the bytes are unusable.
+        let mut seen = Vec::new();
+        run(
+            &["/broken.mp3".to_string()],
+            |_| Some(PathBuf::from("/nonexistent/vapor-broken-fixture.mp3")),
+            &Cancel::new(),
+            |p| seen.push(p.retryable),
+        );
+        assert_eq!(seen, vec![false], "an unreadable file was marked retryable");
     }
 
     #[test]

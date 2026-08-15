@@ -39,6 +39,22 @@ pub struct Analysis {
     pub duration_secs: f64,
     pub sample_rate: u32,
     pub channels: usize,
+    /// Camelot key of the track's opening and closing spans (TD-13).
+    ///
+    /// The pathfinder prefers these to the whole-track key, because a mix
+    /// happens at the *seam*: what matters is the key the outgoing track ends
+    /// in and the one the incoming track starts in, which on a track that
+    /// modulates are not the whole-track answer. Empty when the track is too
+    /// short for a segment to mean anything separate from the whole.
+    pub intro_key: String,
+    pub outro_key: String,
+    /// Perceived energy, 0–1 (TD-42b).
+    ///
+    /// Loudness, brightness and tempo averaged with equal weight. Equal
+    /// because there is no ground truth here to justify anything else —
+    /// weighting them by feel would be a tuned constant pretending to be a
+    /// measurement. See [`energy`].
+    pub energy: f32,
     /// Envelope peaks across the whole track, for drawing a waveform.
     ///
     /// A fixed number of bins rather than a fixed resolution, so a five-minute
@@ -50,6 +66,55 @@ pub struct Analysis {
 
 /// Envelope bins stored per track. See [`Analysis::waveform`].
 pub const WAVEFORM_BINS: usize = 64;
+
+/// Span read for the intro and outro keys, in seconds.
+///
+/// Long enough to establish a tonality and short enough to still be "the
+/// opening" of a five-minute track. Both are measured from the audible content
+/// rather than the file, so a long silent lead-in does not become the intro.
+const SEGMENT_SECS: f64 = 45.0;
+
+/// Below this a track has no meaningful segments — the intro, the outro and the
+/// whole are all the same music, and reporting three keys would imply a
+/// distinction that is not there.
+const MIN_SEGMENTED_SECS: f64 = SEGMENT_SECS * 3.0;
+
+/// Tempo mapped onto 0–1 for the energy average.
+///
+/// 60 BPM is about as slow as recorded music gets before it stops reading as a
+/// pulse; 180 is about as fast before the perceived tempo halves.
+fn tempo_energy(bpm: f32) -> f32 {
+    ((bpm - 60.0) / 120.0).clamp(0.0, 1.0)
+}
+
+/// Loudness mapped onto 0–1 for the energy average.
+///
+/// Anchored on the range a mastered library actually occupies: about −20 LUFS
+/// for something gentle, about −6 for something relentless.
+fn loudness_energy(lufs: f32) -> f32 {
+    if !lufs.is_finite() {
+        return 0.0;
+    }
+    ((lufs + 20.0) / 14.0).clamp(0.0, 1.0)
+}
+
+/// Perceived energy from its three ingredients.
+///
+/// Loudness alone orders a set badly — it cannot tell a loud ballad from a
+/// quiet banger, which is exactly the pair the DJ has to keep apart. Brightness
+/// separates them spectrally and tempo separates them rhythmically.
+///
+/// Equal weights, deliberately. There is no annotated corpus here to fit
+/// against, and picking weights by ear would produce a tuned constant that
+/// looks like a measurement — the mistake MIG-002b was reverted for twice.
+pub fn energy(lufs: f32, brightness: f32, bpm: f32) -> f32 {
+    let parts = [
+        loudness_energy(lufs),
+        brightness.clamp(0.0, 1.0),
+        tempo_energy(bpm),
+    ];
+    parts.iter().sum::<f32>() / parts.len() as f32
+}
 
 #[derive(Debug)]
 pub enum AnalysisError {
@@ -175,6 +240,32 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
     let (cue_in, cue_out) = loudness::cue_points(&audio.samples, rate as f32);
     let lufs = loudness::integrated_lufs(&audio.samples, rate as f32);
 
+    // Segment keys are read from the audible span, not the file: a track with
+    // ten seconds of silence at the front would otherwise have an "intro key"
+    // estimated from nothing.
+    let duration = audio.duration_secs();
+    let (intro_key, outro_key) = if duration >= MIN_SEGMENTED_SECS {
+        let sample_at = |secs: f64| ((secs * rate as f64) as usize).min(total);
+        let intro_from = sample_at(cue_in as f64);
+        let intro_to = sample_at(cue_in as f64 + SEGMENT_SECS);
+        let outro_to = sample_at(cue_out as f64);
+        let outro_from = sample_at((cue_out as f64 - SEGMENT_SECS).max(cue_in as f64));
+
+        let segment = |from: usize, to: usize| -> String {
+            if to <= from {
+                return String::new();
+            }
+            key::estimate(&spectrum::for_key(&audio.samples[from..to], rate))
+                .map(|k| k.camelot)
+                .unwrap_or_default()
+        };
+        (segment(intro_from, intro_to), segment(outro_from, outro_to))
+    } else {
+        (String::new(), String::new())
+    };
+
+    let brightness = spectrum::brightness(&key_spec);
+
     Ok(Analysis {
         bpm: tempo.bpm,
         beats,
@@ -187,8 +278,127 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         duration_secs: audio.duration_secs(),
         sample_rate: rate,
         channels: audio.channels,
+        intro_key,
+        outro_key,
+        energy: energy(lufs, brightness, tempo.bpm),
         // Computed from the same decoded signal every other stage used, so it
         // costs a pass over memory rather than another decode.
         waveform: loudness::waveform_peaks(&audio.samples, WAVEFORM_BINS),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pair the DJ has to keep apart, and the reason loudness alone was not
+    /// good enough: a loud ballad and a quiet banger.
+    #[test]
+    fn energy_separates_a_loud_ballad_from_a_quiet_banger() {
+        // Loud, dark, slow.
+        let ballad = energy(-7.0, 0.10, 68.0);
+        // Quieter, bright, fast.
+        let banger = energy(-13.0, 0.55, 168.0);
+
+        assert!(
+            banger > ballad,
+            "a quiet banger ({banger:.2}) did not out-energise a loud ballad ({ballad:.2})"
+        );
+        // And loudness alone would have got it backwards, which is the whole
+        // point of the change.
+        assert!(loudness_energy(-7.0) > loudness_energy(-13.0));
+    }
+
+    #[test]
+    fn energy_is_bounded_for_any_input() {
+        for lufs in [-60.0f32, -20.0, -14.0, -6.0, 0.0, f32::NAN, f32::INFINITY] {
+            for brightness in [-1.0f32, 0.0, 0.5, 1.0, 9.0] {
+                for bpm in [0.0f32, 60.0, 128.0, 400.0] {
+                    let e = energy(lufs, brightness, bpm);
+                    assert!(
+                        (0.0..=1.0).contains(&e),
+                        "energy({lufs}, {brightness}, {bpm}) = {e}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Each ingredient has to move the answer, or it is not an ingredient.
+    #[test]
+    fn every_ingredient_changes_the_result() {
+        let base = energy(-14.0, 0.3, 120.0);
+        assert!(energy(-8.0, 0.3, 120.0) > base, "loudness had no effect");
+        assert!(energy(-14.0, 0.8, 120.0) > base, "brightness had no effect");
+        assert!(energy(-14.0, 0.3, 175.0) > base, "tempo had no effect");
+    }
+
+    /// A track shorter than three segments has no separate intro or outro, and
+    /// claiming otherwise would imply a distinction that is not there.
+    #[test]
+    fn a_short_track_reports_no_segment_keys() {
+        let rate = 44_100u32;
+        let secs = 30.0;
+        let samples: Vec<f32> = (0..(rate as f64 * secs) as usize)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                // A C major triad, so key estimation has something to find.
+                ((t * 261.63 * std::f32::consts::TAU).sin()
+                    + (t * 329.63 * std::f32::consts::TAU).sin()
+                    + (t * 392.00 * std::f32::consts::TAU).sin())
+                    * 0.2
+            })
+            .collect();
+
+        let audio = decode::DecodedAudio {
+            samples,
+            sample_rate: rate,
+            channels: 1,
+        };
+        let result = analyze_decoded(&audio).expect("analyse");
+        assert!(result.intro_key.is_empty());
+        assert!(result.outro_key.is_empty());
+        assert!(
+            !result.camelot.is_empty(),
+            "the whole-track key still works"
+        );
+    }
+
+    /// A long track gets segment keys, and on one that never modulates they
+    /// agree with the whole — which is the case that proves the windows are
+    /// pointed at real audio rather than at silence.
+    #[test]
+    fn a_long_unmodulating_track_agrees_with_itself() {
+        let rate = 44_100u32;
+        let secs = 180.0;
+        let samples: Vec<f32> = (0..(rate as f64 * secs) as usize)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                ((t * 261.63 * std::f32::consts::TAU).sin()
+                    + (t * 329.63 * std::f32::consts::TAU).sin()
+                    + (t * 392.00 * std::f32::consts::TAU).sin())
+                    * 0.2
+            })
+            .collect();
+
+        let audio = decode::DecodedAudio {
+            samples,
+            sample_rate: rate,
+            channels: 1,
+        };
+        let result = analyze_decoded(&audio).expect("analyse");
+
+        assert!(
+            !result.intro_key.is_empty(),
+            "no intro key on a 3-minute track"
+        );
+        assert!(
+            !result.outro_key.is_empty(),
+            "no outro key on a 3-minute track"
+        );
+        assert_eq!(
+            result.intro_key, result.outro_key,
+            "a track that never modulates reported two different segment keys"
+        );
+    }
 }
