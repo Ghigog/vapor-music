@@ -1,6 +1,6 @@
 # Vapor Music — Tech debt
 
-**Last reviewed:** 2026-08-15 (TD-01, TD-03 and TD-10 closed)
+**Last reviewed:** 2026-08-15 (TD-01, TD-03, TD-08, TD-10 and TD-25 closed)
 
 Known shortcuts, deferred work and things that are wrong but not yet worth
 fixing. Kept separate from `docs/MIGRATION.md`, which tracks the *plan*; this
@@ -46,7 +46,8 @@ Things that would be a defect if the app shipped today.
 | TD-22 | **Time-stretch is a placeholder.** WSOLA works and is transparent at the ±2% beat-matching uses, but was written to prove the approach rather than chosen on measured quality against Rubber Band or signalsmith-stretch. | MIG-012 |
 | TD-23 | **Standard Crossfade is not equal-power.** Replicated from Godot including its ~3 dB midpoint dip. Deliberate — fidelity over correctness during a refactor — and pinned by a test so changing it is visible. | MIG-015 |
 | TD-24 | **cpal is unvalidated on iOS and Android.** The least battle-tested part of the audio stack, and phase 4 is where it would be discovered late. TD-03 exercises it on macOS desktop only; that says nothing about either mobile target. | MIG-011 |
-| TD-25 | **The app plays tracks, it does not mix them.** `vapor-engine` beat-matches, and the shell drives one deck sequentially: a track ends, the next loads and starts. So the product's whole reason for existing — the transition — is unreachable from the app even though the engine and the analysis both support it. Blocked on TD-08: you cannot beat-match into a track that has not been downloaded and decoded ahead of time. | MIG-008, TD-08 |
+| ~~TD-25~~ | ~~The app plays tracks, it does not mix them.~~ **Done** — the supervisor decodes the next track ~30 s before the outgoing one's `cue_out` and schedules a beat-matched mix. Beat grids never cross to the audio thread: the alignment is computed on the control side and only a ratio and a cue position are sent (`Mixer::schedule_prepared`). A mix falls back to plain sequential playback whenever it cannot be arranged — no analysis, or tempi more than ±6% apart — which on a queue in title order is the common case, not an error. **What is still missing: choosing the transition *type* per pair.** Every mix is a Standard Crossfade; the Godot build picked from context. | MIG-008, TD-27 |
+| TD-27 | **Every mix is a Standard Crossfade.** The engine has three transition types and the shell always picks one, because nothing ports the Godot build's per-context choice. Standard Crossfade is the least opinionated of the three, and it is also the one with the inherited ~3 dB midpoint dip (TD-23), so the default is both arbitrary and the weakest-sounding of the set. | TD-20, TD-23 |
 | TD-26 | **No repeat or shuffle, and the queue always wraps.** `Queue::next` advances modulo the queue length, so the end of a queue silently restarts it and a one-track queue repeats forever. That is the core's pinned behaviour, inherited rather than chosen; there is no UI to change it and no "stop at the end" mode. | `vapor-core/crates/vapor-library/src/queue.rs` |
 
 ## Shell and UI

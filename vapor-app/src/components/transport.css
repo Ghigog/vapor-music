@@ -171,3 +171,14 @@
   color: var(--ink-2);
   padding-top: 4px;
 }
+
+/* The mix indicator. Accent-coloured because it is the app's whole point, and
+   because it must not read as an error while it briefly replaces the artist. */
+.transport__mixing {
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+}

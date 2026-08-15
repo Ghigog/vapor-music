@@ -257,6 +257,99 @@ fn pausing_is_not_an_ending() {
     assert_eq!(link.snapshot().status, vapor_app_lib::audio::Status::Paused);
 }
 
+/// A mix must be arrangeable without allocating on the audio thread either.
+///
+/// This is the case the design bends around: beat grids are `Vec<f32>`, and if
+/// one crossed to the audio thread it would have to be freed there. The
+/// alignment is computed on the control side and only two scalars cross, which
+/// is what this measures.
+#[test]
+fn arranging_a_mix_does_not_allocate_on_the_audio_thread() {
+    use vapor_engine::mixer::BeatGrid;
+    use vapor_engine::{Mixer, TransitionType};
+
+    let (link, mut engine, mut out) = setup();
+
+    assert!(link.load(tone(30.0), true));
+    assert!(link.preload(tone(30.0)));
+    for _ in 0..32 {
+        engine.render(&mut out);
+    }
+
+    // Grids exist here, on the control side, and stay here.
+    let grid = |bpm: f32| BeatGrid {
+        bpm,
+        beats: (0..2000).map(|i| i as f32 * 60.0 / bpm).collect(),
+    };
+    let (a, b) = (grid(128.0), grid(126.0));
+    let ratio = Mixer::tempo_ratio(&a, &b).expect("ratio");
+    let pos = Mixer::aligned_incoming_position(&a, &b, 2.0, 1.0).expect("position");
+
+    assert!(link.schedule_transition(TransitionType::BassSwap, 4.0, pos, ratio, 2.0));
+
+    measure();
+    // Long enough to cover the wait, the whole mix and the deck swap.
+    for _ in 0..600 {
+        engine.render(&mut out);
+    }
+    let (allocs, frees) = stop_measuring();
+
+    assert_eq!(
+        (allocs, frees),
+        (0, 0),
+        "arranging and running a mix cost {allocs} allocations and {frees} frees"
+    );
+
+    // Guard against measuring a mix that never happened.
+    assert!(
+        link.take_swapped(),
+        "the transition never completed, so nothing was measured"
+    );
+    assert!(!link.transition_armed());
+}
+
+/// Cancelling must leave the track that is playing alone — it is what runs
+/// whenever a person picks something else while a mix is arranged.
+#[test]
+fn cancelling_a_mix_leaves_playback_running() {
+    use vapor_engine::mixer::BeatGrid;
+    use vapor_engine::{Mixer, TransitionType};
+
+    let (link, mut engine, mut out) = setup();
+
+    assert!(link.load(tone(30.0), true));
+    assert!(link.preload(tone(30.0)));
+    for _ in 0..16 {
+        engine.render(&mut out);
+    }
+
+    let grid = |bpm: f32| BeatGrid {
+        bpm,
+        beats: (0..2000).map(|i| i as f32 * 60.0 / bpm).collect(),
+    };
+    let (a, b) = (grid(128.0), grid(126.0));
+    let ratio = Mixer::tempo_ratio(&a, &b).expect("ratio");
+    let pos = Mixer::aligned_incoming_position(&a, &b, 10.0, 1.0).expect("position");
+    link.schedule_transition(TransitionType::BassSwap, 4.0, pos, ratio, 10.0);
+    for _ in 0..4 {
+        engine.render(&mut out);
+    }
+    assert!(link.transition_armed(), "the mix was never armed");
+
+    link.cancel_transition();
+    for _ in 0..8 {
+        engine.render(&mut out);
+    }
+
+    assert!(!link.transition_armed(), "the mix survived a cancel");
+    assert!(!link.take_swapped(), "a cancelled mix reported a swap");
+    assert_eq!(
+        link.snapshot().status,
+        vapor_app_lib::audio::Status::Playing,
+        "cancelling a mix stopped playback"
+    );
+}
+
 /// Opening a real device, which nothing else here touches.
 ///
 /// Every test above drives an [`Engine`] directly, so none of them would notice

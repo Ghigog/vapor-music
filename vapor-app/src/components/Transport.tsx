@@ -79,7 +79,15 @@ export function Transport() {
           {state.title || "Nothing playing"}
         </div>
         <div className="transport__artist" title={state.artist}>
-          {loading ? "loading…" : state.artist || "—"}
+          {/* Mixing outranks the artist name here: it is the one moment the
+              app is doing what it exists to do, and it lasts a few seconds. */}
+          {state.mixing ? (
+            <span className="transport__mixing">mixing</span>
+          ) : loading ? (
+            "loading…"
+          ) : (
+            state.artist || "—"
+          )}
         </div>
       </div>
 

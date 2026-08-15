@@ -263,6 +263,34 @@ impl Mixer {
         let incoming_pos =
             Self::aligned_incoming_position(outgoing_grid, incoming_grid, start_time_out, cue_in)?;
 
+        self.schedule_prepared(kind, duration, incoming_pos, ratio, delay_frames);
+        Ok(())
+    }
+
+    /// Schedule a transition whose alignment has already been worked out.
+    ///
+    /// [`schedule_transition`](Self::schedule_transition) reads both beat grids
+    /// to derive the tempo ratio and the incoming cue position. A player cannot
+    /// do that where the mixer is actually driven: the grids are `Vec<f32>`, the
+    /// mixer runs on the audio thread, and neither allocating nor freeing a
+    /// `Vec` is allowed there.
+    ///
+    /// So the shell computes the alignment on a control thread —
+    /// [`tempo_ratio`](Self::tempo_ratio) and
+    /// [`aligned_incoming_position`](Self::aligned_incoming_position) are public
+    /// and pure precisely so it can — and hands the two scalars here. No grid
+    /// ever crosses the boundary.
+    ///
+    /// Infallible by construction: every way this could fail was already decided
+    /// by the caller that produced `ratio`.
+    pub fn schedule_prepared(
+        &mut self,
+        kind: TransitionType,
+        duration: f32,
+        incoming_pos: f32,
+        ratio: f64,
+        delay_frames: usize,
+    ) {
         let pending = PendingTransition {
             kind,
             duration,
@@ -276,7 +304,38 @@ impl Mixer {
         } else {
             self.pending = Some(pending);
         }
-        Ok(())
+    }
+
+    /// Abandon a transition, scheduled or in flight, and restore the outgoing
+    /// deck.
+    ///
+    /// Needed because a transition is decided seconds before it is heard, and a
+    /// person can pick a different track in between. Without this, an explicit
+    /// choice would be interrupted moments later by a mix that was arranged
+    /// before it was made.
+    ///
+    /// Cancelling a transition already under way is audible — the outgoing deck
+    /// returns to full immediately. That is accepted: the only caller is a
+    /// person choosing something else, and whatever is playing is about to be
+    /// replaced anyway. Allocation-free, so it is safe to call from the render
+    /// path.
+    pub fn cancel_transition(&mut self) {
+        self.pending = None;
+        self.glide = None;
+
+        if self.transition.take().is_some() {
+            let incoming = self.incoming();
+            incoming.stop();
+            incoming.set_gain_db(-60.0);
+            incoming.ratio = 1.0;
+
+            let outgoing = self.outgoing();
+            outgoing.set_gain_db(0.0);
+            outgoing.set_eq_db(0.0, 0.0, 0.0);
+            outgoing.set_clip_attenuation(clipping::Bands::default());
+            outgoing.set_sweep(None);
+            outgoing.ratio = 1.0;
+        }
     }
 
     /// True when a transition has been decided but has not begun.
@@ -440,6 +499,8 @@ pub fn no_sweep() -> Option<Sweep> {
 mod tests {
     use super::*;
 
+    const RATE: f32 = 44_100.0;
+
     fn grid(bpm: f32, start: f32, count: usize) -> BeatGrid {
         let period = 60.0 / bpm;
         BeatGrid {
@@ -531,6 +592,90 @@ mod tests {
             "beats land {:.4}s apart (out {out_delay:.4}s, in {in_delay:.4}s)",
             (out_delay - in_delay).abs()
         );
+    }
+
+    /// The scalars route must place the incoming deck exactly where the grid
+    /// route does — otherwise a player using it would beat-match differently
+    /// from every test that proves beat-matching works.
+    #[test]
+    fn preparing_by_hand_matches_scheduling_from_grids() {
+        let out = grid(128.0, 0.1, 400);
+        let inc = grid(126.0, 0.37, 400);
+        let (start, cue) = (30.0, 8.0);
+
+        let mut from_grids = Mixer::new(RATE, 512);
+        from_grids
+            .start_transition(TransitionType::BassSwap, 6.0, &out, &inc, start, cue)
+            .expect("schedule");
+
+        let ratio = Mixer::tempo_ratio(&out, &inc).expect("ratio");
+        let pos = Mixer::aligned_incoming_position(&out, &inc, start, cue).expect("position");
+        let mut prepared = Mixer::new(RATE, 512);
+        prepared.schedule_prepared(TransitionType::BassSwap, 6.0, pos, ratio, 0);
+
+        assert!((from_grids.incoming().ratio - prepared.incoming().ratio).abs() < 1e-12);
+        assert!(
+            (from_grids.incoming().position_seconds() - prepared.incoming().position_seconds())
+                .abs()
+                < 1e-9,
+            "the two routes cued the incoming deck to different positions"
+        );
+    }
+
+    /// A person picking a different track must not be interrupted by a mix
+    /// arranged before they chose.
+    #[test]
+    fn a_cancelled_transition_leaves_the_outgoing_deck_playing() {
+        let out = grid(128.0, 0.0, 400);
+        let inc = grid(126.0, 0.0, 400);
+
+        let mut mixer = Mixer::new(RATE, 512);
+        mixer.deck_a.load(vec![[0.5f32; 2]; (RATE * 60.0) as usize]);
+        mixer.deck_b.load(vec![[0.5f32; 2]; (RATE * 60.0) as usize]);
+        mixer.deck_a.play();
+        mixer
+            .start_transition(TransitionType::BassSwap, 6.0, &out, &inc, 10.0, 1.0)
+            .expect("schedule");
+        assert!(mixer.is_transitioning());
+
+        let mut block = [[0.0f32; 2]; 512];
+        for _ in 0..8 {
+            mixer.render(&mut block);
+        }
+
+        mixer.cancel_transition();
+
+        assert!(!mixer.is_transitioning());
+        assert!(!mixer.has_pending_transition());
+        assert!(
+            mixer.outgoing().is_playing(),
+            "cancelling stopped the track that was already playing"
+        );
+        assert!(
+            !mixer.incoming().is_playing(),
+            "the incoming deck was left running after a cancel"
+        );
+
+        // And it is audible again at full level, not stuck wherever the
+        // transition's automation had faded it to.
+        for _ in 0..4 {
+            mixer.render(&mut block);
+        }
+        let peak = block
+            .iter()
+            .flat_map(|s| [s[0].abs(), s[1].abs()])
+            .fold(0.0f32, f32::max);
+        assert!(peak > 0.4, "the restored deck is inaudible: peak {peak}");
+    }
+
+    /// Cancelling with nothing scheduled must be a no-op rather than a panic —
+    /// the shell calls it before every explicit load.
+    #[test]
+    fn cancelling_nothing_is_harmless() {
+        let mut mixer = Mixer::new(RATE, 512);
+        mixer.cancel_transition();
+        mixer.cancel_transition();
+        assert!(!mixer.is_transitioning());
     }
 
     /// Alignment must hold regardless of where in the bar the transition is

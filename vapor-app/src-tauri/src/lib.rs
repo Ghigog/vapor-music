@@ -71,6 +71,9 @@ struct AppState {
     /// Why the last load failed, surfaced instead of silence with no
     /// explanation.
     playback_error: Option<String>,
+    /// The track cued on the other deck for a beat-matched mix, if one is
+    /// arranged. Cleared when the mix completes or is abandoned.
+    armed_next: Option<String>,
 }
 
 impl AppState {
@@ -118,6 +121,7 @@ impl AppState {
             generation: 0,
             loading: false,
             playback_error: None,
+            armed_next: None,
         }
     }
 
@@ -390,6 +394,10 @@ struct PlaybackState {
     /// False when the machine has no output device. The UI disables the
     /// transport rather than offering buttons that silently do nothing.
     available: bool,
+    /// True while a beat-matched mix is arranged or under way. The one moment
+    /// the app is doing what it exists to do, so it should be visible rather
+    /// than inferred from two tracks being audible at once.
+    mixing: bool,
 }
 
 /// Fetch, decode and start a track.
@@ -412,6 +420,10 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     app.loading = true;
     app.playback_error = None;
     app.playing = Some(href.clone());
+    // A mix arranged before this choice is now for the wrong track. The engine
+    // cancels its own side when the load lands; this is the shell's half.
+    app.armed_next = None;
+    player.cancel_transition();
 
     let link = player.link();
     let rate = player.sample_rate();
@@ -499,6 +511,7 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         volume: snapshot.map_or(1.0, |s| s.volume),
         error: app.playback_error.clone(),
         available: app.player.is_some(),
+        mixing: app.player.as_ref().is_some_and(|p| p.transition_armed()),
     })
 }
 
@@ -544,6 +557,163 @@ fn set_volume(volume: f32, state: State<'_, Shared>) -> Result<()> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
     player(&app)?.set_volume(volume);
     Ok(())
+}
+
+/// How long before a mix begins to start decoding the incoming track.
+///
+/// Long enough for a fetch and a decode — the track is normally already
+/// downloaded by the prefetcher, so this is mostly decode — and short enough
+/// that two whole tracks are only in memory near the seam rather than for the
+/// whole of every song (TD-09).
+const TRANSITION_ARM_LEAD: f64 = 30.0;
+
+/// The mix used when nothing has chosen one.
+///
+/// Choosing per pair is what the Godot build did from context and what
+/// `dj_pathfinder` is eventually for; until that is ported, one neutral choice
+/// beats a random one. Standard Crossfade is the least opinionated of the
+/// three — Bass Swap and Filter Sweep both alter the sound of the outgoing
+/// track on the way out.
+const DEFAULT_TRANSITION: vapor_engine::TransitionType =
+    vapor_engine::TransitionType::StandardCrossfade;
+
+/// Build the mixer's beat grid for a track, honouring a manual tempo.
+///
+/// A corrected BPM has to reach the grid, not just the table: the correction
+/// exists because detection put the track at half or double time, and mixing
+/// on the uncorrected value would beat-match to a tempo the person has already
+/// said is wrong.
+fn beat_grid(analysis: &analysis::Analysis, override_bpm: Option<f32>) -> vapor_engine::BeatGrid {
+    let bpm = override_bpm.unwrap_or(analysis.bpm);
+    // The tracked grid follows real tempo drift and real downbeat phase. It is
+    // only consistent with the detected tempo, though — a corrected BPM means
+    // synthesising a grid from it instead, which assumes a beat at zero and a
+    // tempo that never wavers. Both are false for real music, and it is still
+    // better than aligning to a grid the person has told us is wrong.
+    let beats = if override_bpm.is_none() && !analysis.beats.is_empty() {
+        analysis.beats.clone()
+    } else {
+        let period = 60.0 / bpm.max(1.0);
+        let count = (analysis.duration as f32 / period) as usize;
+        (0..count).map(|i| i as f32 * period).collect()
+    };
+    vapor_engine::BeatGrid { bpm, beats }
+}
+
+/// Everything a beat-matched mix needs, once it is known to be possible.
+struct ArmedMix {
+    next: String,
+    duration: f32,
+    incoming_pos: f32,
+    ratio: f64,
+    start_at: f64,
+}
+
+/// Decide whether the next track can be mixed into rather than merely followed.
+///
+/// Returns `None` for every ordinary reason a mix cannot happen — no analysis
+/// yet, tempi too far apart to bridge musically, the moment already passed —
+/// and the caller falls back to playing the next track when this one ends.
+/// That fallback is the common case, not an error: a queue in title order will
+/// mostly hold neighbours whose tempi are nowhere near each other.
+fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
+    let current = app.playing.as_ref()?;
+    let next = app.queue.peek_next(None)?.to_string();
+    // A single-track queue would otherwise try to mix a track into itself.
+    if &next == current {
+        return None;
+    }
+
+    let outgoing = app.analysis.get(current)?;
+    let incoming = app.analysis.get(&next)?;
+
+    let duration = DEFAULT_TRANSITION.default_duration();
+    // Start early enough that the mix finishes as the outgoing track's audible
+    // content ends, rather than after it has already fallen silent.
+    let start_at = (outgoing.cue_out - duration).max(0.0) as f64;
+    if position < start_at - TRANSITION_ARM_LEAD || position > start_at {
+        return None;
+    }
+
+    let out_grid = beat_grid(outgoing, app.settings.bpm_override(current));
+    let in_grid = beat_grid(incoming, app.settings.bpm_override(&next));
+
+    // Both of these are pure and live in the engine; running them here is what
+    // keeps beat grids off the audio thread entirely.
+    let ratio = vapor_engine::Mixer::tempo_ratio(&out_grid, &in_grid).ok()?;
+    let incoming_pos = vapor_engine::Mixer::aligned_incoming_position(
+        &out_grid,
+        &in_grid,
+        start_at as f32,
+        incoming.cue_in,
+    )
+    .ok()?;
+
+    Some(ArmedMix {
+        next,
+        duration,
+        incoming_pos,
+        ratio,
+        start_at,
+    })
+}
+
+/// Decode the incoming track and arrange the mix (TD-25).
+///
+/// The decode happens off the supervisor thread because it is seconds of CPU,
+/// and the supervisor has to stay responsive enough to notice a track ending.
+fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
+    let Some(player) = app.player.as_ref() else {
+        return;
+    };
+
+    app.armed_next = Some(mix.next.clone());
+    let generation = app.generation;
+
+    let link = player.link();
+    let rate = player.sample_rate();
+    let cache_dir = app.cache.dir().to_path_buf();
+    let cache_max = app.cache.max_bytes();
+    let remote = app.settings.remote.clone();
+    let shared = Arc::clone(shared);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = cache::Cache::new(cache_dir, cache_max);
+        let outcome = cache
+            .store(&mix.next, || webdav::fetch_blocking(&remote, &mix.next))
+            .map_err(|e| e.to_string())
+            .and_then(|path| {
+                vapor_dsp::decode_for_playback(&path, rate).map_err(|e| e.to_string())
+            });
+
+        let Ok(mut app) = shared.lock() else {
+            return;
+        };
+        // A person chose something else while this was decoding, so the mix is
+        // now for the wrong pair of tracks.
+        if app.generation != generation || app.armed_next.as_deref() != Some(mix.next.as_str()) {
+            return;
+        }
+
+        match outcome {
+            Ok(frames) if !frames.is_empty() => {
+                link.preload(frames);
+                link.schedule_transition(
+                    DEFAULT_TRANSITION,
+                    mix.duration,
+                    mix.incoming_pos,
+                    mix.ratio,
+                    mix.start_at,
+                );
+            }
+            // Not surfaced. A mix that cannot be arranged is not a failure a
+            // person needs to see — the track simply plays to its end and the
+            // next one follows, which is what would have happened anyway.
+            _ => {
+                app.armed_next = None;
+            }
+        }
+    });
 }
 
 /// How often the prefetcher looks for something worth downloading.
@@ -648,8 +818,33 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
             let Ok(mut app) = shared.lock() else {
                 return;
             };
+
+            // A mix completed, so the decks have changed roles: what was cued
+            // is now what is playing. Nothing needs loading — the audio is
+            // already running — the queue just has to agree about where it is.
+            if app.player.as_ref().is_some_and(|p| p.take_swapped()) {
+                app.queue.next(None);
+                app.playing = app.armed_next.take();
+                drop(app);
+                let _ = app_handle.emit("playback-changed", ());
+                continue;
+            }
+
             // Consumed here, so one ending advances the queue exactly once.
             if !app.player.as_ref().is_some_and(|p| p.take_ended()) {
+                // Nothing ended, so this is the moment to look ahead: can the
+                // next track be mixed into rather than merely followed?
+                let position = app.player.as_ref().map_or(0.0, |p| p.snapshot().position);
+                let idle = app.loading
+                    || app.armed_next.is_some()
+                    || app.player.as_ref().is_none_or(|p| {
+                        p.transition_armed() || p.snapshot().status != audio::Status::Playing
+                    });
+                if !idle {
+                    if let Some(mix) = plan_mix(&app, position) {
+                        arm_mix(&shared, &mut app, mix);
+                    }
+                }
                 continue;
             }
 

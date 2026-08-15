@@ -51,7 +51,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use serde::Serialize;
 
-use vapor_engine::Mixer;
+use vapor_engine::{Mixer, TransitionType};
 
 /// Largest block the mixer will render in one callback.
 ///
@@ -95,6 +95,28 @@ enum Command {
         frames: Vec<[f32; 2]>,
         play: bool,
     },
+    /// Put the next track on the other deck — silent, cued, ready to be mixed
+    /// in. The transition is what makes it audible.
+    Preload {
+        frames: Vec<[f32; 2]>,
+    },
+    /// Begin a transition once the outgoing deck reaches `start_at`.
+    ///
+    /// Carries scalars, never beat grids — see `Mixer::schedule_prepared`.
+    ScheduleTransition {
+        kind: TransitionType,
+        duration: f32,
+        incoming_pos: f32,
+        ratio: f64,
+        /// Position **within the outgoing track** at which to start mixing.
+        ///
+        /// A position rather than a delay, because only the audio thread knows
+        /// where the playhead truly is. A delay computed on the control thread
+        /// would be stale by however long the command waited in the queue, and
+        /// beat alignment is measured in single-digit milliseconds.
+        start_at: f64,
+    },
+    CancelTransition,
     Play,
     Pause,
     Stop,
@@ -124,6 +146,12 @@ pub struct Link {
     /// Set when a track runs out. Consumed by the supervisor, which advances
     /// the queue — the audio thread must not know what a queue is.
     ended: AtomicBool,
+    /// Set when a transition completes and the decks change roles. The track
+    /// that was "next" is now the one playing, and the queue has to catch up.
+    swapped: AtomicBool,
+    /// True while a transition is scheduled or under way, so the control side
+    /// does not arrange a second one on top of it.
+    transition_armed: AtomicBool,
     /// Master volume, as `f32` bits.
     volume: AtomicU32,
     /// Callbacks that could not take the command lock. A health signal, not an
@@ -159,6 +187,8 @@ impl Link {
             duration: AtomicU64::new(0),
             status: AtomicU8::new(Status::Idle as u8),
             ended: AtomicBool::new(false),
+            swapped: AtomicBool::new(false),
+            transition_armed: AtomicBool::new(false),
             volume: AtomicU32::new(1.0f32.to_bits()),
             commands_deferred: AtomicU64::new(0),
             sample_rate,
@@ -197,6 +227,48 @@ impl Link {
     /// Hand a decoded track to the deck and start it.
     pub fn load(&self, frames: Vec<[f32; 2]>, play: bool) -> bool {
         self.send(Command::Load { frames, play })
+    }
+
+    /// Cue the next track on the other deck, silent.
+    pub fn preload(&self, frames: Vec<[f32; 2]>) -> bool {
+        self.send(Command::Preload { frames })
+    }
+
+    /// Arrange a beat-matched mix into the preloaded track.
+    ///
+    /// The alignment is computed by the caller — see `Mixer::schedule_prepared`
+    /// for why the grids stay on this side of the boundary.
+    pub fn schedule_transition(
+        &self,
+        kind: TransitionType,
+        duration: f32,
+        incoming_pos: f32,
+        ratio: f64,
+        start_at: f64,
+    ) -> bool {
+        self.send(Command::ScheduleTransition {
+            kind,
+            duration,
+            incoming_pos,
+            ratio,
+            start_at,
+        })
+    }
+
+    pub fn cancel_transition(&self) {
+        self.send(Command::CancelTransition);
+    }
+
+    /// True while a mix is scheduled or under way.
+    pub fn transition_armed(&self) -> bool {
+        self.transition_armed.load(Ordering::Acquire)
+    }
+
+    /// True once per completed transition, for whoever advances the queue.
+    pub fn take_swapped(&self) -> bool {
+        self.swapped
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     pub fn play(&self) {
@@ -375,7 +447,27 @@ impl Engine {
         self.apply_commands();
 
         let frames = (out.len() / self.channels).min(self.scratch.len());
+        let was_transitioning = self.mixer.is_transitioning();
         let produced = self.mixer.render(&mut self.scratch[..frames]);
+
+        // A transition that was running and now is not has completed, and the
+        // decks have changed roles: what was cued is now what is playing. The
+        // queue has to catch up, and only the supervisor can do that — the
+        // audio thread does not know what a queue is.
+        if was_transitioning && !self.mixer.is_transitioning() {
+            self.link.duration.store(
+                self.mixer.outgoing().duration_seconds().to_bits(),
+                Ordering::Relaxed,
+            );
+            self.link.swapped.store(true, Ordering::Release);
+        }
+
+        // Published every block rather than tracked by hand, so it cannot fall
+        // out of step with what the mixer actually holds.
+        self.link.transition_armed.store(
+            self.mixer.is_transitioning() || self.mixer.has_pending_transition(),
+            Ordering::Release,
+        );
 
         let target = f32::from_bits(self.link.volume.load(Ordering::Relaxed));
         write_out(
@@ -419,6 +511,10 @@ impl Engine {
             match command {
                 Command::Load { frames, play } => {
                     let seconds = frames.len() as f64 / self.link.sample_rate as f64;
+                    // An explicit choice outranks a mix arranged before it was
+                    // made. Without this, picking a track would be interrupted
+                    // seconds later by a transition into something else.
+                    self.mixer.cancel_transition();
                     let deck = self.mixer.outgoing();
                     // Reset what a previous track may have left behind. A deck
                     // still carrying a transition's EQ or stretch ratio would
@@ -455,6 +551,45 @@ impl Engine {
                     );
                 }
 
+                Command::Preload { frames } => {
+                    let deck = self.mixer.incoming();
+                    // Silent until the transition's envelope raises it. The
+                    // mixer's `activate` seeks and sets the ratio, so this only
+                    // has to undo whatever the deck was left holding by a
+                    // previous mix.
+                    deck.ratio = 1.0;
+                    deck.set_gain_db(-60.0);
+                    deck.set_eq_db(0.0, 0.0, 0.0);
+                    deck.set_sweep(None);
+                    let previous = deck.swap_samples(frames);
+
+                    debug_assert!(
+                        channel.retired.len() < channel.retired.capacity(),
+                        "the retired queue would grow, which allocates on the audio thread"
+                    );
+                    channel.retired.push_back(previous);
+                }
+
+                Command::ScheduleTransition {
+                    kind,
+                    duration,
+                    incoming_pos,
+                    ratio,
+                    start_at,
+                } => {
+                    // The delay is derived here, against the playhead as it
+                    // actually stands, rather than against wherever the control
+                    // thread last saw it. A mix that starts a queue-latency
+                    // late is a mix on the offbeat.
+                    let now = self.mixer.outgoing().position_seconds();
+                    let ahead = (start_at - now).max(0.0);
+                    let delay_frames = (ahead * self.link.sample_rate as f64) as usize;
+                    self.mixer
+                        .schedule_prepared(kind, duration, incoming_pos, ratio, delay_frames);
+                }
+
+                Command::CancelTransition => self.mixer.cancel_transition(),
+
                 // Resuming a finished track would restart it from its end and
                 // immediately report another ending, so an idle deck ignores
                 // this.
@@ -481,6 +616,7 @@ impl Engine {
                 }
 
                 Command::Stop => {
+                    self.mixer.cancel_transition();
                     let deck = self.mixer.outgoing();
                     deck.stop();
                     deck.seek_seconds(0.0);

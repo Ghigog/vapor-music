@@ -695,16 +695,51 @@ rate and channel count the device offers, for its whole life, and each track is
 resampled to it once. Reconfiguring a device between tracks is audible where it
 is possible at all, and a real library has 44.1 and 48 kHz side by side.
 
-**What this deliberately does not do.** The app *plays* tracks; it does not
-*mix* them. A track ends, the next loads and starts. The engine beat-matches and
-the analysis supplies the grids, but a beat-matched auto-transition needs the
-incoming track downloaded and decoded before the outgoing one ends — which is
-prefetch, and prefetch does not exist (TD-08). That is the next link, and it is
-what turns this from a music player into the product. Tracked as TD-25.
+Unaddressed here: streaming decode (TD-09 — a track is held whole in memory),
+and cpal on iOS and Android, which this exercises on macOS desktop only and
+therefore says nothing about (MIG-011).
 
-Also unaddressed here: streaming decode (TD-09 — a track is held whole in
-memory), and cpal on iOS and Android, which this exercises on macOS desktop only
-and therefore says nothing about (MIG-011).
+### The app mixes (TD-08, TD-25)
+
+Playback alone made the app usable; this is the part that makes it the product.
+The supervisor decodes the next track about 30 s before the outgoing one's
+`cue_out` and schedules a beat-matched mix into it, with a prefetch thread
+keeping `Queue::lookahead` downloaded so that decode is the only cost at the
+seam.
+
+**Beat grids never reach the audio thread.** This is the constraint that shaped
+the design. `schedule_transition` reads both grids to derive the tempo ratio and
+the incoming cue position — but grids are `Vec<f32>`, the mixer is driven from
+the audio callback, and neither allocating nor freeing a `Vec` is allowed there.
+So `Mixer::schedule_prepared` takes the two scalars instead, the shell computes
+them with `tempo_ratio` and `aligned_incoming_position` (both already public and
+pure), and the boundary stays clean. A test measures a whole mix — arrangement,
+crossfade and deck swap — at zero allocations and zero frees.
+
+**The trigger is a position, not a delay.** The control thread says "start at
+1:47 of the outgoing track" and the audio thread converts that to a frame count
+against the playhead as it actually stands. A delay computed on the control
+thread would be stale by however long the command sat in the queue, and beat
+alignment is measured in single-digit milliseconds.
+
+**Falling back is the common case, not an error.** A mix is refused when either
+track is unanalysed, when the tempi are more than ±6% apart, or when the moment
+has already passed — and a queue in title order will mostly be pairs whose
+tempi are nowhere near each other. Those tracks simply play one after another,
+exactly as before. Nothing is surfaced to the person, because nothing went
+wrong.
+
+**A manual BPM correction reaches the mix, not just the table.** The override
+exists because detection put a track at half or double time; beat-matching on
+the uncorrected value would align to a tempo the person has already said is
+wrong. When an override is present the tracked grid is discarded and one is
+synthesised from the corrected tempo — worse in principle, since it assumes a
+beat at zero and no drift, and still better than aligning to a rejected tempo.
+
+**What is still missing** is the *choice* of transition. The engine has three
+and the shell always picks Standard Crossfade, because nothing ports the Godot
+build's per-context selection — which also means every mix inherits that
+envelope's ~3 dB midpoint dip (TD-23). New item TD-27.
 
 ### Phase 5 — Retire
 

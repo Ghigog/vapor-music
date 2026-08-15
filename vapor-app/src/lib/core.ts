@@ -94,6 +94,8 @@ export interface PlaybackState {
   error: string | null;
   /** False when the machine has no output device at all. */
   available: boolean;
+  /** True while a beat-matched mix is arranged or under way (TD-25). */
+  mixing: boolean;
 }
 
 export interface TrackMeta {
