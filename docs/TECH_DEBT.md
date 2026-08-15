@@ -20,7 +20,8 @@ Things that would be a defect if the app shipped today.
 | TD-01 | **Fonts are not vendored.** The design specifies Outfit, Inter and JetBrains Mono; `public/fonts.css` is an empty placeholder and the UI falls back to the system font, so nothing currently matches the design's typography. The CSP correctly blocks remote origins, so they must be shipped as woff2 in `public/fonts/`. | `vapor-app/public/fonts.css` |
 | ~~TD-02~~ | ~~No persistence.~~ **Done** — playlists and settings persist via atomic write-and-rename in `store.rs`. The queue is still in memory, which is arguably correct (a stale queue on relaunch is worse than none) but was not a considered decision. | `vapor-app/src-tauri/src/store.rs` |
 | TD-03 | **No audio output in the app.** `vapor-engine` plays correctly from the `play` binary, but the Tauri shell has no audio path wired at all — the buttons move queue state and nothing is heard. | `vapor-app/src-tauri` |
-| TD-04 | **No library scan.** `AppState::rows` is always empty; nothing populates it. The WebDAV client (transport, not parsing) has not been written. | `vapor-app/src-tauri` |
+| ~~TD-04~~ | ~~No library scan.~~ **Done** — `webdav.rs` walks the tree and rebuilds the index; the password lives in the OS keychain. Rows carry no analysis yet (see TD-06). | `vapor-app/src-tauri/src/webdav.rs` |
+| TD-06 | **Scanned rows carry no analysis.** A scan fills in artist/album/title from the path, but BPM, key and genre stay empty because nothing runs `vapor-dsp` over the library yet. The table renders "—" honestly, but the Vibe DJ has nothing to work with. | `vapor-app/src-tauri` |
 | TD-05 | **Dolby Atmos does not decode.** 22 tracks in a real library are E-AC-3, which Symphonia cannot read. Shipping on macOS without a decision here is a silent regression against the Godot build, which handled them via ffmpeg. Recommendation stands: transcode on import. | MIG-003 |
 
 ## Correctness
@@ -58,7 +59,7 @@ Things that would be a defect if the app shipped today.
 
 | ID | Item | Notes |
 |---|---|---|
-| TD-40 | **The Tauri shell is not in CI.** Building its dependency tree adds several minutes per run, so it was left out rather than slowing every commit. It will rot. A path-filtered job is the fix. | — |
+| ~~TD-40~~ | ~~The Tauri shell is not in CI.~~ **Done** — `.github/workflows/app.yml`, path-filtered to `vapor-app/**` and `vapor-core/**` so it does not tax unrelated commits. | — |
 | TD-41 | **The Godot CI job runs without the GDExtension**, so DSP-dependent tests are not covered. Deliberate — building Essentia from a HEAD-only tap on every run is worse — but the gap is real. | MIG-040 |
 | TD-42 | **12 GUT tests fail** and are pinned as a known-failing baseline. Never diagnosed. | — |
 | TD-43 | **The fixture set is not reproducible by anyone else.** Validation runs against a personal library via `extract-fixtures.mjs`; there is no synthetic corpus, so no one else can verify the analysis numbers. | — |

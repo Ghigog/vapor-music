@@ -17,6 +17,7 @@
 //! core would have to be written twice.
 
 mod store;
+mod webdav;
 
 use std::sync::Mutex;
 
@@ -318,6 +319,95 @@ fn set_bpm_override(href: String, bpm: f32, state: State<'_, Shared>) -> Result<
 }
 
 // ---------------------------------------------------------------------------
+// Library scan
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanReport {
+    tracks: usize,
+    directories: usize,
+}
+
+/// Save the WebDAV password to the OS keychain.
+///
+/// Separate from the rest of settings on purpose: the credential is the one
+/// piece of state that must never be written to a settings file, and keeping
+/// its command separate makes that hard to undo by accident.
+#[tauri::command]
+fn save_webdav_password(username: String, password: String) -> Result<()> {
+    webdav::save_password(&username, &password).map_err(|e| Error(e.to_string()))
+}
+
+/// Walk the configured WebDAV tree and rebuild the library index.
+#[tauri::command]
+async fn scan_library(state: State<'_, Shared>) -> Result<ScanReport> {
+    // The remote config is copied out and the lock released before the network
+    // call: holding it across an await would block every other command for the
+    // length of a scan, which can be minutes on a large library.
+    let (url, username, folder) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        let r = &app.settings.remote;
+        if !r.is_configured() {
+            return Err(Error(
+                "No server configured. Add one in Settings.".to_string(),
+            ));
+        }
+        (r.url.clone(), r.username.clone(), r.folder.clone())
+    };
+
+    let result = webdav::scan(&url, &username, &folder)
+        .await
+        .map_err(|e| Error(e.to_string()))?;
+
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.rows = result
+        .files
+        .iter()
+        .map(|href| build_row(href, &folder))
+        .collect();
+
+    Ok(ScanReport {
+        tracks: app.rows.len(),
+        directories: result.directories,
+    })
+}
+
+/// Derive a table row from a path.
+///
+/// Analysis fields stay empty until the track is actually analysed — the row
+/// says "unknown", not a guess. That distinction is the whole reason the Godot
+/// stub fabricating 120 BPM was a bug rather than a convenience.
+fn build_row(href: &str, base_folder: &str) -> Row {
+    let info = vapor_library::parse_path(href, base_folder);
+    Row {
+        href: href.to_string(),
+        title: if info.title.is_empty() {
+            href.rsplit('/').next().unwrap_or(href).to_string()
+        } else {
+            info.title
+        },
+        artist: info.artist.clone(),
+        album: info.album.clone(),
+        artist_source: if info.artist.is_empty() {
+            vapor_library::index::Source::Unknown
+        } else {
+            vapor_library::index::Source::File
+        },
+        album_source: if info.album.is_empty() {
+            vapor_library::index::Source::Unknown
+        } else {
+            vapor_library::index::Source::File
+        },
+        genre: String::new(),
+        bpm: 0.0,
+        key: String::new(),
+        year: info.year.unwrap_or(0),
+        manual_pos: 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Your Data
 // ---------------------------------------------------------------------------
 
@@ -339,6 +429,11 @@ fn data_location(state: State<'_, Shared>) -> Result<String> {
 fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.store.clear()?;
+    // The password lives in the keychain, not the data directory, so clearing
+    // one does not clear the other. "Delete my data" must mean both.
+    if !app.settings.remote.username.is_empty() {
+        let _ = webdav::delete_password(&app.settings.remote.username);
+    }
     app.settings = Settings::default();
     app.playlists = PlaylistStore::default();
     app.queue = Queue::default();
@@ -389,6 +484,8 @@ pub fn run() {
             set_bpm_override,
             data_location,
             delete_all_data,
+            save_webdav_password,
+            scan_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vapor Music");
