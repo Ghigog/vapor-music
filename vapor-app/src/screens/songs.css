@@ -1,0 +1,256 @@
+/*
+ * Songs table. Row geometry is mirrored from Songs.tsx (ROW_HEIGHT); if one
+ * changes the other must, which is why the constant lives in the component and
+ * is documented there as the single source.
+ */
+
+.songs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  min-height: 0; /* lets the scroll region actually shrink */
+}
+
+.songs__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.songs__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: 34px;
+  line-height: 1.04;
+  letter-spacing: -0.028em;
+  color: var(--ink);
+}
+
+.songs__search {
+  height: 34px;
+  border-radius: 17px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  min-width: 200px;
+}
+
+.songs__search-input {
+  border: 0;
+  background: none;
+  outline: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  width: 100%;
+}
+
+.songs__search-input::-webkit-search-decoration,
+.songs__search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+/* ---- Columns --------------------------------------------------------- */
+
+/*
+ * One grid definition, shared by the header and every row via .songrow.
+ * Defining it twice is how column headers drift out of alignment with their
+ * data — the Godot table carried per-column width logic in two places.
+ */
+.songs__cols,
+.songrow {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 2.2fr) minmax(0, 1.6fr) 56px 52px;
+  align-items: center;
+  gap: 13px;
+  padding: 0 12px;
+}
+
+.songs__cols {
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+/* The first grid cell under the header is the artwork column, which has no
+   label — the header starts at the title. */
+.songs__cols {
+  grid-template-columns: 48px minmax(0, 2.2fr) minmax(0, 1.6fr) 56px 52px;
+}
+
+.songs__col {
+  grid-column: auto;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.songs__col--title {
+  grid-column: 2;
+}
+.songs__col--artist {
+  /* Artist shares the names cell with the title, so its header sits over the
+     album column's left edge rather than getting a column of its own. */
+  display: none;
+}
+.songs__col--album {
+  grid-column: 3;
+}
+.songs__col--bpm {
+  grid-column: 4;
+}
+.songs__col--key {
+  grid-column: 5;
+}
+
+.songs__col--num {
+  text-align: right;
+}
+
+.songs__col--on {
+  color: var(--accent);
+}
+
+.songs__col:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- Scroll region --------------------------------------------------- */
+
+.songs__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Momentum scrolling on WebKit; without it a long list feels stuck. */
+  -webkit-overflow-scrolling: touch;
+}
+
+.songs__empty,
+.songs__error {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+}
+
+/* ---- Row ------------------------------------------------------------- */
+
+.songrow {
+  border-radius: 20px;
+  border: 1px solid transparent;
+  cursor: default;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.songrow:hover {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+.songrow--on {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.34);
+}
+
+.songrow__art {
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+  position: relative;
+  flex: none;
+  background: linear-gradient(150deg, #cfe0f2 0%, #dfe3ea 55%, #efe9de 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 3px 9px -3px rgba(38, 58, 104, 0.32);
+}
+
+.songrow__art-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 15px;
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.22), transparent 45%);
+}
+
+.songrow__names {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.songrow__title,
+.songrow__artist,
+.songrow__album {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.songrow__title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.songrow__artist {
+  font-size: var(--fs-body);
+  color: #7b8189;
+}
+
+.songrow__album {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  min-width: 0;
+}
+
+.songrow__bpm,
+.songrow__key {
+  font-size: 12px;
+  color: var(--ink-3);
+  text-align: right;
+}
+
+/* ---- Selection bar --------------------------------------------------- */
+
+.selbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.selbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.selbar__select,
+.selbar__clear {
+  height: 30px;
+  border-radius: 15px;
+  padding: 0 12px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--glass-rim);
+  cursor: pointer;
+}

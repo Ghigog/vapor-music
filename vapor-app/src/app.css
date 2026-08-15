@@ -71,3 +71,38 @@
   max-width: 60ch;
   line-height: 1.6;
 }
+
+/* ---- Sidebar navigation ---------------------------------------------- */
+
+.nav__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  margin-bottom: 4px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+}
+
+.nav__item:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.nav__item--on {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The content column owns its own scrolling so the table can size to it. */
+.shell__content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}

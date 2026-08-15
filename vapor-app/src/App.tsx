@@ -8,8 +8,10 @@
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Library } from "./screens/Library";
+import { Songs } from "./screens/Songs";
 import * as core from "./lib/core";
 import "./screens/library.css";
+import "./screens/songs.css";
 
 type Status =
   | { kind: "loading" }
@@ -18,6 +20,7 @@ type Status =
 
 export function App() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
+  const [screen, setScreen] = useState<"library" | "songs">("library");
 
   useEffect(() => {
     // One real round trip to the core. An empty library is a valid answer —
@@ -38,8 +41,19 @@ export function App() {
   if (status.kind === "ready") {
     return (
       <div className="shell">
+        <nav className="shell__sidebar">
+          {(["library", "songs"] as const).map((s) => (
+            <button
+              key={s}
+              className={"nav__item" + (screen === s ? " nav__item--on" : "")}
+              onClick={() => setScreen(s)}
+            >
+              {s === "library" ? "Library" : "Songs"}
+            </button>
+          ))}
+        </nav>
         <main className="shell__content">
-          <Library />
+          {screen === "library" ? <Library /> : <Songs />}
         </main>
       </div>
     );
