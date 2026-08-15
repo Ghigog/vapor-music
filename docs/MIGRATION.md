@@ -686,9 +686,30 @@ running a server — is not this product.
 
 ---
 
+## Scope
+
+**This is a refactor, not a quality project.** The goal is the same app, off
+Godot. Analysis accuracy, key detection and mixing polish are explicitly *later*
+work — they are tracked so they are not forgotten, not because they gate the
+port. When a choice arises between matching existing behaviour and improving on
+it, match it.
+
+---
+
+## Decisions (2026-08-14)
+
+| # | Decision |
+|---|---|
+| Tempo | **Accept ~81% agreement.** Ship a manual BPM override in the UI. Refine later. |
+| Key | **Defer.** 56.1% exact / 80.9% compatible is good enough to port with. |
+| Dolby Atmos | **Transcode on import** to AAC or FLAC once, at add time. |
+| Crossfade | **Keep Godot's dB-linear envelope**, midpoint dip and all. Fidelity over correctness. |
+
+---
+
 ## Open decisions
 
-1. **Dolby Atmos / E-AC-3.** 22 tracks in the current library do not decode
+1. ~~**Dolby Atmos / E-AC-3.**~~ **Decided: transcode on import.** 22 tracks do not decode
    without ffmpeg. Options, roughly in order of preference:
    - Transcode-on-import to AAC or FLAC once, at add time, and analyse the
      result. Costs nothing at playback and needs no decoder in the core.
@@ -701,8 +722,8 @@ running a server — is not this product.
    or it ships as a silent regression.
 2. **Web tier scope.** Full parity, or cloud-only with analysis deferred to a
    desktop instance? Affects how state is split in phase 4.
-3. **Time-stretch library.** `signalsmith-stretch` (MIT) vs Rubber Band's
-   single-file build (GPL). Decide in phase 2 on measured quality.
+3. **Time-stretch library.** WSOLA is in place and works; `signalsmith-stretch`
+   vs Rubber Band is a quality question, so it falls under *later*.
 4. **UI framework** inside Tauri. Not yet chosen; defer until phase 4 so the
    redesign informs it.
 
