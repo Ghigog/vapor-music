@@ -74,6 +74,44 @@ pub fn analyze_bytes(bytes: Vec<u8>, ext_hint: Option<&str>) -> Result<Analysis,
     analyze_decoded(&audio)
 }
 
+/// Decode a file into deck-ready stereo frames at `target_rate`.
+///
+/// The two steps a player needs before audio can reach a device, in the order
+/// that keeps the audio thread simple: decode to stereo, then convert the rate
+/// **once, here**, rather than per block. The output stream runs at one fixed
+/// rate for the life of the app — reconfiguring a device between tracks is
+/// audible and, on some hosts, not possible at all — while a real library holds
+/// 44.1 and 48 kHz side by side.
+///
+/// Lives here rather than in the shell because the browser build needs exactly
+/// the same two steps before handing frames to an AudioWorklet (MIG-013).
+pub fn decode_for_playback(
+    path: &Path,
+    target_rate: u32,
+) -> Result<Vec<[f32; 2]>, decode::DecodeError> {
+    let decoded = decode::decode_to_stereo(path)?;
+    Ok(resample::resample(
+        &decoded.frames,
+        decoded.sample_rate,
+        target_rate,
+    ))
+}
+
+/// Decode bytes into deck-ready stereo frames — the wasm counterpart of
+/// [`decode_for_playback`].
+pub fn decode_bytes_for_playback(
+    bytes: Vec<u8>,
+    ext_hint: Option<&str>,
+    target_rate: u32,
+) -> Result<Vec<[f32; 2]>, decode::DecodeError> {
+    let decoded = decode::decode_bytes_to_stereo(bytes, ext_hint)?;
+    Ok(resample::resample(
+        &decoded.frames,
+        decoded.sample_rate,
+        target_rate,
+    ))
+}
+
 /// Span of the onset function used to pick the tempo. Beats still come from
 /// the whole track; only the tempo estimate is windowed.
 const TEMPO_WINDOW_SECS: f64 = 120.0;

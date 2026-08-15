@@ -1,4 +1,4 @@
-//! Audio decoding to mono f32, via Symphonia.
+//! Audio decoding via Symphonia — to mono for analysis, to stereo for playback.
 //!
 //! This replaces three things at once in the Godot build:
 //!
@@ -10,9 +10,21 @@
 //! * `_load_standard_audio_stream()` in `audio_manager.gd`, which handles only
 //!   mp3/wav/ogg and so returns null for every `.m4a` — 58% of the real library.
 //!
-//! Downmixing to mono happens inline over the decoded frames, so the
+//! Downmixing happens inline over the decoded frames, so the
 //! arbitrary-channel-count case (BUG-001, Dolby Atmos `.m4a`) needs no temp
 //! files and no external binary.
+//!
+//! ## Two outputs, one conversion table
+//!
+//! Analysis wants mono — every DSP stage here operates on a single channel, and
+//! decoding to stereo would double its memory for nothing. Playback wants
+//! stereo, because a player that collapsed the stereo image would be a
+//! regression a person can hear immediately.
+//!
+//! Both go through the same [`Sink`] trait, so the per-format sample
+//! conversions — i24 scaling, the unsigned offsets — exist once. Two copies of
+//! that match statement is exactly the kind of duplication that stays correct
+//! until one of them is fixed.
 
 use std::fs::File;
 use std::path::Path;
@@ -38,6 +50,26 @@ impl DecodedAudio {
             return 0.0;
         }
         self.samples.len() as f64 / self.sample_rate as f64
+    }
+}
+
+/// Stereo frames, ready for a deck.
+#[derive(Debug)]
+pub struct DecodedStereo {
+    /// Interleaved-by-frame stereo samples in [-1.0, 1.0]. This is exactly the
+    /// shape `vapor_engine::Deck::load` takes, so playback needs no repacking.
+    pub frames: Vec<[f32; 2]>,
+    pub sample_rate: u32,
+    /// Channels the source actually carried, before downmixing.
+    pub channels: usize,
+}
+
+impl DecodedStereo {
+    pub fn duration_secs(&self) -> f64 {
+        if self.sample_rate == 0 {
+            return 0.0;
+        }
+        self.frames.len() as f64 / self.sample_rate as f64
     }
 }
 
@@ -67,10 +99,13 @@ impl std::error::Error for DecodeError {}
 /// Native only in practice — the browser has no filesystem. Web callers read
 /// the cached bytes out of OPFS and use [`decode_bytes_to_mono`].
 pub fn decode_to_mono(path: &Path) -> Result<DecodedAudio, DecodeError> {
-    let file = File::open(path).map_err(|e| DecodeError::Io(e.to_string()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let hint = hint_from_extension(path.extension().and_then(|e| e.to_str()));
-    decode_stream(mss, hint)
+    let mut samples: Vec<f32> = Vec::new();
+    let (sample_rate, channels) = decode_stream(source_from_path(path)?, &mut Mono(&mut samples))?;
+    Ok(DecodedAudio {
+        samples,
+        sample_rate,
+        channels,
+    })
 }
 
 /// Decode from an in-memory buffer.
@@ -83,9 +118,66 @@ pub fn decode_bytes_to_mono(
     bytes: Vec<u8>,
     ext_hint: Option<&str>,
 ) -> Result<DecodedAudio, DecodeError> {
-    let source = std::io::Cursor::new(bytes);
-    let mss = MediaSourceStream::new(Box::new(source), Default::default());
-    decode_stream(mss, hint_from_extension(ext_hint))
+    let mut samples: Vec<f32> = Vec::new();
+    let (sample_rate, channels) =
+        decode_stream(source_from_bytes(bytes, ext_hint), &mut Mono(&mut samples))?;
+    Ok(DecodedAudio {
+        samples,
+        sample_rate,
+        channels,
+    })
+}
+
+/// Decode any supported file to stereo f32 at its native sample rate.
+///
+/// The playback counterpart of [`decode_to_mono`]. The offline mixing tools
+/// duplicate the mono signal into both channels, which is adequate for
+/// measuring beat alignment and unacceptable for listening.
+pub fn decode_to_stereo(path: &Path) -> Result<DecodedStereo, DecodeError> {
+    let mut frames: Vec<[f32; 2]> = Vec::new();
+    let (sample_rate, channels) = decode_stream(source_from_path(path)?, &mut Stereo(&mut frames))?;
+    Ok(DecodedStereo {
+        frames,
+        sample_rate,
+        channels,
+    })
+}
+
+/// Decode stereo from an in-memory buffer — the wasm playback entry point.
+pub fn decode_bytes_to_stereo(
+    bytes: Vec<u8>,
+    ext_hint: Option<&str>,
+) -> Result<DecodedStereo, DecodeError> {
+    let mut frames: Vec<[f32; 2]> = Vec::new();
+    let (sample_rate, channels) =
+        decode_stream(source_from_bytes(bytes, ext_hint), &mut Stereo(&mut frames))?;
+    Ok(DecodedStereo {
+        frames,
+        sample_rate,
+        channels,
+    })
+}
+
+/// A media source plus the format hint that goes with it.
+struct Source {
+    mss: MediaSourceStream,
+    hint: Hint,
+}
+
+fn source_from_path(path: &Path) -> Result<Source, DecodeError> {
+    let file = File::open(path).map_err(|e| DecodeError::Io(e.to_string()))?;
+    Ok(Source {
+        mss: MediaSourceStream::new(Box::new(file), Default::default()),
+        hint: hint_from_extension(path.extension().and_then(|e| e.to_str())),
+    })
+}
+
+fn source_from_bytes(bytes: Vec<u8>, ext_hint: Option<&str>) -> Source {
+    let cursor = std::io::Cursor::new(bytes);
+    Source {
+        mss: MediaSourceStream::new(Box::new(cursor), Default::default()),
+        hint: hint_from_extension(ext_hint),
+    }
 }
 
 fn hint_from_extension(ext: Option<&str>) -> Hint {
@@ -96,7 +188,10 @@ fn hint_from_extension(ext: Option<&str>) -> Hint {
     hint
 }
 
-fn decode_stream(mss: MediaSourceStream, hint: Hint) -> Result<DecodedAudio, DecodeError> {
+/// Decode everything in `source` into `sink`, returning the sample rate and the
+/// source's channel count.
+fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), DecodeError> {
+    let Source { mss, hint } = source;
     let probed = symphonia::default::get_probe()
         .format(
             &hint,
@@ -122,9 +217,9 @@ fn decode_stream(mss: MediaSourceStream, hint: Hint) -> Result<DecodedAudio, Dec
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
 
-    let mut samples: Vec<f32> = Vec::new();
     let mut sample_rate = track.codec_params.sample_rate.unwrap_or(0);
     let mut channels = 0usize;
+    let mut frames = 0usize;
 
     loop {
         let packet = match format.next_packet() {
@@ -149,7 +244,8 @@ fn decode_stream(mss: MediaSourceStream, hint: Hint) -> Result<DecodedAudio, Dec
                 let spec = *buf.spec();
                 sample_rate = spec.rate;
                 channels = spec.channels.count();
-                append_mono(&buf, &mut samples);
+                frames += buf.frames();
+                append(&buf, sink);
             }
             // A corrupt packet mid-file should not lose the whole track; the
             // analysis is statistical and tolerates a dropped frame.
@@ -158,57 +254,242 @@ fn decode_stream(mss: MediaSourceStream, hint: Hint) -> Result<DecodedAudio, Dec
         }
     }
 
-    if samples.is_empty() {
+    if frames == 0 {
         return Err(DecodeError::Empty);
     }
 
-    Ok(DecodedAudio {
-        samples,
-        sample_rate,
-        channels: channels.max(1),
-    })
+    Ok((sample_rate, channels.max(1)))
 }
 
-/// Average all channels of one decoded buffer into the mono output.
-fn append_mono(buf: &AudioBufferRef<'_>, out: &mut Vec<f32>) {
-    macro_rules! mix {
+/// Where decoded frames go.
+///
+/// A trait rather than one decode loop per output shape. Both implementations
+/// are monomorphised, so the abstraction costs nothing at run time — which
+/// matters, because the mono path runs over a whole library.
+trait Sink {
+    fn reserve(&mut self, frames: usize);
+    /// Accept one frame. `get(c)` reads channel `c`, already converted to f32.
+    fn frame<F: Fn(usize) -> f32>(&mut self, channels: usize, get: F);
+}
+
+/// Mono for analysis: every channel averaged.
+///
+/// Averaging *all* channels, not just the front pair, is what lets an
+/// arbitrary-channel-count file be analysed with no external downmix step —
+/// the thing `audio_dsp.cpp` shelled out to ffmpeg for.
+struct Mono<'a>(&'a mut Vec<f32>);
+
+impl Sink for Mono<'_> {
+    fn reserve(&mut self, frames: usize) {
+        self.0.reserve(frames);
+    }
+
+    fn frame<F: Fn(usize) -> f32>(&mut self, channels: usize, get: F) {
+        let mut acc = 0.0f32;
+        for c in 0..channels {
+            acc += get(c);
+        }
+        self.0.push(acc / channels as f32);
+    }
+}
+
+/// Stereo for playback: mono is doubled, everything else takes the front pair.
+///
+/// Taking channels 0 and 1 from a multichannel source rather than averaging
+/// them all is deliberate — averaging would fold the surrounds into the front
+/// image and make a 5.1 music mix sound like a bad mono fold-down. The one
+/// multichannel family in the real library is Dolby Atmos, which Symphonia
+/// cannot decode at all (TD-05), so this path is presently theoretical.
+struct Stereo<'a>(&'a mut Vec<[f32; 2]>);
+
+impl Sink for Stereo<'_> {
+    fn reserve(&mut self, frames: usize) {
+        self.0.reserve(frames);
+    }
+
+    fn frame<F: Fn(usize) -> f32>(&mut self, channels: usize, get: F) {
+        self.0.push(if channels == 1 {
+            let s = get(0);
+            [s, s]
+        } else {
+            [get(0), get(1)]
+        });
+    }
+}
+
+/// Feed one decoded buffer to a sink, converting whatever sample format the
+/// codec produced.
+fn append<S: Sink>(buf: &AudioBufferRef<'_>, out: &mut S) {
+    macro_rules! feed {
         ($b:expr, $conv:expr) => {{
             let b = $b;
             let chans = b.spec().channels.count();
             let frames = b.frames();
             out.reserve(frames);
-            if chans == 1 {
-                let ch = b.chan(0);
-                out.extend(ch[..frames].iter().map(|&s| $conv(s)));
-            } else {
-                let inv = 1.0 / chans as f32;
-                for i in 0..frames {
-                    let mut acc = 0.0f32;
-                    for c in 0..chans {
-                        acc += $conv(b.chan(c)[i]);
-                    }
-                    out.push(acc * inv);
-                }
+            for i in 0..frames {
+                out.frame(chans, |c| $conv(b.chan(c)[i]));
             }
         }};
     }
 
     match buf {
-        AudioBufferRef::F32(b) => mix!(b.as_ref(), |s: f32| s),
-        AudioBufferRef::F64(b) => mix!(b.as_ref(), |s: f64| s as f32),
-        AudioBufferRef::S32(b) => mix!(b.as_ref(), |s: i32| s as f32 / i32::MAX as f32),
-        AudioBufferRef::S24(b) => mix!(b.as_ref(), |s: symphonia::core::sample::i24| {
+        AudioBufferRef::F32(b) => feed!(b.as_ref(), |s: f32| s),
+        AudioBufferRef::F64(b) => feed!(b.as_ref(), |s: f64| s as f32),
+        AudioBufferRef::S32(b) => feed!(b.as_ref(), |s: i32| s as f32 / i32::MAX as f32),
+        AudioBufferRef::S24(b) => feed!(b.as_ref(), |s: symphonia::core::sample::i24| {
             s.inner() as f32 / 8_388_607.0
         }),
-        AudioBufferRef::S16(b) => mix!(b.as_ref(), |s: i16| s as f32 / i16::MAX as f32),
-        AudioBufferRef::S8(b) => mix!(b.as_ref(), |s: i8| s as f32 / i8::MAX as f32),
-        AudioBufferRef::U32(b) => mix!(b.as_ref(), |s: u32| {
+        AudioBufferRef::S16(b) => feed!(b.as_ref(), |s: i16| s as f32 / i16::MAX as f32),
+        AudioBufferRef::S8(b) => feed!(b.as_ref(), |s: i8| s as f32 / i8::MAX as f32),
+        AudioBufferRef::U32(b) => feed!(b.as_ref(), |s: u32| {
             (s as f32 - 2_147_483_648.0) / 2_147_483_648.0
         }),
-        AudioBufferRef::U24(b) => mix!(b.as_ref(), |s: symphonia::core::sample::u24| {
+        AudioBufferRef::U24(b) => feed!(b.as_ref(), |s: symphonia::core::sample::u24| {
             (s.inner() as f32 - 8_388_608.0) / 8_388_608.0
         }),
-        AudioBufferRef::U16(b) => mix!(b.as_ref(), |s: u16| (s as f32 - 32_768.0) / 32_768.0),
-        AudioBufferRef::U8(b) => mix!(b.as_ref(), |s: u8| (s as f32 - 128.0) / 128.0),
+        AudioBufferRef::U16(b) => feed!(b.as_ref(), |s: u16| (s as f32 - 32_768.0) / 32_768.0),
+        AudioBufferRef::U8(b) => feed!(b.as_ref(), |s: u8| (s as f32 - 128.0) / 128.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 16-bit PCM WAV with per-channel sample values, so a test can assert
+    /// which channel a sample came from. Synthetic on purpose: the analysis
+    /// fixtures need a personal library (TD-43) and these do not.
+    fn wav(channels: u16, rate: u32, frames: &[[f32; 2]]) -> Vec<u8> {
+        let data_len = (frames.len() * channels as usize * 2) as u32;
+        let mut v = Vec::with_capacity(44 + data_len as usize);
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(36 + data_len).to_le_bytes());
+        v.extend_from_slice(b"WAVEfmt ");
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        v.extend_from_slice(&channels.to_le_bytes());
+        v.extend_from_slice(&rate.to_le_bytes());
+        v.extend_from_slice(&(rate * channels as u32 * 2).to_le_bytes());
+        v.extend_from_slice(&(channels * 2).to_le_bytes());
+        v.extend_from_slice(&16u16.to_le_bytes());
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_len.to_le_bytes());
+        for f in frames {
+            for sample in f.iter().take(channels as usize) {
+                let q = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                v.extend_from_slice(&q.to_le_bytes());
+            }
+        }
+        v
+    }
+
+    /// Left and right deliberately differ, so a collapsed image is detectable.
+    fn asymmetric(n: usize) -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / 44_100.0;
+                let l = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+                let r = (t * 660.0 * std::f32::consts::TAU).sin() * 0.25;
+                [l, r]
+            })
+            .collect()
+    }
+
+    /// The reason `decode_to_stereo` exists: the offline tools duplicate mono
+    /// into both channels, and a player that did the same would silently throw
+    /// away half the recording.
+    #[test]
+    fn stereo_decoding_keeps_the_channels_apart() {
+        let frames = asymmetric(4_410);
+        let decoded = decode_bytes_to_stereo(wav(2, 44_100, &frames), Some("wav")).expect("decode");
+
+        assert_eq!(decoded.sample_rate, 44_100);
+        assert_eq!(decoded.channels, 2);
+        assert_eq!(decoded.frames.len(), frames.len());
+
+        let divergence = decoded
+            .frames
+            .iter()
+            .map(|f| (f[0] - f[1]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            divergence > 0.1,
+            "left and right came back identical — the image was collapsed"
+        );
+    }
+
+    /// Sample values must survive the round trip, not merely the shape.
+    #[test]
+    fn stereo_samples_match_what_was_encoded() {
+        let frames = asymmetric(1_000);
+        let decoded = decode_bytes_to_stereo(wav(2, 44_100, &frames), Some("wav")).expect("decode");
+
+        for (i, (got, want)) in decoded.frames.iter().zip(&frames).enumerate() {
+            for ch in 0..2 {
+                // 16-bit quantisation is the only permitted difference.
+                assert!(
+                    (got[ch] - want[ch]).abs() < 1e-4,
+                    "frame {i} channel {ch}: {} vs {}",
+                    got[ch],
+                    want[ch]
+                );
+            }
+        }
+    }
+
+    /// Mono is the average of every channel. Analysis depends on this and its
+    /// accuracy figures were measured with it, so a change here would silently
+    /// move the validated numbers.
+    #[test]
+    fn mono_decoding_averages_the_channels() {
+        let frames = asymmetric(1_000);
+        let bytes = wav(2, 44_100, &frames);
+        let mono = decode_bytes_to_mono(bytes, Some("wav")).expect("decode");
+
+        assert_eq!(mono.samples.len(), frames.len());
+        for (i, (got, want)) in mono.samples.iter().zip(&frames).enumerate() {
+            let expected = (want[0] + want[1]) / 2.0;
+            assert!(
+                (got - expected).abs() < 1e-4,
+                "sample {i}: {got} vs {expected}"
+            );
+        }
+    }
+
+    /// A mono source must reach both speakers, not just the left one.
+    #[test]
+    fn a_mono_source_is_doubled_into_both_channels() {
+        let frames: Vec<[f32; 2]> = (0..500)
+            .map(|i| {
+                let v = (i as f32 / 44_100.0 * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+                [v, v]
+            })
+            .collect();
+        let decoded = decode_bytes_to_stereo(wav(1, 44_100, &frames), Some("wav")).expect("decode");
+
+        assert_eq!(decoded.channels, 1);
+        assert!(
+            decoded.frames.iter().all(|f| f[0] == f[1]),
+            "a mono source produced differing channels"
+        );
+        assert!(
+            decoded.frames.iter().any(|f| f[0].abs() > 0.1),
+            "a mono source decoded to silence"
+        );
+    }
+
+    /// Both sinks read the same stream; disagreeing about its length would
+    /// mean a track whose analysis and playback are offset from each other.
+    #[test]
+    fn both_sinks_agree_on_length_and_rate() {
+        let frames = asymmetric(2_000);
+        let bytes = wav(2, 48_000, &frames);
+
+        let mono = decode_bytes_to_mono(bytes.clone(), Some("wav")).expect("mono");
+        let stereo = decode_bytes_to_stereo(bytes, Some("wav")).expect("stereo");
+
+        assert_eq!(mono.samples.len(), stereo.frames.len());
+        assert_eq!(mono.sample_rate, stereo.sample_rate);
+        assert_eq!(mono.sample_rate, 48_000);
     }
 }

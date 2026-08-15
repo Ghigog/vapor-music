@@ -4465,6 +4465,7 @@ name = "vapor-app"
 version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
+ "cpal",
  "keyring",
  "reqwest 0.12.28",
  "serde",

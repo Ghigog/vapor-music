@@ -92,11 +92,7 @@ pub fn analyse_file(path: &Path) -> Result<Analysis, String> {
 pub fn pending(hrefs: &[String], cache: &Cache) -> Vec<String> {
     hrefs
         .iter()
-        .filter(|h| {
-            cache
-                .get(*h)
-                .is_none_or(|a| a.version < ANALYSIS_VERSION)
-        })
+        .filter(|h| cache.get(*h).is_none_or(|a| a.version < ANALYSIS_VERSION))
         .cloned()
         .collect()
 }
@@ -226,9 +222,14 @@ mod tests {
         let hrefs: Vec<String> = (0..5).map(|i| format!("/{i}.mp3")).collect();
         let mut last = None;
 
-        run(&hrefs, |_| None, &Cancel::new(), |p| {
-            last = Some((p.done, p.total));
-        });
+        run(
+            &hrefs,
+            |_| None,
+            &Cancel::new(),
+            |p| {
+                last = Some((p.done, p.total));
+            },
+        );
 
         assert_eq!(last, Some((5, 5)));
     }
@@ -241,12 +242,17 @@ mod tests {
         let cancel = Cancel::new();
         let mut count = 0usize;
 
-        run(&hrefs, |_| None, &cancel, |_| {
-            count += 1;
-            if count == 3 {
-                cancel.stop();
-            }
-        });
+        run(
+            &hrefs,
+            |_| None,
+            &cancel,
+            |_| {
+                count += 1;
+                if count == 3 {
+                    cancel.stop();
+                }
+            },
+        );
 
         assert_eq!(count, 3, "kept going after cancellation");
     }

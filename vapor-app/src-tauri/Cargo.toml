@@ -24,6 +24,11 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 base64 = "0.22"
 keyring = "3"
 
+# Audio output (TD-03). The engine itself stays platform-free — a device only
+# exists here, in the shell, and behind an AudioWorklet in the browser build.
+# MIG-011: cpal on Android/iOS is the least battle-tested part of this stack.
+cpal = "0.15"
+
 # The whole point of the migration: the shell is a thin adapter over these.
 vapor-dsp = { path = "../../vapor-core/crates/vapor-dsp" }
 vapor-engine = { path = "../../vapor-core/crates/vapor-engine" }

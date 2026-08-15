@@ -248,9 +248,7 @@ mod tests {
         let bytes = synthetic_wav(1000);
 
         assert!(cache.get("/a.wav").is_none());
-        let path = cache
-            .store("/a.wav", || Ok(bytes.clone()))
-            .expect("store");
+        let path = cache.store("/a.wav", || Ok(bytes.clone())).expect("store");
         assert!(path.is_file());
         assert_eq!(cache.get("/a.wav"), Some(path));
 
@@ -340,7 +338,9 @@ mod tests {
     #[test]
     fn no_temporary_survives_a_successful_store() {
         let (cache, dir) = temp_cache();
-        cache.store("/a.wav", || Ok(synthetic_wav(50))).expect("store");
+        cache
+            .store("/a.wav", || Ok(synthetic_wav(50)))
+            .expect("store");
 
         let tmps: Vec<String> = fs::read_dir(&dir)
             .expect("readdir")
@@ -382,10 +382,14 @@ mod tests {
     #[test]
     fn remove_and_clear_are_idempotent() {
         let (cache, dir) = temp_cache();
-        cache.store("/a.wav", || Ok(synthetic_wav(10))).expect("store");
+        cache
+            .store("/a.wav", || Ok(synthetic_wav(10)))
+            .expect("store");
 
         cache.remove("/a.wav").expect("remove");
-        cache.remove("/a.wav").expect("removing twice must not fail");
+        cache
+            .remove("/a.wav")
+            .expect("removing twice must not fail");
         assert!(!cache.contains("/a.wav"));
 
         cache.clear().expect("clear");

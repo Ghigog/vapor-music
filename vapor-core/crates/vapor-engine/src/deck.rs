@@ -55,13 +55,29 @@ impl Deck {
     }
 
     pub fn load(&mut self, samples: Vec<[f32; 2]>) {
-        self.samples = samples;
+        drop(self.swap_samples(samples));
+    }
+
+    /// Replace the loaded audio and hand back the previous buffer.
+    ///
+    /// [`load`](Self::load) drops the old samples where it stands. For a
+    /// player, "where it stands" is the audio callback, and freeing a
+    /// hundred-megabyte buffer there can block on a lock inside the allocator —
+    /// the exact failure MIG-010 exists to prevent, and one that only shows up
+    /// as a dropout at the moment a track changes.
+    ///
+    /// Returning it lets the caller move the buffer back to a control thread
+    /// and drop it there. Everything else about the two is identical, so
+    /// `load` is written in terms of this rather than beside it.
+    pub fn swap_samples(&mut self, samples: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
+        let previous = std::mem::replace(&mut self.samples, samples);
         self.stretcher.reset(0.0);
         self.eq.reset();
         self.meter.reset();
         self.last_rms = Bands::default();
         self.clip_atten = Bands::default();
         self.playing = false;
+        previous
     }
 
     /// Band levels of the most recently rendered block, before gain and EQ.

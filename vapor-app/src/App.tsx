@@ -7,9 +7,11 @@
  */
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
+import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
 import { Songs } from "./screens/Songs";
 import * as core from "./lib/core";
+import "./components/transport.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 
@@ -55,6 +57,9 @@ export function App() {
         <main className="shell__content">
           {screen === "library" ? <Library /> : <Songs />}
         </main>
+        {/* Lives outside the content column: the shell grid spans it across
+            both, and playback outlives whichever screen started it. */}
+        <Transport />
       </div>
     );
   }

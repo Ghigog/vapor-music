@@ -6,32 +6,52 @@
 //! usual way this is "verified" is by listening and hoping, which finds the
 //! problem only on the machines and workloads that happen to trigger it.
 //!
-//! This measures it instead: a counting global allocator wraps the system one,
-//! and the test asserts that a warmed-up `Mixer::render` performs **zero**
-//! allocations, across a transition and the tempo glide that follows.
+//! This measures it instead: a counting allocator wraps the system one, and the
+//! test asserts that a warmed-up `Mixer::render` performs **zero** allocations,
+//! across a transition and the tempo glide that follows.
 //!
 //! It lives in its own integration test file deliberately. Each integration
-//! test file is a separate binary, so the global allocator here affects nothing
-//! else; installed in a unit test it would count every other test's allocations
-//! running in parallel and report noise.
+//! test file is a separate binary, so the global allocator installed here
+//! affects nothing else in the workspace.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::cell::Cell;
 
 use vapor_engine::mixer::BeatGrid;
 use vapor_engine::{Mixer, TransitionType};
 
-static ALLOCS: AtomicUsize = AtomicUsize::new(0);
-static COUNTING: AtomicBool = AtomicBool::new(false);
+// The counters are thread-local, not process-wide.
+//
+// This used to be a global counter serialised by a mutex, so that two tests
+// could not measure each other. That was not enough: cargo's harness runs on
+// its own threads, and formatting another test's result line allocates too —
+// which a global counter attributes to whatever is being measured at the time.
+// The shell's equivalent test (`vapor-app`, TD-03) caught it, reporting three
+// allocations for a path that performs none.
+//
+// Counting per thread removes the whole class of interference, and the mutex
+// with it.
+//
+// `const`-initialised `Cell`s so the thread-local never allocates on first
+// touch, which would recurse straight back into here.
+thread_local! {
+    static COUNTING: Cell<bool> = const { Cell::new(false) };
+    static ALLOCS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// `try_with` rather than `with`: during thread teardown the thread-local is
+/// already gone, and a panic raised inside the allocator aborts the process.
+fn bump() {
+    if COUNTING.try_with(Cell::get).unwrap_or(false) {
+        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+    }
+}
 
 struct CountingAlloc;
 
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        bump();
         unsafe { System.alloc(layout) }
     }
 
@@ -40,9 +60,7 @@ unsafe impl GlobalAlloc for CountingAlloc {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        bump();
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -50,25 +68,14 @@ unsafe impl GlobalAlloc for CountingAlloc {
 #[global_allocator]
 static ALLOCATOR: CountingAlloc = CountingAlloc;
 
-/// Serialises the two tests in this file.
-///
-/// `COUNTING` and `ALLOCS` are process-wide, and cargo runs tests in a binary
-/// in parallel by default, so without this the two would interleave and each
-/// would measure the other's allocations. Taking the lock is what makes the
-/// result meaningful rather than dependent on `--test-threads`.
-static MEASURING: Mutex<()> = Mutex::new(());
-
-/// Begin counting, returning a guard that stops counting when dropped.
-fn measure() -> MutexGuard<'static, ()> {
-    let guard = MEASURING.lock().unwrap_or_else(|e| e.into_inner());
-    ALLOCS.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::Relaxed);
-    guard
+fn measure() {
+    ALLOCS.with(|c| c.set(0));
+    COUNTING.with(|c| c.set(true));
 }
 
 fn stop_measuring() -> usize {
-    COUNTING.store(false, Ordering::Relaxed);
-    ALLOCS.load(Ordering::Relaxed)
+    COUNTING.with(|c| c.set(false));
+    ALLOCS.with(Cell::get)
 }
 
 const RATE: f32 = 44100.0;
@@ -133,7 +140,7 @@ fn render_does_not_allocate() {
     // together exercise every branch in the render path: two decks summing, EQ
     // automation, the clipping guard, the limiter, the deck-role swap and the
     // glide.
-    let _guard = measure();
+    measure();
 
     let blocks = ((14.0 * RATE) / BLOCK as f32) as usize;
     for _ in 0..blocks {
@@ -159,7 +166,7 @@ fn render_does_not_allocate() {
 /// vacuously and proves nothing.
 #[test]
 fn the_allocation_counter_detects_allocation() {
-    let _guard = measure();
+    measure();
     let v: Vec<u8> = Vec::with_capacity(4096);
     let count = stop_measuring();
     drop(v);

@@ -57,7 +57,7 @@ jobs:
       - name: Build
         run: npx vite build
 
-  # Only `cargo check` and clippy, not a full bundle. Bundling produces
+  # Check, test and clippy — but not a full bundle. Bundling produces
   # installers nobody consumes on every push, and takes several times longer.
   shell:
     name: shell (${{ matrix.os }})
@@ -89,7 +89,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -102,8 +102,21 @@ jobs:
       - name: Stub the frontend dist
         run: mkdir -p ../dist && touch ../dist/index.html
 
+      # The core has been format-gated since phase 0; the shell was not, so it
+      # had drifted. Gating it too means `cargo fmt` never again produces a
+      # diff in files a change did not touch.
+      - name: Format
+        run: cargo fmt --check
+
       - name: Check
         run: cargo check
+
+      # The shell has real logic worth gating on: the cache, the store, and the
+      # audio path's proof that it neither allocates nor frees on the audio
+      # thread (TD-03). None of it needs a window or a device, so it runs on a
+      # bare runner like any other test.
+      - name: Test
+        run: cargo test
 
       - name: Clippy
         run: cargo clippy --all-targets

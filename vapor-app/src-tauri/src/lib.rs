@@ -17,6 +17,9 @@
 //! core would have to be written twice.
 
 mod analysis;
+/// Public so `tests/audio_realtime.rs` can drive the audio path without a
+/// device. Nothing outside the crate uses it.
+pub mod audio;
 mod cache;
 mod store;
 mod webdav;
@@ -51,6 +54,23 @@ struct AppState {
     cancel: analysis::Cancel,
     cache: cache::Cache,
     store: Store,
+
+    /// The audio device, absent when the machine has none. Playback commands
+    /// then fail with a message instead of the app refusing to start — a
+    /// library you cannot hear is still one you can scan and analyse.
+    player: Option<audio::Player>,
+    /// What the audio thread is playing, or is being loaded to play.
+    playing: Option<String>,
+    /// Increments on every load request. A load whose generation is stale lost
+    /// a race with a newer one and must discard its result rather than
+    /// interrupt the track a person actually asked for.
+    generation: u64,
+    /// True while a track is being fetched and decoded, which can take seconds
+    /// on a cold cache. The UI has to be able to say so.
+    loading: bool,
+    /// Why the last load failed, surfaced instead of silence with no
+    /// explanation.
+    playback_error: Option<String>,
 }
 
 impl AppState {
@@ -75,6 +95,20 @@ impl AppState {
             cache: cache::Cache::new(store.dir().join("audio"))
                 .with_max_bytes(cache::DEFAULT_MAX_BYTES),
             store,
+            // Opened once at startup rather than per track: acquiring a device
+            // takes long enough to hear as a gap, and holding one open is what
+            // every other player does.
+            player: match audio::Player::start() {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("audio output unavailable: {e}");
+                    None
+                }
+            },
+            playing: None,
+            generation: 0,
+            loading: false,
+            playback_error: None,
         }
     }
 
@@ -90,10 +124,7 @@ impl AppState {
     /// library, and a correction that the table ignored would be useless.
     fn apply_analysis(&self, row: &mut Row) {
         if let Some(a) = self.analysis.get(&row.href) {
-            row.bpm = self
-                .settings
-                .bpm_override(&row.href)
-                .unwrap_or(a.bpm);
+            row.bpm = self.settings.bpm_override(&row.href).unwrap_or(a.bpm);
             row.key = a.key.clone();
         } else if let Some(bpm) = self.settings.bpm_override(&row.href) {
             // A person can correct a track that was never successfully
@@ -288,21 +319,267 @@ fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {
 
 #[tauri::command]
 fn play_tracks(hrefs: Vec<String>, start: Option<String>, state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let shared: Shared = Arc::clone(&state);
+    let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
     app.queue.set_tracks(hrefs, start.as_deref());
+    if let Some(current) = app.queue.current().map(str::to_string) {
+        begin_playback(&shared, &mut app, current);
+    }
     Ok(())
 }
 
 #[tauri::command]
 fn next_track(state: State<'_, Shared>) -> Result<Option<String>> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.queue.next(None).map(str::to_string))
+    let shared: Shared = Arc::clone(&state);
+    let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
+    let next = app.queue.next(None).map(str::to_string);
+    if let Some(href) = next.clone() {
+        begin_playback(&shared, &mut app, href);
+    }
+    Ok(next)
 }
 
 #[tauri::command]
 fn previous_track(state: State<'_, Shared>) -> Result<Option<String>> {
+    let shared: Shared = Arc::clone(&state);
+    let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
+    let previous = app.queue.previous().map(str::to_string);
+    if let Some(href) = previous.clone() {
+        begin_playback(&shared, &mut app, href);
+    }
+    Ok(previous)
+}
+
+// ---------------------------------------------------------------------------
+// Playback (TD-03)
+// ---------------------------------------------------------------------------
+
+/// How often the supervisor checks whether a track has finished.
+///
+/// Long enough to cost nothing, short enough that the gap between tracks is not
+/// noticed — and the gap is dominated by fetch and decode anyway, which is what
+/// prefetch (TD-08) exists to remove.
+const SUPERVISOR_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackState {
+    href: Option<String>,
+    /// Resolved from the library rows, so the transport can name what is
+    /// playing without the UI holding its own copy of the table.
+    title: String,
+    artist: String,
+    status: audio::Status,
+    /// Fetching and decoding, which on a cold cache is seconds. Distinct from
+    /// playing so the UI can say "loading" rather than showing a stalled
+    /// playhead.
+    loading: bool,
+    position: f64,
+    duration: f64,
+    volume: f32,
+    error: Option<String>,
+    /// False when the machine has no output device. The UI disables the
+    /// transport rather than offering buttons that silently do nothing.
+    available: bool,
+}
+
+/// Fetch, decode and start a track.
+///
+/// The work happens on a blocking thread because it is neither quick nor
+/// bounded: a cold cache means a download, and decoding a five-minute track is
+/// seconds of CPU. Doing either on the command thread would freeze the window,
+/// and doing it on the audio thread is unthinkable.
+fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
+    let Some(player) = app.player.as_ref() else {
+        app.playback_error = Some("No audio output device is available.".to_string());
+        return;
+    };
+
+    // A person who double-clicks a second track while the first is still
+    // downloading expects the second one. The generation is what lets the
+    // abandoned load recognise that it lost and drop its result.
+    app.generation += 1;
+    let generation = app.generation;
+    app.loading = true;
+    app.playback_error = None;
+    app.playing = Some(href.clone());
+
+    let link = player.link();
+    let rate = player.sample_rate();
+    let cache_dir = app.cache.dir().to_path_buf();
+    let remote = app.settings.remote.clone();
+    let shared = Arc::clone(shared);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = cache::Cache::new(cache_dir);
+        let outcome = cache
+            .store(&href, || webdav::fetch_blocking(&remote, &href))
+            .map_err(|e| e.to_string())
+            .and_then(|path| {
+                // Converted to the device's rate here, once, rather than per
+                // block on the audio thread.
+                vapor_dsp::decode_for_playback(&path, rate).map_err(|e| e.to_string())
+            });
+
+        let Ok(mut app) = shared.lock() else {
+            return;
+        };
+        if app.generation != generation {
+            // Superseded. Handing these frames to the deck now would interrupt
+            // whatever the person actually chose.
+            return;
+        }
+        app.loading = false;
+
+        match outcome {
+            Ok(frames) if !frames.is_empty() => {
+                // A refused load means the audio thread has stopped servicing
+                // its queue, which is a dead device rather than a busy one.
+                // Saying so beats a transport that reads "playing" in silence.
+                if !link.load(frames, true) {
+                    app.playback_error = Some("The audio device stopped responding.".to_string());
+                    app.playing = None;
+                }
+            }
+            // A file that decodes to nothing is the malformed-AAC case (TD-12).
+            // It has to say so rather than present as a track that plays
+            // silently for its whole duration.
+            Ok(_) => {
+                app.playback_error = Some("That track contains no playable audio.".to_string());
+                app.playing = None;
+            }
+            Err(e) => {
+                app.playback_error = Some(e);
+                app.playing = None;
+            }
+        }
+    });
+}
+
+/// The device, or a message a person can act on.
+fn player(app: &AppState) -> Result<&audio::Player> {
+    app.player
+        .as_ref()
+        .ok_or_else(|| Error("No audio output device is available.".to_string()))
+}
+
+#[tauri::command]
+fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    let snapshot = app.player.as_ref().map(|p| p.snapshot());
+    let row = app
+        .playing
+        .as_ref()
+        .and_then(|href| app.rows.iter().find(|r| &r.href == href));
+
+    Ok(PlaybackState {
+        href: app.playing.clone(),
+        title: row.map(|r| r.title.clone()).unwrap_or_default(),
+        // The same rule the table follows: unknown renders as a dash, never as
+        // a guess.
+        artist: row
+            .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
+            .map(|r| r.artist.clone())
+            .unwrap_or_default(),
+        status: snapshot.map_or(audio::Status::Idle, |s| s.status),
+        loading: app.loading,
+        position: snapshot.map_or(0.0, |s| s.position),
+        duration: snapshot.map_or(0.0, |s| s.duration),
+        volume: snapshot.map_or(1.0, |s| s.volume),
+        error: app.playback_error.clone(),
+        available: app.player.is_some(),
+    })
+}
+
+#[tauri::command]
+fn pause_playback(state: State<'_, Shared>) -> Result<()> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    player(&app)?.pause();
+    Ok(())
+}
+
+#[tauri::command]
+fn resume_playback(state: State<'_, Shared>) -> Result<()> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    player(&app)?.play();
+    Ok(())
+}
+
+/// Stop and forget what was playing.
+///
+/// Deliberately not a pause: the position returns to the start and the
+/// transport reads as idle, which is what the Godot build's stop button did.
+#[tauri::command]
+fn stop_playback(state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.queue.previous().map(str::to_string))
+    player(&app)?.stop();
+    // Any load still in flight now belongs to nothing, so retire its
+    // generation rather than let it start playing after a stop.
+    app.generation += 1;
+    app.loading = false;
+    app.playing = None;
+    Ok(())
+}
+
+#[tauri::command]
+fn seek(seconds: f64, state: State<'_, Shared>) -> Result<()> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    player(&app)?.seek(seconds);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_volume(volume: f32, state: State<'_, Shared>) -> Result<()> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    player(&app)?.set_volume(volume);
+    Ok(())
+}
+
+/// Advance the queue when a track finishes.
+///
+/// A thread rather than something the UI drives, because the queue has to keep
+/// moving whether or not a window is open, focused or even rendering — a
+/// webview that stops running timers when hidden is a normal thing for an OS to
+/// do, and music stopping because of it is not.
+fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
+    use tauri::Emitter;
+
+    let spawned = std::thread::Builder::new()
+        .name("vapor-playback-supervisor".to_string())
+        .spawn(move || loop {
+            std::thread::sleep(SUPERVISOR_POLL);
+
+            let Ok(mut app) = shared.lock() else {
+                return;
+            };
+            // Consumed here, so one ending advances the queue exactly once.
+            if !app.player.as_ref().is_some_and(|p| p.take_ended()) {
+                continue;
+            }
+
+            // Something is already on its way to the deck — almost always
+            // because a person pressed next or picked a track while the
+            // outgoing one was still running. Advancing now would skip past it:
+            // the ending belongs to the track they just left, not to a queue
+            // that ran out. Consuming the flag and doing nothing is the whole
+            // fix; the pending load will start on its own.
+            if app.loading {
+                continue;
+            }
+
+            match app.queue.next(None).map(str::to_string) {
+                Some(href) => begin_playback(&shared, &mut app, href),
+                None => app.playing = None,
+            }
+            drop(app);
+
+            let _ = app_handle.emit("playback-changed", ());
+        });
+
+    if let Err(e) = spawned {
+        eprintln!("could not start the playback supervisor: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +885,15 @@ fn data_location(state: State<'_, Shared>) -> Result<String> {
 #[tauri::command]
 fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    // Silence first. Deleting the cache from under a playing track would leave
+    // the deck holding audio the person just asked to be rid of.
+    if let Some(p) = app.player.as_ref() {
+        p.stop();
+    }
+    app.generation += 1;
+    app.loading = false;
+    app.playing = None;
+    app.playback_error = None;
     app.store.clear()?;
     app.cache.clear().map_err(|e| Error(e.to_string()))?;
     // The password lives in the keychain, not the data directory, so clearing
@@ -648,7 +934,15 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("no app data directory available");
-            app.manage(Arc::new(Mutex::new(AppState::load(Store::new(dir)))));
+            let shared: Shared = Arc::new(Mutex::new(AppState::load(Store::new(dir))));
+
+            // Only worth a thread if there is a device for it to watch.
+            let has_audio = shared.lock().map(|s| s.player.is_some()).unwrap_or(false);
+            if has_audio {
+                spawn_supervisor(app.handle().clone(), Arc::clone(&shared));
+            }
+
+            app.manage(shared);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -660,6 +954,12 @@ pub fn run() {
             play_tracks,
             next_track,
             previous_track,
+            playback_state,
+            pause_playback,
+            resume_playback,
+            stop_playback,
+            seek,
+            set_volume,
             mood_path,
             settings,
             set_bpm_override,

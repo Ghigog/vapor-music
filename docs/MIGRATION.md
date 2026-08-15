@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Status:** Living Document — spike complete, decision pending
-**Last reviewed:** 2026-08-14
+**Last reviewed:** 2026-08-15
 
 > Why Vapor Music is moving off Godot, what replaces it, what the spike proved,
 > and the order the work happens in.
@@ -652,6 +652,60 @@ transition, `energy` from the deck level. Wire it as a readout, not decoration.
 - Web build via wasm + AudioWorklet + OPFS.
 - Feature parity checklist against the current app, then cut over.
 
+### Phase 4 progress — the app makes sound (TD-03)
+
+The chain scan → download → analyse → **play** is now closed. `vapor-engine`
+had always played correctly from the `play` binary; what was missing was a
+device inside the app, and that is what `vapor-app/src-tauri/src/audio.rs` adds.
+
+**The shape, which is the part worth keeping.** Three threads with different
+rights: Tauri commands enqueue and read a snapshot; one loader thread per track
+fetches, decodes and resamples; the cpal callback renders and applies commands,
+and is allowed to do nothing else. Commands cross on a `VecDeque` the audio
+thread takes with `try_lock` — it never waits, so a contended block applies its
+commands one callback later rather than glitching.
+
+**Two things measurement caught, both of the kind inspection does not.**
+
+1. **Loading a track frees the previous one on the audio thread.** A deck loaded
+   the obvious way drops ~106 MB inside the callback, which can block in the
+   allocator. The symptom would be a dropout *only ever at a track change* —
+   irreproducible on demand and eventually heard by everyone. `Deck::load` now
+   has a sibling, `swap_samples`, that returns the displaced buffer so the
+   control thread frees it. `tests/audio_realtime.rs` counts frees as well as
+   allocations and asserts zero of both across a track change.
+2. **The existing allocation test was measuring the wrong thing.** MIG-010's
+   proof used a *process-wide* counter serialised by a mutex. That is not
+   enough: cargo's harness formats another test's result line on its own thread,
+   and a global counter attributes those allocations to whatever is being
+   measured. The new shell test reported 3 allocations for a path that performs
+   none, and passed only under `--test-threads=1`. Both files now count per
+   thread. The engine's number was right; the method that produced it was not,
+   and it would have failed the moment a third test joined that file.
+
+**Decode gained a stereo path.** The offline tools duplicate the mono analysis
+signal into both channels, which is fine for measuring beat alignment and a
+regression anyone can hear in a player. `decode_to_stereo` shares one conversion
+table with `decode_to_mono` through a `Sink` trait, so the two cannot disagree
+about i24 scaling or unsigned offsets — and mono still averages *every* channel,
+which is what the validated analysis figures were measured with.
+
+**Conversion happens at load, not per block.** The output stream keeps whatever
+rate and channel count the device offers, for its whole life, and each track is
+resampled to it once. Reconfiguring a device between tracks is audible where it
+is possible at all, and a real library has 44.1 and 48 kHz side by side.
+
+**What this deliberately does not do.** The app *plays* tracks; it does not
+*mix* them. A track ends, the next loads and starts. The engine beat-matches and
+the analysis supplies the grids, but a beat-matched auto-transition needs the
+incoming track downloaded and decoded before the outgoing one ends — which is
+prefetch, and prefetch does not exist (TD-08). That is the next link, and it is
+what turns this from a music player into the product. Tracked as TD-25.
+
+Also unaddressed here: streaming decode (TD-09 — a track is held whole in
+memory), and cpal on iOS and Android, which this exercises on macOS desktop only
+and therefore says nothing about (MIG-011).
+
 ### Phase 5 — Retire
 
 Archive the Godot tree on a branch. Do not delete it until the new app has run
@@ -807,8 +861,8 @@ resolved by, not when it must be started.
 
 | ID | Item | Phase | Source |
 |---|---|---|---|
-| ~~MIG-010~~ | ~~Real-time-safe audio thread discipline.~~ **Done** — `Mixer::render` is allocation-free, *asserted* by a counting global allocator (0 allocations across a transition and glide) rather than by inspection. `play` now renders inside the audio callback. Transitions are scheduled ahead via `schedule_transition`, keeping the fallible decision off the audio thread. | 2 | Risks |
-| MIG-011 | Validate `cpal` on Android and iOS **early**, on device. Less battle-tested than desktop; discovering this in phase 4 is too late. | 2 | Risks |
+| ~~MIG-010~~ | ~~Real-time-safe audio thread discipline.~~ **Done** — `Mixer::render` is allocation-free, *asserted* by a counting allocator (0 allocations across a transition and glide) rather than by inspection. `play` renders inside the audio callback. Transitions are scheduled ahead via `schedule_transition`, keeping the fallible decision off the audio thread. **Extended in phase 4** to the shell's audio path, which also counts frees — a track change displaces a ~106 MB buffer and must not release it on the audio thread. Both counters are now per thread; the process-wide version was measuring the test harness. | 2 | Risks |
+| MIG-011 | Validate `cpal` on Android and iOS **early**, on device. Less battle-tested than desktop; discovering this in phase 4 is too late. The shell now opens a real device (TD-03), but on macOS desktop only — the mobile question is untouched. | 2 | Risks |
 | MIG-012 | Choose the time-stretch library on measured quality: `signalsmith-stretch` (MIT) vs Rubber Band single-file (GPL). | 2 | Open decision 3 |
 | MIG-013 | Verify the wasm audio path end to end — the crate compiles for wasm, but AudioWorklet integration is unexercised. | 4 | Spike limits |
 

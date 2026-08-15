@@ -182,7 +182,10 @@ mod tests {
     fn overwriting_replaces_the_whole_file() {
         let (store, dir) = temp_store();
         store
-            .save("things", &vec!["long".to_string(), "list".into(), "here".into()])
+            .save(
+                "things",
+                &vec!["long".to_string(), "list".into(), "here".into()],
+            )
             .expect("save");
         store.save("things", &vec!["x".to_string()]).expect("save");
 

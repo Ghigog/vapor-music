@@ -76,6 +76,26 @@ export interface QueueState {
   next: string | null;
 }
 
+/** What the audio thread is doing. "loading" is a separate flag — fetching and
+ *  decoding is the shell's business, not the device's. */
+export type PlaybackStatus = "idle" | "playing" | "paused";
+
+export interface PlaybackState {
+  href: string | null;
+  /** Resolved from the library rows; empty when nothing is playing. */
+  title: string;
+  artist: string;
+  status: PlaybackStatus;
+  /** Fetching and decoding — seconds on a cold cache. */
+  loading: boolean;
+  position: number;
+  duration: number;
+  volume: number;
+  error: string | null;
+  /** False when the machine has no output device at all. */
+  available: boolean;
+}
+
 export interface TrackMeta {
   href: string;
   bpm: number;
@@ -144,6 +164,13 @@ export function queueState(): Promise<QueueState> {
   return invoke<QueueState>("queue_state");
 }
 
+/**
+ * Replace the queue and start playing.
+ *
+ * Returns as soon as the queue is set, not when audio starts: the track still
+ * has to be fetched and decoded, which is seconds on a cold cache. Watch
+ * `playbackState().loading` for that.
+ */
 export function playTracks(hrefs: string[], start?: string): Promise<void> {
   return invoke<void>("play_tracks", { hrefs, start: start ?? null });
 }
@@ -154,6 +181,37 @@ export function nextTrack(): Promise<string | null> {
 
 export function previousTrack(): Promise<string | null> {
   return invoke<string | null>("previous_track");
+}
+
+// ---------------------------------------------------------------------------
+// Transport
+// ---------------------------------------------------------------------------
+
+export function playbackState(): Promise<PlaybackState> {
+  return invoke<PlaybackState>("playback_state");
+}
+
+export function pausePlayback(): Promise<void> {
+  return invoke<void>("pause_playback");
+}
+
+export function resumePlayback(): Promise<void> {
+  return invoke<void>("resume_playback");
+}
+
+/** Stop and return to the start — not a pause. */
+export function stopPlayback(): Promise<void> {
+  return invoke<void>("stop_playback");
+}
+
+export function seek(seconds: number): Promise<void> {
+  return invoke<void>("seek", { seconds });
+}
+
+/** Master volume, 0 to 1. Applied after the mixer, so a transition's own gain
+ *  automation is unaffected. */
+export function setVolume(volume: number): Promise<void> {
+  return invoke<void>("set_volume", { volume });
 }
 
 /** Order a set of tracks along an energy/tempo curve. */

@@ -296,7 +296,10 @@ mod tests {
     #[test]
     fn absolute_child_urls_reduce_to_paths() {
         let xml = "<d:href>https://host.example/dav/Music/Sub/</d:href>";
-        assert_eq!(child_directories(xml, "/dav/Music/"), vec!["/dav/Music/Sub/"]);
+        assert_eq!(
+            child_directories(xml, "/dav/Music/"),
+            vec!["/dav/Music/Sub/"]
+        );
     }
 
     /// The messages are shown to a person, so they must say what to do.

@@ -1,0 +1,173 @@
+/*
+ * The transport bar. Layout only — every colour and size is a token from
+ * public/tokens.css.
+ *
+ * Four regions on one row: what is playing, the controls, the scrubber, and
+ * volume. The scrubber takes the slack so the controls stay put as a title
+ * changes length; a transport whose buttons move when the track changes is one
+ * you cannot hit without looking.
+ */
+
+.transport {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto minmax(180px, 2fr) 110px;
+  align-items: center;
+  gap: 18px;
+}
+
+/* Stacked on narrow windows, where four columns cannot fit. The scrubber and
+   the controls are what matter, so the rest wraps around them. */
+@media (max-width: 767px) {
+  .transport {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "now      controls"
+      "scrub    scrub";
+    row-gap: 8px;
+  }
+
+  .transport__now {
+    grid-area: now;
+  }
+  .transport__controls {
+    grid-area: controls;
+  }
+  .transport__scrub {
+    grid-area: scrub;
+  }
+  .transport__volume {
+    display: none;
+  }
+}
+
+.transport__now {
+  min-width: 0;
+}
+
+.transport__title,
+.transport__artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transport__title {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.transport__artist {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.transport__controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.transport__button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.transport__button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+
+.transport__button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.transport__button--primary {
+  width: 40px;
+  height: 40px;
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--fs-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.transport__button--primary:hover:not(:disabled) {
+  background: var(--accent-bright);
+  color: #fff;
+}
+
+.transport__scrub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.transport__time {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  /* Fixed width so the controls do not shift when 9:59 becomes 10:00. */
+  width: 5ch;
+  text-align: center;
+  flex: none;
+}
+
+.transport__range,
+.transport__volume {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: var(--r-hair);
+  background: rgba(var(--accent-rgb), 0.18);
+  cursor: pointer;
+}
+
+.transport__range {
+  flex: 1;
+  min-width: 0;
+}
+
+.transport__range:disabled,
+.transport__volume:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.transport__range::-webkit-slider-thumb,
+.transport__volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.transport__range::-moz-range-thumb,
+.transport__volume::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+
+/* Spans the whole bar rather than sitting in a column: an error about audio is
+   about the bar as a whole, and there is no width to spare on one row. */
+.transport__error {
+  grid-column: 1 / -1;
+  font-size: var(--fs-label);
+  color: var(--ink-2);
+  padding-top: 4px;
+}
