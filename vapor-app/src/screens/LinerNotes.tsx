@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from "react";
 import * as core from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Loading } from "../components/States";
 
 export function LinerNotes({
@@ -35,7 +36,7 @@ export function LinerNotes({
         if (!cancelled) setTrack(t);
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setError(messageOf(e));
       });
     return () => {
       cancelled = true;
@@ -48,7 +49,7 @@ export function LinerNotes({
         <button className="liner__back" onClick={onBack}>
           ‹ Back
         </button>
-        <p className="liner__error">{error}</p>
+        <ErrorNotice error={error} />
       </div>
     );
   }

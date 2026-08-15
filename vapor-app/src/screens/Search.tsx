@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as core from "../lib/core";
 import type { Row } from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Empty, Skeleton } from "../components/States";
 
 /** Long enough that typing a word does not fire six searches, short enough
@@ -24,6 +25,7 @@ export function Search({ onOpen }: { onOpen: (href: string) => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<core.SearchResults | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -38,6 +40,7 @@ export function Search({ onOpen }: { onOpen: (href: string) => void }) {
     }
     let cancelled = false;
     setBusy(true);
+    setError(null);
     const timer = setTimeout(() => {
       core
         .search(query)
@@ -45,8 +48,13 @@ export function Search({ onOpen }: { onOpen: (href: string) => void }) {
           // A slower earlier search must not overwrite a faster later one.
           if (!cancelled) setResults(r);
         })
-        .catch(() => {
-          if (!cancelled) setResults(null);
+        .catch((e: unknown) => {
+          // A failed search must not present as "nothing matched" — that is a
+          // different answer, and a wrong one.
+          if (!cancelled) {
+            setResults(null);
+            setError(messageOf(e));
+          }
         })
         .finally(() => {
           if (!cancelled) setBusy(false);
@@ -70,6 +78,7 @@ export function Search({ onOpen }: { onOpen: (href: string) => void }) {
   );
 
   const nothing =
+    !error &&
     results !== null &&
     results.total === 0 &&
     results.playlists.length === 0 &&
@@ -111,7 +120,9 @@ export function Search({ onOpen }: { onOpen: (href: string) => void }) {
         />
       )}
 
-      {query.trim() && busy && !results && <Skeleton rows={5} />}
+      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+
+      {query.trim() && busy && !results && !error && <Skeleton rows={5} />}
 
       {nothing && (
         <Empty title={`Nothing matched “${query.trim()}”`} body="Try fewer letters, or a different word." />

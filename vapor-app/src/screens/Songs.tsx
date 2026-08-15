@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import * as core from "../lib/core";
 import type { Row, SortKey } from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
 /** Row height in px, from the design. Declared once; the virtualizer and the
  *  stylesheet both read it from here rather than each holding a copy. */
@@ -69,6 +70,11 @@ export function Songs({
   /** Bumped after a correction lands, to re-read rows with it applied. */
   const [revision, setRevision] = useState(0);
 
+  /** The row the keyboard is on. Separate from `selected`, which is what a
+   *  bulk action applies to — moving focus should not silently change what a
+   *  person is about to add to a playlist. */
+  const [focused, setFocused] = useState(0);
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,7 +88,7 @@ export function Songs({
           setLoad({ kind: "ready", rows: sections[0]?.rows ?? [] });
         })
         .catch((e: unknown) => {
-          if (!cancelled) setLoad({ kind: "error", message: String(e) });
+          if (!cancelled) setLoad({ kind: "error", message: messageOf(e) });
         });
     }, 120);
     return () => {
@@ -120,7 +126,7 @@ export function Songs({
       setBpmError(null);
       setRevision((r) => r + 1);
     } catch (e: unknown) {
-      setBpmError(String(e));
+      setBpmError(messageOf(e));
     }
   }
 
@@ -215,16 +221,7 @@ export function Songs({
         // Dismissed by fixing it or by clicking away, not by a timer: a
         // message about the number you just typed should not vanish while you
         // are still reading it.
-        <div className="songs__notice" role="status">
-          <span>{bpmError}</span>
-          <button
-            className="songs__notice-close"
-            onClick={() => setBpmError(null)}
-            aria-label="Dismiss"
-          >
-            ×
-          </button>
-        </div>
+        <ErrorNotice error={bpmError} onDismiss={() => setBpmError(null)} />
       )}
 
       {selected.size > 0 && (
@@ -235,11 +232,61 @@ export function Songs({
         />
       )}
 
-      <div className="songs__scroll" ref={scrollRef}>
+      <div
+        className="songs__scroll"
+        ref={scrollRef}
+        tabIndex={0}
+        role="listbox"
+        aria-label="Tracks"
+        aria-activedescendant={rows[focused] ? `row-${focused}` : undefined}
+        onKeyDown={(e) => {
+          if (rows.length === 0) return;
+          // Arrow keys move a cursor; Enter plays it; space selects. The Godot
+          // version had none of this, and a table this size is unusable without
+          // it (TD-33).
+          const move = (to: number) => {
+            e.preventDefault();
+            const next = Math.max(0, Math.min(rows.length - 1, to));
+            setFocused(next);
+            virtualizer.scrollToIndex(next, { align: "auto" });
+          };
+          switch (e.key) {
+            case "ArrowDown":
+              return move(focused + 1);
+            case "ArrowUp":
+              return move(focused - 1);
+            case "PageDown":
+              return move(focused + 10);
+            case "PageUp":
+              return move(focused - 10);
+            case "Home":
+              return move(0);
+            case "End":
+              return move(rows.length - 1);
+            case "Enter": {
+              e.preventDefault();
+              const row = rows[focused];
+              if (row) void playFrom(row.href);
+              return;
+            }
+            case " ": {
+              e.preventDefault();
+              const row = rows[focused];
+              if (row) toggleSelected(row.href);
+              return;
+            }
+            default:
+              return;
+          }
+        }}
+      >
         {load.kind === "loading" && <p className="label">reading library</p>}
 
         {load.kind === "error" && (
-          <p className="songs__error numeric">{load.message}</p>
+          <ErrorNotice
+            error={load.message}
+            onRetry={() => setRevision((r) => r + 1)}
+          />
         )}
 
         {load.kind === "ready" && rows.length === 0 && (
@@ -259,8 +306,13 @@ export function Songs({
             return (
               <div
                 key={row.href}
+                id={`row-${item.index}`}
+                role="option"
+                aria-selected={selected.has(row.href)}
                 className={
-                  "songrow" + (selected.has(row.href) ? " songrow--on" : "")
+                  "songrow" +
+                  (selected.has(row.href) ? " songrow--on" : "") +
+                  (item.index === focused ? " songrow--cursor" : "")
                 }
                 style={{
                   position: "absolute",
@@ -274,6 +326,7 @@ export function Songs({
                 onClick={(e) => {
                   // Plain click selects; double-click plays. Modifier-click is
                   // the multi-select gesture people expect from a table.
+                  setFocused(item.index);
                   if (e.metaKey || e.ctrlKey) toggleSelected(row.href);
                   else setSelected(new Set([row.href]));
                 }}

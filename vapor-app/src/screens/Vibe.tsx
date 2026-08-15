@@ -21,6 +21,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { VaporMark } from "../components/VaporMark";
 import * as core from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Empty } from "../components/States";
 
 const CURVES: { id: core.Curve; label: string; blurb: string }[] = [
@@ -83,7 +84,7 @@ export function Vibe() {
       );
       await refresh();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(messageOf(e));
     } finally {
       setConducting(false);
     }
@@ -204,7 +205,7 @@ export function Vibe() {
           {conducting ? "Choosing…" : "Conduct from here"}
         </button>
         {result && <p className="vibe__result">{result}</p>}
-        {error && <p className="vibe__error">{error}</p>}
+        {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
         <p className="vibe__note">
           Energy is loudness, brightness and tempo in equal parts — enough to
           tell a loud ballad from a quiet banger, which loudness alone cannot.

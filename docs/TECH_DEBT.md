@@ -1,6 +1,6 @@
 # Vapor Music — Tech debt
 
-**Last reviewed:** 2026-08-15 (TD-01, TD-03, TD-08, TD-10, TD-25, TD-30, TD-36, TD-37, TD-38 closed)
+**Last reviewed:** 2026-08-15 (closed since the port: TD-01, TD-03, TD-08, TD-10, TD-12, TD-13, TD-25, TD-26, TD-27, TD-30, TD-33, TD-34, TD-36, TD-37, TD-38, TD-42b, TD-43b)
 
 Known shortcuts, deferred work and things that are wrong but not yet worth
 fixing. Kept separate from `docs/MIGRATION.md`, which tracks the *plan*; this
@@ -65,8 +65,8 @@ Things that would be a defect if the app shipped today.
 | TD-40b | **Onboarding's second path does not exist.** "Use files on this device" is shown disabled: a local-folder library needs a file picker, a watcher and a filesystem scanner, none of which are written. Shown rather than hidden so the intended choice is visible and honest. | — |
 | ~~TD-31~~ | ~~No drag and drop.~~ **Partly done** — the Queue reorders by dragging, using the platform's own HTML5 drag events rather than `dnd-kit`; explicit up/down buttons cover the keyboard, which a pointer-only implementation would have needed anyway. Dragging tracks *onto* playlists is still not wired. | — |
 | TD-32 | **Songs column header layout is a compromise.** Artist shares a grid cell with the title, so its header is hidden rather than aligned. Works, but the header row and the data row agree by convention rather than by construction. | `songs.css` |
-| TD-33 | **No keyboard navigation.** Rows are click-only; a table this size needs arrow keys, and the Godot version did not have this either. | — |
-| TD-34 | **No error surface.** IPC failures render as a raw string. Fine for a scaffold, wrong for a person. | — |
+| ~~TD-33~~ | ~~No keyboard navigation.~~ **Done** — the Songs table is a `listbox` with arrow keys, Page Up/Down, Home/End, Enter to play and Space to select. The cursor is deliberately separate from the selection: selection is what a bulk action applies to, and an arrow key must not silently change what a person is about to add to a playlist. | — |
+| ~~TD-34~~ | ~~No error surface.~~ **Done** — one `ErrorNotice` across every screen, with `messageOf` unwrapping a thrown string, an `Error`, or an object with a message field, and the raw text kept behind a Details toggle for when it is the only clue. Search gained a real error path in the process: a failed search used to present as "nothing matched", which is a different answer and a wrong one. | — |
 | TD-35 | **The mark's shape is unfinished.** Known and expected; the attribute surface is stable so screens are safe to build against it. | — |
 
 ## Process

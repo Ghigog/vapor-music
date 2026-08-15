@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
 type Busy = "idle" | "saving" | "scanning" | "analysing";
 
@@ -59,7 +60,7 @@ export function Settings() {
         setUsername(s.remote.username);
         setFolder(s.remote.folder);
       })
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => setError(messageOf(e)));
     void refresh();
   }, [refresh]);
 
@@ -85,7 +86,7 @@ export function Settings() {
     try {
       done(await fn());
     } catch (e: unknown) {
-      setError(String(e));
+      setError(messageOf(e));
     } finally {
       // Analysis clears its own flag when the last track lands, since it
       // outlives the call that started it.
@@ -303,7 +304,7 @@ export function Settings() {
         </div>
       </section>
 
-      {error && <p className="settings__error numeric">{error}</p>}
+      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
       {note && <p className="settings__note">{note}</p>}
     </div>
   );

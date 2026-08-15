@@ -27,6 +27,7 @@ import { Onboarding } from "./screens/Onboarding";
 import * as core from "./lib/core";
 import "./components/transport.css";
 import "./components/states.css";
+import "./components/notice.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 import "./screens/search.css";

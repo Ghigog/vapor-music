@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import * as core from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import type { GroupBy, LibrarySection, Row } from "../lib/core";
 
 /** Tabs map onto the index's grouping, so the UI cannot invent a category. */
@@ -44,7 +45,7 @@ export function Library() {
           if (!cancelled) setLoad({ kind: "ready", sections });
         })
         .catch((e: unknown) => {
-          if (!cancelled) setLoad({ kind: "error", message: String(e) });
+          if (!cancelled) setLoad({ kind: "error", message: messageOf(e) });
         });
     }, 120);
 
@@ -108,7 +109,7 @@ export function Library() {
         {load.kind === "error" && (
           <div className="library__empty">
             <p className="library__empty-title">Could not read the library</p>
-            <p className="library__empty-body numeric">{load.message}</p>
+            <ErrorNotice error={load.message} />
           </div>
         )}
 

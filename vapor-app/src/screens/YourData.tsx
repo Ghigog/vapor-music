@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
 /** The design's list, verbatim. Every line is a claim the code keeps. */
 const NEVERS = [
@@ -84,7 +85,7 @@ export function YourData() {
           <button
             className="data__button"
             onClick={() => {
-              core.revealDataFolder().catch((e: unknown) => setError(String(e)));
+              core.revealDataFolder().catch((e: unknown) => setError(messageOf(e)));
             }}
           >
             Open folder
@@ -157,7 +158,7 @@ export function YourData() {
               core
                 .deleteAllData()
                 .then(refresh)
-                .catch((e: unknown) => setError(String(e)));
+                .catch((e: unknown) => setError(messageOf(e)));
             }}
           >
             Delete everything stored here
@@ -170,7 +171,7 @@ export function YourData() {
           {location}
         </p>
       )}
-      {error && <p className="data__error">{error}</p>}
+      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
     </div>
   );
 }
