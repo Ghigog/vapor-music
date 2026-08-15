@@ -1,6 +1,6 @@
 # Vapor Music — Tech debt
 
-**Last reviewed:** 2026-08-15 (TD-01, TD-03, TD-08, TD-10 and TD-25 closed)
+**Last reviewed:** 2026-08-15 (TD-01, TD-03, TD-08, TD-10, TD-25, TD-36, TD-37, TD-38 closed)
 
 Known shortcuts, deferred work and things that are wrong but not yet worth
 fixing. Kept separate from `docs/MIGRATION.md`, which tracks the *plan*; this
@@ -54,10 +54,12 @@ Things that would be a defect if the app shipped today.
 
 | ID | Item | Notes |
 |---|---|---|
-| TD-30 | **Three screens of twelve.** Library, Songs and Settings, plus the transport bar. Missing: Onboarding, Search, Now Playing, Queue, Vibe DJ, Liner Notes, Your Data, Loading, Empty. Settings currently carries Your Data's content as a card, since the sovereignty claim needs somewhere to be checkable. | — |
-| TD-36 | **The transport is a bar, not the Now Playing screen.** It has the controls, a scrubber, a clock and volume, and none of the design's artwork, waveform or logo state readout. The mark exposes `state` and `energy` for exactly this and nothing drives them yet. | `Transport.tsx` |
-| TD-37 | **Nine backend commands had no frontend binding, and one did not exist.** Scan, analyse, cache and data-deletion were unreachable from the UI, and there was no `set_remote_config` at all — so the app could not be pointed at a server. Fixed, but the shape of the mistake is worth keeping: the Rust side and `core.ts` drift silently, because nothing checks that every registered command has a binding. A test could. | `core.ts` |
-| TD-38 | **Changing the username orphans the old keychain entry.** `save_webdav_password` is keyed by username, so editing it writes a new entry and leaves the previous one behind until "delete everything" runs. | `webdav.rs` |
+| TD-30 | **Five screens of twelve.** Onboarding, Library, Songs, Now Playing and Settings, plus the transport bar. Missing: Search, Queue, Vibe DJ, Liner Notes, Your Data, Loading, Empty. Settings carries Your Data's content as a card. | — |
+| ~~TD-36~~ | ~~The transport is a bar, not the Now Playing screen.~~ **Done** — Now Playing has the artwork, the real waveform from analysis, click-to-seek, and the mark driven as an actual readout: `blending` while a mix is armed, `energy` from the measured output level. Artwork is absent (no cover art anywhere yet) and the design's ♥ and playlist header are not built. | `NowPlaying.tsx` |
+| ~~TD-37~~ | ~~Nine backend commands had no frontend binding.~~ **Done** — `tests/command_bindings.rs` reads the `generate_handler!` list and `core.ts` and fails if a command cannot be called. Verified to fail by removing a binding. It cannot check argument shapes; that would need real type extraction. | `core.ts` |
+| ~~TD-38~~ | ~~Changing the username orphans the old keychain entry.~~ **Done** — `set_remote_config` deletes the previous entry when the name changes. Best effort: a keychain that will not release an entry is not a reason to refuse the rename. | `webdav.rs` |
+| TD-39 | **No cover art anywhere.** Now Playing and the Songs rows draw a gradient placeholder. WebDAV has no art API, so this needs either embedded-tag extraction (`lofty`) or the OpenSubsonic client, which serves it over a documented endpoint. | MIG-030 |
+| TD-40b | **Onboarding's second path does not exist.** "Use files on this device" is shown disabled: a local-folder library needs a file picker, a watcher and a filesystem scanner, none of which are written. Shown rather than hidden so the intended choice is visible and honest. | — |
 | TD-31 | **No drag and drop.** The Godot build supported dragging tracks onto playlists and reordering within one. `dnd-kit` is the intended answer; nothing is wired. | — |
 | TD-32 | **Songs column header layout is a compromise.** Artist shares a grid cell with the title, so its header is hidden rather than aligned. Works, but the header row and the data row agree by convention rather than by construction. | `songs.css` |
 | TD-33 | **No keyboard navigation.** Rows are click-only; a table this size needs arrow keys, and the Godot version did not have this either. | — |

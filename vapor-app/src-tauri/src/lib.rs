@@ -398,6 +398,13 @@ struct PlaybackState {
     /// the app is doing what it exists to do, so it should be visible rather
     /// than inferred from two tracks being audible at once.
     mixing: bool,
+    /// Peak output level, 0–1. Drives the mark's `energy`.
+    level: f32,
+    /// Envelope peaks for the playing track, empty until it has been analysed
+    /// at the current version.
+    waveform: Vec<f32>,
+    /// What plays after this, so Now Playing can say so without a second call.
+    next_title: String,
 }
 
 /// Fetch, decode and start a track.
@@ -512,6 +519,19 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         error: app.playback_error.clone(),
         available: app.player.is_some(),
         mixing: app.player.as_ref().is_some_and(|p| p.transition_armed()),
+        level: snapshot.map_or(0.0, |s| s.level),
+        waveform: app
+            .playing
+            .as_ref()
+            .and_then(|href| app.analysis.get(href))
+            .map(|a| a.waveform.clone())
+            .unwrap_or_default(),
+        next_title: app
+            .queue
+            .peek_next(None)
+            .and_then(|href| app.rows.iter().find(|r| r.href == href))
+            .map(|r| r.title.clone())
+            .unwrap_or_default(),
     })
 }
 
@@ -968,6 +988,15 @@ fn set_remote_config(
     state: State<'_, Shared>,
 ) -> Result<Settings> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    // Renaming the account leaves its password behind otherwise: the keychain
+    // entry is keyed by username, so a new name writes a new entry and the old
+    // one sits there until "delete everything" runs. Best effort — a keychain
+    // that will not give up an entry is not a reason to refuse the change.
+    let previous = app.settings.remote.username.clone();
+    if !previous.is_empty() && previous != username.trim() {
+        let _ = webdav::delete_password(&previous);
+    }
 
     app.settings.remote.url = url.trim().to_string();
     app.settings.remote.username = username.trim().to_string();

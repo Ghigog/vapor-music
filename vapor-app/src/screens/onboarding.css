@@ -1,0 +1,128 @@
+/*
+ * Onboarding. A centred column on a wide window rather than the design's
+ * phone-width stack — the copy is the same, the measure is what changes.
+ */
+
+.onboard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+  max-width: 520px;
+  margin: auto;
+  padding: 40px 0;
+}
+
+.onboard__mark {
+  margin: 0 auto 4px;
+}
+
+.onboard__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-display);
+  line-height: 1.04;
+  letter-spacing: var(--ls-display);
+  color: var(--ink);
+}
+
+.onboard__body {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.onboard__promises {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.onboard__promise {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* The one green. It means "this is on your device and it is yours", which is
+   exactly what each of these lines claims — so this is the one place on the
+   screen it belongs. */
+.onboard__tick {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  border-radius: var(--r-pill);
+}
+
+.onboard__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.onboard__button {
+  width: 100%;
+  padding: 15px 20px;
+  border: 0;
+  border-radius: var(--r-lg);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.onboard__button:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+.onboard__button--quiet {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid var(--glass-rim);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.onboard__button--quiet:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.onboard__soon {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-pill);
+  padding: 2px 7px;
+}
+
+.onboard__footnote {
+  margin: 0 auto;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}

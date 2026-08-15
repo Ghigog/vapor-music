@@ -66,6 +66,13 @@ const MAX_BLOCK: usize = 4096;
 /// the queue has a fixed allocation rather than to ration anything.
 const COMMAND_CAPACITY: usize = 32;
 
+/// How much of the previous level survives a quieter block.
+///
+/// Attack is instant and release is slow, the way a meter behaves: a transient
+/// should show immediately, and the fall between drum hits should not read as
+/// the music stopping.
+const LEVEL_DECAY: f32 = 0.86;
+
 /// What the audio thread is doing.
 ///
 /// Loading is deliberately absent: fetching and decoding a track is the shell's
@@ -154,6 +161,13 @@ pub struct Link {
     transition_armed: AtomicBool,
     /// Master volume, as `f32` bits.
     volume: AtomicU32,
+    /// Peak level of the last rendered block, as `f32` bits.
+    ///
+    /// The design's mark takes an `energy` drive "from the deck's level", which
+    /// makes the logo a readout rather than an ornament. Measured after the
+    /// mixer and before master volume, so turning the volume down does not make
+    /// the mark go still while music is plainly playing.
+    level: AtomicU32,
     /// Callbacks that could not take the command lock. A health signal, not an
     /// error: see the module docs.
     commands_deferred: AtomicU64,
@@ -168,6 +182,7 @@ pub struct Snapshot {
     pub position: f64,
     pub duration: f64,
     pub volume: f32,
+    pub level: f32,
     pub commands_deferred: u64,
 }
 
@@ -190,6 +205,7 @@ impl Link {
             swapped: AtomicBool::new(false),
             transition_armed: AtomicBool::new(false),
             volume: AtomicU32::new(1.0f32.to_bits()),
+            level: AtomicU32::new(0),
             commands_deferred: AtomicU64::new(0),
             sample_rate,
         }
@@ -303,6 +319,7 @@ impl Link {
             position: f64::from_bits(self.position.load(Ordering::Relaxed)),
             duration: f64::from_bits(self.duration.load(Ordering::Relaxed)),
             volume: f32::from_bits(self.volume.load(Ordering::Relaxed)),
+            level: f32::from_bits(self.level.load(Ordering::Relaxed)),
             commands_deferred: self.commands_deferred.load(Ordering::Relaxed),
         }
     }
@@ -498,6 +515,24 @@ impl Engine {
             self.mixer.outgoing().position_seconds().to_bits(),
             Ordering::Relaxed,
         );
+
+        // Block peak, decayed rather than replaced. A raw per-block peak
+        // flickers at the callback rate — 86 times a second at 512 frames — and
+        // reads as noise; letting it fall slowly gives the mark something that
+        // tracks the music instead of the buffer size.
+        let peak = self.scratch[..frames]
+            .iter()
+            .flat_map(|s| [s[0].abs(), s[1].abs()])
+            .fold(0.0f32, f32::max);
+        let previous = f32::from_bits(self.link.level.load(Ordering::Relaxed));
+        let level = if peak > previous {
+            peak
+        } else {
+            previous * LEVEL_DECAY + peak * (1.0 - LEVEL_DECAY)
+        };
+        self.link
+            .level
+            .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     /// Drain and apply pending commands. Never blocks; never allocates.

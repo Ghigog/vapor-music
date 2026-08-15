@@ -42,6 +42,9 @@ pub struct Analysis {
     pub cue_out: f32,
     pub lufs: f32,
     pub duration: f64,
+    /// Envelope peaks for drawing a waveform. See `vapor_dsp::WAVEFORM_BINS`.
+    #[serde(default)]
+    pub waveform: Vec<f32>,
     /// Schema version, so a future change to what analysis produces can
     /// invalidate stale entries instead of silently mixing formats.
     #[serde(default)]
@@ -50,7 +53,13 @@ pub struct Analysis {
 
 /// Bump when the meaning of any field changes. Entries at a lower version are
 /// re-analysed rather than trusted.
-pub const ANALYSIS_VERSION: u32 = 1;
+///
+/// 2 added the waveform. A `#[serde(default)]` empty vector would have avoided
+/// the re-analysis, and would have left a library where some tracks draw a
+/// waveform and others cannot, with no way to tell why or to fix it short of
+/// deleting everything. Invalidating is what this constant is for — the pass is
+/// resumable, cached per track, and now has a progress bar and a stop button.
+pub const ANALYSIS_VERSION: u32 = 2;
 
 /// Analysis results keyed by href.
 pub type Cache = HashMap<String, Analysis>;
@@ -81,6 +90,7 @@ pub fn analyse_file(path: &Path) -> Result<Analysis, String> {
         cue_out: result.cue_out,
         lufs: result.lufs,
         duration: result.duration_secs,
+        waveform: result.waveform,
         version: ANALYSIS_VERSION,
     })
 }

@@ -39,7 +39,17 @@ pub struct Analysis {
     pub duration_secs: f64,
     pub sample_rate: u32,
     pub channels: usize,
+    /// Envelope peaks across the whole track, for drawing a waveform.
+    ///
+    /// A fixed number of bins rather than a fixed resolution, so a five-minute
+    /// track and a ninety-second one cost the same to store and draw the same
+    /// way. [`WAVEFORM_BINS`] is comfortably more than the design's 52 bars,
+    /// which lets a wider screen subsample rather than interpolate.
+    pub waveform: Vec<f32>,
 }
+
+/// Envelope bins stored per track. See [`Analysis::waveform`].
+pub const WAVEFORM_BINS: usize = 64;
 
 #[derive(Debug)]
 pub enum AnalysisError {
@@ -177,5 +187,8 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         duration_secs: audio.duration_secs(),
         sample_rate: rate,
         channels: audio.channels,
+        // Computed from the same decoded signal every other stage used, so it
+        // costs a pass over memory rather than another decode.
+        waveform: loudness::waveform_peaks(&audio.samples, WAVEFORM_BINS),
     })
 }

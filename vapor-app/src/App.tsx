@@ -1,13 +1,13 @@
 /**
  * App shell.
  *
- * Routing is a piece of state rather than a router: there are three screens and
+ * Routing is a piece of state rather than a router: there are four screens and
  * no URLs to be back-buttoned through. When there are twelve, revisit.
  *
- * The one real decision here is where a fresh launch lands. With no server
- * configured there is nothing to show and nothing to do on Library or Songs, so
- * it opens Settings — the design's Onboarding screen is the fuller answer to
- * the same problem and is not built yet.
+ * Onboarding is the exception to the layout. It takes the whole window with no
+ * sidebar and no transport, because there is nothing to navigate to and nothing
+ * to play — offering a disabled transport to someone who has not yet connected
+ * anything is clutter posing as consistency.
  */
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
@@ -15,22 +15,28 @@ import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
 import { Songs } from "./screens/Songs";
 import { Settings } from "./screens/Settings";
+import { NowPlaying } from "./screens/NowPlaying";
+import { Onboarding } from "./screens/Onboarding";
 import * as core from "./lib/core";
 import "./components/transport.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 import "./screens/settings.css";
+import "./screens/nowplaying.css";
+import "./screens/onboarding.css";
 
-type Screen = "library" | "songs" | "settings";
+type Screen = "library" | "songs" | "playing" | "settings";
 
 const SCREENS: { id: Screen; label: string }[] = [
   { id: "library", label: "Library" },
   { id: "songs", label: "Songs" },
+  { id: "playing", label: "Now Playing" },
   { id: "settings", label: "Settings" },
 ];
 
 type Status =
   | { kind: "loading" }
+  | { kind: "onboarding" }
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
@@ -46,13 +52,27 @@ export function App() {
       .then((s) => {
         const connected =
           s.remote.url.trim() !== "" && s.remote.username.trim() !== "";
-        if (!connected) setScreen("settings");
-        setStatus({ kind: "ready" });
+        setStatus({ kind: connected ? "ready" : "onboarding" });
       })
       .catch((e: unknown) => {
         setStatus({ kind: "error", message: String(e) });
       });
   }, []);
+
+  if (status.kind === "onboarding") {
+    return (
+      <div className="shell shell--bare">
+        <main className="shell__content">
+          <Onboarding
+            onConnect={() => {
+              setScreen("settings");
+              setStatus({ kind: "ready" });
+            }}
+          />
+        </main>
+      </div>
+    );
+  }
 
   if (status.kind === "ready") {
     return (
@@ -71,6 +91,7 @@ export function App() {
         <main className="shell__content">
           {screen === "library" && <Library />}
           {screen === "songs" && <Songs />}
+          {screen === "playing" && <NowPlaying />}
           {screen === "settings" && <Settings />}
         </main>
         {/* Outside the content column: the shell grid spans it across both, and

@@ -96,6 +96,13 @@ export interface PlaybackState {
   available: boolean;
   /** True while a beat-matched mix is arranged or under way (TD-25). */
   mixing: boolean;
+  /** Peak output level, 0–1. Drives the mark's `energy` on Now Playing. */
+  level: number;
+  /** Envelope peaks for the playing track. Empty until it has been analysed
+   *  at the current version — draw a plain bar rather than inventing one. */
+  waveform: number[];
+  /** What plays after this, so Now Playing needs no second call. */
+  nextTitle: string;
 }
 
 export interface TrackMeta {
