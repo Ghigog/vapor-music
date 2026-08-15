@@ -126,6 +126,8 @@ export interface Settings {
   headphoneCalibrationEnabled: boolean;
   /** Manual corrections, keyed by href. See the note on setBpmOverride. */
   bpmOverrides: Record<string, number>;
+  /** Ceiling on the local audio cache, in bytes. */
+  cacheMaxBytes: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,4 +239,15 @@ export function settings(): Promise<Settings> {
  */
 export function setBpmOverride(href: string, bpm: number): Promise<void> {
   return invoke<void>("set_bpm_override", { href, bpm });
+}
+
+/**
+ * Change how much of the device the audio cache may use.
+ *
+ * Returns the bound actually applied, which may be larger than asked for: the
+ * core refuses a cache too small to hold a track, since that fetches, evicts
+ * and re-fetches the same audio while reporting itself as working.
+ */
+export function setCacheMaxBytes(bytes: number): Promise<number> {
+  return invoke<number>("set_cache_max_bytes", { bytes });
 }

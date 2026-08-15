@@ -23,6 +23,19 @@ fn default_ui_scale() -> f32 {
 fn default_theme() -> String {
     "default_dark".to_string()
 }
+fn default_cache_max_bytes() -> u64 {
+    MAX_CACHE_BYTES_DEFAULT
+}
+
+/// Default local cache ceiling — generous on a desktop, finite anywhere.
+pub const MAX_CACHE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Smallest cache worth having.
+///
+/// A cache below roughly one album fetches a track, evicts it to make room for
+/// the next, and fetches it again the moment it is wanted — strictly worse than
+/// no cache, because it pays the download twice and reports itself as working.
+pub const MIN_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Where the library lives.
 ///
@@ -102,6 +115,14 @@ pub struct Settings {
     /// software conventionally has one.
     #[serde(default)]
     pub bpm_overrides: std::collections::HashMap<String, f32>,
+
+    /// Ceiling on the local audio cache, in bytes.
+    ///
+    /// The library lives in the user's cloud and local storage is only a cache,
+    /// so this is the one number that decides how much of a device the app is
+    /// entitled to. It belongs to the person, not to a constant.
+    #[serde(default = "default_cache_max_bytes")]
+    pub cache_max_bytes: u64,
 }
 
 impl Default for Settings {
@@ -117,6 +138,7 @@ impl Default for Settings {
             headphone_profile: String::new(),
             headphone_calibration_enabled: false,
             bpm_overrides: std::collections::HashMap::new(),
+            cache_max_bytes: default_cache_max_bytes(),
         }
     }
 }
@@ -165,6 +187,7 @@ impl Settings {
     pub fn sanitised(mut self) -> Self {
         self.base_font_size = self.base_font_size.clamp(8, 48);
         self.ui_scale = self.ui_scale.clamp(0.5, 3.0);
+        self.cache_max_bytes = self.cache_max_bytes.max(MIN_CACHE_BYTES);
         if self.remote.folder.trim().is_empty() {
             self.remote.folder = default_folder();
         }
@@ -293,6 +316,31 @@ mod tests {
         assert_eq!(s.base_font_size, 48);
         assert_eq!(s.ui_scale, 0.5);
         assert_eq!(s.theme, "default_dark");
+    }
+
+    /// A cache too small to hold a track fetches it, evicts it to make room for
+    /// the next, and fetches it again — worse than no cache, and it reports
+    /// itself as working.
+    #[test]
+    fn a_uselessly_small_cache_is_raised_to_a_usable_one() {
+        let s = Settings {
+            cache_max_bytes: 0,
+            ..Default::default()
+        }
+        .sanitised();
+        assert_eq!(s.cache_max_bytes, MIN_CACHE_BYTES);
+    }
+
+    /// A deliberately large cache is the person's call and must survive.
+    #[test]
+    fn a_generous_cache_bound_is_left_alone() {
+        let huge = 200 * 1024 * 1024 * 1024;
+        let s = Settings {
+            cache_max_bytes: huge,
+            ..Default::default()
+        }
+        .sanitised();
+        assert_eq!(s.cache_max_bytes, huge);
     }
 
     #[test]

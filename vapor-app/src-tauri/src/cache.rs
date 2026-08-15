@@ -26,9 +26,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Default ceiling. Generous on a desktop, deliberately not unbounded.
-pub const DEFAULT_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-
 pub struct Cache {
     dir: PathBuf,
     max_bytes: u64,
@@ -56,16 +53,20 @@ impl From<std::io::Error> for CacheError {
 }
 
 impl Cache {
-    pub fn new(dir: PathBuf) -> Self {
-        Cache {
-            dir,
-            max_bytes: DEFAULT_MAX_BYTES,
-        }
+    /// The bound is a constructor argument rather than a builder step on
+    /// purpose.
+    ///
+    /// Three separate places open a cache — playback, analysis and prefetch —
+    /// and with a defaulted bound each of them could silently keep growing to
+    /// 8 GB after a person had asked for 2. Requiring it here makes that
+    /// mistake unrepresentable rather than merely unlikely; the default now
+    /// lives in `Settings`, which is the thing a person actually edits.
+    pub fn new(dir: PathBuf, max_bytes: u64) -> Self {
+        Cache { dir, max_bytes }
     }
 
-    pub fn with_max_bytes(mut self, max: u64) -> Self {
-        self.max_bytes = max;
-        self
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
     }
 
     pub fn dir(&self) -> &Path {
@@ -118,9 +119,26 @@ impl Cache {
         }
 
         let target = self.path_for(href);
-        let tmp = self.dir.join(format!(".{:016x}.tmp", hash(href)));
+        // The temporary is unique per attempt, not per href.
+        //
+        // Two things now fetch: the analysis pass and the playback prefetcher,
+        // and they can want the same track at the same moment. A temp name
+        // derived only from the href would have both writing the same file,
+        // interleaving their bytes, and renaming the wreckage into place — a
+        // corrupt track that looks perfectly cached. The counter is what makes
+        // the two writes independent; the rename is what makes the winner
+        // atomic.
+        let tmp = self
+            .dir
+            .join(format!(".{:016x}.{}.tmp", hash(href), next_attempt()));
         fs::write(&tmp, &bytes)?;
-        fs::rename(&tmp, &target)?;
+        // A failed rename must not strand the temporary — it would be counted
+        // by `size()` forever and never evicted, since eviction only considers
+        // files it can identify.
+        if let Err(e) = fs::rename(&tmp, &target) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
+        }
 
         self.evict_to_fit()?;
         Ok(target)
@@ -137,6 +155,15 @@ impl Cache {
             .filter(|m| m.is_file())
             .map(|m| m.len())
             .sum()
+    }
+
+    /// Bring the cache within its bound now.
+    ///
+    /// Eviction otherwise only runs after a download, so lowering the bound
+    /// would reclaim nothing until the next fetch — which, for someone who has
+    /// just lowered it to free space, is indistinguishable from it not working.
+    pub fn trim(&self) -> Result<(), CacheError> {
+        self.evict_to_fit()
     }
 
     /// Delete least-recently-used files until the cache fits its bound.
@@ -194,6 +221,16 @@ impl Cache {
     }
 }
 
+/// Distinguishes one download attempt from another.
+///
+/// Process-wide and monotonic. Two threads fetching the same href must not
+/// share a temporary file; see `store`.
+fn next_attempt() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
 /// FNV-1a. Names cache files; the only requirements are determinism and a low
 /// collision rate, so a cryptographic hash would be cost without benefit.
 fn hash(s: &str) -> u64 {
@@ -209,7 +246,13 @@ fn hash(s: &str) -> u64 {
 mod tests {
     use super::*;
 
+    /// A cache in its own directory, bounded high enough that eviction never
+    /// interferes with a test that is not about eviction.
     fn temp_cache() -> (Cache, PathBuf) {
+        bounded_cache(1 << 30)
+    }
+
+    fn bounded_cache(max_bytes: u64) -> (Cache, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "vapor-cache-test-{}-{}",
             std::process::id(),
@@ -218,7 +261,7 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        (Cache::new(dir.clone()), dir)
+        (Cache::new(dir.clone(), max_bytes), dir)
     }
 
     /// Synthetic audio: a WAV header plus silence. Real enough to be a file of
@@ -355,9 +398,8 @@ mod tests {
     /// The bound is the point: an unbounded cache eventually fills a phone.
     #[test]
     fn eviction_keeps_the_cache_under_its_bound() {
-        let (cache, dir) = temp_cache();
         // Each file is 44 + 2000 bytes; the bound holds roughly two.
-        let cache = cache.with_max_bytes(5_000);
+        let (cache, dir) = bounded_cache(5_000);
 
         for i in 0..6 {
             cache
@@ -376,6 +418,51 @@ mod tests {
         // The newest must survive — evicting what was just asked for would
         // make the cache useless.
         assert!(cache.contains("/track5.wav"), "evicted the newest entry");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Analysis and playback prefetch can want the same track at the same
+    /// moment. Sharing a temporary would interleave two downloads into one
+    /// file and rename the result into place — a corrupt track that looks
+    /// perfectly cached, and decodes to noise or nothing.
+    #[test]
+    fn concurrent_stores_of_one_href_do_not_corrupt_it() {
+        let (cache, dir) = temp_cache();
+        let cache = std::sync::Arc::new(cache);
+        let expected = synthetic_wav(20_000);
+
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let cache = std::sync::Arc::clone(&cache);
+                let bytes = expected.clone();
+                std::thread::spawn(move || {
+                    cache.store("/contended.wav", || {
+                        // Long enough that the writes genuinely overlap.
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        Ok(bytes)
+                    })
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("thread").expect("store");
+        }
+
+        let stored = fs::read(cache.path_for("/contended.wav")).expect("read back");
+        assert_eq!(
+            stored, expected,
+            "the cached file is not what was downloaded"
+        );
+
+        // And nothing was left behind for `size()` to count forever.
+        let tmps: Vec<String> = fs::read_dir(&dir)
+            .expect("readdir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(tmps.is_empty(), "left temporaries: {tmps:?}");
+
         let _ = fs::remove_dir_all(dir);
     }
 

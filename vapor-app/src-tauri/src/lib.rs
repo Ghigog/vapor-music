@@ -80,7 +80,16 @@ impl AppState {
     /// Starting empty on a read failure would show a person an empty library
     /// while their data sits unreadable on disk.
     fn load(store: Store) -> Self {
-        let settings = store.load("settings").unwrap_or(None).unwrap_or_default();
+        // `sanitised` on the way in, not on the way out. The core has always
+        // had it and nothing called it, so a hand-edited settings file's
+        // nonsense reached the app unchecked — including, now, a cache bound
+        // too small to hold a track.
+        let settings = store
+            .load::<Settings>("settings")
+            .unwrap_or(None)
+            .unwrap_or_default()
+            .sanitised();
+        let cache_max_bytes = settings.cache_max_bytes;
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
         let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
         AppState {
@@ -90,10 +99,10 @@ impl AppState {
             rows: Vec::new(),
             analysis,
             cancel: analysis::Cancel::new(),
-            // The bound is what stops the cache filling a phone. Configurable
-            // later; the default is generous on a desktop and finite anywhere.
-            cache: cache::Cache::new(store.dir().join("audio"))
-                .with_max_bytes(cache::DEFAULT_MAX_BYTES),
+            // The bound is what stops the cache filling a phone, and it is the
+            // person's to set — `sanitised` has already refused a value too
+            // small to be worth having.
+            cache: cache::Cache::new(store.dir().join("audio"), cache_max_bytes),
             store,
             // Opened once at startup rather than per track: acquiring a device
             // takes long enough to hear as a gap, and holding one open is what
@@ -407,11 +416,12 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     let link = player.link();
     let rate = player.sample_rate();
     let cache_dir = app.cache.dir().to_path_buf();
+    let cache_max = app.cache.max_bytes();
     let remote = app.settings.remote.clone();
     let shared = Arc::clone(shared);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir);
+        let cache = cache::Cache::new(cache_dir, cache_max);
         let outcome = cache
             .store(&href, || webdav::fetch_blocking(&remote, &href))
             .map_err(|e| e.to_string())
@@ -534,6 +544,91 @@ fn set_volume(volume: f32, state: State<'_, Shared>) -> Result<()> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
     player(&app)?.set_volume(volume);
     Ok(())
+}
+
+/// How often the prefetcher looks for something worth downloading.
+///
+/// Unhurried on purpose. It is racing the length of a song, not a frame
+/// deadline, and a tight loop over a lock the audio path also wants is a poor
+/// trade for arriving thirty seconds earlier than necessary.
+const PREFETCH_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Wait after a failed fetch, doubling up to [`PREFETCH_BACKOFF_MAX`].
+const PREFETCH_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
+const PREFETCH_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Download the queue's lookahead before it is needed (TD-08).
+///
+/// Without this the next track starts downloading at the instant the current
+/// one ends, so every track change costs a download and a decode in silence.
+/// `Queue::lookahead` already returns exactly the right three hrefs — now
+/// playing, next, and the one after — and has since the port; nothing consumed
+/// them.
+///
+/// One track at a time, re-deciding after each. A queue that changes mid-fetch
+/// therefore wastes at most one download, which is cheaper than the
+/// cancellation machinery that would avoid it.
+fn spawn_prefetcher(shared: Shared) {
+    let spawned = std::thread::Builder::new()
+        .name("vapor-prefetch".to_string())
+        .spawn(move || {
+            let mut failures: u32 = 0;
+
+            loop {
+                std::thread::sleep(if failures == 0 {
+                    PREFETCH_POLL
+                } else {
+                    // An unreachable server must not be hammered every two
+                    // seconds for as long as the app is open.
+                    PREFETCH_BACKOFF
+                        .saturating_mul(1 << (failures - 1).min(4))
+                        .min(PREFETCH_BACKOFF_MAX)
+                });
+
+                let wanted = {
+                    let Ok(app) = shared.lock() else {
+                        return;
+                    };
+                    if !app.settings.remote.is_configured() {
+                        continue;
+                    }
+                    // The track being played is fetched by `begin_playback`;
+                    // what matters here is everything after it.
+                    app.queue
+                        .lookahead(None)
+                        .into_iter()
+                        .find(|href| !app.cache.contains(href))
+                        .map(|href| {
+                            (
+                                href,
+                                app.settings.remote.clone(),
+                                app.cache.dir().to_path_buf(),
+                                app.settings.cache_max_bytes,
+                            )
+                        })
+                };
+
+                let Some((href, remote, dir, max_bytes)) = wanted else {
+                    failures = 0;
+                    continue;
+                };
+
+                // Fetched with the lock released: this is a network round trip
+                // measured in seconds, and every command would block behind it.
+                let cache = cache::Cache::new(dir, max_bytes);
+                match cache.store(&href, || webdav::fetch_blocking(&remote, &href)) {
+                    Ok(_) => failures = 0,
+                    Err(e) => {
+                        failures = failures.saturating_add(1);
+                        eprintln!("prefetch of {href} failed: {e}");
+                    }
+                }
+            }
+        });
+
+    if let Err(e) = spawned {
+        eprintln!("could not start the prefetcher: {e}");
+    }
 }
 
 /// Advance the queue when a track finishes.
@@ -782,13 +877,13 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
 
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
-    let (todo, cache_dir, cancel, remote) = {
+    let (todo, (cache_dir, cache_max), cancel, remote) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
         let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
         app.cancel.reset();
         (
             analysis::pending(&hrefs, &app.analysis),
-            app.cache.dir().to_path_buf(),
+            (app.cache.dir().to_path_buf(), app.cache.max_bytes()),
             app.cancel.clone(),
             app.settings.remote.clone(),
         )
@@ -802,7 +897,7 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir);
+        let cache = cache::Cache::new(cache_dir, cache_max);
         analysis::run(
             &todo,
             // Fetch on demand. Analysis needs local bytes; this is where they
@@ -857,11 +952,34 @@ fn cache_status(state: State<'_, Shared>) -> Result<CacheStatus> {
         .count();
     Ok(CacheStatus {
         bytes: app.cache.size(),
-        max_bytes: cache::DEFAULT_MAX_BYTES,
+        max_bytes: app.cache.max_bytes(),
         tracks_cached: cached,
         tracks_total: app.rows.len(),
         location: app.cache.dir().display().to_string(),
     })
+}
+
+/// Change how much of the device the cache may use.
+///
+/// Takes effect for every later fetch, and trims immediately rather than
+/// waiting for the next download: someone who has just lowered the bound to
+/// reclaim space expects the space back now, not eventually.
+#[tauri::command]
+fn set_cache_max_bytes(bytes: u64, state: State<'_, Shared>) -> Result<u64> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    app.settings.cache_max_bytes = bytes;
+    // The core decides what is too small to be worth having, so the answer is
+    // the same here as it would be for a hand-edited settings file.
+    app.settings = std::mem::take(&mut app.settings).sanitised();
+    let applied = app.settings.cache_max_bytes;
+
+    let dir = app.cache.dir().to_path_buf();
+    app.cache = cache::Cache::new(dir, applied);
+    app.cache.trim().map_err(|e| Error(e.to_string()))?;
+    app.save_settings()?;
+
+    Ok(applied)
 }
 
 /// Drop one track's local copy, keeping its analysis.
@@ -951,6 +1069,9 @@ pub fn run() {
             let has_audio = shared.lock().map(|s| s.player.is_some()).unwrap_or(false);
             if has_audio {
                 spawn_supervisor(app.handle().clone(), Arc::clone(&shared));
+                // Only useful alongside playback: without a device there is no
+                // queue moving forward to run ahead of.
+                spawn_prefetcher(Arc::clone(&shared));
             }
 
             app.manage(shared);
@@ -982,6 +1103,7 @@ pub fn run() {
             cancel_analysis,
             analysis_status,
             cache_status,
+            set_cache_max_bytes,
             evict_track,
         ])
         .run(tauri::generate_context!())
