@@ -1,0 +1,109 @@
+name: App
+
+# Separate from ci.yml, and path-filtered, on purpose.
+#
+# Building Tauri's dependency tree takes minutes. Putting these jobs in the main
+# workflow would tax every commit — including ones that only touch the Godot
+# tree or the docs — so the shell gets its own workflow that only runs when the
+# shell or the core it depends on actually changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "vapor-app/**"
+      - "vapor-core/**"
+      - ".github/workflows/app.yml"
+  pull_request:
+    paths:
+      - "vapor-app/**"
+      - "vapor-core/**"
+      - ".github/workflows/app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # The frontend is cheap to check, so it runs on its own and reports fast
+  # rather than waiting behind a Rust build.
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vapor-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vapor-app/package-lock.json
+
+      # `npm ci` rather than `install`: the lockfile is the point of running
+      # this in CI at all.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npx vite build
+
+  # Only `cargo check` and clippy, not a full bundle. Bundling produces
+  # installers nobody consumes on every push, and takes several times longer.
+  shell:
+    name: shell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    defaults:
+      run:
+        working-directory: vapor-app/src-tauri
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's Linux backend is WebKitGTK; cpal also needs ALSA headers.
+      # Neither is present on a bare runner.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vapor-app/src-tauri
+
+      # tauri.conf.json points frontendDist at ../dist, which does not exist
+      # until the frontend builds. An empty directory satisfies the config
+      # without spending a full frontend build in this job — the frontend job
+      # above is what actually verifies it.
+      - name: Stub the frontend dist
+        run: mkdir -p ../dist && touch ../dist/index.html
+
+      - name: Check
+        run: cargo check
+
+      - name: Clippy
+        run: cargo clippy --all-targets

@@ -73,6 +73,59 @@ been incompatible with AGPL-3.0 and unfixable without replacing it.)
 
 ---
 
+## 2026-08-15 — the AGPL is no longer forced
+
+The migration removed both copyleft dependencies. `vapor-core` links neither
+Essentia nor Rubber Band, and nothing that replaced them is copyleft:
+
+| Dependency | Replaces | Licence |
+|---|---|---|
+| symphonia | Essentia's loaders, ffmpeg, taglib | MPL-2.0 |
+| rustfft | Essentia's FFT | MIT OR Apache-2.0 |
+| WSOLA (written here) | Rubber Band | — |
+| cpal | Godot's `AudioServer` | Apache-2.0 |
+| serde, regex | — | MIT OR Apache-2.0 |
+
+MPL-2.0 is file-level copyleft: modifications to symphonia's own files must be
+published, but linking it imposes nothing on the rest of the work. It does not
+propagate the way the AGPL does.
+
+**So the AGPL is now a choice rather than an obligation.** It became one the
+moment the Rust core stopped linking Essentia — the Godot tree still carries
+the old dependencies, so the obligation persists only for as long as that tree
+is shipped.
+
+### Recommendation: keep AGPL-3.0
+
+Not because anything requires it, but because it costs nothing and buys
+something:
+
+- **It costs nothing.** All copyright is held by one person, so dual-licensing
+  or relicensing later is available at any time without collecting agreements
+  from contributors. The AGPL binds other people's derivatives, not the
+  copyright holder.
+- **It matches the product's argument.** An app whose entire pitch is "own your
+  music, own your data" is oddly served by a licence that lets someone take it
+  closed and host it as a service. AGPL §13 is precisely the clause that stops
+  that.
+- **It is the reversible direction.** AGPL → MIT can be done later. MIT → AGPL
+  cannot, in any meaningful sense: every copy already released stays MIT and
+  can be forked from.
+
+### What changes if the licence changes
+
+Only if it moves to a permissive licence:
+
+- `THIRD_PARTY_NOTICES.md` and `licenses/` shrink to the MIT/Apache/MPL set —
+  the Essentia and Rubber Band entries go with the Godot tree.
+- The in-app About screen's "Free software under the AGPL" line changes.
+- MPL-2.0 still requires symphonia's own notices to be kept.
+
+None of that is urgent. The obligation only attaches on distribution, and
+nothing new has been distributed.
+
+---
+
 ## Options
 
 ### ✅ Option A — Release Vapor Music as open source under AGPL-3.0 — **CHOSEN**
