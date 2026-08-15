@@ -90,6 +90,9 @@ jobs:
       - name: Build vapor-engine for wasm
         run: cargo build --release --target wasm32-unknown-unknown -p vapor-engine --lib
 
+      - name: Build vapor-library for wasm
+        run: cargo build --release --target wasm32-unknown-unknown -p vapor-library --lib
+
   # Regression gate for the Godot app while it is still the shipping version.
   #
   # IMPORTANT: this runs WITHOUT the AudioDSP GDExtension, so the suite takes
