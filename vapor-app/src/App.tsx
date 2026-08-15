@@ -1,64 +1,80 @@
 /**
  * App shell.
  *
- * Deliberately minimal: this proves the wiring — tokens, the generative mark,
- * and a live call into the Rust core — before any screen is built. If this
- * renders and reports a core version, the whole seam works.
+ * Routing is a piece of state rather than a router: there are three screens and
+ * no URLs to be back-buttoned through. When there are twelve, revisit.
+ *
+ * The one real decision here is where a fresh launch lands. With no server
+ * configured there is nothing to show and nothing to do on Library or Songs, so
+ * it opens Settings — the design's Onboarding screen is the fuller answer to
+ * the same problem and is not built yet.
  */
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
 import { Songs } from "./screens/Songs";
+import { Settings } from "./screens/Settings";
 import * as core from "./lib/core";
 import "./components/transport.css";
 import "./screens/library.css";
 import "./screens/songs.css";
+import "./screens/settings.css";
+
+type Screen = "library" | "songs" | "settings";
+
+const SCREENS: { id: Screen; label: string }[] = [
+  { id: "library", label: "Library" },
+  { id: "songs", label: "Songs" },
+  { id: "settings", label: "Settings" },
+];
 
 type Status =
   | { kind: "loading" }
-  | { kind: "ready"; tracks: number }
+  | { kind: "ready" }
   | { kind: "error"; message: string };
 
 export function App() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
-  const [screen, setScreen] = useState<"library" | "songs">("library");
+  const [screen, setScreen] = useState<Screen>("library");
 
   useEffect(() => {
-    // One real round trip to the core. An empty library is a valid answer —
-    // the point is that the IPC boundary works, not that there is data.
+    // Settings is the round trip worth making at boot: it decides where to
+    // land, and it answers whether the core is reachable at all.
     core
-      .libraryView({})
-      .then((sections) => {
-        const tracks = sections.reduce((n, s) => n + s.rows.length, 0);
-        setStatus({ kind: "ready", tracks });
+      .settings()
+      .then((s) => {
+        const connected =
+          s.remote.url.trim() !== "" && s.remote.username.trim() !== "";
+        if (!connected) setScreen("settings");
+        setStatus({ kind: "ready" });
       })
       .catch((e: unknown) => {
         setStatus({ kind: "error", message: String(e) });
       });
   }, []);
 
-  // The boot screen exists only until the core answers. A person should not
-  // see a splash for a round trip that takes single-digit milliseconds.
   if (status.kind === "ready") {
     return (
       <div className="shell">
         <nav className="shell__sidebar">
-          {(["library", "songs"] as const).map((s) => (
+          {SCREENS.map((s) => (
             <button
-              key={s}
-              className={"nav__item" + (screen === s ? " nav__item--on" : "")}
-              onClick={() => setScreen(s)}
+              key={s.id}
+              className={"nav__item" + (screen === s.id ? " nav__item--on" : "")}
+              onClick={() => setScreen(s.id)}
             >
-              {s === "library" ? "Library" : "Songs"}
+              {s.label}
             </button>
           ))}
         </nav>
         <main className="shell__content">
-          {screen === "library" ? <Library /> : <Songs />}
+          {screen === "library" && <Library />}
+          {screen === "songs" && <Songs />}
+          {screen === "settings" && <Settings />}
         </main>
-        {/* Lives outside the content column: the shell grid spans it across
-            both, and playback outlives whichever screen started it. */}
+        {/* Outside the content column: the shell grid spans it across both, and
+            playback outlives whichever screen started it. */}
         <Transport />
       </div>
     );

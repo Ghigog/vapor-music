@@ -54,8 +54,10 @@ Things that would be a defect if the app shipped today.
 
 | ID | Item | Notes |
 |---|---|---|
-| TD-30 | **Two screens of twelve.** Library and Songs, plus the transport bar. Missing: Onboarding, Search, Now Playing, Queue, Vibe DJ, Liner Notes, Your Data, Settings, Loading, Empty. | — |
+| TD-30 | **Three screens of twelve.** Library, Songs and Settings, plus the transport bar. Missing: Onboarding, Search, Now Playing, Queue, Vibe DJ, Liner Notes, Your Data, Loading, Empty. Settings currently carries Your Data's content as a card, since the sovereignty claim needs somewhere to be checkable. | — |
 | TD-36 | **The transport is a bar, not the Now Playing screen.** It has the controls, a scrubber, a clock and volume, and none of the design's artwork, waveform or logo state readout. The mark exposes `state` and `energy` for exactly this and nothing drives them yet. | `Transport.tsx` |
+| TD-37 | **Nine backend commands had no frontend binding, and one did not exist.** Scan, analyse, cache and data-deletion were unreachable from the UI, and there was no `set_remote_config` at all — so the app could not be pointed at a server. Fixed, but the shape of the mistake is worth keeping: the Rust side and `core.ts` drift silently, because nothing checks that every registered command has a binding. A test could. | `core.ts` |
+| TD-38 | **Changing the username orphans the old keychain entry.** `save_webdav_password` is keyed by username, so editing it writes a new entry and leaves the previous one behind until "delete everything" runs. | `webdav.rs` |
 | TD-31 | **No drag and drop.** The Godot build supported dragging tracks onto playlists and reordering within one. `dnd-kit` is the intended answer; nothing is wired. | — |
 | TD-32 | **Songs column header layout is a compromise.** Artist shares a grid cell with the title, so its header is hidden rather than aligned. Works, but the header row and the data row agree by convention rather than by construction. | `songs.css` |
 | TD-33 | **No keyboard navigation.** Rows are click-only; a table this size needs arrow keys, and the Godot version did not have this either. | — |

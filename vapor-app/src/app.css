@@ -4,12 +4,26 @@
  */
 
 #root {
+  /* Matches `.shell` so the two cannot disagree by the height of a collapsing
+     mobile address bar and leave a sliver of page scrolling behind the app. */
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--page-gradient);
 }
 
 .shell {
-  min-height: 100vh;
+  /* A fixed height, not a minimum.
+   *
+   * With `min-height` the grid grows past the viewport whenever a screen is
+   * tall, so the *page* scrolls and `overflow: auto` on the content column
+   * never binds — the sidebar and the transport scroll away with it. Songs hid
+   * this because it brings its own inner scroller; Settings, which is simply a
+   * long column, did not.
+   *
+   * `dvh` so a mobile browser's collapsing address bar does not leave a strip
+   * of the shell cut off; `vh` first for anything that does not know `dvh`. */
+  height: 100vh;
+  height: 100dvh;
   display: grid;
   /* Sidebar plus content; the mini player spans both at the bottom. */
   grid-template-columns: 260px 1fr;

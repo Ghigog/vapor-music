@@ -954,6 +954,32 @@ struct ScanReport {
     directories: usize,
 }
 
+/// Point the app at a server.
+///
+/// Separate from the password, which never touches this struct — see
+/// `save_webdav_password`. Without this command the app had no way to be
+/// configured at all: `settings` could report a server and nothing could set
+/// one.
+#[tauri::command]
+fn set_remote_config(
+    url: String,
+    username: String,
+    folder: String,
+    state: State<'_, Shared>,
+) -> Result<Settings> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    app.settings.remote.url = url.trim().to_string();
+    app.settings.remote.username = username.trim().to_string();
+    app.settings.remote.folder = folder.trim().to_string();
+    // An empty folder means the library root, which `sanitised` spells as the
+    // default rather than as "".
+    app.settings = std::mem::take(&mut app.settings).sanitised();
+    app.save_settings()?;
+
+    Ok(app.settings.clone())
+}
+
 /// Save the WebDAV password to the OS keychain.
 ///
 /// Separate from the rest of settings on purpose: the credential is the one
@@ -1293,6 +1319,7 @@ pub fn run() {
             data_location,
             delete_all_data,
             save_webdav_password,
+            set_remote_config,
             scan_library,
             analyse_library,
             cancel_analysis,

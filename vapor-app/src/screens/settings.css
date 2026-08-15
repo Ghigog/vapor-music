@@ -1,0 +1,179 @@
+/*
+ * Settings. Layout only — colours and type come from public/tokens.css.
+ *
+ * A single readable column rather than the design's phone-width stack: this is
+ * the desktop shell, and a form that runs the full width of a 1600 px window is
+ * harder to read, not easier.
+ */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 620px;
+  padding-bottom: 24px;
+}
+
+.settings__head {
+  margin-bottom: 4px;
+}
+
+.settings__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-display);
+  letter-spacing: var(--ls-display);
+  color: var(--ink);
+}
+
+.settings__card {
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings__section {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.settings__hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 56ch;
+}
+
+.settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings__field-note {
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+}
+
+.settings__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--glass-rim);
+  background: rgba(255, 255, 255, 0.7);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--ink);
+  outline: none;
+}
+
+.settings__input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+}
+
+.settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.settings__button {
+  padding: 9px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--glass-rim);
+  background: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.settings__button:hover:not(:disabled) {
+  background: #fff;
+}
+
+.settings__button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings__button--primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.settings__button--primary:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+.settings__button--danger {
+  color: #b3261e;
+  border-color: rgba(179, 38, 30, 0.3);
+}
+
+.settings__stat {
+  margin: 0;
+  font-size: var(--fs-label);
+  color: var(--ink-2);
+}
+
+/* The path is the sovereignty claim made checkable, so it must be selectable
+   and legible rather than truncated into decoration. */
+.settings__path {
+  margin: 0;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  word-break: break-all;
+  user-select: text;
+}
+
+.settings__meter {
+  height: 5px;
+  border-radius: var(--r-hair);
+  background: rgba(var(--accent-rgb), 0.15);
+  overflow: hidden;
+}
+
+.settings__meter-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-hair);
+  transition: width var(--dur-base) var(--ease);
+}
+
+.settings__error,
+.settings__note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.settings__error {
+  background: rgba(179, 38, 30, 0.08);
+  border: 1px solid rgba(179, 38, 30, 0.22);
+  color: #8c1d18;
+}
+
+.settings__note {
+  background: rgba(var(--sov-rgb), 0.1);
+  border: 1px solid rgba(var(--sov-rgb), 0.28);
+  color: var(--sov-ink);
+}

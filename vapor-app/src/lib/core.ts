@@ -218,6 +218,120 @@ export function setVolume(volume: number): Promise<void> {
   return invoke<void>("set_volume", { volume });
 }
 
+// ---------------------------------------------------------------------------
+// Connecting a library
+// ---------------------------------------------------------------------------
+
+export interface ScanReport {
+  tracks: number;
+  /** Directories visited, so a slow scan reports progress honestly. */
+  directories: number;
+}
+
+export interface AnalysisStatus {
+  analysed: number;
+  total: number;
+}
+
+export interface Analysis {
+  bpm: number;
+  key: string;
+  beats: number[];
+  cueIn: number;
+  cueOut: number;
+  lufs: number;
+  duration: number;
+  version: number;
+}
+
+/** Emitted on the `analysis-progress` event, once per track. */
+export interface AnalysisProgress {
+  done: number;
+  total: number;
+  /** The track just finished, so one row can update rather than the table. */
+  href: string;
+  analysis: Analysis | null;
+  /** Present when this track failed. The pass continues either way. */
+  error: string | null;
+}
+
+export interface CacheStatus {
+  bytes: number;
+  maxBytes: number;
+  /** How many of the library's tracks are actually on the device. */
+  tracksCached: number;
+  tracksTotal: number;
+  location: string;
+}
+
+/**
+ * Point the app at a server. Returns the settings as stored.
+ *
+ * The password is deliberately not a parameter — it goes to the OS keychain
+ * via `saveWebdavPassword` and never enters the settings file.
+ */
+export function setRemoteConfig(
+  url: string,
+  username: string,
+  folder: string,
+): Promise<Settings> {
+  return invoke<Settings>("set_remote_config", { url, username, folder });
+}
+
+/** Store the password in the OS keychain, keyed by username. */
+export function saveWebdavPassword(
+  username: string,
+  password: string,
+): Promise<void> {
+  return invoke<void>("save_webdav_password", { username, password });
+}
+
+/** Walk the server and rebuild the index. Minutes on a large library. */
+export function scanLibrary(): Promise<ScanReport> {
+  return invoke<ScanReport>("scan_library");
+}
+
+/**
+ * Analyse everything not already done.
+ *
+ * Returns as soon as the pass starts, not when it finishes — it is roughly
+ * 0.5 s per track. Progress arrives on the `analysis-progress` event.
+ */
+export function analyseLibrary(): Promise<void> {
+  return invoke<void>("analyse_library");
+}
+
+export function analysisStatus(): Promise<AnalysisStatus> {
+  return invoke<AnalysisStatus>("analysis_status");
+}
+
+export function cancelAnalysis(): Promise<void> {
+  return invoke<void>("cancel_analysis");
+}
+
+// ---------------------------------------------------------------------------
+// Your data
+// ---------------------------------------------------------------------------
+
+export function cacheStatus(): Promise<CacheStatus> {
+  return invoke<CacheStatus>("cache_status");
+}
+
+/** Drop one track's local copy, keeping its analysis. */
+export function evictTrack(href: string): Promise<void> {
+  return invoke<void>("evict_track", { href });
+}
+
+/** Where the app keeps everything — the claim "your data is local", shown. */
+export function dataLocation(): Promise<string> {
+  return invoke<string>("data_location");
+}
+
+/** Delete everything stored, including the keychain entry. */
+export function deleteAllData(): Promise<void> {
+  return invoke<void>("delete_all_data");
+}
+
 /** Order a set of tracks along an energy/tempo curve. */
 export function moodPath(
   tracks: Record<string, TrackMeta>,
