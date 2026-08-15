@@ -6,8 +6,11 @@
  * the product's actual argument, and paraphrasing them would weaken a claim the
  * rest of the code goes to some trouble to keep true.
  *
- * It is one screen with two paths because the design has two, and only one of
- * them exists yet — see the note on the second button.
+ * The design offers a second path — "Use files on this phone" — and it is
+ * deliberately absent. Vapor is cloud-first: the library lives on the user's own
+ * server and local storage is only a bounded cache. A local-folder library would
+ * be a second source of truth, a second scanner and a second sync story, in
+ * service of a promise the product does not make.
  */
 
 import { VaporMark } from "../components/VaporMark";
@@ -53,17 +56,6 @@ export function Onboarding({ onConnect }: { onConnect: () => void }) {
       <div className="onboard__actions">
         <button className="onboard__button" onClick={onConnect}>
           Choose where music lives
-        </button>
-        {/*
-          The design's second path — "Use files on this phone" — is not built.
-          A local-folder library needs a file picker, a watcher and a scanner
-          that walks a filesystem rather than WebDAV, none of which exist. It is
-          shown disabled rather than hidden so the choice the product intends to
-          offer is visible, and honest about not being ready.
-        */}
-        <button className="onboard__button onboard__button--quiet" disabled>
-          Use files on this device
-          <span className="onboard__soon">not yet</span>
         </button>
       </div>
 

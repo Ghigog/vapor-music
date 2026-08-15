@@ -103,6 +103,8 @@ export interface PlaybackState {
   waveform: number[];
   /** What plays after this, so Now Playing needs no second call. */
   nextTitle: string;
+  /** Cover art as a data URI, when the file carried one. */
+  cover: string | null;
 }
 
 export interface TrackMeta {
@@ -233,6 +235,7 @@ export interface QueueEntry {
   href: string;
   title: string;
   artist: string;
+  cover: string | null;
   /** 0 when unknown — not "0 BPM". */
   bpm: number;
   key: string;
@@ -356,6 +359,12 @@ export interface TrackDetails {
   cached: boolean;
   /** Why this track cannot be played, when it cannot (TD-12). */
   unplayable: string | null;
+  cover: string | null;
+  /** The file's own comment field — the nearest thing to sleeve notes a file
+   *  actually carries. */
+  notes: string | null;
+  /** True when any of this came from tags rather than the path. */
+  tagged: boolean;
 }
 
 export function trackDetails(href: string): Promise<TrackDetails> {
@@ -557,4 +566,15 @@ export function setBpmOverride(href: string, bpm: number): Promise<void> {
  */
 export function setCacheMaxBytes(bytes: number): Promise<number> {
   return invoke<number>("set_cache_max_bytes", { bytes });
+}
+
+/**
+ * Empty the audio cache, keeping analysis, playlists and settings.
+ *
+ * Returns the bytes freed. Distinct from `deleteAllData`: cached audio is the
+ * only re-fetchable part of the data directory and the only part that gets
+ * large, so reclaiming space should not cost ten minutes of analysis.
+ */
+export function clearAudioCache(): Promise<number> {
+  return invoke<number>("clear_audio_cache");
 }

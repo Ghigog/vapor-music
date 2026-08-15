@@ -185,3 +185,30 @@
   color: #8c1d18;
   font-size: var(--fs-sm);
 }
+
+.data__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.data__select {
+  padding: 6px 10px;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.8);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.data__ok {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: rgba(var(--sov-rgb), 0.1);
+  border: 1px solid rgba(var(--sov-rgb), 0.28);
+  color: var(--sov-ink);
+  font-size: var(--fs-sm);
+}

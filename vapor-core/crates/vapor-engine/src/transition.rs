@@ -12,11 +12,16 @@
 //!
 //! ## Fidelity
 //!
-//! These envelopes replicate `audio_manager.gd` exactly, including its easing
-//! curves, rather than "improving" them — the migration's verification strategy
-//! is comparison against existing behaviour, so a silent change of sound would
-//! defeat the point. Where the existing curve is arguably wrong, that is
-//! recorded as a backlog item, not fixed here.
+//! These envelopes replicate `audio_manager.gd`'s easing curves rather than
+//! "improving" them — the migration's verification strategy is comparison
+//! against existing behaviour, so a silent change of sound would defeat the
+//! point.
+//!
+//! **One deliberate exception.** Standard Crossfade is now equal-power, where
+//! the original interpolated both gains linearly in dB and left a hole in the
+//! middle of every mix (TD-23, MIG-015). Carried across the port unchanged so
+//! the rest could be verified against it, then fixed once it was — a known
+//! defect that survives a migration is a good argument against having migrated.
 //!
 //! Godot easing equivalents used below:
 //!
@@ -81,6 +86,18 @@ pub struct Transition {
 
 /// The floor both implementations fade to.
 pub const SILENCE_DB: f32 = -60.0;
+
+/// Linear gain as decibels, floored at silence.
+///
+/// The deck takes dB because that is what every other envelope here speaks; an
+/// equal-power law is naturally expressed as a linear gain, so it is converted
+/// once here rather than the deck growing a second setter.
+fn gain_to_db(gain: f32) -> f32 {
+    if gain <= 0.0 {
+        return SILENCE_DB;
+    }
+    (20.0 * gain.log10()).max(SILENCE_DB)
+}
 /// Bass cut depth for a Bass Swap (`_transition_eq_gains` bands 0 and 1).
 const BASS_CUT_DB: f32 = -40.0;
 
@@ -113,21 +130,35 @@ impl Transition {
         }
     }
 
-    /// Both decks fade across the full duration, in dB, sine ease-in-out.
+    /// Both decks cross with **constant power** (TD-23, MIG-015).
     ///
-    /// Note this is *not* an equal-power crossfade — summed level dips at the
-    /// midpoint for uncorrelated material. That is the existing behaviour and
-    /// is replicated deliberately; see the `midpoint_level_dip_is_inherited`
-    /// test and the backlog.
+    /// The Godot original interpolated the two gains linearly *in decibels*,
+    /// which sounds like the obvious thing and is not: at the midpoint both
+    /// decks sit at −30 dB, so the summed power of two uncorrelated tracks is
+    /// about 0.002 of full scale. That is a hole in the middle of every mix —
+    /// roughly 3 dB by the usual description, far worse here because the fade
+    /// spans 60 dB.
+    ///
+    /// The fix is the standard equal-power pair: gains of `cos` and `sin` over
+    /// a quarter turn, whose squares sum to exactly 1 at every instant. The
+    /// level a listener hears stays put across the whole transition.
+    ///
+    /// This was inherited deliberately during the port — fidelity over
+    /// correctness while everything else moved — and is now corrected, because
+    /// carrying a known defect across a migration is how the migration stops
+    /// being worth doing.
     fn standard_crossfade(&self) -> Automation {
+        // Eased rather than linear in time, so the *rate* of the crossfade
+        // still matches the original's feel; only the level law changes.
         let p = sine_in_out(self.elapsed / self.duration);
+        let angle = p * std::f32::consts::FRAC_PI_2;
         Automation {
             outgoing: DeckAutomation {
-                gain_db: lerp(0.0, SILENCE_DB, p),
+                gain_db: gain_to_db(angle.cos()),
                 ..DeckAutomation::neutral()
             },
             incoming: DeckAutomation {
-                gain_db: lerp(SILENCE_DB, 0.0, p),
+                gain_db: gain_to_db(angle.sin()),
                 ..DeckAutomation::neutral()
             },
         }
@@ -376,20 +407,74 @@ mod tests {
     /// sources loses summed power at the midpoint. Recorded so that any future
     /// switch to equal-power is a deliberate, visible change.
     #[test]
-    fn midpoint_level_dip_is_inherited_from_the_godot_envelope() {
-        let mut t = Transition::new(TransitionType::StandardCrossfade, 4.0);
+    fn the_crossfade_holds_its_level_all_the_way_through() {
+        // The defect this replaces: the Godot envelope interpolated both gains
+        // linearly in dB, so at the midpoint both decks sat at -30 dB and the
+        // summed power fell to about 0.002 — a hole in the middle of every mix.
+        let duration = 4.0;
+        let mut t = Transition::new(TransitionType::StandardCrossfade, duration);
+
+        let mut worst: f32 = 0.0;
+        let steps = 200;
+        for _ in 0..=steps {
+            let a = t.automation();
+            let g_out = 10f32.powf(a.outgoing.gain_db / 20.0);
+            let g_in = 10f32.powf(a.incoming.gain_db / 20.0);
+            let power = g_out * g_out + g_in * g_in;
+            worst = worst.max((power - 1.0).abs());
+            t.advance(duration / steps as f32);
+        }
+
+        // Equal power means the squares sum to one at *every* instant, not just
+        // at the midpoint — a law that only held in the middle would still dip
+        // either side of it.
+        assert!(
+            worst < 0.02,
+            "summed power strayed from unity by {worst:.4}; the crossfade is \
+             not equal-power"
+        );
+    }
+
+    /// The ends still have to be the ends: full one side, silent the other.
+    #[test]
+    fn the_crossfade_still_starts_and_finishes_where_it_should() {
+        let mut t = Transition::new(TransitionType::StandardCrossfade, 2.0);
+
+        let a = t.automation();
+        assert!(a.outgoing.gain_db > -0.1, "outgoing did not start at full");
+        assert_eq!(
+            a.incoming.gain_db, SILENCE_DB,
+            "incoming did not start silent"
+        );
+
         t.advance(2.0);
         let a = t.automation();
-
-        let g_out = 10f32.powf(a.outgoing.gain_db / 20.0);
-        let g_in = 10f32.powf(a.incoming.gain_db / 20.0);
-        let power = g_out * g_out + g_in * g_in;
-
-        assert!(
-            power < 0.75,
-            "expected the inherited midpoint dip; summed power was {power:.3}. \
-             If this now passes at ~1.0 the envelope became equal-power — \
-             intended, but update the backlog and the docs."
+        assert_eq!(
+            a.outgoing.gain_db, SILENCE_DB,
+            "outgoing did not finish silent"
         );
+        assert!(a.incoming.gain_db > -0.1, "incoming did not finish at full");
+    }
+
+    /// Neither deck may get louder than it started — an equal-power law that
+    /// achieved unity by boosting would clip a mix rather than fix it.
+    #[test]
+    fn the_crossfade_never_boosts_either_deck() {
+        let duration = 3.0;
+        let mut t = Transition::new(TransitionType::StandardCrossfade, duration);
+        for _ in 0..=120 {
+            let a = t.automation();
+            assert!(
+                a.outgoing.gain_db <= 0.001,
+                "outgoing boosted to {}",
+                a.outgoing.gain_db
+            );
+            assert!(
+                a.incoming.gain_db <= 0.001,
+                "incoming boosted to {}",
+                a.incoming.gain_db
+            );
+            t.advance(duration / 120.0);
+        }
     }
 }

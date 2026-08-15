@@ -271,3 +271,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Real artwork replaces the gradient rather than sitting on it, so a sleeve
+   with its own light does not get a second highlight painted over it. */
+.np__art-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

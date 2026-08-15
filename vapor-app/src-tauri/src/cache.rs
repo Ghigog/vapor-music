@@ -253,13 +253,21 @@ mod tests {
     }
 
     fn bounded_cache(max_bytes: u64) -> (Cache, PathBuf) {
+        // A counter, not a timestamp.
+        //
+        // This used to be `SystemTime::now().as_nanos()`, which reads as unique
+        // and is not: macOS resolves the clock to a microsecond, so two of
+        // these tests starting together got the same directory. Then one
+        // finished, ran `remove_dir_all`, and deleted a file the other was
+        // still asserting about — a failure that reproduced roughly once in
+        // twenty runs and looked like a cache bug rather than a test bug.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+
         let dir = std::env::temp_dir().join(format!(
             "vapor-cache-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         (Cache::new(dir.clone(), max_bytes), dir)
     }

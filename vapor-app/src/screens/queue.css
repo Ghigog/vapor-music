@@ -37,6 +37,8 @@
 }
 
 .queue__now-art {
+  position: relative;
+  overflow: hidden;
   width: 56px;
   height: 56px;
   flex: none;
@@ -239,4 +241,12 @@
   background: rgba(var(--accent-rgb), 0.1);
   border-color: rgba(var(--accent-rgb), 0.34);
   color: var(--accent-dim);
+}
+
+.queue__now-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }

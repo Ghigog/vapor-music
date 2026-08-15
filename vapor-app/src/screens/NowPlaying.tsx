@@ -79,8 +79,16 @@ export function NowPlaying() {
   return (
     <div className="np">
       <div className="np__art" aria-hidden="true">
-        <div className="np__art-sheen" />
-        <div className="np__art-band" />
+        {state.cover ? (
+          // The file's own sleeve. Everything else on this screen is derived;
+          // this is the one thing the recording itself supplied.
+          <img className="np__art-image" src={state.cover} alt="" />
+        ) : (
+          <>
+            <div className="np__art-sheen" />
+            <div className="np__art-band" />
+          </>
+        )}
       </div>
 
       <div className="np__meta">

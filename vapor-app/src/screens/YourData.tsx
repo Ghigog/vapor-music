@@ -14,6 +14,18 @@ import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
+/** Offered ceilings. A large library is a legitimate reason to want a large
+ *  cache — the point of the bound is that it is finite and chosen, not small. */
+const CACHE_SIZES = [
+  2 * 1024 ** 3,
+  4 * 1024 ** 3,
+  8 * 1024 ** 3,
+  16 * 1024 ** 3,
+  32 * 1024 ** 3,
+  64 * 1024 ** 3,
+  128 * 1024 ** 3,
+];
+
 /** The design's list, verbatim. Every line is a claim the code keeps. */
 const NEVERS = [
   "Send a listening log anywhere — there is no endpoint to send it to.",
@@ -27,6 +39,7 @@ export function YourData() {
   const [cache, setCache] = useState<core.CacheStatus | null>(null);
   const [location, setLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [r, c, l] = await Promise.allSettled([
@@ -121,6 +134,47 @@ export function YourData() {
             analysis is kept, because it is small and expensive and the audio is
             large and cheap to fetch again.
           </p>
+
+          <label className="data__field">
+            <span className="label">ceiling</span>
+            <select
+              className="data__select"
+              value={String(cache.maxBytes)}
+              onChange={(e) => {
+                void core
+                  .setCacheMaxBytes(Number(e.target.value))
+                  .then(refresh)
+                  .catch((err: unknown) => setError(messageOf(err)));
+              }}
+            >
+              {CACHE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {bytes(n)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="data__actions">
+            {/* Distinct from "delete everything": this is the only re-fetchable
+                part of the directory and the only part that gets large, so
+                reclaiming space should not also cost the analysis. */}
+            <button
+              className="data__button"
+              disabled={cache.bytes === 0}
+              onClick={() => {
+                void core
+                  .clearAudioCache()
+                  .then((freed) => {
+                    setNote(`Freed ${bytes(freed)}. Tracks are fetched again as they are played.`);
+                    return refresh();
+                  })
+                  .catch((err: unknown) => setError(messageOf(err)));
+              }}
+            >
+              Clear cached audio
+            </button>
+          </div>
         </section>
       )}
 
@@ -171,6 +225,7 @@ export function YourData() {
           {location}
         </p>
       )}
+      {note && <p className="data__ok">{note}</p>}
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
     </div>
   );

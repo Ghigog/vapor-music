@@ -94,33 +94,6 @@
   background: var(--accent-bright);
 }
 
-.onboard__button--quiet {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: rgba(255, 255, 255, 0.75);
-  border: 1px solid var(--glass-rim);
-  color: var(--ink);
-  box-shadow: none;
-}
-
-.onboard__button--quiet:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.onboard__soon {
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  letter-spacing: var(--ls-label);
-  text-transform: uppercase;
-  color: var(--ink-3);
-  border: 1px solid var(--glass-rim);
-  border-radius: var(--r-pill);
-  padding: 2px 7px;
-}
-
 .onboard__footnote {
   margin: 0 auto;
   font-size: var(--fs-sm);

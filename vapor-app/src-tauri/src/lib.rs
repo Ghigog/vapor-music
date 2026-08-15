@@ -22,6 +22,7 @@ mod analysis;
 pub mod audio;
 mod cache;
 mod store;
+mod tags;
 mod webdav;
 
 use std::sync::{Arc, Mutex};
@@ -50,6 +51,17 @@ struct AppState {
     /// Analysis results, keyed by href. Persisted so a library is analysed
     /// once rather than on every launch.
     analysis: analysis::Cache,
+    /// Learned dislike of specific transitions, keyed "from\u{1f}to" (TD-14).
+    ///
+    /// Persisted, because the whole value is that it accumulates. A tuple key
+    /// cannot be a JSON object key, so the pair is joined by a unit separator —
+    /// a character no href contains.
+    skips: std::collections::HashMap<String, f32>,
+    /// Embedded tags and artwork, keyed by href (TD-39).
+    ///
+    /// Persisted beside the analysis and for the same reason: reading them
+    /// costs a file open, and the answer does not change unless the file does.
+    tags: std::collections::HashMap<String, StoredTags>,
     /// Tracks that were read and could not be used, and why (TD-12).
     ///
     /// Persisted, because the answer does not change between launches and the
@@ -102,12 +114,16 @@ impl AppState {
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
         let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
         let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
+        let tags = store.load("tags").unwrap_or(None).unwrap_or_default();
+        let skips = store.load("skips").unwrap_or(None).unwrap_or_default();
         AppState {
             settings,
             playlists,
             queue: Queue::default(),
             rows: Vec::new(),
             analysis,
+            skips,
+            tags,
             failures,
             cancel: analysis::Cancel::new(),
             // The bound is what stops the cache filling a phone, and it is the
@@ -138,6 +154,16 @@ impl AppState {
         Ok(())
     }
 
+    fn save_skips(&self) -> Result<()> {
+        self.store.save("skips", &self.skips)?;
+        Ok(())
+    }
+
+    fn save_tags(&self) -> Result<()> {
+        self.store.save("tags", &self.tags)?;
+        Ok(())
+    }
+
     fn save_failures(&self) -> Result<()> {
         self.store.save("failures", &self.failures)?;
         Ok(())
@@ -148,6 +174,40 @@ impl AppState {
     /// A manual BPM override wins over the detected value: it exists precisely
     /// because detection lands a metrical relative on roughly 10% of a real
     /// library, and a correction that the table ignored would be useless.
+    /// Fill a row's blanks from the file's own tags (TD-39).
+    ///
+    /// Gaps only. A library filed as `Artist/Album/Track` is a statement about
+    /// how it should be organised, and a tag that disagrees is usually the tag
+    /// being wrong — a compilation track carrying its original album. So the
+    /// derived value wins wherever there is one.
+    fn apply_tags(&self, row: &mut Row) {
+        let Some(tags) = self.tags.get(&row.href) else {
+            return;
+        };
+        if row.artist_source == vapor_library::index::Source::Unknown {
+            if let Some(artist) = &tags.artist {
+                row.artist = artist.clone();
+                row.artist_source = vapor_library::index::Source::File;
+            }
+        }
+        if row.album_source == vapor_library::index::Source::Unknown {
+            if let Some(album) = &tags.album {
+                row.album = album.clone();
+                row.album_source = vapor_library::index::Source::File;
+            }
+        }
+        if row.genre.is_empty() {
+            if let Some(genre) = &tags.genre {
+                row.genre = genre.clone();
+            }
+        }
+        if row.year == 0 {
+            if let Some(year) = tags.year {
+                row.year = year;
+            }
+        }
+    }
+
     fn apply_analysis(&self, row: &mut Row) {
         if let Some(a) = self.analysis.get(&row.href) {
             row.bpm = self.settings.bpm_override(&row.href).unwrap_or(a.bpm);
@@ -169,6 +229,41 @@ impl AppState {
     fn save_settings(&self) -> Result<()> {
         self.store.save("settings", &self.settings)?;
         Ok(())
+    }
+}
+
+/// Tags as persisted. A mirror of `tags::Tags` with serde on it, so the reader
+/// stays free of a serialisation format it does not care about.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredTags {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    artist: Option<String>,
+    #[serde(default)]
+    album: Option<String>,
+    #[serde(default)]
+    genre: Option<String>,
+    #[serde(default)]
+    year: Option<u32>,
+    #[serde(default)]
+    comment: Option<String>,
+    #[serde(default)]
+    cover: Option<String>,
+}
+
+impl From<tags::Tags> for StoredTags {
+    fn from(t: tags::Tags) -> Self {
+        StoredTags {
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            genre: t.genre,
+            year: t.year,
+            comment: t.comment,
+            cover: t.cover,
+        }
     }
 }
 
@@ -237,6 +332,7 @@ fn library_view(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<Libra
         .cloned()
         .collect();
     for row in rows.iter_mut() {
+        app.apply_tags(row);
         app.apply_analysis(row);
     }
 
@@ -354,10 +450,41 @@ fn play_tracks(hrefs: Vec<String>, start: Option<String>, state: State<'_, Share
     Ok(())
 }
 
+/// Fraction of a track that counts as "heard" rather than skipped.
+///
+/// Leaving in the first third is a rejection; leaving at the end is just
+/// impatience with the outro, and treating that as a verdict would poison the
+/// cost model with transitions a person was actually happy with.
+const SKIP_THRESHOLD: f64 = 0.33;
+
 #[tauri::command]
 fn next_track(state: State<'_, Shared>) -> Result<Option<String>> {
     let shared: Shared = Arc::clone(&state);
     let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
+
+    // Pressing next early is the only signal the app gets about a transition it
+    // chose, so it is the one worth recording (TD-14).
+    if let (Some(from), Some(current)) = (
+        app.queue
+            .current_index()
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| app.queue.tracks().get(i).cloned()),
+        app.playing.clone(),
+    ) {
+        let snapshot = app.player.as_ref().map(|p| p.snapshot());
+        let played = snapshot
+            .filter(|s| s.duration > 0.0)
+            .map(|s| s.position / s.duration)
+            .unwrap_or(1.0);
+        if played < SKIP_THRESHOLD && from != current {
+            let key = skip_key(&from, &current);
+            let penalty =
+                (app.skips.get(&key).copied().unwrap_or(0.0) + SKIP_INCREMENT).min(SKIP_MAX);
+            app.skips.insert(key, penalty);
+            let _ = app.save_skips();
+        }
+    }
+
     let next = app.queue.next(None).map(str::to_string);
     if let Some(href) = next.clone() {
         begin_playback(&shared, &mut app, href);
@@ -418,6 +545,9 @@ struct PlaybackState {
     waveform: Vec<f32>,
     /// What plays after this, so Now Playing can say so without a second call.
     next_title: String,
+    /// Cover art for the playing track as a data URI, when the file carried
+    /// one (TD-39).
+    cover: Option<String>,
 }
 
 /// Fetch, decode and start a track.
@@ -560,6 +690,11 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
             .and_then(|href| app.rows.iter().find(|r| r.href == href))
             .map(|r| r.title.clone())
             .unwrap_or_default(),
+        cover: app
+            .playing
+            .as_ref()
+            .and_then(|href| app.tags.get(href))
+            .and_then(|t| t.cover.clone()),
     })
 }
 
@@ -972,6 +1107,7 @@ struct QueueEntry {
     href: String,
     title: String,
     artist: String,
+    cover: Option<String>,
     bpm: f32,
     key: String,
     /// True for the track currently playing.
@@ -1007,6 +1143,7 @@ fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
             let analysis = app.analysis.get(href);
             QueueEntry {
                 href: href.clone(),
+                cover: app.tags.get(href).and_then(|t| t.cover.clone()),
                 title: row
                     .map(|r| r.title.clone())
                     // A track queued from a playlist whose scan has since been
@@ -1153,9 +1290,7 @@ fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<Strin
         &req.start,
         Curve::parse(&req.curve),
         vapor_library::DEFAULT_ENERGY_THRESHOLD,
-        // Skip history is not persisted yet; an empty map means no learned
-        // dislikes rather than a lookup that silently returns nothing.
-        &std::collections::HashMap::new(),
+        &skip_penalties(&app),
     ))
 }
 
@@ -1166,6 +1301,38 @@ fn transition_name(kind: vapor_engine::TransitionType) -> String {
         vapor_engine::TransitionType::FilterSweep => "filter sweep",
     }
     .to_string()
+}
+
+/// Separator for a transition's two hrefs in the skip map.
+///
+/// A unit separator rather than a slash or a pipe: an href is a URL path and
+/// can contain either, and a key that could be produced by two different pairs
+/// would teach the pathfinder the wrong lesson.
+const SKIP_KEY_SEP: char = '\u{1f}';
+
+/// How much a single skip adds to a transition's cost.
+///
+/// Roughly the cost of a harmonic step, so one skip nudges and a handful
+/// genuinely rules a pair out. Deliberately not large: skipping a track is an
+/// ambiguous signal — a phone call, a wrong mood, a song heard too often — and
+/// treating one as a verdict would make the DJ timid after a single evening.
+const SKIP_INCREMENT: f32 = 1.5;
+/// Ceiling on accumulated dislike, so a pair can never become unpickable.
+const SKIP_MAX: f32 = 8.0;
+
+fn skip_key(from: &str, to: &str) -> String {
+    format!("{from}{SKIP_KEY_SEP}{to}")
+}
+
+/// The skip map in the shape the pathfinder wants.
+fn skip_penalties(app: &AppState) -> std::collections::HashMap<(String, String), f32> {
+    app.skips
+        .iter()
+        .filter_map(|(key, penalty)| {
+            let (from, to) = key.split_once(SKIP_KEY_SEP)?;
+            Some(((from.to_string(), to.to_string()), *penalty))
+        })
+        .collect()
 }
 
 /// Everything the pathfinder needs about the library, built from what has
@@ -1246,8 +1413,8 @@ fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<V
             &start,
             Curve::parse(&curve),
             vapor_library::DEFAULT_ENERGY_THRESHOLD,
-            // Skip history is still not persisted (TD-14).
-            &std::collections::HashMap::new(),
+            // What the app has learned from being skipped (TD-14).
+            &skip_penalties(&app),
         ),
         considered,
         skipped,
@@ -1398,6 +1565,13 @@ struct TrackDetails {
     cached: bool,
     /// Why this track cannot be played, when it cannot (TD-12).
     unplayable: Option<String>,
+    cover: Option<String>,
+    /// The file's own comment field — the closest thing to the design's
+    /// written notes that a file actually carries (TD-41b).
+    notes: Option<String>,
+    /// True when any of this came from the file's tags rather than its path,
+    /// so the screen can stop claiming everything was derived from the name.
+    tagged: bool,
 }
 
 #[tauri::command]
@@ -1441,6 +1615,9 @@ fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails>
         href_path: href.clone(),
         cached: app.cache.contains(&href),
         unplayable: app.failures.get(&href).cloned(),
+        cover: app.tags.get(&href).and_then(|t| t.cover.clone()),
+        notes: app.tags.get(&href).and_then(|t| t.comment.clone()),
+        tagged: app.tags.contains_key(&href),
     })
 }
 
@@ -1495,6 +1672,7 @@ fn search(query: String, state: State<'_, Shared>) -> Result<SearchResults> {
         .into_iter()
         .cloned()
         .map(|mut row| {
+            app.apply_tags(&mut row);
             app.apply_analysis(&mut row);
             row
         })
@@ -1796,6 +1974,17 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
                 // halfway then loses only the track in flight.
                 if let Ok(mut app) = state_arc.lock() {
                     if let Some(a) = &progress.analysis {
+                        // The file is local and just been read, so this is the
+                        // cheapest moment there will ever be to read its tags
+                        // (TD-39). A separate pass would mean downloading the
+                        // library twice.
+                        if let Some(path) = cache.get(&progress.href) {
+                            let tags = tags::read(&path);
+                            if !tags.is_empty() {
+                                app.tags.insert(progress.href.clone(), tags.into());
+                                let _ = app.save_tags();
+                            }
+                        }
                         app.analysis.insert(progress.href.clone(), a.clone());
                         let _ = app.save_analysis();
                         // It worked this time, so whatever was wrong before is
@@ -1875,6 +2064,29 @@ fn set_cache_max_bytes(bytes: u64, state: State<'_, Shared>) -> Result<u64> {
     app.save_settings()?;
 
     Ok(applied)
+}
+
+/// Empty the audio cache, keeping everything else.
+///
+/// Distinct from "delete everything": the cached audio is the only part of the
+/// data directory that is *re-fetchable*, and it is the part that gets large.
+/// Someone reclaiming space wants it gone; they do not want to lose ten minutes
+/// of analysis, their playlists and their server password with it.
+#[tauri::command]
+fn clear_audio_cache(state: State<'_, Shared>) -> Result<u64> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let freed = app.cache.size();
+
+    app.cache.clear().map_err(|e| Error(e.to_string()))?;
+    // Anything mid-flight is now pointing at files that no longer exist.
+    app.generation += 1;
+    app.loading = false;
+    app.armed_next = None;
+    if let Some(p) = app.player.as_ref() {
+        p.cancel_transition();
+    }
+
+    Ok(freed)
 }
 
 /// Drop one track's local copy, keeping its analysis.
@@ -2115,6 +2327,7 @@ pub fn run() {
             analysis_status,
             cache_status,
             set_cache_max_bytes,
+            clear_audio_cache,
             evict_track,
         ])
         .run(tauri::generate_context!())

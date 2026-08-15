@@ -63,7 +63,11 @@ export function LinerNotes({
       </button>
 
       <header className="liner__head">
-        <div className="liner__art" aria-hidden="true" />
+        <div className="liner__art" aria-hidden="true">
+          {track.cover && (
+            <img className="liner__art-image" src={track.cover} alt="" />
+          )}
+        </div>
         <div className="liner__names">
           <h1 className="liner__title">{track.title}</h1>
           <p className="liner__artist">{track.artist || "—"}</p>
@@ -142,14 +146,25 @@ export function LinerNotes({
         </section>
       )}
 
+      {track.notes && (
+        <section className="liner__card glass">
+          <h2 className="label">notes</h2>
+          {/* The file's own comment field. Not the design's commissioned prose
+              — that would have to be written by someone — but it is what a
+              recording actually carries, and some releases carry a lot. */}
+          <p className="liner__prose">{track.notes}</p>
+        </section>
+      )}
+
       <section className="liner__card glass">
         <h2 className="label">where it lives</h2>
         <p className="liner__path numeric">{track.hrefPath}</p>
         <p className="liner__note">
           {/* The design's "credits" become this: the honest provenance of every
               field above. */}
-          Title, artist and album are read from the file's path — nothing reads
-          embedded tags yet, so a badly named file is a badly named track.
+          {track.tagged
+            ? "Read from the file's own tags where it had them, and from its path where it did not — so a badly named, untagged file is still a badly named track."
+            : "Read from the file's path. Its tags are read when the track is analysed, so this fills in once it has been listened to."}
         </p>
       </section>
     </div>

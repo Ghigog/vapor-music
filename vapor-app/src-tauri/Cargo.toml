@@ -33,3 +33,4 @@ cpal = "0.15"
 vapor-dsp = { path = "../../vapor-core/crates/vapor-dsp" }
 vapor-engine = { path = "../../vapor-core/crates/vapor-engine" }
 vapor-library = { path = "../../vapor-core/crates/vapor-library" }
+lofty = "0.25.1"

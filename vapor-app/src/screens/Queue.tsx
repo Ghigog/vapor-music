@@ -142,7 +142,9 @@ export function Queue({ onOpen }: { onOpen: (href: string) => void }) {
 
       {current && (
         <section className="queue__now glass">
-          <span className="queue__now-art" aria-hidden="true" />
+          <span className="queue__now-art" aria-hidden="true">
+            {current.cover && <img src={current.cover} alt="" />}
+          </span>
           <span className="queue__now-text">
             <span className="label">now playing</span>
             <span className="queue__now-title">{current.title}</span>
