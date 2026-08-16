@@ -280,6 +280,77 @@ pub fn is_searchable(name: &str) -> bool {
     !n.is_empty() && n != "Unknown Artist" && n != "Unknown Album" && n != "Unknown Track"
 }
 
+/// Where a fetched image is kept on disk.
+///
+/// Named by a hash of its URL, as `_download_image` did, because two tracks
+/// from the same album resolve to the same art and downloading it per track
+/// would fetch one sleeve a dozen times. Kept as a file rather than inside the
+/// JSON cache: a `picture_xl` is a few hundred kilobytes, and a 563-track
+/// library's worth of base64 in one document is a file the app would have to
+/// read whole to answer any question about any track.
+pub fn image_path(dir: &std::path::Path, url: &str) -> std::path::PathBuf {
+    // The extension is the server's, minus any query string, and is only ever
+    // used to name the file — the data URI's type comes from the bytes.
+    let tail = url.rsplit('/').next().unwrap_or("");
+    let ext = tail
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .rsplit_once('.')
+        .map(|(_, e)| e)
+        .filter(|e| !e.is_empty() && e.len() <= 4 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("jpg");
+
+    dir.join("metadata_images")
+        .join(format!("{}.{ext}", fingerprint(url)))
+}
+
+/// A short stable name for a URL. FNV-1a: not a security hash, and does not
+/// need to be — it names a cache file.
+fn fingerprint(url: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in url.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Read an image file back as a `data:` URI.
+///
+/// A data URI rather than a file path or an asset URL because the window's CSP
+/// allows `data:` and not a remote host — which is the right way round. The
+/// image is fetched once, by Rust, at a moment the person asked for; the
+/// webview never talks to Deezer.
+pub fn image_data_uri(path: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "data:{};base64,{}",
+        image_mime(&bytes),
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+    ))
+}
+
+/// The type of an image from its first bytes.
+///
+/// Read from the content rather than from the URL's extension: the extension
+/// is whatever the path happened to say, and a mislabelled type renders as a
+/// broken image with no clue why.
+fn image_mime(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if bytes.starts_with(&[b'G', b'I', b'F']) {
+        "image/gif"
+    } else if bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        "image/jpeg"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
@@ -355,6 +426,41 @@ impl Lookup {
             }
         }
         (String::new(), String::new())
+    }
+
+    /// Fetch an image and keep it, returning where it was kept.
+    ///
+    /// Already downloaded means already done — the file *is* the cache, which
+    /// is what stops one album sleeve being fetched once per track on it.
+    /// A non-200 leaves nothing behind: the original wrote the response body
+    /// to the destination first and had to delete the truncated file
+    /// afterwards, and any failure between the two left a broken image that
+    /// the next `file_exists` check would hand back as a hit.
+    pub fn download_image(&self, url: &str, dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        if url.is_empty() || !url.starts_with("http") {
+            return None;
+        }
+        let path = image_path(dir, url);
+        if path.is_file() {
+            return Some(path);
+        }
+
+        let response = self.client.get(url).send().ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let bytes = response.bytes().ok()?;
+        if bytes.is_empty() {
+            return None;
+        }
+
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        // Written whole and then renamed, so a partial file never exists under
+        // the name the cache check looks for.
+        let temporary = path.with_extension("part");
+        std::fs::write(&temporary, &bytes).ok()?;
+        std::fs::rename(&temporary, &path).ok()?;
+        Some(path)
     }
 }
 
@@ -517,6 +623,49 @@ mod tests {
         assert!(!is_searchable("Unknown Album"));
         assert!(!is_searchable("   "));
         assert!(is_searchable("Aphex Twin"));
+    }
+
+    #[test]
+    fn an_image_is_named_by_its_url_not_by_its_track() {
+        let dir = std::path::Path::new("/data");
+        // The same sleeve from two tracks on the album is one file, which is
+        // what stops it being fetched once per track.
+        let a = image_path(dir, "https://cdn.example/cover/abc/1000x1000.jpg");
+        let b = image_path(dir, "https://cdn.example/cover/abc/1000x1000.jpg");
+        assert_eq!(a, b);
+
+        let other = image_path(dir, "https://cdn.example/cover/xyz/1000x1000.jpg");
+        assert_ne!(a, other);
+        assert_eq!(a.extension().and_then(|e| e.to_str()), Some("jpg"));
+    }
+
+    /// A URL with no usable extension still has to name a file.
+    #[test]
+    fn an_extensionless_url_falls_back_to_jpg() {
+        let dir = std::path::Path::new("/data");
+        assert_eq!(
+            image_path(dir, "https://cdn.example/cover/abc")
+                .extension()
+                .and_then(|e| e.to_str()),
+            Some("jpg")
+        );
+        // A query string is not part of the extension.
+        assert_eq!(
+            image_path(dir, "https://cdn.example/a.png?size=xl")
+                .extension()
+                .and_then(|e| e.to_str()),
+            Some("png")
+        );
+    }
+
+    /// Read from the bytes, not from the name: a mislabelled type renders as a
+    /// broken image with nothing on screen to say why.
+    #[test]
+    fn the_image_type_comes_from_the_content() {
+        assert_eq!(image_mime(&[0x89, b'P', b'N', b'G', 0, 0]), "image/png");
+        assert_eq!(image_mime(b"GIF89a...."), "image/gif");
+        assert_eq!(image_mime(b"RIFF____WEBPVP8 "), "image/webp");
+        assert_eq!(image_mime(&[0xFF, 0xD8, 0xFF]), "image/jpeg");
     }
 
     #[test]

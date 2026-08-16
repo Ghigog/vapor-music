@@ -634,6 +634,41 @@ describe("Liner Notes", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent(/switched off/i);
     });
 
+    /**
+     * A looked-up sleeve fills the gap when the file carries none, and says
+     * so — a picture from Deezer standing in for one that came out of the
+     * recording is a difference worth being able to see.
+     */
+    it("marks a sleeve that came from the lookup rather than the file", async () => {
+      useBackend({
+        covers: false,
+        metadataLookup: true,
+        lyrics: { [A_TRACK]: WORDS },
+      });
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+
+      expect(await screen.findByText(/looked up/i)).toBeInTheDocument();
+    });
+
+    /** The file's own artwork wins; the lookup only fills a gap. */
+    it("keeps the file's own cover when it has one", async () => {
+      useBackend({
+        covers: true,
+        metadataLookup: true,
+        lyrics: { [A_TRACK]: WORDS },
+      });
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+      await screen.findByText("The first line");
+
+      expect(screen.queryByText(/looked up/i)).not.toBeInTheDocument();
+    });
+
     it("shows plain words when there is no timed version", async () => {
       useBackend({
         metadataLookup: true,

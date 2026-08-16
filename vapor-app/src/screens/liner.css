@@ -282,3 +282,50 @@
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* A sleeve that came from Deezer rather than out of the recording. Marked,
+   because standing in for the file's own artwork is a difference worth being
+   able to see. */
+.liner__art-source {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 3px 0;
+  text-align: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* The artist, as the lookup describes them. Inside the lookup card rather
+   than the header, with everything else that came from elsewhere. */
+.liner__who {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.liner__who-art {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: var(--shadow-sm);
+}
+
+.liner__who-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.liner__who-name {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}

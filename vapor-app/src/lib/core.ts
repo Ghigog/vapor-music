@@ -322,6 +322,16 @@ export function lookUpTrack(href: string, force = false): Promise<LookedUp> {
   return invoke<LookedUp>("look_up_track", { href, force });
 }
 
+/**
+ * A looked-up image as a data URI, from the file it was cached in.
+ *
+ * Takes the URL rather than an href because one sleeve serves every track on
+ * the album. Only a URL a previous lookup stored is served.
+ */
+export function lookedUpImage(url: string): Promise<string | null> {
+  return invoke<string | null>("looked_up_image", { url });
+}
+
 /** Turn lookups on or off. Off also forgets everything already found. */
 export function setMetadataLookup(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_metadata_lookup", { enabled });

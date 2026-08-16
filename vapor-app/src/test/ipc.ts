@@ -545,6 +545,16 @@ export class FakeBackend {
       case "track_lookup":
         return this.lookedUp(String(a.href ?? ""));
 
+      case "looked_up_image": {
+        const url = String(a.url ?? "");
+        // Only a URL a lookup actually stored, as the backend guards.
+        const known = Object.keys(this.lyricsFor).some((href) => {
+          const l = this.lookedUp(href);
+          return url !== "" && (l.artistImage === url || l.albumArt === url);
+        });
+        return known ? A_SLEEVE : null;
+      }
+
       case "look_up_track": {
         const href = String(a.href ?? "");
         if (!this.settings.metadataLookupEnabled) {
@@ -910,7 +920,10 @@ export class FakeBackend {
           hrefPath: row.href,
           cached: true,
           unplayable: null,
-          cover: null,
+          // Honours `covers` like every other cover-bearing command. It was
+          // hard-coded to null, so this screen could not tell a track with
+          // artwork from one without.
+          cover: this.covers ? A_SLEEVE : null,
           notes: null,
           tagged: false,
         };

@@ -72,6 +72,45 @@ export function LinerNotes({
     };
   }, [href]);
 
+  /**
+   * The looked-up pictures, as data URIs.
+   *
+   * Fetched by the backend into a file and read back here, rather than pointed
+   * at with a remote `src`: the window's CSP allows `data:` and no remote
+   * host, so the page never opens a connection to Deezer of its own.
+   */
+  const [pictures, setPictures] = useState<{ album?: string; artist?: string }>(
+    {},
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setPictures({});
+    const wanted = [
+      ["album", looked?.albumArt] as const,
+      ["artist", looked?.artistImage] as const,
+    ].filter(([, url]) => !!url);
+    if (wanted.length === 0) return;
+
+    void Promise.all(
+      wanted.map(async ([which, url]) => {
+        const data = await core.lookedUpImage(url!).catch(() => null);
+        return [which, data] as const;
+      }),
+    ).then((found) => {
+      if (cancelled) return;
+      setPictures(
+        Object.fromEntries(found.filter(([, data]) => !!data)) as {
+          album?: string;
+          artist?: string;
+        },
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [looked?.albumArt, looked?.artistImage]);
+
   const lookUp = useCallback(async () => {
     setLooking(true);
     setLookupError(null);
@@ -104,9 +143,20 @@ export function LinerNotes({
       </button>
 
       <header className="liner__head">
+        {/* The file's own artwork first. A looked-up sleeve fills the gap
+            when the file carries none, and is marked so, because a picture
+            from Deezer standing in for one that came out of the recording is
+            a difference worth being able to see. */}
         <div className="liner__art" aria-hidden="true">
-          {track.cover && (
-            <img className="liner__art-image" src={track.cover} alt="" />
+          {(track.cover || pictures.album) && (
+            <img
+              className="liner__art-image"
+              src={track.cover ?? pictures.album}
+              alt=""
+            />
+          )}
+          {!track.cover && pictures.album && (
+            <span className="liner__art-source label">looked up</span>
           )}
         </div>
         <div className="liner__names">
@@ -190,6 +240,26 @@ export function LinerNotes({
       <section className="liner__card glass">
         <h2 className="label">lyrics</h2>
         {lookupError && <ErrorNotice error={lookupError} />}
+
+        {/* The artist portrait and the genre arrive with the words. They sit
+            in this card rather than in the header for the same reason the
+            words do: everything in here came from somewhere else. */}
+        {(pictures.artist || looked?.genre) && (
+          <div className="liner__who">
+            {pictures.artist && (
+              <img className="liner__who-art" src={pictures.artist} alt="" />
+            )}
+            <div className="liner__who-text">
+              <p className="liner__who-name">{track.artist || "—"}</p>
+              {looked?.genre && (
+                <p className="liner__note">
+                  Filed as {looked.genre} by Deezer
+                  {track.genre ? `; this file says ${track.genre}.` : "."}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         {looked?.lyrics ? (
           <>

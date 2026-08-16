@@ -650,7 +650,7 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     // The lock is taken, the identity read, and the lock *dropped* before the
     // request goes out. Holding it across an eight-second network call would
     // freeze playback control, the queue and every other command behind it.
-    let (artist, album, title) = {
+    let (artist, album, title, dir) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
         if !app.settings.metadata_lookup_enabled {
             return Err(Error(
@@ -669,13 +669,25 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
             .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
         let mut row = row.clone();
         app.apply_tags(&mut row);
-        (row.artist, row.album, row.title)
+        (
+            row.artist,
+            row.album,
+            row.title,
+            app.store.dir().to_path_buf(),
+        )
     };
 
     let lookup = metadata::Lookup::new().map_err(Error)?;
     let lyrics = lookup.lyrics(&artist, &title);
     let artist_image = lookup.artist_image(&artist);
     let (album_art, genre) = lookup.album(&artist, &album);
+
+    // Fetched here, once, rather than by the webview: the window's CSP allows
+    // `data:` and no remote host, which is the right way round — the page
+    // should not be opening connections to Deezer on every render.
+    for url in [&artist_image, &album_art] {
+        lookup.download_image(url, &dir);
+    }
 
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.looked.insert(
@@ -692,6 +704,31 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     Ok(LookedUp::of(&app, &href))
 }
 
+/// A looked-up image as a `data:` URI, read from the file it was cached in.
+///
+/// Takes a URL rather than an href because one sleeve serves every track on
+/// the album, and the file is named after the URL for that reason.
+///
+/// **Only a URL that a previous lookup actually stored will be served.**
+/// Without that check this command is a general "read any file the app can
+/// name" primitive reachable from the webview, and its argument comes from the
+/// page.
+#[tauri::command]
+fn looked_up_image(url: String, state: State<'_, Shared>) -> Result<Option<String>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let known = app
+        .looked
+        .values()
+        .any(|l| l.artist_image == url || l.album_art == url);
+    if !known || url.is_empty() {
+        return Ok(None);
+    }
+    Ok(metadata::image_data_uri(&metadata::image_path(
+        app.store.dir(),
+        &url,
+    )))
+}
+
 /// Turn lookups on or off.
 ///
 /// Switching it off forgets what was found as well as stopping further
@@ -704,6 +741,10 @@ fn set_metadata_lookup(enabled: bool, state: State<'_, Shared>) -> Result<Settin
     if !enabled {
         app.looked.clear();
         app.save_looked()?;
+        // The downloaded sleeves go too. Forgetting the index and leaving the
+        // pictures on the disk would make "off" a claim the data directory
+        // contradicts — and `Your data` invites people to go and look.
+        let _ = std::fs::remove_dir_all(app.store.dir().join("metadata_images"));
     }
     app.save_settings()?;
     Ok(app.settings.clone())
@@ -3471,6 +3512,7 @@ pub fn run() {
             set_playlist_folder,
             track_lookup,
             look_up_track,
+            looked_up_image,
             set_metadata_lookup,
             queue_state,
             queue_view,
