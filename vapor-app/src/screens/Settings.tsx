@@ -25,6 +25,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
+import { SyncPanel } from "../components/SyncPanel";
 
 type Busy = "idle" | "saving" | "scanning" | "analysing";
 
@@ -469,6 +470,8 @@ export function Settings() {
           <p className="settings__note">{note.text}</p>
         )}
       </section>
+
+      <SyncPanel />
 
       <section className="settings__card glass">
         <h2 className="settings__section">Your data</h2>

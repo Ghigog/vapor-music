@@ -26,6 +26,7 @@ mod cache;
 pub mod decoder;
 mod media;
 mod metadata;
+mod peers;
 mod store;
 mod sync;
 mod tags;
@@ -109,6 +110,34 @@ struct AppState {
     analysing_title: String,
     /// Where the four-step choice cycle has got to (§3 of the workflow doc).
     mix_step: u64,
+
+    /// This installation's identity on the local network (SYNC-001).
+    ///
+    /// Generated once and persisted. Deliberately not derived from the
+    /// hostname, the user or the hardware: it is broadcast in clear on a
+    /// shared network, so it must say "a copy of Vapor" and nothing else about
+    /// whose it is.
+    device_id: String,
+    /// Devices this one has paired with (SYNC-002). Persisted.
+    trust: vapor_library::sync::Trust,
+    /// A pairing in progress, if this device is currently showing a code.
+    pairing: Option<vapor_library::sync::Pairing>,
+    /// The code on screen. Held separately because `Pairing` deliberately does
+    /// not hand its PIN back out — the only thing that may read it is the
+    /// person looking at the screen.
+    pin: Option<String>,
+    /// Who is on the network, kept by the beacon thread.
+    peers: peers::Peers,
+    /// Content digests, keyed by href, with the size they were computed at.
+    ///
+    /// Hashing a library is not free and the answer does not change unless the
+    /// file does, so it is memoised beside the analysis and for the same
+    /// reason. The size is the invalidation: a file that changed length is a
+    /// different file.
+    digests: std::collections::HashMap<String, (u64, String)>,
+    /// What a running sync is doing, for the dashboard to draw.
+    sync: SyncProgress,
+
     cache: cache::Cache,
     store: Store,
 
@@ -167,6 +196,15 @@ impl AppState {
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
         let folders = store.load("folders").unwrap_or(None).unwrap_or_default();
         let looked = store.load("metadata").unwrap_or(None).unwrap_or_default();
+        let trust = store.load("trust").unwrap_or(None).unwrap_or_default();
+        let digests = store.load("digests").unwrap_or(None).unwrap_or_default();
+        // Generated on first launch and kept. A device that renamed itself
+        // every start would appear as a new peer each time, and every pairing
+        // would have to be redone.
+        let device_id: String = store
+            .load("device_id")
+            .unwrap_or(None)
+            .unwrap_or_else(|| new_id("device"));
         let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
         let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
         let tags = store.load("tags").unwrap_or(None).unwrap_or_default();
@@ -182,6 +220,13 @@ impl AppState {
             playlists,
             folders,
             looked,
+            device_id,
+            trust,
+            pairing: None,
+            pin: None,
+            peers: Arc::new(Mutex::new(vapor_library::sync::PeerRegistry::new())),
+            digests,
+            sync: SyncProgress::default(),
             queue: Queue::default(),
             rows,
             last_mix: None,
@@ -317,6 +362,53 @@ impl AppState {
     fn save_looked(&self) -> Result<()> {
         self.store.save("metadata", &self.looked)?;
         Ok(())
+    }
+
+    fn save_trust(&self) -> Result<()> {
+        self.store.save("trust", &self.trust)?;
+        Ok(())
+    }
+
+    /// What this device calls itself on the network.
+    ///
+    /// The folder name of the library, or a plain fallback. **Not** the
+    /// hostname: on a personal machine that is usually the owner's name, and
+    /// this is broadcast in clear to everyone on the café Wi-Fi.
+    fn device_name(&self) -> String {
+        let folder = self
+            .settings
+            .remote
+            .folder
+            .rsplit('/')
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        if folder.is_empty() || folder == "Music" {
+            "Vapor".to_string()
+        } else {
+            format!("Vapor · {folder}")
+        }
+    }
+
+    /// The content digest of a cached track, computed once.
+    ///
+    /// `None` for a track this device knows of but has never held, which in a
+    /// cloud-first library is most of them. That is a real answer, not a
+    /// failure — [`vapor_library::sync::reconcile`] treats a missing digest as
+    /// "no opinion" rather than as a disagreement.
+    fn digest_of(&mut self, href: &str) -> Option<String> {
+        let path = self.cache.get(href)?;
+        let size = std::fs::metadata(&path).ok()?.len();
+
+        if let Some((seen_at, digest)) = self.digests.get(href) {
+            if *seen_at == size {
+                return Some(digest.clone());
+            }
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        let digest = vapor_library::sync::digest(&bytes);
+        self.digests
+            .insert(href.to_string(), (size, digest.clone()));
+        Some(digest)
     }
 
     fn save_settings(&self) -> Result<()> {
@@ -769,6 +861,529 @@ fn set_metadata_lookup(enabled: bool, state: State<'_, Shared>) -> Result<Settin
     }
     app.save_settings()?;
     Ok(app.settings.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Local sync (SYNC-001 to SYNC-005)
+// ---------------------------------------------------------------------------
+
+/// What a running sync is doing, for the dashboard.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncProgress {
+    running: bool,
+    /// The device being synced with.
+    peer: String,
+    /// What is moving right now.
+    file: String,
+    done: usize,
+    total: usize,
+    /// Bytes moved since this sync started.
+    bytes: u64,
+    /// Seconds since it started, so the frontend can divide rather than have
+    /// a rate pushed at it that is already stale by the time it renders.
+    elapsed: f64,
+    /// Set when the sync ended badly. Cleared when the next one starts.
+    error: String,
+}
+
+/// What may be moved. The dashboard's filters (SYNC-005).
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncWhat {
+    #[serde(default = "yes")]
+    tracks: bool,
+    #[serde(default = "yes")]
+    playlists: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for SyncWhat {
+    fn default() -> Self {
+        SyncWhat {
+            tracks: true,
+            playlists: true,
+        }
+    }
+}
+
+/// The app, as the sync server sees it.
+///
+/// A thin adapter so `peers.rs` depends on a trait it can be tested against
+/// rather than on `AppState`, which cannot be built outside a running app.
+struct ServedLibrary(Shared);
+
+impl peers::Library for ServedLibrary {
+    fn trust(&self) -> vapor_library::sync::Trust {
+        self.0
+            .lock()
+            .map(|app| app.trust.clone())
+            .unwrap_or_default()
+    }
+
+    fn pair(
+        &self,
+        device_id: &str,
+        name: &str,
+        kind: vapor_library::sync::DeviceKind,
+        pin: &str,
+    ) -> vapor_library::sync::PairOutcome {
+        use vapor_library::sync::PairOutcome;
+
+        let Ok(mut app) = self.0.lock() else {
+            return PairOutcome::Refused;
+        };
+        let Some(pairing) = app.pairing.as_mut() else {
+            // Nobody pressed "pair" on this device. A plausible code is not an
+            // invitation.
+            return PairOutcome::Refused;
+        };
+
+        let outcome = pairing.offer(device_id, pin, peers::now());
+        match outcome {
+            PairOutcome::Paired => {
+                app.trust.add(device_id, name, kind, peers::now());
+                app.pairing = None;
+                let _ = app.save_trust();
+            }
+            PairOutcome::Refused => app.pairing = None,
+            PairOutcome::WrongPin { .. } => {}
+        }
+        outcome
+    }
+
+    fn manifest(&self) -> vapor_library::sync::Manifest {
+        self.0
+            .lock()
+            .map(|mut app| build_manifest(&mut app))
+            .unwrap_or_default()
+    }
+
+    fn read_track(&self, href: &str) -> Option<Vec<u8>> {
+        let path = {
+            let app = self.0.lock().ok()?;
+            // Two conditions, and both matter. In the library, so a peer
+            // cannot name a path; cached, so this serves a file this device
+            // actually holds rather than fetching one from the owner's cloud
+            // on a stranger's behalf.
+            if !app.rows.iter().any(|r| r.href == href) {
+                return None;
+            }
+            app.cache.get(href)?
+        };
+        std::fs::read(path).ok()
+    }
+
+    fn identity(&self) -> (String, String, vapor_library::sync::DeviceKind) {
+        let kind = if cfg!(any(target_os = "ios", target_os = "android")) {
+            vapor_library::sync::DeviceKind::Phone
+        } else {
+            vapor_library::sync::DeviceKind::Desktop
+        };
+        self.0
+            .lock()
+            .map(|app| (app.device_id.clone(), app.device_name(), kind))
+            .unwrap_or_default()
+    }
+}
+
+/// This device's manifest: what it knows, for another device to compare.
+fn build_manifest(app: &mut AppState) -> vapor_library::sync::Manifest {
+    use vapor_library::sync::{Manifest, PlaylistRecord, TrackRecord};
+
+    let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
+    let tracks = hrefs
+        .into_iter()
+        .map(|href| {
+            let digest = app.digest_of(&href).unwrap_or_default();
+            let size = app
+                .cache
+                .get(&href)
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map_or(0, |m| m.len());
+            // The tempo correction is the thing a person actually changes
+            // about a track, so it is what makes one device's record newer.
+            let updated = u64::from(app.settings.bpm_override(&href).is_some());
+            TrackRecord {
+                href,
+                size,
+                digest,
+                updated,
+            }
+        })
+        .collect();
+
+    let playlists = app
+        .playlists
+        .all()
+        .iter()
+        .map(|p| PlaylistRecord {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            digest: vapor_library::sync::playlist_digest(&p.name, &p.tracks),
+            updated: p.tracks.len() as u64,
+        })
+        .collect();
+
+    let _ = app.store.save("digests", &app.digests);
+
+    Manifest {
+        device_id: app.device_id.clone(),
+        tracks,
+        playlists,
+        generated: peers::now(),
+    }
+}
+
+/// Everything the sync dashboard draws.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncView {
+    /// This device, as others see it.
+    device_id: String,
+    device_name: String,
+    /// Seen on the network and not yet paired.
+    discovered: Vec<vapor_library::sync::Peer>,
+    trusted: Vec<vapor_library::sync::TrustedDevice>,
+    /// The code this device is currently showing, if any.
+    pin: Option<String>,
+    pairing_with: Option<String>,
+    progress: SyncProgress,
+}
+
+#[tauri::command]
+fn sync_view(state: State<'_, Shared>) -> Result<SyncView> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let discovered = app
+        .peers
+        .lock()
+        .map(|mut registry| registry.live(peers::now()).to_vec())
+        .unwrap_or_default();
+
+    Ok(SyncView {
+        device_id: app.device_id.clone(),
+        device_name: app.device_name(),
+        discovered,
+        trusted: app.trust.all().to_vec(),
+        pin: app.pin.clone(),
+        pairing_with: app.pairing.as_ref().map(|p| p.peer_id().to_string()),
+        progress: app.sync.clone(),
+    })
+}
+
+/// Show a code, for `peer_id` to type in.
+///
+/// The code is bound to that one device, so a PIN on screen is not an
+/// invitation to everything else on the subnet that can see it.
+#[tauri::command]
+fn open_pairing(peer_id: String, state: State<'_, Shared>) -> Result<String> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let pin = peers::new_pin();
+    app.pairing = Some(vapor_library::sync::Pairing::begin(
+        pin.clone(),
+        &peer_id,
+        peers::now(),
+    ));
+    app.pin = Some(pin.clone());
+    Ok(pin)
+}
+
+#[tauri::command]
+fn cancel_pairing(state: State<'_, Shared>) -> Result<()> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.pairing = None;
+    app.pin = None;
+    Ok(())
+}
+
+/// Type the code the other device is showing.
+#[tauri::command]
+fn pair_with(peer_id: String, pin: String, state: State<'_, Shared>) -> Result<String> {
+    let (address, me, my_name, kind) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        let registry = app.peers.lock().map_err(|e| Error(e.to_string()))?;
+        let peer = registry
+            .get(&peer_id)
+            .ok_or_else(|| Error("That device is no longer on the network.".to_string()))?;
+        (
+            peer.address.clone(),
+            app.device_id.clone(),
+            app.device_name(),
+            peer.kind,
+        )
+    };
+
+    // A crafted advert must not be able to point this device at a host on the
+    // internet and have it open a connection there.
+    if !peers::is_local(&address) {
+        return Err(Error(
+            "That device is not on this local network.".to_string(),
+        ));
+    }
+
+    let (reply, _) = peers::ask(
+        &address,
+        &peers::Request::Pair {
+            device_id: me,
+            name: my_name,
+            device_kind: if cfg!(any(target_os = "ios", target_os = "android")) {
+                vapor_library::sync::DeviceKind::Phone
+            } else {
+                vapor_library::sync::DeviceKind::Desktop
+            },
+            pin,
+        },
+    )
+    .map_err(Error)?;
+
+    match reply {
+        peers::Reply::Paired { device_id, name } => {
+            let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+            app.trust.add(&device_id, &name, kind, peers::now());
+            app.save_trust()?;
+            Ok(name)
+        }
+        peers::Reply::Refused { reason } => Err(Error(reason)),
+        _ => Err(Error(
+            "That device answered with something else.".to_string(),
+        )),
+    }
+}
+
+#[tauri::command]
+fn forget_peer(peer_id: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let forgotten = app.trust.forget(&peer_id);
+    if forgotten {
+        app.save_trust()?;
+    }
+    Ok(forgotten)
+}
+
+/// Sync with a paired device, on a thread, reporting progress as it goes.
+#[tauri::command]
+fn sync_with(
+    peer_id: String,
+    what: Option<SyncWhat>,
+    app_handle: tauri::AppHandle,
+    state: State<'_, Shared>,
+) -> Result<()> {
+    use tauri::Emitter as _;
+
+    let shared: Shared = Arc::clone(&state);
+    let what = what.unwrap_or_default();
+
+    let (address, name) = {
+        let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
+        if app.sync.running {
+            return Err(Error("A sync is already running.".to_string()));
+        }
+        if !app.trust.allows(&peer_id) {
+            return Err(Error("That device is not paired.".to_string()));
+        }
+        let registry = app.peers.lock().map_err(|e| Error(e.to_string()))?;
+        let peer = registry
+            .get(&peer_id)
+            .ok_or_else(|| Error("That device is not on the network.".to_string()))?;
+        let found = (peer.address.clone(), peer.name.clone());
+        drop(registry);
+
+        if !peers::is_local(&found.0) {
+            return Err(Error(
+                "That device is not on this local network.".to_string(),
+            ));
+        }
+        app.sync = SyncProgress {
+            running: true,
+            peer: found.1.clone(),
+            ..Default::default()
+        };
+        found
+    };
+
+    let started = std::time::Instant::now();
+    let spawned = std::thread::Builder::new()
+        .name("vapor-sync".into())
+        .spawn(move || {
+            let outcome = run_sync(&shared, &address, what, started);
+            if let Ok(mut app) = shared.lock() {
+                app.sync.running = false;
+                app.sync.elapsed = started.elapsed().as_secs_f64();
+                if let Err(e) = outcome {
+                    app.sync.error = e;
+                }
+            }
+            let _ = app_handle.emit("sync-changed", ());
+        });
+
+    if let Err(e) = spawned {
+        // The thread never started, so nothing will ever clear the flag it was
+        // set under. Left running, the dashboard shows a sync that is not
+        // happening and refuses to start another.
+        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+        app.sync.running = false;
+        app.sync.error = format!("could not start the sync: {e}");
+        return Err(Error(format!("could not start the sync: {e}")));
+    }
+    let _ = name;
+    Ok(())
+}
+
+/// The body of a sync. Runs on its own thread and holds the lock only in
+/// short bursts — a sync can take minutes, and the app has to stay usable.
+fn run_sync(
+    shared: &Shared,
+    address: &str,
+    what: SyncWhat,
+    started: std::time::Instant,
+) -> std::result::Result<(), String> {
+    let me = shared.lock().map_err(|e| e.to_string())?.device_id.clone();
+
+    let (reply, _) = peers::ask(
+        address,
+        &peers::Request::Manifest {
+            device_id: me.clone(),
+        },
+    )?;
+    let theirs = match reply {
+        peers::Reply::Manifest(m) => *m,
+        peers::Reply::Refused { reason } => return Err(reason),
+        _ => return Err("that device answered with something else".to_string()),
+    };
+
+    let mine = {
+        let mut app = shared.lock().map_err(|e| e.to_string())?;
+        build_manifest(&mut app)
+    };
+    let delta = vapor_library::sync::reconcile(&mine, &theirs);
+
+    // Only what this device is missing is pulled. Pushing would mean writing
+    // to someone else's library on their behalf, and the other device runs
+    // this same code when its owner asks it to.
+    let mut wanted: Vec<String> = Vec::new();
+    if what.tracks {
+        wanted.extend(delta.fetch.iter().cloned());
+        wanted.extend(delta.replace.iter().cloned());
+    }
+    let total = wanted.len()
+        + if what.playlists {
+            delta.take_playlists.len()
+        } else {
+            0
+        };
+
+    {
+        let mut app = shared.lock().map_err(|e| e.to_string())?;
+        app.sync.total = total;
+    }
+
+    for (done, href) in wanted.iter().enumerate() {
+        {
+            let mut app = shared.lock().map_err(|e| e.to_string())?;
+            app.sync.done = done;
+            app.sync.file = href.rsplit('/').next().unwrap_or(href).to_string();
+            app.sync.elapsed = started.elapsed().as_secs_f64();
+        }
+        if let Err(e) = pull_track(shared, address, &me, href) {
+            // One track that will not come across must not end the sync — a
+            // library with one unreadable file would otherwise never finish
+            // one.
+            eprintln!("sync: {href} did not transfer ({e})");
+        }
+    }
+
+    if what.playlists {
+        for id in &delta.take_playlists {
+            if let Some(list) = theirs.playlists.iter().find(|p| &p.id == id) {
+                let mut app = shared.lock().map_err(|e| e.to_string())?;
+                // Names and membership only. A playlist arrives as a list of
+                // hrefs that may not all be here yet, and rows_in_order
+                // already skips what the library does not hold.
+                if app.playlists.get(id).is_none() {
+                    app.playlists.create(id.clone(), list.name.clone());
+                }
+            }
+        }
+        let app = shared.lock().map_err(|e| e.to_string())?;
+        app.save_playlists().map_err(|e| e.0)?;
+    }
+
+    let mut app = shared.lock().map_err(|e| e.to_string())?;
+    app.sync.done = total;
+    app.sync.file.clear();
+    let _ = app.store.save("digests", &app.digests);
+    Ok(())
+}
+
+/// Pull one track, a chunk at a time, resuming from whatever is on disk.
+fn pull_track(
+    shared: &Shared,
+    address: &str,
+    me: &str,
+    href: &str,
+) -> std::result::Result<(), String> {
+    let mut collected: Vec<u8> = Vec::new();
+    let mut expected_digest;
+
+    loop {
+        let have = collected.len() as u64;
+        let (reply, body) = peers::ask(
+            address,
+            &peers::Request::Fetch {
+                device_id: me.to_string(),
+                href: href.to_string(),
+                offset: have,
+                len: vapor_library::sync::CHUNK,
+            },
+        )?;
+
+        let (len, total, digest) = match reply {
+            peers::Reply::Bytes { len, total, digest } => (len, total, digest),
+            peers::Reply::Error { reason } | peers::Reply::Refused { reason } => {
+                return Err(reason)
+            }
+            _ => return Err("that device answered with something else".to_string()),
+        };
+        expected_digest = digest;
+
+        if len == 0 {
+            if have < total {
+                // The peer says there is more and then sends none. Continuing
+                // would spin forever asking for the same offset.
+                return Err("the transfer stalled".to_string());
+            }
+            break;
+        }
+        collected.extend_from_slice(&body);
+
+        {
+            let mut app = shared.lock().map_err(|e| e.to_string())?;
+            app.sync.bytes += len;
+        }
+
+        if collected.len() as u64 >= total {
+            break;
+        }
+    }
+
+    // Verified before it is written, not after. A file that lands in the cache
+    // and is then found to be wrong has already been offered to the decoder.
+    let actual = vapor_library::sync::digest(&collected);
+    if actual != expected_digest {
+        return Err("the copy that arrived does not match the original".to_string());
+    }
+
+    let app = shared.lock().map_err(|e| e.to_string())?;
+    // `store` skips an href it already holds, which is what makes a `replace`
+    // need the removal first.
+    let _ = app.cache.remove(href);
+    app.cache
+        .store(href, || Ok(collected))
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn parse_sort_key(s: &str) -> Option<SortKey> {
@@ -3635,6 +4250,34 @@ pub fn run() {
                 spawn_prefetcher(Arc::clone(&shared));
             }
 
+            // Local sync (SYNC-001, SYNC-004). Independent of audio: a device
+            // with no speaker is exactly the sort of thing worth syncing to.
+            //
+            // Both are best-effort. A locked-down network, or a second copy of
+            // the app already holding the port, costs a person discovery and
+            // nothing else — the app still opens, plays and scans.
+            {
+                let (id, name, kind, registry) = {
+                    let state = shared.lock().expect("fresh state");
+                    let kind = if cfg!(any(target_os = "ios", target_os = "android")) {
+                        vapor_library::sync::DeviceKind::Phone
+                    } else {
+                        vapor_library::sync::DeviceKind::Desktop
+                    };
+                    // Persisted on first launch, so a device keeps its identity
+                    // and its pairings survive a restart.
+                    let _ = state.store.save("device_id", &state.device_id);
+                    (
+                        state.device_id.clone(),
+                        state.device_name(),
+                        kind,
+                        Arc::clone(&state.peers),
+                    )
+                };
+                peers::spawn_beacon(registry, id, name, kind);
+                peers::spawn_server(Arc::new(ServedLibrary(Arc::clone(&shared))));
+            }
+
             app.manage(shared);
             Ok(())
         })
@@ -3658,6 +4301,12 @@ pub fn run() {
             looked_up_image,
             set_metadata_lookup,
             set_vibe_limit,
+            sync_view,
+            open_pairing,
+            cancel_pairing,
+            pair_with,
+            forget_peer,
+            sync_with,
             queue_state,
             queue_view,
             remove_from_queue,

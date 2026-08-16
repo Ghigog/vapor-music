@@ -44,6 +44,10 @@ export interface FakeOptions {
   metadataLookup?: boolean;
   /** What a lookup would find, by href. Anything absent finds nothing. */
   lyrics?: Record<string, core.Lyrics>;
+  /** Devices on the network. Empty by default, as a lone machine is. */
+  peers?: core.SyncPeer[];
+  /** Devices already paired with. */
+  trustedPeers?: core.TrustedDevice[];
   /**
    * Folders the scan cannot read and walks past (TD-49). The real backend
    * counts them and reports them; this is how a test reaches that sentence.
@@ -185,6 +189,32 @@ export class FakeBackend {
   private mixStep = 0;
   /** Tracks a lookup has been made for. */
   private attempted = new Set<string>();
+  /** Devices on the fake network. */
+  private peers: core.SyncPeer[];
+  private trusted: core.TrustedDevice[];
+  private pairing: { peerId: string; pin: string } | null = null;
+  private syncing: core.SyncProgress | null = null;
+
+  private syncView(): core.SyncView {
+    return {
+      deviceId: "this-device",
+      deviceName: "Vapor",
+      discovered: this.peers,
+      trusted: this.trusted,
+      pin: this.pairing?.pin ?? null,
+      pairingWith: this.pairing?.peerId ?? null,
+      progress: this.syncing ?? {
+        running: false,
+        peer: "",
+        file: "",
+        done: 0,
+        total: 0,
+        bytes: 0,
+        elapsed: 0,
+        error: "",
+      },
+    };
+  }
   private readonly lyricsFor: Record<string, core.Lyrics>;
 
   /**
@@ -229,6 +259,8 @@ export class FakeBackend {
       vibeLimit: 0.5,
     };
     this.lyricsFor = options.lyrics ?? {};
+    this.peers = options.peers ?? [];
+    this.trusted = options.trustedPeers ?? [];
     this.keychainSilentlyFails = options.keychainSilentlyFails ?? false;
     // A store that never keeps anything cannot already be holding something.
     // Seeding a password here made `keychainSilentlyFails` unobservable: the
@@ -588,6 +620,64 @@ export class FakeBackend {
         // Off forgets what was found, as the backend does.
         if (!this.settings.metadataLookupEnabled) this.attempted.clear();
         return this.settings;
+      }
+
+      case "sync_view":
+        return this.syncView();
+
+      case "open_pairing": {
+        // Fixed, so a test can type it. The real one is six random digits
+        // from the OS.
+        this.pairing = { peerId: String(a.peerId ?? ""), pin: "482913" };
+        return this.pairing.pin;
+      }
+
+      case "cancel_pairing":
+        this.pairing = null;
+        return null;
+
+      case "pair_with": {
+        const peerId = String(a.peerId ?? "");
+        const peer = this.peers.find((p) => p.id === peerId);
+        if (!peer) throw new Error("That device is no longer on the network.");
+        // The fake's other device is showing 482913, the same one `open_pairing`
+        // shows — enough for a screen test to get the code right or wrong.
+        if (String(a.pin ?? "") !== "482913") {
+          throw new Error("wrong code — 2 left");
+        }
+        this.trusted = [
+          ...this.trusted.filter((t) => t.id !== peerId),
+          { id: peer.id, name: peer.name, kind: peer.kind, pairedAt: 1 },
+        ];
+        return peer.name;
+      }
+
+      case "forget_peer": {
+        const peerId = String(a.peerId ?? "");
+        const had = this.trusted.some((t) => t.id === peerId);
+        this.trusted = this.trusted.filter((t) => t.id !== peerId);
+        return had;
+      }
+
+      case "sync_with": {
+        const peerId = String(a.peerId ?? "");
+        const peer = this.trusted.find((t) => t.id === peerId);
+        if (!peer) throw new Error("That device is not paired.");
+        if (this.syncing?.running) throw new Error("A sync is already running.");
+        // Finished immediately: what a screen test needs is the shape of a
+        // completed sync, and a fake that takes real time is a fake that makes
+        // every test that touches it slow and flaky.
+        this.syncing = {
+          running: false,
+          peer: peer.name,
+          file: "",
+          done: 2,
+          total: 2,
+          bytes: 8_000_000,
+          elapsed: 4,
+          error: "",
+        };
+        return null;
       }
 
       case "playlist_folders":

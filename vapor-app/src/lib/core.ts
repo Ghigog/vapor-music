@@ -353,6 +353,91 @@ export function setMetadataLookup(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_metadata_lookup", { enabled });
 }
 
+// --- Sync with another device on the same network (SYNC-001 to SYNC-005) ----
+
+export type DeviceKind = "desktop" | "phone" | "tablet" | "unknown";
+
+/** A device seen on the network. */
+export interface SyncPeer {
+  id: string;
+  name: string;
+  kind: DeviceKind;
+  /** Host and port, as this device heard it — never as the peer claimed it. */
+  address: string;
+  lastSeen: number;
+}
+
+/** A device this one has agreed to sync with. */
+export interface TrustedDevice {
+  id: string;
+  name: string;
+  kind: DeviceKind;
+  pairedAt: number;
+}
+
+export interface SyncProgress {
+  running: boolean;
+  peer: string;
+  /** What is moving right now. */
+  file: string;
+  done: number;
+  total: number;
+  bytes: number;
+  /** Seconds since it started — the rate is divided here, not pushed stale. */
+  elapsed: number;
+  error: string;
+}
+
+export interface SyncView {
+  deviceId: string;
+  deviceName: string;
+  /** On the network, paired or not. */
+  discovered: SyncPeer[];
+  trusted: TrustedDevice[];
+  /** The code this device is showing, if it is showing one. */
+  pin: string | null;
+  pairingWith: string | null;
+  progress: SyncProgress;
+}
+
+/** What may move. Both default to true. */
+export interface SyncWhat {
+  tracks: boolean;
+  playlists: boolean;
+}
+
+export function syncView(): Promise<SyncView> {
+  return invoke<SyncView>("sync_view");
+}
+
+/**
+ * Show a pairing code for one device to type in.
+ *
+ * Bound to that device, so a code on screen is not an invitation to everything
+ * else on the network that can see it.
+ */
+export function openPairing(peerId: string): Promise<string> {
+  return invoke<string>("open_pairing", { peerId });
+}
+
+export function cancelPairing(): Promise<void> {
+  return invoke<void>("cancel_pairing");
+}
+
+/** Type the code the other device is showing. Resolves to its name. */
+export function pairWith(peerId: string, pin: string): Promise<string> {
+  return invoke<string>("pair_with", { peerId, pin });
+}
+
+export function forgetPeer(peerId: string): Promise<boolean> {
+  return invoke<boolean>("forget_peer", { peerId });
+}
+
+/** Start a sync. Returns as soon as it has begun; watch `syncView` for the rest. */
+export function syncWith(peerId: string, what?: SyncWhat): Promise<void> {
+  return invoke<void>("sync_with", { peerId, what: what ?? null });
+}
+
 // --- Playlist folders -------------------------------------------------------
 
 export function playlistFolders(): Promise<Folder[]> {

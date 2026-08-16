@@ -267,3 +267,111 @@
   cursor: default;
   color: var(--ink-3);
 }
+
+/* ---------------------------------------------------------------------------
+   Syncing with another device (SYNC-005)
+
+   Beside "Your data" because it belongs to the same claim: the library is on
+   the owner's own storage, and this moves it between their own machines
+   without anything in between.
+--------------------------------------------------------------------------- */
+
+.sync__heading {
+  margin: 10px 0 0;
+  color: var(--ink-3);
+}
+
+.sync__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid var(--glass-rim);
+}
+
+/* Lit when the device is actually reachable. A paired device that is switched
+   off is not a failure, and a row that says nothing about it reads as one. */
+.sync__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+
+.sync__dot--on {
+  background: var(--sov);
+}
+
+.sync__name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+.sync__where {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+.sync__code {
+  width: 9ch;
+  flex: none;
+  font-family: var(--font-mono);
+  letter-spacing: 0.18em;
+}
+
+/* The code this device is showing, to be read aloud and typed on the other. */
+.sync__pin {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: rgba(var(--accent-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+}
+
+.sync__pin-code {
+  font-size: var(--fs-xl);
+  letter-spacing: 0.22em;
+  color: var(--ink);
+}
+
+.sync__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sync__bar {
+  height: 6px;
+  border-radius: var(--r-hair);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.sync__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-hair);
+  background: var(--accent);
+  transition: width var(--dur-base) var(--ease);
+}

@@ -20,6 +20,7 @@ pub mod pathfinder;
 pub mod playlist;
 pub mod queue;
 pub mod settings;
+pub mod sync;
 pub mod track;
 pub mod webdav;
 
@@ -36,6 +37,10 @@ pub use queue::{Queue, Repeat};
 pub use settings::{
     RemoteConfig, Settings, ThemeMode, MAX_CACHE_BYTES_DEFAULT, MAX_MANUAL_BPM, MIN_CACHE_BYTES,
     MIN_MANUAL_BPM,
+};
+pub use sync::{
+    reconcile, Advert, Delta, DeviceKind, Manifest, PairOutcome, Pairing, Peer, PeerRegistry,
+    PlaylistRecord, TrackRecord, Trust, TrustedDevice,
 };
 pub use track::{transition_cost, TrackMeta, DEFAULT_ENERGY_THRESHOLD};
 pub use webdav::{is_audio_path, parse_propfind, AUDIO_EXTENSIONS};
