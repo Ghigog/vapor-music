@@ -3,13 +3,17 @@
 //! Mirrors one `AudioStreamPlayer` + its `DeckA`/`DeckB` bus in the Godot
 //! build: source audio, a stretch ratio, an EQ/filter chain, and a gain.
 //!
-//! ## Samples are stored as `i16`
+//! ## Where the audio comes from
 //!
-//! A deck holds a whole decoded track, which makes the sample format the app's
-//! largest memory cost: a five-minute track at 48 kHz is 110 MB as stereo `f32`
-//! and 55 MB as `i16`, and two decks are loaded near a transition. The sources
-//! are lossy AAC and MP3 whose own noise floor sits far above 16 bit, so this
-//! discards nothing that was in the recording.
+//! A deck reads through a [`TrackSource`], which is either a whole decoded
+//! track in memory or a few seconds of window onto one being decoded as it
+//! plays (TD-09). Playback uses the window — 1 MB a deck rather than 55 — and
+//! the offline tools and every alignment test use the whole buffer, which is
+//! what lets a test run the identical mixer over both and compare.
+//!
+//! Samples are stored as `i16` either way: the sources are lossy AAC and MP3
+//! whose own noise floor sits far above 16 bit, so it discards nothing that was
+//! in the recording and halves what it costs to hold.
 //!
 //! The critical structural difference: Godot polled `get_playback_position()`
 //! every frame from three separate `_process` loops and drove bus parameters
@@ -20,6 +24,7 @@
 use crate::biquad::{EqChain, Sweep};
 use crate::clipping::{BandRms, Bands};
 use crate::delay::{Delay, Reverb};
+use crate::source::TrackSource;
 use crate::stretch::Stretcher;
 
 /// Echo Out's delay time — 350 ms, from `feedback_delay_ms`.
@@ -31,7 +36,7 @@ const FREEZE_ROOM: f32 = 0.95;
 const FREEZE_DAMPING: f32 = 0.1;
 
 pub struct Deck {
-    samples: Vec<[i16; 2]>,
+    source: TrackSource,
     sample_rate: f32,
     stretcher: Stretcher,
     eq: EqChain,
@@ -47,6 +52,8 @@ pub struct Deck {
     /// Source frames consumed per output frame. 1.0 = original tempo.
     pub ratio: f64,
     playing: bool,
+    /// The last block came up short because the decoder had not caught up.
+    starved: bool,
 
     /// Three-band level meter, fed the raw signal before EQ and gain so the
     /// clipping guard sees the source level rather than the result of its own
@@ -62,7 +69,7 @@ pub struct Deck {
 impl Deck {
     pub fn new(sample_rate: f32) -> Self {
         Deck {
-            samples: Vec::new(),
+            source: TrackSource::Empty,
             sample_rate,
             stretcher: Stretcher::new(),
             eq: EqChain::new(sample_rate),
@@ -71,6 +78,7 @@ impl Deck {
             gain: 1.0,
             ratio: 1.0,
             playing: false,
+            starved: false,
             meter: BandRms::default(),
             last_rms: Bands::default(),
             clip_atten: Bands::default(),
@@ -78,23 +86,26 @@ impl Deck {
         }
     }
 
+    /// Load a whole decoded track. The offline and test path; playback streams.
     pub fn load(&mut self, samples: Vec<[i16; 2]>) {
-        drop(self.swap_samples(samples));
+        drop(self.swap_source(TrackSource::Memory(samples)));
     }
 
-    /// Replace the loaded audio and hand back the previous buffer.
+    /// Replace the deck's audio and hand back what was there.
     ///
-    /// [`load`](Self::load) drops the old samples where it stands. For a
-    /// player, "where it stands" is the audio callback, and freeing a
-    /// hundred-megabyte buffer there can block on a lock inside the allocator —
-    /// the exact failure MIG-010 exists to prevent, and one that only shows up
-    /// as a dropout at the moment a track changes.
+    /// Dropping the old source where it stands is what a player must not do:
+    /// "where it stands" is the audio callback, and releasing a track's buffer
+    /// there can block on a lock inside the allocator — the exact failure
+    /// MIG-010 exists to prevent, and one that only shows up as a dropout at
+    /// the moment a track changes.
     ///
-    /// Returning it lets the caller move the buffer back to a control thread
-    /// and drop it there. Everything else about the two is identical, so
-    /// `load` is written in terms of this rather than beside it.
-    pub fn swap_samples(&mut self, samples: Vec<[i16; 2]>) -> Vec<[i16; 2]> {
-        let previous = std::mem::replace(&mut self.samples, samples);
+    /// Returning it lets the caller move it to a control thread and drop it
+    /// there. Streaming shrinks the buffer this hands back from tens of
+    /// megabytes to about one, but it does not remove the rule: the window is
+    /// still an allocation, and the decoder thread behind it still has to be
+    /// stopped by someone who is allowed to wait.
+    pub fn swap_source(&mut self, source: TrackSource) -> TrackSource {
+        let previous = std::mem::replace(&mut self.source, source);
         self.stretcher.reset(0.0);
         self.eq.reset();
         // A new track must not inherit the tail of the one before it.
@@ -104,6 +115,7 @@ impl Deck {
         self.last_rms = Bands::default();
         self.clip_atten = Bands::default();
         self.playing = false;
+        self.starved = false;
         previous
     }
 
@@ -151,7 +163,13 @@ impl Deck {
     }
 
     pub fn seek_seconds(&mut self, secs: f64) {
-        self.stretcher.reset(secs * self.sample_rate as f64);
+        let frames = (secs * self.sample_rate as f64).max(0.0);
+        self.stretcher.reset(frames);
+        // A streaming source has to be told: the audio for that position may
+        // not be in the window, and only the decoder thread can fetch it. A
+        // target already inside the window costs nothing, which is what makes a
+        // short scrub gapless.
+        self.source.seek(frames as u64);
         self.eq.reset();
         self.meter.reset();
     }
@@ -161,7 +179,16 @@ impl Deck {
     }
 
     pub fn duration_seconds(&self) -> f64 {
-        self.samples.len() as f64 / self.sample_rate as f64
+        self.source.duration_frames() as f64 / self.sample_rate as f64
+    }
+
+    /// True while the deck is waiting on its decoder rather than playing.
+    ///
+    /// Distinct from being stopped: the deck still intends to play and will
+    /// resume the instant frames arrive. Surfaced so a player can tell the
+    /// difference between "buffering" and "finished" without inferring it.
+    pub fn is_starved(&self) -> bool {
+        self.starved
     }
 
     pub fn set_gain_db(&mut self, db: f32) {
@@ -202,20 +229,34 @@ impl Deck {
     /// Both decks sum into the same buffer, which is what makes the crossfade a
     /// true mix rather than a switch.
     ///
-    /// Returns the number of frames actually produced; a short return means the
-    /// source ran out.
+    /// Returns the number of frames actually produced. A short return means
+    /// either that the track ended — in which case the deck stops — or that its
+    /// decoder is behind, in which case the deck stays exactly where it is and
+    /// picks up on the next block.
     pub fn render_additive(&mut self, out: &mut [[f32; 2]], scratch: &mut [[f32; 2]]) -> usize {
-        if !self.playing || self.samples.is_empty() {
+        if !self.playing || self.source.is_empty() {
             return 0;
         }
 
         let n = out.len().min(scratch.len());
-        let produced = self
-            .stretcher
-            .process(&self.samples, self.ratio, &mut scratch[..n]);
 
+        // Publish before reading, never after: this is what stops the decoder
+        // thread retiring the history the WSOLA search is about to read. See
+        // `source`'s module docs.
+        self.source
+            .publish_read(self.stretcher.source_position() as u64);
+        let view = self.source.view();
+        let rendered = self.stretcher.process(&view, self.ratio, &mut scratch[..n]);
+
+        // Starvation is not the end of a track, and treating it as one would
+        // make the player skip to the next song because a disk read was slow.
+        self.starved = rendered.frames < n && !rendered.ended;
+
+        let produced = rendered.frames;
         if produced == 0 {
-            self.playing = false;
+            if rendered.ended {
+                self.playing = false;
+            }
             return 0;
         }
 
@@ -238,7 +279,7 @@ impl Deck {
             out[i][1] += frame[1] * self.gain;
         }
 
-        if produced < n {
+        if rendered.ended {
             self.playing = false;
         }
         produced

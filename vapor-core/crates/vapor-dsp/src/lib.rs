@@ -15,6 +15,7 @@ pub mod key;
 pub mod loudness;
 pub mod resample;
 pub mod spectrum;
+pub mod stream;
 pub mod tempo;
 
 use std::path::Path;
@@ -136,25 +137,24 @@ pub fn decode_for_playback(
     )))
 }
 
-/// Pack float frames into the deck's storage format.
+/// Pack one float frame into the deck's storage format.
 ///
-/// A deck holds a whole track, so this is the app's largest memory cost: 110 MB
-/// as `f32` for a five-minute track at 48 kHz, 55 MB as `i16`, and two decks are
-/// loaded near a transition. The sources are lossy AAC and MP3 whose noise floor
-/// sits far above 16 bit.
+/// The sources are lossy AAC and MP3 whose own noise floor sits far above 16
+/// bit, so this discards nothing that was in the recording — and it halves what
+/// a deck costs, whether the deck holds a whole track or a few seconds of one.
 ///
 /// Clamped before scaling, so a sample above full scale saturates rather than
 /// wrapping to the opposite sign and turning a hot master into noise.
+#[inline]
+pub fn frame_to_i16(f: [f32; 2]) -> [i16; 2] {
+    [
+        (f[0].clamp(-1.0, 1.0) * 32_768.0).clamp(-32_768.0, 32_767.0) as i16,
+        (f[1].clamp(-1.0, 1.0) * 32_768.0).clamp(-32_768.0, 32_767.0) as i16,
+    ]
+}
+
 fn to_i16(frames: Vec<[f32; 2]>) -> Vec<[i16; 2]> {
-    frames
-        .into_iter()
-        .map(|f| {
-            [
-                (f[0].clamp(-1.0, 1.0) * 32_768.0).clamp(-32_768.0, 32_767.0) as i16,
-                (f[1].clamp(-1.0, 1.0) * 32_768.0).clamp(-32_768.0, 32_767.0) as i16,
-            ]
-        })
-        .collect()
+    frames.into_iter().map(frame_to_i16).collect()
 }
 
 /// Decode bytes into deck-ready stereo frames — the wasm counterpart of

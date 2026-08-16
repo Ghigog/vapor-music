@@ -21,6 +21,9 @@ mod analysis;
 /// device. Nothing outside the crate uses it.
 pub mod audio;
 mod cache;
+/// Public for the same reason as `audio`: the real-time test drives a real
+/// streaming deck rather than a stand-in for one.
+pub mod decoder;
 mod store;
 mod tags;
 mod webdav;
@@ -32,6 +35,7 @@ use store::Store;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
+use vapor_engine::TrackSource;
 use vapor_library::{
     index::{GroupBy, Row, SortKey},
     Curve, PlaylistStore, Queue, Settings, TrackMeta,
@@ -100,6 +104,17 @@ struct AppState {
     /// The track cued on the other deck for a beat-matched mix, if one is
     /// arranged. Cleared when the mix completes or is abandoned.
     armed_next: Option<String>,
+
+    /// The decoder threads feeding the two decks (TD-09).
+    ///
+    /// Held here, on the control side, for two reasons. A decoder that nobody
+    /// holds is never stopped, and would go on filling a window for a track
+    /// that is no longer playing. And dropping one is what joins its thread —
+    /// which must happen somewhere allowed to wait, never on the audio thread.
+    ///
+    /// They swap roles when a transition completes, exactly as the decks do.
+    playing_stream: Option<decoder::Streamer>,
+    next_stream: Option<decoder::Streamer>,
 }
 
 impl AppState {
@@ -156,6 +171,8 @@ impl AppState {
             loading: false,
             playback_error: None,
             armed_next: None,
+            playing_stream: None,
+            next_stream: None,
         }
     }
 
@@ -565,6 +582,10 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     // A mix arranged before this choice is now for the wrong track. The engine
     // cancels its own side when the load lands; this is the shell's half.
     app.armed_next = None;
+    // And its decoder stops with it. Left running it would go on filling a
+    // window for a mix that will never happen, competing for disk and CPU with
+    // the track the person actually asked for.
+    app.next_stream = None;
     player.cancel_transition();
 
     let link = player.link();
@@ -580,27 +601,35 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
             .store(&href, || webdav::fetch_blocking(&remote, &href))
             .map_err(|e| e.to_string())
             .and_then(|path| {
-                // Converted to the device's rate here, once, rather than per
-                // block on the audio thread.
-                vapor_dsp::decode_for_playback(&path, rate).map_err(|e| e.to_string())
+                // A decoder thread and a few seconds of window, rather than the
+                // whole track in memory (TD-09). Returns once there is enough
+                // audio to start, so playback opens with music.
+                decoder::Streamer::start(&path, rate, 0)
             });
 
         let Ok(mut app) = shared.lock() else {
             return;
         };
         if app.generation != generation {
-            // Superseded. Handing these frames to the deck now would interrupt
-            // whatever the person actually chose.
+            // Superseded. Handing this to the deck now would interrupt whatever
+            // the person actually chose — and dropping the streamer here stops
+            // its decoder thread, which is the point of holding one.
             return;
         }
         app.loading = false;
 
         match outcome {
-            Ok(frames) if !frames.is_empty() => {
+            Ok(streamer) if !streamer.is_silent() => {
                 // A refused load means the audio thread has stopped servicing
                 // its queue, which is a dead device rather than a busy one.
                 // Saying so beats a transport that reads "playing" in silence.
-                if !link.load(frames, true) {
+                if link.load(TrackSource::Stream(streamer.window()), true) {
+                    // Held so the decoder keeps running and, more importantly,
+                    // so it is stopped when this track is replaced. Dropping
+                    // the previous one here — on a control thread — is what
+                    // keeps that work off the audio thread.
+                    app.playing_stream = Some(streamer);
+                } else {
                     app.playback_error = Some("The audio device stopped responding.".to_string());
                     app.playing = None;
                 }
@@ -968,7 +997,12 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
             .store(&mix.next, || webdav::fetch_blocking(&remote, &mix.next))
             .map_err(|e| e.to_string())
             .and_then(|path| {
-                vapor_dsp::decode_for_playback(&path, rate).map_err(|e| e.to_string())
+                // Decoded from where the mix will actually start, not from the
+                // top of the track. A transition cues the incoming track
+                // minutes in, and decoding the run-up to it would be the whole
+                // cost that streaming exists to avoid.
+                let from = (mix.incoming_pos as f64 * rate as f64).max(0.0) as u64;
+                decoder::Streamer::start(&path, rate, from)
             });
 
         let Ok(mut app) = shared.lock() else {
@@ -981,8 +1015,8 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
         }
 
         match outcome {
-            Ok(frames) if !frames.is_empty() => {
-                link.preload(frames);
+            Ok(streamer) if !streamer.is_silent() => {
+                link.preload(TrackSource::Stream(streamer.window()));
                 link.schedule_transition(
                     mix.kind,
                     mix.duration,
@@ -991,12 +1025,14 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
                     mix.outgoing_ratio,
                     mix.start_at,
                 );
+                app.next_stream = Some(streamer);
             }
             // Not surfaced. A mix that cannot be arranged is not a failure a
             // person needs to see — the track simply plays to its end and the
             // next one follows, which is what would have happened anyway.
             _ => {
                 app.armed_next = None;
+                app.next_stream = None;
             }
         }
     });
@@ -1112,6 +1148,10 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
                 let from = app.playing.clone();
                 app.queue.next(None);
                 app.playing = app.armed_next.take();
+                // The decoders change roles with the decks. Assigning here also
+                // drops the one feeding the track that just ended, which joins
+                // its thread — on this thread, which is allowed to wait for it.
+                app.playing_stream = app.next_stream.take();
                 // Remember what was blended into what, so a skip in the next
                 // ten seconds can be attributed to this pair (TD-14).
                 if let (Some(from), Some(to)) = (from, app.playing.clone()) {
@@ -2195,6 +2235,11 @@ fn clear_audio_cache(state: State<'_, Shared>) -> Result<u64> {
     app.generation += 1;
     app.loading = false;
     app.armed_next = None;
+    // The cued track's decoder is reading a file that has just been deleted.
+    // The track that is *playing* keeps its decoder: its file handle is already
+    // open, and stopping the music because someone reclaimed disk space would
+    // be a worse answer than letting the song finish.
+    app.next_stream = None;
     if let Some(p) = app.player.as_ref() {
         p.cancel_transition();
     }

@@ -1,26 +1,41 @@
-//! Proof that the shell's audio path does not allocate (TD-03, MIG-010).
+//! Proof that the shell's audio path does not allocate (TD-03, MIG-010, TD-09).
 //!
 //! `vapor-engine` already proves `Mixer::render` is allocation-free. That
 //! guarantee is worth nothing if the plumbing the shell wraps it in allocates,
 //! and this is where the plumbing lives: a command queue drained on the audio
-//! thread, a track buffer displaced at every track change, and the interleave
+//! thread, a track's audio displaced at every track change, and the interleave
 //! into the device's own format.
 //!
 //! The track change is the case that matters and the one inspection misses. A
 //! deck loaded the obvious way frees the previous track's samples where it
-//! stands — tens of megabytes, inside the callback, producing a dropout that
-//! only ever happens at the moment one track becomes the next. That is a bug
-//! nobody reproduces on demand and everybody hears eventually.
+//! stands — inside the callback, producing a dropout that only ever happens at
+//! the moment one track becomes the next. That is a bug nobody reproduces on
+//! demand and everybody hears eventually.
+//!
+//! ## These drive the streaming path, because that is what ships
+//!
+//! Since TD-09 a deck reads through a window that a decoder thread keeps
+//! filled, so the audio thread now shares state with a second thread that
+//! allocates freely. Testing a deck loaded from memory would no longer be
+//! testing the player. Every test here therefore runs a real file through a
+//! real `Streamer`: real decode, real thread, real window.
+//!
+//! The counters being **per thread** is what makes that measurable at all — the
+//! decoder thread allocates constantly and by design, and a process-wide
+//! counter would attribute all of it to the audio thread.
 //!
 //! Same method as `vapor-engine`'s: a counting global allocator, in its own
-//! integration binary so it measures nothing but this — but counting per
-//! thread rather than per process, for the reason recorded below.
+//! integration binary so it measures nothing but this.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use vapor_app_lib::audio::{Engine, Link};
+use vapor_app_lib::decoder::Streamer;
+use vapor_engine::TrackSource;
 
 // The counters are thread-local, not global.
 //
@@ -89,19 +104,59 @@ fn stop_measuring() -> (usize, usize) {
 const RATE: u32 = 44_100;
 const BLOCK: usize = 512;
 
-/// A tone rather than silence, so the limiter and the EQ chain have real signal
-/// to work on rather than a path of zeroes that skips work.
-fn tone(seconds: f32) -> Vec<[i16; 2]> {
-    use vapor_engine::stretch::from_f32;
+/// A tone on disk, rather than silence, so the limiter and the EQ chain have
+/// real signal to work on rather than a path of zeroes that skips work.
+///
+/// A file rather than a buffer because a streaming deck decodes from one, and a
+/// test that fed the window by hand would be testing a stand-in for the player
+/// instead of the player.
+fn tone_file(seconds: f32) -> PathBuf {
+    // A counter, not a timestamp: the clock is too coarse to keep two tests
+    // starting together from colliding on a name.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "vapor-rt-{}-{}.wav",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+
     let n = (seconds * RATE as f32) as usize;
-    (0..n)
-        .map(|i| {
-            let t = i as f32 / RATE as f32;
-            let l = (t * 220.0 * std::f32::consts::TAU).sin() * 0.6;
-            let r = (t * 330.0 * std::f32::consts::TAU).sin() * 0.6;
-            [from_f32(l), from_f32(r)]
-        })
-        .collect()
+    let data_len = (n * 4) as u32;
+    let mut v = Vec::with_capacity(44 + data_len as usize);
+    v.extend_from_slice(b"RIFF");
+    v.extend_from_slice(&(36 + data_len).to_le_bytes());
+    v.extend_from_slice(b"WAVEfmt ");
+    v.extend_from_slice(&16u32.to_le_bytes());
+    v.extend_from_slice(&1u16.to_le_bytes());
+    v.extend_from_slice(&2u16.to_le_bytes());
+    v.extend_from_slice(&RATE.to_le_bytes());
+    v.extend_from_slice(&(RATE * 4).to_le_bytes());
+    v.extend_from_slice(&4u16.to_le_bytes());
+    v.extend_from_slice(&16u16.to_le_bytes());
+    v.extend_from_slice(b"data");
+    v.extend_from_slice(&data_len.to_le_bytes());
+    for i in 0..n {
+        let t = i as f32 / RATE as f32;
+        let l = (t * 220.0 * std::f32::consts::TAU).sin() * 0.6;
+        let r = (t * 330.0 * std::f32::consts::TAU).sin() * 0.6;
+        for s in [l, r] {
+            v.extend_from_slice(&((s * i16::MAX as f32) as i16).to_le_bytes());
+        }
+    }
+
+    std::fs::write(&path, v).expect("write test tone");
+    path
+}
+
+/// A track streaming from disk, exactly as the app plays one.
+///
+/// The returned [`Streamer`] must be kept alive: dropping it stops the decoder
+/// thread, which is the mechanism the shell relies on and would otherwise
+/// silently starve the deck mid-test.
+fn streamed(path: &Path) -> (Streamer, TrackSource) {
+    let streamer = Streamer::start(path, RATE, 0).expect("start decoding");
+    let source = TrackSource::Stream(streamer.window());
+    (streamer, source)
 }
 
 fn setup() -> (Arc<Link>, Engine, Vec<f32>) {
@@ -111,11 +166,18 @@ fn setup() -> (Arc<Link>, Engine, Vec<f32>) {
 }
 
 /// The main claim: steady-state playback allocates and frees nothing.
+///
+/// Streaming makes this a stronger statement than it was. The audio thread now
+/// reads a window a second thread is writing to concurrently, and it does so
+/// through atomics rather than a lock — so this measures the reading half of
+/// that arrangement while the decoder is genuinely running underneath it.
 #[test]
 fn steady_playback_neither_allocates_nor_frees() {
     let (link, mut engine, mut out) = setup();
+    let path = tone_file(20.0);
+    let (_streamer, source) = streamed(&path);
 
-    assert!(link.load(tone(20.0), true));
+    assert!(link.load(source, true));
     // Warm up outside the measurement — the first blocks apply the load and
     // touch lazily initialised state, and a real player would have done so
     // before anyone was listening.
@@ -128,6 +190,7 @@ fn steady_playback_neither_allocates_nor_frees() {
         engine.render(&mut out);
     }
     let (allocs, frees) = stop_measuring();
+    let _ = std::fs::remove_file(&path);
 
     assert_eq!(
         (allocs, frees),
@@ -137,32 +200,42 @@ fn steady_playback_neither_allocates_nor_frees() {
     );
 }
 
-/// The case inspection misses: swapping a track must not free the old buffer on
-/// the audio thread. Loading the naive way would fail exactly here.
+/// The case inspection misses: swapping a track must not free the displaced
+/// audio on the audio thread. Loading the naive way would fail exactly here.
+///
+/// Streaming shrinks what gets displaced from tens of megabytes to about one,
+/// and does not change the rule at all — a `dealloc` takes the same lock
+/// whatever its size.
 #[test]
 fn changing_track_does_not_free_on_the_audio_thread() {
     let (link, mut engine, mut out) = setup();
+    let first = tone_file(10.0);
+    let second = tone_file(10.0);
+    let (_a, source_a) = streamed(&first);
+    let (_b, source_b) = streamed(&second);
 
-    assert!(link.load(tone(10.0), true));
+    assert!(link.load(source_a, true));
     for _ in 0..32 {
         engine.render(&mut out);
     }
 
     // Queued before measuring: enqueueing is the control thread's job and is
     // allowed to allocate. Only the drain is under test.
-    assert!(link.load(tone(10.0), true));
+    assert!(link.load(source_b, true));
 
     measure();
     for _ in 0..8 {
         engine.render(&mut out);
     }
     let (allocs, frees) = stop_measuring();
+    let _ = std::fs::remove_file(&first);
+    let _ = std::fs::remove_file(&second);
 
     assert_eq!(
         (allocs, frees),
         (0, 0),
         "a track change cost {allocs} allocations and {frees} frees on the \
-         audio thread; the displaced buffer must travel back to the control \
+         audio thread; the displaced audio must travel back to the control \
          thread to be dropped there"
     );
 
@@ -174,13 +247,118 @@ fn changing_track_does_not_free_on_the_audio_thread() {
     );
 }
 
+/// A decoder that keeps up produces no gaps.
+///
+/// The trade streaming makes is memory for a deadline, and this is the deadline
+/// half: the deck must be fed continuously from a window a fifth the length of
+/// the track. Counted rather than assumed — `starved_blocks` exists so that a
+/// player which stutters says so instead of being described as fine.
+#[test]
+fn streaming_playback_does_not_starve() {
+    let (link, mut engine, mut out) = setup();
+    let path = tone_file(20.0);
+    let (_streamer, source) = streamed(&path);
+
+    assert!(link.load(source, true));
+
+    // Four seconds of audio, which is more than the five-second window holds at
+    // once — so the decoder has to have refilled it during playback rather than
+    // merely having been ready at the start.
+    let blocks = (RATE as usize * 4) / BLOCK;
+    for _ in 0..blocks {
+        engine.render(&mut out);
+    }
+
+    let snapshot = link.snapshot();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(
+        snapshot.starved_blocks, 0,
+        "the decoder fell behind on {} of {blocks} blocks",
+        snapshot.starved_blocks
+    );
+    let expected = (blocks * BLOCK) as f64 / RATE as f64;
+    assert!(
+        (snapshot.position - expected).abs() < 0.05,
+        "the playhead reached {:.2}s of an expected {expected:.2}s, so audio was missed",
+        snapshot.position
+    );
+}
+
+/// Seeking is served by the decoder thread, and the deck must arrive at the
+/// position asked for rather than somewhere near it.
+///
+/// A seek outside the window costs a short gap, by design: the frames for the
+/// new position do not exist yet, and the deck renders silence rather than
+/// stale audio while its decoder fetches them. That gap is bounded here rather
+/// than assumed away — it is the one audible cost streaming adds, and if it
+/// ever grows this is what says so.
+#[test]
+fn seeking_a_streaming_deck_lands_where_it_was_asked() {
+    let (link, mut engine, mut out) = setup();
+    let path = tone_file(30.0);
+    let (_streamer, source) = streamed(&path);
+
+    assert!(link.load(source, true));
+    for _ in 0..32 {
+        engine.render(&mut out);
+    }
+
+    link.seek(20.0);
+
+    // Long enough for the decoder thread to serve the request and refill. The
+    // sleep is what gives it a chance to: rendering flat out is far faster than
+    // real time, and a player is not.
+    const AFTER: usize = 200;
+    for _ in 0..AFTER {
+        engine.render(&mut out);
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+
+    let snapshot = link.snapshot();
+    let _ = std::fs::remove_file(&path);
+
+    // Playing on from the seek point, so the playhead is the target plus what
+    // was rendered, less whatever was lost to the refill.
+    let played = (AFTER * BLOCK) as f64 / RATE as f64;
+    assert!(
+        snapshot.position >= 20.0,
+        "a seek to 20.0s left the playhead at {:.2}s — it did not move",
+        snapshot.position
+    );
+    assert!(
+        snapshot.position <= 20.0 + played,
+        "the playhead reached {:.2}s, past the {:.2}s that was rendered",
+        snapshot.position,
+        20.0 + played
+    );
+
+    let gap = (20.0 + played) - snapshot.position;
+    assert!(
+        gap < 0.15,
+        "the refill after a seek cost {:.0} ms of silence, which is audible as \
+         a hole rather than as a seek",
+        gap * 1000.0
+    );
+    let counted = snapshot.starved_blocks as f64 * BLOCK as f64 / RATE as f64;
+    assert!(
+        (counted - gap).abs() < 1e-6,
+        "the gap is {:.1} ms but starvation was counted as {:.1} ms, so one of \
+         them is not measuring what it claims",
+        gap * 1000.0,
+        counted * 1000.0
+    );
+}
+
 /// Every transport command runs on the audio thread. All of them must be free
 /// of allocation, not just the common one.
 #[test]
 fn transport_commands_do_not_allocate() {
     let (link, mut engine, mut out) = setup();
+    let path = tone_file(30.0);
+    let (_streamer, source) = streamed(&path);
 
-    assert!(link.load(tone(30.0), true));
+    assert!(link.load(source, true));
     for _ in 0..32 {
         engine.render(&mut out);
     }
@@ -196,6 +374,7 @@ fn transport_commands_do_not_allocate() {
         engine.render(&mut out);
     }
     let (allocs, frees) = stop_measuring();
+    let _ = std::fs::remove_file(&path);
 
     assert_eq!((allocs, frees), (0, 0), "a transport command allocated");
 }
@@ -207,10 +386,14 @@ fn a_finished_track_reports_one_ending() {
     let (link, mut engine, mut out) = setup();
 
     // Shorter than the blocks rendered below, so it is certain to finish.
-    assert!(link.load(tone(0.05), true));
+    let path = tone_file(0.05);
+    let (_streamer, source) = streamed(&path);
+
+    assert!(link.load(source, true));
     for _ in 0..40 {
         engine.render(&mut out);
     }
+    let _ = std::fs::remove_file(&path);
 
     assert!(link.take_ended(), "a finished track reported no ending");
     assert!(!link.take_ended(), "one ending was reported twice");
@@ -222,8 +405,10 @@ fn a_finished_track_reports_one_ending() {
 #[test]
 fn an_empty_callback_is_not_mistaken_for_the_end_of_a_track() {
     let (link, mut engine, mut out) = setup();
+    let path = tone_file(20.0);
+    let (_streamer, source) = streamed(&path);
 
-    assert!(link.load(tone(20.0), true));
+    assert!(link.load(source, true));
     for _ in 0..8 {
         engine.render(&mut out);
     }
@@ -231,6 +416,7 @@ fn an_empty_callback_is_not_mistaken_for_the_end_of_a_track() {
     for _ in 0..8 {
         engine.render(&mut out[..0]);
     }
+    let _ = std::fs::remove_file(&path);
 
     assert!(
         !link.take_ended(),
@@ -243,8 +429,10 @@ fn an_empty_callback_is_not_mistaken_for_the_end_of_a_track() {
 #[test]
 fn pausing_is_not_an_ending() {
     let (link, mut engine, mut out) = setup();
+    let path = tone_file(20.0);
+    let (_streamer, source) = streamed(&path);
 
-    assert!(link.load(tone(20.0), true));
+    assert!(link.load(source, true));
     for _ in 0..8 {
         engine.render(&mut out);
     }
@@ -253,6 +441,7 @@ fn pausing_is_not_an_ending() {
     for _ in 0..8 {
         engine.render(&mut out);
     }
+    let _ = std::fs::remove_file(&path);
 
     assert!(!link.take_ended(), "a pause was reported as an ending");
     assert_eq!(link.snapshot().status, vapor_app_lib::audio::Status::Paused);
@@ -264,15 +453,22 @@ fn pausing_is_not_an_ending() {
 /// one crossed to the audio thread it would have to be freed there. The
 /// alignment is computed on the control side and only two scalars cross, which
 /// is what this measures.
+///
+/// With streaming there are now *two* decoder threads running while this
+/// measures — one per deck, exactly as during a real transition.
 #[test]
 fn arranging_a_mix_does_not_allocate_on_the_audio_thread() {
     use vapor_engine::mixer::BeatGrid;
     use vapor_engine::{Mixer, TransitionType};
 
     let (link, mut engine, mut out) = setup();
+    let outgoing = tone_file(30.0);
+    let incoming = tone_file(30.0);
+    let (_a, source_a) = streamed(&outgoing);
+    let (_b, source_b) = streamed(&incoming);
 
-    assert!(link.load(tone(30.0), true));
-    assert!(link.preload(tone(30.0)));
+    assert!(link.load(source_a, true));
+    assert!(link.preload(source_b));
     for _ in 0..32 {
         engine.render(&mut out);
     }
@@ -294,6 +490,8 @@ fn arranging_a_mix_does_not_allocate_on_the_audio_thread() {
         engine.render(&mut out);
     }
     let (allocs, frees) = stop_measuring();
+    let _ = std::fs::remove_file(&outgoing);
+    let _ = std::fs::remove_file(&incoming);
 
     assert_eq!(
         (allocs, frees),
@@ -317,9 +515,13 @@ fn cancelling_a_mix_leaves_playback_running() {
     use vapor_engine::{Mixer, TransitionType};
 
     let (link, mut engine, mut out) = setup();
+    let outgoing = tone_file(30.0);
+    let incoming = tone_file(30.0);
+    let (_a, source_a) = streamed(&outgoing);
+    let (_b, source_b) = streamed(&incoming);
 
-    assert!(link.load(tone(30.0), true));
-    assert!(link.preload(tone(30.0)));
+    assert!(link.load(source_a, true));
+    assert!(link.preload(source_b));
     for _ in 0..16 {
         engine.render(&mut out);
     }
@@ -341,6 +543,8 @@ fn cancelling_a_mix_leaves_playback_running() {
     for _ in 0..8 {
         engine.render(&mut out);
     }
+    let _ = std::fs::remove_file(&outgoing);
+    let _ = std::fs::remove_file(&incoming);
 
     assert!(!link.transition_armed(), "the mix survived a cancel");
     assert!(!link.take_swapped(), "a cancelled mix reported a swap");

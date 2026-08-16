@@ -51,7 +51,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use serde::Serialize;
 
-use vapor_engine::{Mixer, TransitionType};
+use vapor_engine::{Mixer, TrackSource, TransitionType};
 
 /// Largest block the mixer will render in one callback.
 ///
@@ -99,13 +99,13 @@ enum Command {
     /// Replace the loaded track. `play` starts it immediately, which is what
     /// every caller wants — cueing without playing has no UI yet.
     Load {
-        frames: Vec<[i16; 2]>,
+        source: TrackSource,
         play: bool,
     },
     /// Put the next track on the other deck — silent, cued, ready to be mixed
     /// in. The transition is what makes it audible.
     Preload {
-        frames: Vec<[i16; 2]>,
+        source: TrackSource,
     },
     /// Begin a transition once the outgoing deck reaches `start_at`.
     ///
@@ -136,9 +136,9 @@ enum Command {
 /// The two queues crossing the thread boundary.
 struct Channel {
     to_audio: VecDeque<Command>,
-    /// Track buffers the audio thread has finished with, awaiting a free on the
+    /// Track sources the audio thread has finished with, awaiting a free on the
     /// control thread. See the module docs.
-    retired: VecDeque<Vec<[i16; 2]>>,
+    retired: VecDeque<TrackSource>,
 }
 
 /// Everything shared between the control side and the audio thread.
@@ -174,6 +174,13 @@ pub struct Link {
     /// Callbacks that could not take the command lock. A health signal, not an
     /// error: see the module docs.
     commands_deferred: AtomicU64,
+    /// Blocks that came up short because a decoder had not caught up (TD-09).
+    ///
+    /// Measured for the same reason as `commands_deferred`: streaming trades a
+    /// track held whole in memory for a decoder that has to stay ahead, and the
+    /// honest way to hold that trade is to count how often it does not rather
+    /// than to assume it always does. Nonzero means audible dropouts.
+    starved_blocks: AtomicU64,
     sample_rate: u32,
 }
 
@@ -187,6 +194,7 @@ pub struct Snapshot {
     pub volume: f32,
     pub level: f32,
     pub commands_deferred: u64,
+    pub starved_blocks: u64,
 }
 
 impl Link {
@@ -210,6 +218,7 @@ impl Link {
             volume: AtomicU32::new(1.0f32.to_bits()),
             level: AtomicU32::new(0),
             commands_deferred: AtomicU64::new(0),
+            starved_blocks: AtomicU64::new(0),
             sample_rate,
         }
     }
@@ -229,10 +238,10 @@ impl Link {
     fn send(&self, command: Command) -> bool {
         let (accepted, retired) = {
             let mut channel = self.channel.lock().unwrap_or_else(|e| e.into_inner());
-            // Take the finished buffers out under the lock but drop them
-            // outside it: freeing tens of megabytes while holding the lock
-            // would make the audio thread defer its drain for that whole time.
-            let retired: Vec<Vec<[i16; 2]>> = channel.retired.drain(..).collect();
+            // Take the finished sources out under the lock but drop them
+            // outside it: freeing a track's memory while holding the lock would
+            // make the audio thread defer its drain for that whole time.
+            let retired: Vec<TrackSource> = channel.retired.drain(..).collect();
             let accepted = channel.to_audio.len() < COMMAND_CAPACITY;
             if accepted {
                 channel.to_audio.push_back(command);
@@ -243,14 +252,17 @@ impl Link {
         accepted
     }
 
-    /// Hand a decoded track to the deck and start it.
-    pub fn load(&self, frames: Vec<[i16; 2]>, play: bool) -> bool {
-        self.send(Command::Load { frames, play })
+    /// Hand a track to the deck and start it.
+    ///
+    /// The source is normally a window onto a track being decoded as it plays
+    /// (TD-09), which is why this is cheap however long the track is.
+    pub fn load(&self, source: TrackSource, play: bool) -> bool {
+        self.send(Command::Load { source, play })
     }
 
     /// Cue the next track on the other deck, silent.
-    pub fn preload(&self, frames: Vec<[i16; 2]>) -> bool {
-        self.send(Command::Preload { frames })
+    pub fn preload(&self, source: TrackSource) -> bool {
+        self.send(Command::Preload { source })
     }
 
     /// Arrange a beat-matched mix into the preloaded track.
@@ -327,6 +339,7 @@ impl Link {
             volume: f32::from_bits(self.volume.load(Ordering::Relaxed)),
             level: f32::from_bits(self.level.load(Ordering::Relaxed)),
             commands_deferred: self.commands_deferred.load(Ordering::Relaxed),
+            starved_blocks: self.starved_blocks.load(Ordering::Relaxed),
         }
     }
 
@@ -509,7 +522,16 @@ impl Engine {
         // nothing for the same reason a finished track does, and without this
         // the queue would skip to the next song because a callback came back
         // empty.
-        if self.intent == Intent::Playing && produced == 0 && frames > 0 {
+        //
+        // A starving deck produces nothing for a third reason (TD-09): its
+        // decoder has not caught up. That is not the end of anything, and
+        // reporting it as one would advance the queue mid-song because a disk
+        // read was slow.
+        let starved = self.mixer.outgoing().is_starved();
+        if starved {
+            self.link.starved_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        if self.intent == Intent::Playing && produced == 0 && frames > 0 && !starved {
             self.intent = Intent::Idle;
             self.link
                 .status
@@ -550,8 +572,7 @@ impl Engine {
 
         while let Some(command) = channel.to_audio.pop_front() {
             match command {
-                Command::Load { frames, play } => {
-                    let seconds = frames.len() as f64 / self.link.sample_rate as f64;
+                Command::Load { source, play } => {
                     // An explicit choice outranks a mix arranged before it was
                     // made. Without this, picking a track would be interrupted
                     // seconds later by a transition into something else.
@@ -564,7 +585,8 @@ impl Engine {
                     deck.set_gain_db(0.0);
                     deck.set_eq_db(0.0, 0.0, 0.0);
                     deck.set_sweep(None);
-                    let previous = deck.swap_samples(frames);
+                    let previous = deck.swap_source(source);
+                    let seconds = deck.duration_seconds();
 
                     debug_assert!(
                         channel.retired.len() < channel.retired.capacity(),
@@ -592,7 +614,7 @@ impl Engine {
                     );
                 }
 
-                Command::Preload { frames } => {
+                Command::Preload { source } => {
                     let deck = self.mixer.incoming();
                     // Silent until the transition's envelope raises it. The
                     // mixer's `activate` seeks and sets the ratio, so this only
@@ -602,7 +624,7 @@ impl Engine {
                     deck.set_gain_db(-60.0);
                     deck.set_eq_db(0.0, 0.0, 0.0);
                     deck.set_sweep(None);
-                    let previous = deck.swap_samples(frames);
+                    let previous = deck.swap_source(source);
 
                     debug_assert!(
                         channel.retired.len() < channel.retired.capacity(),
@@ -783,13 +805,13 @@ where
 mod tests {
     use super::*;
 
-    fn frames(n: usize, value: f32) -> Vec<[i16; 2]> {
+    fn frames(n: usize, value: f32) -> TrackSource {
         let q = vapor_engine::stretch::from_f32(value);
-        vec![[q, q / 2]; n]
+        TrackSource::Memory(vec![[q, q / 2]; n])
     }
 
     /// The invariant the module depends on: the audio thread can retire a
-    /// buffer per queued command without the deque ever growing.
+    /// source per queued command without the deque ever growing.
     #[test]
     fn the_retired_queue_cannot_grow_within_one_drain() {
         let link = Link::new(44_100);
@@ -799,7 +821,7 @@ mod tests {
         let channel = link.channel.lock().expect("lock");
         assert!(
             channel.retired.capacity() >= channel.to_audio.len(),
-            "a full command queue could retire more buffers than the deque holds"
+            "a full command queue could retire more sources than the deque holds"
         );
     }
 
@@ -817,9 +839,9 @@ mod tests {
     }
 
     /// Sending frees whatever the audio thread handed back — that is the whole
-    /// reason retired buffers travel back rather than being dropped in place.
+    /// reason retired sources travel back rather than being dropped in place.
     #[test]
-    fn sending_a_command_clears_retired_buffers() {
+    fn sending_a_command_clears_retired_sources() {
         let link = Link::new(44_100);
         link.channel
             .lock()
@@ -831,7 +853,7 @@ mod tests {
 
         assert!(
             link.channel.lock().expect("lock").retired.is_empty(),
-            "a retired buffer was left for the audio thread to free"
+            "a retired source was left for the audio thread to free"
         );
     }
 

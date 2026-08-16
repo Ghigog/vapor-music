@@ -159,12 +159,12 @@ pub fn decode_bytes_to_stereo(
 }
 
 /// A media source plus the format hint that goes with it.
-struct Source {
+pub(crate) struct Source {
     mss: MediaSourceStream,
     hint: Hint,
 }
 
-fn source_from_path(path: &Path) -> Result<Source, DecodeError> {
+pub(crate) fn source_from_path(path: &Path) -> Result<Source, DecodeError> {
     let file = File::open(path).map_err(|e| DecodeError::Io(e.to_string()))?;
     Ok(Source {
         mss: MediaSourceStream::new(Box::new(file), Default::default()),
@@ -188,9 +188,23 @@ fn hint_from_extension(ext: Option<&str>) -> Hint {
     hint
 }
 
-/// Decode everything in `source` into `sink`, returning the sample rate and the
-/// source's channel count.
-fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), DecodeError> {
+/// A probed file: the reader, its decoder, and what the container claims.
+///
+/// Shared by the whole-file decode below and by [`crate::stream`], so both
+/// reach the audio through exactly the same probe options. That matters more
+/// than saving a few lines: `enable_gapless` shifts where sample zero is, and
+/// a playback path that disagreed with the analysis path about that would
+/// place every beat in the grid slightly wrong.
+pub(crate) struct Opened {
+    pub(crate) format: Box<dyn symphonia::core::formats::FormatReader>,
+    pub(crate) decoder: Box<dyn symphonia::core::codecs::Decoder>,
+    pub(crate) track_id: u32,
+    pub(crate) sample_rate: u32,
+    /// Frames the container declares, when it declares any.
+    pub(crate) n_frames: Option<u64>,
+}
+
+pub(crate) fn open(source: Source) -> Result<Opened, DecodeError> {
     let Source { mss, hint } = source;
     let probed = symphonia::default::get_probe()
         .format(
@@ -204,7 +218,7 @@ fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), 
         )
         .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
 
-    let mut format = probed.format;
+    let format = probed.format;
 
     let track = format
         .tracks()
@@ -212,12 +226,33 @@ fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), 
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .ok_or_else(|| DecodeError::Unsupported("no decodable audio track".into()))?;
     let track_id = track.id;
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
+    let n_frames = track.codec_params.n_frames;
 
-    let mut decoder = symphonia::default::get_codecs()
+    let decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
 
-    let mut sample_rate = track.codec_params.sample_rate.unwrap_or(0);
+    Ok(Opened {
+        format,
+        decoder,
+        track_id,
+        sample_rate,
+        n_frames,
+    })
+}
+
+/// Decode everything in `source` into `sink`, returning the sample rate and the
+/// source's channel count.
+fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), DecodeError> {
+    let Opened {
+        mut format,
+        mut decoder,
+        track_id,
+        mut sample_rate,
+        ..
+    } = open(source)?;
+
     let mut channels = 0usize;
     let mut frames = 0usize;
 
@@ -266,7 +301,7 @@ fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), 
 /// A trait rather than one decode loop per output shape. Both implementations
 /// are monomorphised, so the abstraction costs nothing at run time — which
 /// matters, because the mono path runs over a whole library.
-trait Sink {
+pub(crate) trait Sink {
     fn reserve(&mut self, frames: usize);
     /// Accept one frame. `get(c)` reads channel `c`, already converted to f32.
     fn frame<F: Fn(usize) -> f32>(&mut self, channels: usize, get: F);
@@ -300,7 +335,7 @@ impl Sink for Mono<'_> {
 /// image and make a 5.1 music mix sound like a bad mono fold-down. The one
 /// multichannel family in the real library is Dolby Atmos, which Symphonia
 /// cannot decode at all (TD-05), so this path is presently theoretical.
-struct Stereo<'a>(&'a mut Vec<[f32; 2]>);
+pub(crate) struct Stereo<'a>(pub(crate) &'a mut Vec<[f32; 2]>);
 
 impl Sink for Stereo<'_> {
     fn reserve(&mut self, frames: usize) {
@@ -319,7 +354,7 @@ impl Sink for Stereo<'_> {
 
 /// Feed one decoded buffer to a sink, converting whatever sample format the
 /// codec produced.
-fn append<S: Sink>(buf: &AudioBufferRef<'_>, out: &mut S) {
+pub(crate) fn append<S: Sink>(buf: &AudioBufferRef<'_>, out: &mut S) {
     macro_rules! feed {
         ($b:expr, $conv:expr) => {{
             let b = $b;

@@ -741,6 +741,124 @@ and the shell always picks Standard Crossfade, because nothing ports the Godot
 build's per-context selection — which also means every mix inherits that
 envelope's ~3 dB midpoint dip (TD-23). New item TD-27.
 
+### A deck stops costing the length of its track (TD-09)
+
+A deck held its whole decoded track: 55 MB for five minutes, 110 MB with a
+second deck cued for a transition, and no upper bound at all — a two-hour set
+cost two hours of memory. It now reads a five-second window that a decoder
+thread keeps filled.
+
+| | Before | After |
+|---|---|---|
+| Five-minute track | 55 MB | **1 MiB** |
+| Two decks at a transition | 110 MB | **2 MiB** |
+| Two-hour DJ set | 1.4 GB | **1 MiB** |
+
+The window is 262,144 frames — five seconds at 48 kHz rounded up to a power of
+two — at four bytes a frame. It is a constant, which is the property that
+matters: length is no longer a variable in what the app costs.
+
+**This was a port, not an invention.** `AudioDSP` in `src/audio_dsp.cpp` already
+streamed: `load_cache_at` held a five-second window, a background thread
+refilled it, and `seek_pos` moved it. Grepping first is what produced the
+five-second figure and the shape of the seek handshake, rather than a number
+picked because it sounded reasonable. Two of its decisions were **not** carried
+over:
+
+* It **re-opened the file for every window**, with a fresh `EasyLoader` and a
+  `startTime`/`endTime`. Sequential playback does not need that. The decoder
+  here stays open and keeps going, so only a real seek costs a seek.
+* It **loaded anything under 900 s whole anyway** — which is every track in the
+  library. The streaming path existed but never ran for music, only for DJ sets.
+  There is no length exception here.
+
+#### Why the source is a window and not a queue
+
+The obvious streaming structure is a ring the consumer pops from. It cannot work
+here, and the reason is the stretcher: WSOLA picks its splice point by searching
+±256 frames around the read position for the offset that best correlates with
+what it has already emitted. **It reads backwards.** A queue that hands out each
+frame once and forgets it cannot answer that, and a stretcher that cannot search
+clicks every 23 ms.
+
+So frames are addressed by absolute position in the track — the same number the
+beat grid and the transition scheduler already use — and the window keeps 8192
+frames behind the playhead. The consumer publishes where it is reading before it
+reads, and the producer never retires anything newer than `read - HISTORY`, so a
+view can be snapshotted once per block and indexed with plain bounds checks
+rather than re-validated per sample.
+
+Addressing frames absolutely paid off twice more. A seek that lands *inside* the
+window needs no refill at all, because the frames already there are the frames
+for those positions — so scrubbing a few seconds is gapless where the Godot
+original flushed and re-decoded every time. And the same property let the whole
+thing be tested against the old path directly.
+
+#### No locks, and no `unsafe` either
+
+The audio thread may not block, so the window cannot be a `Mutex<Vec<_>>`; the
+usual answer is a hand-written ring with `UnsafeCell` and raw pointers. Storing
+each stereo frame as one `AtomicU32` avoids both — two `i16`s pack into 32 bits
+exactly, relaxed atomic loads compile to plain loads, and it costs the same four
+bytes a frame the `Vec` did. The crate still contains no `unsafe` outside its
+test allocators.
+
+#### The distinction the whole thing turns on
+
+Before streaming, a deck running out of frames had one possible meaning. Now it
+has two, and they are nothing alike:
+
+* **The track ended.** The deck stops and the player moves on.
+* **The decoder is behind.** The deck holds its position and picks up on the
+  next block.
+
+Conflating them makes a player skip to the next song because a disk read was
+slow. `Stretcher::process` therefore returns both a frame count and whether the
+source is genuinely exhausted, and `Engine::render` consults `Deck::is_starved`
+before reporting an ending. Starvation is also *counted*
+(`Snapshot::starved_blocks`), for the same reason `commands_deferred` is:
+streaming trades memory for a deadline, and the honest way to hold that trade is
+to measure how often the deadline is missed rather than to assume it never is.
+
+#### What was measured
+
+The claim that matters is that nothing changed except the memory, and it is
+asserted rather than argued:
+
+| Property | How |
+|---|---|
+| Streamed audio **is** the loaded audio | Sample-for-sample equality against `decode_for_playback`, at matching rate and across a 44.1→48 kHz conversion |
+| Stretching through a window **is** stretching a whole buffer | Bit-identical output through a window sized to wrap many times during the comparison |
+| Chunk boundaries are invisible | The rate conversion is bit-identical however the input is divided, including 1-frame chunks |
+| The audio thread still neither allocates nor frees | Both counting-allocator suites now drive real files through real decoder threads, including two at once during a mix |
+| A decoder that keeps up leaves no gaps | Four seconds played from a five-second window: zero starved blocks, playhead exactly where it should be |
+
+The rate conversion needed a stateful resampler, because the 32-tap kernel
+reaches past the end of every chunk and treating that as silence would notch the
+audio at the chunk rate — a buzz, not a subtlety. Rather than write a second
+converter, the existing whole-buffer `resample` is now *implemented as* the
+streaming one fed everything at once, so the two cannot drift apart and the six
+existing resampler tests exercise the streaming path too. Same reasoning as the
+one `Sink` behind both decode outputs.
+
+#### What this costs, stated plainly
+
+* **A seek outside the window is a short gap**, because the frames for the new
+  position do not exist yet and the deck renders silence rather than stale
+  audio. Measured at 23 ms — two blocks — on a local file; the test fails above
+  150 ms. A seek *inside* the window is gapless.
+* **The Godot build blocked the caller on a condition variable until a seek was
+  served.** That is the right shape on the wrong thread: here the caller is the
+  audio callback. The waiting moved to where blocking is legal — the control
+  thread waits for one second of audio before a track starts, so playback opens
+  with music.
+* **Analysis still decodes whole tracks**, and should: beat tracking needs the
+  entire onset function. That is a transient batch cost on a control thread, not
+  a deck holding a track for the length of a song.
+* **The browser has no threads to spawn**, so the decoder thread is the shell's
+  and the wasm build will need its own producer against the same window. Folded
+  into MIG-013.
+
 ### Phase 5 — Retire
 
 Archive the Godot tree on a branch. Do not delete it until the new app has run
@@ -901,7 +1019,7 @@ resolved by, not when it must be started.
 | ~~MIG-010~~ | ~~Real-time-safe audio thread discipline.~~ **Done** — `Mixer::render` is allocation-free, *asserted* by a counting allocator (0 allocations across a transition and glide) rather than by inspection. `play` renders inside the audio callback. Transitions are scheduled ahead via `schedule_transition`, keeping the fallible decision off the audio thread. **Extended in phase 4** to the shell's audio path, which also counts frees — a track change displaces a ~106 MB buffer and must not release it on the audio thread. Both counters are now per thread; the process-wide version was measuring the test harness. | 2 | Risks |
 | MIG-011 | Validate `cpal` on Android and iOS **early**, on device. Less battle-tested than desktop; discovering this in phase 4 is too late. The shell now opens a real device (TD-03), but on macOS desktop only — the mobile question is untouched. | 2 | Risks |
 | MIG-012 | Choose the time-stretch library on measured quality: `signalsmith-stretch` (MIT) vs Rubber Band single-file (GPL). | 2 | Open decision 3 |
-| MIG-013 | Verify the wasm audio path end to end — the crate compiles for wasm, but AudioWorklet integration is unexercised. | 4 | Spike limits |
+| MIG-013 | Verify the wasm audio path end to end — the crate compiles for wasm, but AudioWorklet integration is unexercised. **Now also covers streaming**: `vapor_engine::source::Window` is portable, but the thread that fills it is the shell's, so the browser needs its own producer (a Worker) against the same window. | 4 | Spike limits, TD-09 |
 
 ### Mobile and platform
 

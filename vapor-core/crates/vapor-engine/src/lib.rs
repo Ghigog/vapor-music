@@ -24,8 +24,10 @@ pub mod delay;
 pub mod limiter;
 pub mod mixer;
 pub mod offline;
+pub mod source;
 pub mod stretch;
 pub mod transition;
 
 pub use mixer::{BeatGrid, MatchError, Mixer};
+pub use source::{TrackSource, Window};
 pub use transition::{Transition, TransitionType};
