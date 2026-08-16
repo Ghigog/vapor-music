@@ -252,6 +252,70 @@ impl Fetcher {
             .map(|b| b.to_vec())
             .map_err(|e| e.to_string())
     }
+
+    /// Fetch one file, treating "not there" as an answer rather than an error.
+    ///
+    /// The shared document (SYNC-006) does not exist until some device writes
+    /// one, and a first sync from a library that has never been synced is the
+    /// normal case — not a failure to report.
+    pub fn fetch_optional(&self, href: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+        let response = self
+            .client
+            .get(format!("{}{href}", self.origin))
+            .header("Authorization", self.auth.clone())
+            .send()
+            .map_err(|e| e.to_string())?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(format!("server returned {}", response.status()));
+        }
+        response
+            .bytes()
+            .map(|b| Some(b.to_vec()))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Write one file, replacing whatever was there.
+    ///
+    /// A plain PUT. WebDAV has locking, and this deliberately does not use it:
+    /// two devices writing the shared document at the same instant is a race
+    /// that lock support on the server may or may not exist to solve, and the
+    /// merge is additive precisely so that losing one write costs nothing
+    /// permanent — the next sync from that device puts its contents back.
+    pub fn put(&self, href: &str, bytes: Vec<u8>) -> std::result::Result<(), String> {
+        let response = self
+            .client
+            .put(format!("{}{href}", self.origin))
+            .header("Authorization", self.auth.clone())
+            .body(bytes)
+            .send()
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "the server refused to store it ({})",
+                response.status()
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Where the shared document lives, under the library's own folder.
+///
+/// Beside the music rather than in a hidden corner: a person who opens their
+/// storage should be able to see everything the app put there, which is the
+/// same reason `Your data` lists the local files.
+pub fn shared_document_href(base_folder: &str) -> String {
+    let trimmed = base_folder.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/vapor_metadata.json".to_string()
+    } else {
+        format!("{trimmed}/vapor_metadata.json")
+    }
 }
 
 /// Fetch a single file.

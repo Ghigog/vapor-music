@@ -438,6 +438,27 @@ export function syncWith(peerId: string, what?: SyncWhat): Promise<void> {
   return invoke<void>("sync_with", { peerId, what: what ?? null });
 }
 
+/** What a round trip to the shared document on the server changed. */
+export interface SharedSyncResult {
+  playlistsAdded: number;
+  playlistsExtended: number;
+  foldersAdded: number;
+  temposAdded: number;
+  /** True when there was none there and this device wrote the first. */
+  created: boolean;
+}
+
+/**
+ * Pull the shared document from the server, merge it in, and push it back.
+ *
+ * One call does both halves: pulling without pushing leaves this device's
+ * playlists invisible to every other one, and pushing without pulling
+ * overwrites theirs.
+ */
+export function syncSharedDocument(): Promise<SharedSyncResult> {
+  return invoke<SharedSyncResult>("sync_shared_document");
+}
+
 // --- Playlist folders -------------------------------------------------------
 
 export function playlistFolders(): Promise<Folder[]> {

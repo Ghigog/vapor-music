@@ -178,7 +178,9 @@ impl GroupStore {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+// `PartialEq` so the shared document (SYNC-006) can be compared — a round
+// trip that cannot be asserted is a serialisation format nobody checked.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: String,
     pub name: String,

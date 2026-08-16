@@ -48,6 +48,8 @@ export interface FakeOptions {
   peers?: core.SyncPeer[];
   /** Devices already paired with. */
   trustedPeers?: core.TrustedDevice[];
+  /** Playlists already in the shared document on the server (SYNC-006). */
+  sharedDocument?: core.Playlist[];
   /**
    * Folders the scan cannot read and walks past (TD-49). The real backend
    * counts them and reports them; this is how a test reaches that sentence.
@@ -194,6 +196,8 @@ export class FakeBackend {
   private trusted: core.TrustedDevice[];
   private pairing: { peerId: string; pin: string } | null = null;
   private syncing: core.SyncProgress | null = null;
+  /** The shared document on the fake server, or null when there is none. */
+  private sharedDocument: core.Playlist[] | null;
 
   private syncView(): core.SyncView {
     return {
@@ -261,6 +265,7 @@ export class FakeBackend {
     this.lyricsFor = options.lyrics ?? {};
     this.peers = options.peers ?? [];
     this.trusted = options.trustedPeers ?? [];
+    this.sharedDocument = options.sharedDocument ?? null;
     this.keychainSilentlyFails = options.keychainSilentlyFails ?? false;
     // A store that never keeps anything cannot already be holding something.
     // Seeding a password here made `keychainSilentlyFails` unobservable: the
@@ -678,6 +683,31 @@ export class FakeBackend {
           error: "",
         };
         return null;
+      }
+
+      case "sync_shared_document": {
+        if (!this.settings.remote.url || !this.settings.remote.username) {
+          throw new Error("No server is configured, so there is nowhere to keep it.");
+        }
+        // Additive, as the real merge is: a playlist the server has and this
+        // device does not, and nothing removed.
+        const created = !this.sharedDocument;
+        const incoming = this.sharedDocument ?? [];
+        let added = 0;
+        for (const list of incoming) {
+          if (!this.playlists.some((p) => p.id === list.id)) {
+            this.playlists = [...this.playlists, list];
+            added += 1;
+          }
+        }
+        this.sharedDocument = this.playlists;
+        return {
+          playlistsAdded: added,
+          playlistsExtended: 0,
+          foldersAdded: 0,
+          temposAdded: 0,
+          created,
+        };
       }
 
       case "playlist_folders":

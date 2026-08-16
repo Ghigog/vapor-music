@@ -504,6 +504,121 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// SYNC-006 — the document kept on the WebDAV server
+// ---------------------------------------------------------------------------
+
+/// What every device agrees on, kept as one file beside the music.
+///
+/// The library is already in the owner's own storage, so the obvious place for
+/// "which playlists exist" is next to it. A device that can read the music can
+/// read this; one that cannot has no business with either.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shared {
+    /// Bumped when the shape changes, so an older build refuses a document it
+    /// would otherwise half-understand.
+    pub version: u32,
+    /// Which device wrote it last, and when.
+    pub written_by: String,
+    pub updated: Millis,
+    #[serde(default)]
+    pub playlists: Vec<crate::playlist::Playlist>,
+    #[serde(default)]
+    pub folders: Vec<crate::group::Folder>,
+    /// Tempo corrections, keyed by href. A person's own claim about a track
+    /// (TD-10), and the thing most worth carrying between devices — it is the
+    /// one piece of analysis a human typed rather than a machine measured.
+    #[serde(default)]
+    pub bpm_overrides: std::collections::HashMap<String, f32>,
+}
+
+/// The current shape of [`Shared`].
+pub const SHARED_VERSION: u32 = 1;
+
+/// What a merge changed, for the screen to report.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MergeReport {
+    pub playlists_added: usize,
+    pub playlists_extended: usize,
+    pub folders_added: usize,
+    pub tempos_added: usize,
+}
+
+impl MergeReport {
+    pub fn is_empty(&self) -> bool {
+        *self == MergeReport::default()
+    }
+}
+
+/// Fold a document from the server into what this device holds.
+///
+/// **Additive, deliberately.** Nothing is deleted and nothing is overwritten:
+/// a playlist absent here is taken, a playlist present here gains any tracks
+/// it was missing, and a tempo correction is accepted only where this device
+/// has none of its own.
+///
+/// The alternative — last writer wins per record — needs a modification time
+/// on every playlist, and without one it degrades into "whichever device
+/// synced most recently is right", which loses work silently. Additive merge
+/// cannot lose anything, converges in one pass, and is the same answer
+/// whichever order two devices sync in.
+///
+/// The cost is real and worth stating: **a deletion does not travel.** Remove
+/// a playlist on the laptop and it comes back the next time the phone writes
+/// the document. That is recorded rather than hidden, and the fix is a
+/// tombstone with a timestamp, which is a schema change.
+pub fn merge_shared(
+    playlists: &mut crate::playlist::PlaylistStore,
+    folders: &mut crate::group::FolderStore,
+    overrides: &mut std::collections::HashMap<String, f32>,
+    remote: &Shared,
+) -> MergeReport {
+    let mut report = MergeReport::default();
+
+    for folder in &remote.folders {
+        if folders.get(&folder.id).is_none() {
+            folders.create(folder.id.clone(), folder.name.clone(), folder.parent_id.clone());
+            report.folders_added += 1;
+        }
+    }
+
+    for incoming in &remote.playlists {
+        match playlists.get(&incoming.id) {
+            None => {
+                playlists.create_in_folder(
+                    incoming.id.clone(),
+                    incoming.name.clone(),
+                    incoming.folder_id.clone(),
+                );
+                let added = playlists.add_tracks(&incoming.id, &incoming.tracks);
+                let _ = added;
+                report.playlists_added += 1;
+            }
+            Some(_) => {
+                // `add_tracks` skips what is already there and returns how
+                // many actually landed, which is exactly the question here.
+                let added = playlists.add_tracks(&incoming.id, &incoming.tracks);
+                if added > 0 {
+                    report.playlists_extended += 1;
+                }
+            }
+        }
+    }
+
+    for (href, bpm) in &remote.bpm_overrides {
+        // A correction typed on this device is not overruled by one from
+        // elsewhere. Two people disagreeing about a tempo is a real thing, and
+        // the one sitting in front of this machine wins on this machine.
+        if !overrides.contains_key(href) && bpm.is_finite() && *bpm > 0.0 {
+            overrides.insert(href.clone(), *bpm);
+            report.tempos_added += 1;
+        }
+    }
+
+    report
+}
+
+// ---------------------------------------------------------------------------
 // SYNC-004 — transfer
 // ---------------------------------------------------------------------------
 
@@ -847,6 +962,161 @@ mod tests {
             digest(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    // --- The shared document (SYNC-006) ------------------------------------
+
+    use crate::group::FolderStore;
+    use crate::playlist::PlaylistStore;
+
+    fn shared_with(playlists: Vec<(&str, &str, Vec<&str>)>) -> Shared {
+        let mut store = PlaylistStore::new();
+        for (id, name, tracks) in playlists {
+            store.create(id, name);
+            let hrefs: Vec<String> = tracks.iter().map(|t| t.to_string()).collect();
+            store.add_tracks(id, &hrefs);
+        }
+        Shared {
+            version: SHARED_VERSION,
+            written_by: "other-device".into(),
+            updated: 10,
+            playlists: store.all().to_vec(),
+            folders: Vec::new(),
+            bpm_overrides: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_playlist_only_the_server_has_arrives() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a", "/b.m4a"])]);
+
+        let report = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+
+        assert_eq!(report.playlists_added, 1);
+        let landed = playlists.get("p1").expect("arrived");
+        assert_eq!(landed.name, "Late Night");
+        assert_eq!(landed.tracks.len(), 2);
+    }
+
+    /// Additive on contents too: a playlist edited on both devices ends up
+    /// with both edits rather than one of them.
+    #[test]
+    fn a_playlist_edited_on_both_devices_keeps_both_edits() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("p1", "Late Night");
+        playlists.add_tracks("p1", &["/here.m4a".to_string()]);
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+
+        let remote = shared_with(vec![("p1", "Late Night", vec!["/there.m4a"])]);
+        let report = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+
+        assert_eq!(report.playlists_extended, 1);
+        let merged = playlists.get("p1").expect("still here");
+        assert!(merged.tracks.contains(&"/here.m4a".to_string()));
+        assert!(merged.tracks.contains(&"/there.m4a".to_string()));
+    }
+
+    /// Merging twice must not keep reporting changes, or the screen tells a
+    /// person something happened every time they open the app.
+    #[test]
+    fn merging_the_same_document_twice_changes_nothing_the_second_time() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
+
+        merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+        let again = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(playlists.all().len(), 1);
+        assert_eq!(playlists.get("p1").unwrap().tracks.len(), 1);
+    }
+
+    /// Two people disagreeing about a tempo is a real thing, and the one
+    /// sitting in front of this machine wins on this machine.
+    #[test]
+    fn a_local_tempo_correction_is_not_overruled_by_a_remote_one() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("/a.m4a".to_string(), 128.0);
+
+        let mut remote = shared_with(vec![]);
+        remote.bpm_overrides.insert("/a.m4a".into(), 64.0);
+        remote.bpm_overrides.insert("/b.m4a".into(), 140.0);
+
+        let report = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+
+        assert_eq!(overrides["/a.m4a"], 128.0, "mine stands");
+        assert_eq!(overrides["/b.m4a"], 140.0, "theirs fills a gap");
+        assert_eq!(report.tempos_added, 1);
+    }
+
+    /// A corrupt or hostile document must not be able to poison the settings
+    /// file — `f32::INFINITY` survives a `> 0.0` check and serialises as
+    /// `null`, which loses the whole file on the next read (see MAX_MANUAL_BPM).
+    #[test]
+    fn a_tempo_that_is_not_a_number_is_not_taken() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.bpm_overrides.insert("/a.m4a".into(), f32::INFINITY);
+        remote.bpm_overrides.insert("/b.m4a".into(), f32::NAN);
+        remote.bpm_overrides.insert("/c.m4a".into(), -5.0);
+
+        merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+
+        assert!(overrides.is_empty(), "{overrides:?}");
+    }
+
+    #[test]
+    fn a_folder_only_the_server_has_arrives_once() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.folders.push(crate::group::Folder {
+            id: "f1".into(),
+            name: "Sets".into(),
+            parent_id: String::new(),
+        });
+
+        assert_eq!(
+            merge_shared(&mut playlists, &mut folders, &mut overrides, &remote).folders_added,
+            1
+        );
+        assert_eq!(
+            merge_shared(&mut playlists, &mut folders, &mut overrides, &remote).folders_added,
+            0
+        );
+        assert_eq!(folders.all().len(), 1);
+    }
+
+    #[test]
+    fn the_shared_document_round_trips_through_json() {
+        let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
+        let text = serde_json::to_string(&remote).expect("write");
+
+        assert_eq!(serde_json::from_str::<Shared>(&text).expect("read"), remote);
+    }
+
+    /// A document from an older build, missing every optional field, must
+    /// still open — the alternative is a sync that stops working on upgrade.
+    #[test]
+    fn a_document_with_only_its_header_still_reads() {
+        let bare = r#"{"version":1,"writtenBy":"x","updated":5}"#;
+
+        let parsed: Shared = serde_json::from_str(bare).expect("read");
+        assert!(parsed.playlists.is_empty());
+        assert!(parsed.bpm_overrides.is_empty());
     }
 
     // --- Transfer ----------------------------------------------------------

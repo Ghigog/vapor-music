@@ -1386,6 +1386,126 @@ fn pull_track(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// SYNC-006 — the shared document on the WebDAV server
+// ---------------------------------------------------------------------------
+
+/// What a round trip to the server changed.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SharedSyncResult {
+    playlists_added: usize,
+    playlists_extended: usize,
+    folders_added: usize,
+    tempos_added: usize,
+    /// True when there was no document there and this device wrote the first.
+    created: bool,
+}
+
+/// This device's contribution to the shared document.
+fn shared_document(app: &AppState) -> vapor_library::sync::Shared {
+    vapor_library::sync::Shared {
+        version: vapor_library::sync::SHARED_VERSION,
+        written_by: app.device_id.clone(),
+        updated: peers::now(),
+        playlists: app.playlists.all().to_vec(),
+        folders: app.folders.all().to_vec(),
+        bpm_overrides: app.settings.bpm_overrides.clone(),
+    }
+}
+
+/// Pull the shared document, merge it in, and push the result back.
+///
+/// One round trip does both halves on purpose. Pulling without pushing leaves
+/// this device's playlists invisible to every other one; pushing without
+/// pulling overwrites theirs. Doing them separately means a person has to know
+/// to do both, in the right order.
+#[tauri::command]
+fn sync_shared_document(state: State<'_, Shared>) -> Result<SharedSyncResult> {
+    let (remote_config, href) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        if !app.settings.remote.is_configured() {
+            return Err(Error(
+                "No server is configured, so there is nowhere to keep it.".to_string(),
+            ));
+        }
+        (
+            app.settings.remote.clone(),
+            webdav::shared_document_href(&app.settings.remote.folder),
+        )
+    };
+
+    // Built outside the lock: it reads the keychain and opens a client.
+    let fetcher = webdav::Fetcher::new(&remote_config).map_err(Error)?;
+    let existing = fetcher.fetch_optional(&href).map_err(Error)?;
+
+    let mut result = SharedSyncResult {
+        created: existing.is_none(),
+        ..Default::default()
+    };
+
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    if let Some(bytes) = existing {
+        let incoming: vapor_library::sync::Shared =
+            serde_json::from_slice(&bytes).map_err(|e| {
+                // Deliberately not overwritten with a fresh one. A document this
+                // build cannot read may be one a newer build wrote, and replacing
+                // it would delete another device's playlists to fix a parse error.
+                Error(format!(
+                    "The file on the server could not be read, so nothing was changed: {e}"
+                ))
+            })?;
+
+        if incoming.version > vapor_library::sync::SHARED_VERSION {
+            return Err(Error(
+                "That file was written by a newer version of Vapor. Update this device before \
+                 syncing, or it would write back less than it read."
+                    .to_string(),
+            ));
+        }
+
+        let AppState {
+            playlists,
+            folders,
+            settings,
+            ..
+        } = &mut *app;
+        let report = vapor_library::sync::merge_shared(
+            playlists,
+            folders,
+            &mut settings.bpm_overrides,
+            &incoming,
+        );
+        result.playlists_added = report.playlists_added;
+        result.playlists_extended = report.playlists_extended;
+        result.folders_added = report.folders_added;
+        result.tempos_added = report.tempos_added;
+
+        if !report.is_empty() {
+            app.save_playlists()?;
+            app.save_folders()?;
+            app.save_settings()?;
+            // A merged playlist changes what the rows mean, and a corrected
+            // tempo changes what the table shows.
+            let overrides = app.settings.bpm_overrides.clone();
+            for row in app.rows.iter_mut() {
+                if let Some(bpm) = overrides.get(&row.href) {
+                    row.bpm = *bpm;
+                }
+            }
+        }
+    }
+
+    let outgoing = shared_document(&app);
+    drop(app);
+
+    let bytes = serde_json::to_vec_pretty(&outgoing).map_err(|e| Error(e.to_string()))?;
+    fetcher.put(&href, bytes).map_err(Error)?;
+
+    Ok(result)
+}
+
 fn parse_sort_key(s: &str) -> Option<SortKey> {
     Some(match s {
         "title" => SortKey::Title,
@@ -4307,6 +4427,7 @@ pub fn run() {
             pair_with,
             forget_peer,
             sync_with,
+            sync_shared_document,
             queue_state,
             queue_view,
             remove_from_queue,

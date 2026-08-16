@@ -29,6 +29,8 @@ export function SyncPanel() {
     tracks: true,
     playlists: true,
   });
+  const [shared, setShared] = useState<"idle" | "running">("idle");
+  const [sharedNote, setSharedNote] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -78,6 +80,38 @@ export function SyncPanel() {
       await refresh();
     } catch (e: unknown) {
       setError(messageOf(e));
+    }
+  }
+
+  /** SYNC-006: the round trip through the WebDAV server. */
+  async function syncShared() {
+    setShared("running");
+    setSharedNote(null);
+    setError(null);
+    try {
+      const r = await core.syncSharedDocument();
+      const changes = [
+        r.playlistsAdded && `${r.playlistsAdded} playlist${r.playlistsAdded === 1 ? "" : "s"} arrived`,
+        r.playlistsExtended && `${r.playlistsExtended} gained tracks`,
+        r.foldersAdded && `${r.foldersAdded} folder${r.foldersAdded === 1 ? "" : "s"} arrived`,
+        r.temposAdded && `${r.temposAdded} tempo correction${r.temposAdded === 1 ? "" : "s"} arrived`,
+      ].filter(Boolean);
+
+      // Four outcomes, and three of them look identical if only the changes
+      // are reported: nothing there yet, nothing to change, and a failure that
+      // did not throw.
+      setSharedNote(
+        r.created
+          ? "Written for the first time. Other devices will pick it up when they sync."
+          : changes.length > 0
+            ? `${changes.join(", ")}. Yours is on the server too.`
+            : "Already in step. Yours is on the server too.",
+      );
+      window.dispatchEvent(new Event("vapor:playlists-changed"));
+    } catch (e: unknown) {
+      setError(messageOf(e));
+    } finally {
+      setShared("idle");
     }
   }
 
@@ -295,6 +329,29 @@ export function SyncPanel() {
           )}
         </div>
       )}
+
+      {/*
+        SYNC-006. The other way to sync, and the one that works when the two
+        devices are never switched on at the same time — which for a laptop and
+        a phone is most of the time. Playlists and tempo corrections go in a
+        file beside the music, in the owner's own storage.
+      */}
+      <h3 className="label sync__heading">through your server</h3>
+      <p className="settings__hint">
+        Keeps playlists and tempo corrections in a file next to your music, so
+        devices that are never on at the same time still agree. Track files are
+        already there; this is only the part the app added.
+      </p>
+      <div className="settings__actions">
+        <button
+          className="settings__button"
+          disabled={shared === "running"}
+          onClick={() => void syncShared()}
+        >
+          {shared === "running" ? "Syncing…" : "Sync through the server"}
+        </button>
+      </div>
+      {sharedNote && <p className="settings__note">{sharedNote}</p>}
 
       {note && <p className="settings__note">{note}</p>}
     </section>

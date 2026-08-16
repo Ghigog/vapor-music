@@ -169,4 +169,81 @@ describe("Sync panel", () => {
     expect(backend.called("forget_peer")).toBe(false);
     confirm.mockRestore();
   });
+
+  /**
+   * SYNC-006 — the other way to sync, and the one that works when the two
+   * devices are never switched on at the same time.
+   */
+  describe("through the server", () => {
+    it("writes the first document when there is none", async () => {
+      const backend = useBackend();
+      const user = userEvent.setup();
+      render(<SyncPanel />);
+
+      await user.click(
+        await screen.findByRole("button", { name: /sync through the server/i }),
+      );
+
+      await waitFor(() =>
+        expect(backend.called("sync_shared_document")).toBe(true),
+      );
+      expect(await screen.findByText(/written for the first time/i))
+        .toBeInTheDocument();
+    });
+
+    it("takes a playlist the server has and this device does not", async () => {
+      const backend = useBackend({
+        playlists: [],
+        sharedDocument: [
+          {
+            id: "p9",
+            name: "From the laptop",
+            customCoverPath: "",
+            tracks: ["/dav/Koofr/Music/xtal.m4a"],
+            folderId: "",
+          },
+        ],
+      });
+      const user = userEvent.setup();
+      render(<SyncPanel />);
+
+      await user.click(
+        await screen.findByRole("button", { name: /sync through the server/i }),
+      );
+
+      await waitFor(() => expect(backend.state.playlists).toHaveLength(1));
+      expect(await screen.findByText(/1 playlist arrived/i)).toBeInTheDocument();
+    });
+
+    /**
+     * Nothing-to-do is a real outcome and has to read as one. Reporting only
+     * the changes makes it indistinguishable from a failure that did not
+     * throw.
+     */
+    it("says so when both ends already agree", async () => {
+      useBackend({ playlists: [], sharedDocument: [] });
+      const user = userEvent.setup();
+      render(<SyncPanel />);
+
+      await user.click(
+        await screen.findByRole("button", { name: /sync through the server/i }),
+      );
+
+      expect(await screen.findByText(/already in step/i)).toBeInTheDocument();
+    });
+
+    it("reports having nowhere to keep it when no server is set up", async () => {
+      useBackend({ connected: false });
+      const user = userEvent.setup();
+      render(<SyncPanel />);
+
+      await user.click(
+        await screen.findByRole("button", { name: /sync through the server/i }),
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        /nowhere to keep it/i,
+      );
+    });
+  });
 });
