@@ -71,6 +71,21 @@ pub fn save_password(username: &str, password: &str) -> Result<(), DavError> {
         .map_err(|e| DavError::Network(e.to_string()))
 }
 
+/// Whether a password is stored for `username`.
+///
+/// The Settings screen could not previously ask this, so its password box
+/// always showed the placeholder "unchanged" — which claims a credential
+/// exists whether or not one does. Someone who typed a password, had it not
+/// save, and came back to a box reading "unchanged" had no way to tell the
+/// difference between "already stored" and "never stored". That is the state
+/// this exists to make visible.
+///
+/// Returns only whether it is there. The password itself never leaves this
+/// module.
+pub fn has_password(username: &str) -> bool {
+    !username.is_empty() && load_password(username).is_ok()
+}
+
 fn load_password(username: &str) -> Result<String, DavError> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, username)
         .map_err(|e| DavError::Network(e.to_string()))?;

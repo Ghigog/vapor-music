@@ -173,6 +173,13 @@ export function addTracksToPlaylist(id: string, hrefs: string[]): Promise<number
   return invoke<number>("add_tracks_to_playlist", { id, hrefs });
 }
 
+/** Whether a password is stored for this account. The password itself never
+ *  crosses — only whether it is there, so Settings can say which state it is
+ *  in instead of always claiming "unchanged". */
+export function hasWebdavPassword(username: string): Promise<boolean> {
+  return invoke<boolean>("has_webdav_password", { username });
+}
+
 export function renamePlaylist(id: string, name: string): Promise<boolean> {
   return invoke<boolean>("rename_playlist", { id, name });
 }

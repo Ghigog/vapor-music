@@ -2148,6 +2148,16 @@ fn set_remote_config(
     Ok(app.settings.clone())
 }
 
+/// Whether a password is stored for `username`.
+///
+/// So the Settings screen can say which state it is in rather than always
+/// showing "unchanged", which claims a credential exists whether or not one
+/// does. Only the fact is returned; the password stays in `webdav`.
+#[tauri::command]
+fn has_webdav_password(username: String) -> bool {
+    webdav::has_password(username.trim())
+}
+
 /// Save the WebDAV password to the OS keychain.
 ///
 /// Separate from the rest of settings on purpose: the credential is the one
@@ -2659,6 +2669,7 @@ pub fn run() {
             data_location,
             delete_all_data,
             save_webdav_password,
+            has_webdav_password,
             set_remote_config,
             scan_library,
             analyse_library,

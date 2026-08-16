@@ -227,3 +227,11 @@
   line-height: 1.5;
   color: var(--ink-2);
 }
+
+/* "No password saved yet" — the same chip as the keychain note, in the colour
+   that says this is a state to act on rather than a reassurance. */
+.settings__field-note--warn {
+  background: rgba(180, 60, 60, 0.09);
+  color: #8c2f2f;
+  border-radius: var(--r-sm);
+}
