@@ -21,6 +21,9 @@ import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
 type Busy = "idle" | "saving" | "scanning" | "analysing";
 
+/** Which card a notice belongs to, so an answer appears beside its question. */
+type Card = "remote" | "analysis" | "data";
+
 export function Settings() {
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
@@ -28,8 +31,14 @@ export function Settings() {
   const [folder, setFolder] = useState("Music");
 
   const [busy, setBusy] = useState<Busy>("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<{ card: Card; text: string } | null>(null);
+  /** Which card an action's answer belongs beside.
+   *
+   *  Previously one notice rendered after every card, so clicking "Scan
+   *  library" at the top of the page put the result four cards below the fold:
+   *  the button appeared to do nothing until you scrolled. An answer belongs
+   *  next to the thing that asked the question. */
+  const [note, setNote] = useState<{ card: Card; text: string } | null>(null);
 
   const [status, setStatus] = useState<core.AnalysisStatus | null>(null);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
@@ -60,7 +69,9 @@ export function Settings() {
         setUsername(s.remote.username);
         setFolder(s.remote.folder);
       })
-      .catch((e: unknown) => setError(messageOf(e)));
+      // Loading the settings themselves failed, which belongs beside the
+      // fields that could not be filled in.
+      .catch((e: unknown) => setError({ card: "remote", text: messageOf(e) }));
     void refresh();
   }, [refresh]);
 
@@ -79,14 +90,19 @@ export function Settings() {
     };
   }, [refresh]);
 
-  async function run<T>(kind: Busy, fn: () => Promise<T>, done: (v: T) => void) {
+  async function run<T>(
+    kind: Busy,
+    card: Card,
+    fn: () => Promise<T>,
+    done: (v: T) => void,
+  ) {
     setBusy(kind);
     setError(null);
     setNote(null);
     try {
       done(await fn());
     } catch (e: unknown) {
-      setError(messageOf(e));
+      setError({ card, text: messageOf(e) });
     } finally {
       // Analysis clears its own flag when the last track lands, since it
       // outlives the call that started it.
@@ -97,6 +113,7 @@ export function Settings() {
   async function save() {
     await run(
       "saving",
+      "remote",
       async () => {
         await core.setRemoteConfig(url, username, folder);
         // An empty box means "keep the password already stored", so an
@@ -106,23 +123,33 @@ export function Settings() {
           setPassword("");
         }
       },
-      () => setNote("Saved. The password is in your keychain, not in a file."),
+      () =>
+        setNote({
+          card: "remote",
+          text: "Saved. The password is in your keychain, not in a file.",
+        }),
     );
   }
 
   async function scan() {
-    await run("scanning", core.scanLibrary, (report) => {
-      setNote(
-        `Found ${report.tracks.toLocaleString()} tracks in ` +
-          `${report.directories.toLocaleString()} folders.`,
-      );
+    await run("scanning", "remote", core.scanLibrary, (report) => {
+      setNote({
+        card: "remote",
+        text:
+          report.tracks === 0
+            ? `No tracks found in ${report.directories.toLocaleString()} folders. ` +
+              `Check the folder path — for Koofr it looks like /dav/Koofr/Music, ` +
+              `not just Music.`
+            : `Found ${report.tracks.toLocaleString()} tracks in ` +
+              `${report.directories.toLocaleString()} folders.`,
+      });
       void refresh();
     });
   }
 
   async function analyse() {
     setProgress(null);
-    await run("analysing", core.analyseLibrary, () => {});
+    await run("analysing", "analysis", core.analyseLibrary, () => {});
   }
 
   return (
@@ -203,6 +230,13 @@ export function Settings() {
             {busy === "scanning" ? "Scanning…" : "Scan library"}
           </button>
         </div>
+
+        {error?.card === "remote" && (
+          <ErrorNotice error={error.text} onDismiss={() => setError(null)} />
+        )}
+        {note?.card === "remote" && (
+          <p className="settings__note">{note.text}</p>
+        )}
       </section>
 
       <section className="settings__card glass">
@@ -262,6 +296,13 @@ export function Settings() {
             </button>
           )}
         </div>
+
+        {error?.card === "analysis" && (
+          <ErrorNotice error={error.text} onDismiss={() => setError(null)} />
+        )}
+        {note?.card === "analysis" && (
+          <p className="settings__note">{note.text}</p>
+        )}
       </section>
 
       <section className="settings__card glass">
@@ -304,8 +345,6 @@ export function Settings() {
         </div>
       </section>
 
-      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
-      {note && <p className="settings__note">{note}</p>}
     </div>
   );
 }

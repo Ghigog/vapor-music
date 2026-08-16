@@ -43,7 +43,14 @@ impl std::fmt::Display for DavError {
             // These strings reach a person, so they say what to do rather than
             // what went wrong internally.
             DavError::NoCredentials => {
-                write!(f, "No password saved for this server. Add it in Settings.")
+                // Not "add it in Settings": every path that raises this is
+                // *already* on the Settings screen, so that sends someone
+                // looking for a place they are standing in. Say which field.
+                write!(
+                    f,
+                    "No password saved for this account. Type it in the Password \
+                     field above and press Save before scanning."
+                )
             }
             DavError::Auth => write!(
                 f,
@@ -305,7 +312,24 @@ mod tests {
     /// The messages are shown to a person, so they must say what to do.
     #[test]
     fn errors_are_actionable() {
-        assert!(DavError::NoCredentials.to_string().contains("Settings"));
+        // "Actionable" means naming the field and the action, not naming the
+        // screen. This used to assert the text contained "Settings", which it
+        // did — while being displayed *on* the Settings screen, sending anyone
+        // who read it looking for the place they were already standing in.
+        let missing = DavError::NoCredentials.to_string();
+        assert!(
+            missing.contains("Password"),
+            "does not name the field: {missing}"
+        );
+        assert!(
+            missing.contains("Save"),
+            "does not name the action: {missing}"
+        );
+        assert!(
+            !missing.contains("in Settings"),
+            "still sends the reader to the screen they are on: {missing}"
+        );
+
         assert!(DavError::Auth.to_string().contains("app password"));
     }
 }

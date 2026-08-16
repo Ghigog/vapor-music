@@ -2110,6 +2110,20 @@ fn set_remote_config(
 ) -> Result<Settings> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
 
+    // Refused rather than stored, because everything downstream treats this as
+    // an origin to hang paths off: a value that is not one produces a scan that
+    // finds nothing and reports no error, which reads as "my library is empty"
+    // rather than "that is not an address". Pasting an app password in here is
+    // the way it actually happens.
+    let trimmed = url.trim();
+    if !trimmed.is_empty() && !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err(Error(format!(
+            "\"{trimmed}\" is not a server address — it needs to start with \
+             https://. For Koofr that is https://app.koofr.net, and the app \
+             password goes in the Password field."
+        )));
+    }
+
     // Renaming the account leaves its password behind otherwise: the keychain
     // entry is keyed by username, so a new name writes a new entry and the old
     // one sits there until "delete everything" runs. Best effort — a keychain
