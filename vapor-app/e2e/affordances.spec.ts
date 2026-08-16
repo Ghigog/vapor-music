@@ -231,7 +231,18 @@ const SCREENS: {
       await page.locator(".queue__row-title", { hasText: "Xtal" }).click();
     },
     byKeyboard: async (page) => {
-      await control(page, "Xtal").focus();
+      // Scoped to the queue, as `activate` above is. Two controls on this
+      // screen legitimately name a track: a queue row plays it, and a
+      // Match/Fresh/Switch card makes it the *next blend* without interrupting
+      // what is playing. The generic `control` helper takes the first button
+      // holding the title, which is now the card — a different, correct
+      // action, and not the one this test is about.
+      await page
+        .locator(".queue__item")
+        .filter({ hasText: "Xtal" })
+        .getByRole("button")
+        .first()
+        .focus();
       await page.keyboard.press("Enter");
     },
     plays: "Xtal",

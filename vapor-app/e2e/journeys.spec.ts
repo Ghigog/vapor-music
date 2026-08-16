@@ -100,6 +100,47 @@ test.describe("Building a playlist", () => {
     await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible();
   });
 
+  /**
+   * Filing a playlist into a folder, through a real drag.
+   *
+   * The component tests dispatch a synthetic `drop` because jsdom has no
+   * `DataTransfer` at all — which means they assert the handler works, not
+   * that a mouse can reach it. `dragTo` is a real press, move and release in
+   * a real browser, and it is the only layer where the difference shows.
+   */
+  test("a playlist can be filed into a folder and taken back out", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: /new folder/i }).click();
+    await page.getByPlaceholder(/folder name/i).fill("Sets");
+    await page.getByPlaceholder(/folder name/i).press("Enter");
+
+    await page.getByRole("button", { name: /new playlist/i }).click();
+    await page.getByPlaceholder(/playlist name/i).fill("Openers");
+    await page.getByPlaceholder(/playlist name/i).press("Enter");
+
+    const folder = page.locator(".rail__folder").filter({ hasText: "Sets" });
+    await expect(folder.getByText("Drag a playlist here.")).toBeVisible();
+
+    // Scoped to the rail: the open playlist screen has a "Delete the playlist
+    // Openers" button, which also carries the name.
+    const inRail = page.locator(".rail__item").filter({ hasText: "Openers" });
+    await inRail.dragTo(folder);
+
+    // Inside the folder's own subtree, which is the whole claim.
+    await expect(folder.getByText("Openers")).toBeVisible();
+    await expect(folder.getByText("Drag a playlist here.")).toHaveCount(0);
+
+    // And back out, or a playlist filed once is filed forever.
+    await folder
+      .locator(".rail__item")
+      .filter({ hasText: "Openers" })
+      .dragTo(page.getByText(/not in a folder/i));
+
+    await expect(folder.getByText("Openers")).toHaveCount(0);
+    await expect(inRail).toBeVisible();
+  });
+
   test("a playlist can be renamed and deleted", async ({ page }) => {
     await boot(page);
 
