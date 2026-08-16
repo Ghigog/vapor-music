@@ -1,6 +1,6 @@
 # Handover
 
-**Written:** 2026-08-16
+**Written:** 2026-08-16 (updated after TD-49 and the first green CI run)
 **For:** whoever picks this up next
 
 Read `docs/MIGRATION.md` (the plan), `docs/TECH_DEBT.md` (what is knowingly left
@@ -39,7 +39,8 @@ cd vapor-app            && npm run e2e              #  17: journeys + monkey
 cd vapor-app            && npm run typecheck
 ```
 
-All five were green at `bac077b`.
+All five green locally, and green in CI — both workflows, six jobs, including
+the Ubuntu Playwright job that had never run anywhere but this Mac.
 
 ---
 
@@ -58,58 +59,28 @@ What follows is what is still wrong.
 
 Ranked by what would bite a person first.
 
-### 1. A scan of the wrong folder reports success with zero tracks — TD-49, new
+### 1. Nothing has ever talked to a real server
 
-**This is almost certainly what Dylan hit** ("I connected my koofr account but I
-don't know if it's able to see my music. doesnt show anything to analyze").
+Five separate defects reached Dylan when he first tried, and all five are now
+fixed: a rename deleting the keychain entry, scan reading the keychain instead
+of the form, the password box claiming "unchanged" when nothing was stored, the
+result rendering off screen, and **TD-49 — a mistyped folder reporting "Found 0
+tracks" instead of saying the folder was not there**, which is the likeliest
+explanation for "doesn't show anything to analyze".
 
-`vapor-app/src-tauri/src/webdav.rs:207`:
-
-```rust
-let body = match propfind(&client, &origin, &dir, &auth).await {
-    Ok(b) => b,
-    // One unreadable directory should not lose the whole library.
-    Err(DavError::Auth) => return Err(DavError::Auth),
-    Err(_) => continue,
-};
-```
-
-The comment is right about subdirectories and wrong about the first one. The
-base path goes through the same loop, so a `404` on it is swallowed, the queue
-drains, and the function returns `Ok(ScanResult { files: [], directories: 1 })`.
-The screen then says **"Found 0 tracks"** — which is what an empty library also
-says. A wrong folder path is indistinguishable from an empty one, and the folder
-path is the single field most likely to be wrong: Koofr wants
-`/dav/Koofr/Music`, and `/Music` looks more reasonable.
-
-**Fix:** the base directory's `propfind` must propagate its error; only
-subdirectory failures are skippable. Count the skipped ones and report them, so
-"found 40 tracks, 2 folders unreadable" is sayable. Both cases are testable from
-captured responses at the integration layer — no live server needed.
-
-### 2. Nothing has ever talked to a real server
-
-Four separate defects reached Dylan in one sitting when he first tried, and all
-four are fixed: a rename deleting the keychain entry, scan reading the keychain
-instead of the form, the password box claiming "unchanged" when nothing was
-stored, and the result rendering off screen. **He never came back to confirm a
-scan works**, and the keychain had no entry at all when last checked:
+**He has never confirmed a scan works**, and the keychain had no entry at all
+when last checked:
 
 ```bash
-security find-generic-password -s vapor-music -a "$USERNAME"
+security find-generic-password -s com.dylangrowcoot.vapormusic.webdav -a "$USERNAME"
 ```
 
-So the credential path is fixed *in theory* and unconfirmed in practice. Fix
-TD-49 first — it is likely the thing standing between him and a working scan.
+So the credential and scan paths are fixed *in theory* and unconfirmed in
+practice. This is the top item: everything downstream — analysis, playback,
+mixing — is unexercised against real files, and none of it can be trusted until
+one real library has been through it.
 
-### 3. Fourteen commits are unpushed, so CI has never run
-
-`main` is 14 ahead of `origin/main`. The CI wiring in the last commit —
-including a brand-new `end-to-end` job that installs Chromium on Ubuntu — has
-**never executed**. The suite has only ever run on this Mac. Expect the first
-push to shake out Linux-only problems in the Playwright job specifically.
-
-### 4. The Songs table's header is orphaned ARIA — TD-46
+### 2. The Songs table's header is orphaned ARIA — TD-46
 
 A `role="row"` of `role="columnheader"` buttons sitting above a `listbox` of
 `option`s. A `row` must live inside a `table`, `grid` or `treegrid`, and there is
@@ -118,7 +89,7 @@ make the whole table a `grid` (which also buys cell-level navigation) or have th
 header shed its roles and become plain sort buttons. Announced oddly rather than
 unusable, but it gets more expensive as the table grows.
 
-### 5. No media controls on any platform — MIG-023
+### 3. No media controls on any platform — MIG-023
 
 A parity regression, not a gap. The Godot build answers hardware keys, Control
 Center and SMTC (`MediaControlsManager.gd` plus a macOS `.mm` and a Windows
@@ -126,7 +97,7 @@ Center and SMTC (`MediaControlsManager.gd` plus a macOS `.mm` and a Windows
 build works**. One crate (`souvlaki` or equivalent) covers all three desktop
 targets from the shell.
 
-### 6. Key detection is 60.6% exact — TD-11
+### 4. Key detection is 60.6% exact — TD-11
 
 Up from 56.1%; feeding the chroma from spectral peaks rather than every bin is
 what did it, because a drum hit is broadband and was depositing energy into all
@@ -135,7 +106,7 @@ them: **segmented analysis shipped** (TD-13) and is not the remaining lever, and
 **tuning correction measures 58.1%** — worse than doing nothing — and was
 reverted. Needs the personal fixture library to go further (TD-43).
 
-### 7. Process gaps
+### 5. Process gaps
 
 * **TD-41** — the Godot CI job runs without the GDExtension, so DSP-dependent
   tests are uncovered. Deliberate; the tree is being archived, not repaired.

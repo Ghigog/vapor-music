@@ -2093,6 +2093,8 @@ fn set_bpm_override(href: String, bpm: f32, state: State<'_, Shared>) -> Result<
 struct ScanReport {
     tracks: usize,
     directories: usize,
+    /// Folders that could not be read and were walked past (TD-49).
+    unreadable: usize,
 }
 
 /// Point the app at a server.
@@ -2212,6 +2214,7 @@ async fn scan_library(state: State<'_, Shared>) -> Result<ScanReport> {
     Ok(ScanReport {
         tracks: app.rows.len(),
         directories: result.directories,
+        unreadable: result.unreadable,
     })
 }
 

@@ -38,6 +38,11 @@ export interface FakeOptions {
   /** Tracks in the library. Defaults to a small mixed set. */
   rows?: core.Row[];
   playlists?: core.Playlist[];
+  /**
+   * Folders the scan cannot read and walks past (TD-49). The real backend
+   * counts them and reports them; this is how a test reaches that sentence.
+   */
+  unreadableFolders?: number;
 }
 
 /** A library row with sensible defaults, so a test states only what it cares
@@ -124,6 +129,7 @@ export class FakeBackend {
   private nextId = 1;
   private repeat: core.RepeatMode = "off";
   private shuffled = false;
+  private unreadableFolders: number;
 
   constructor(options: FakeOptions = {}) {
     const connected = options.connected ?? true;
@@ -150,6 +156,7 @@ export class FakeBackend {
     this.scanned = connected;
     this.playlists = options.playlists ?? [];
     this.analysed = connected ? this.rows.length : 0;
+    this.unreadableFolders = options.unreadableFolders ?? 0;
   }
 
   /** Make `cmd` reject with `message` until cleared. */
@@ -235,14 +242,23 @@ export class FakeBackend {
             "No password saved for this account. Type it in the Password field above and press Save before scanning.",
           );
         }
-        // A folder that is not the real one finds nothing — the case that
-        // produced "0 tracks" and no explanation.
+        // A folder that is not on the server is an error, not an empty
+        // library (TD-49). It used to return zero tracks here, matching a
+        // backend that swallowed the 404 — and "Found 0 tracks" is also what
+        // a genuinely empty library says, so nothing distinguished them.
         if (!this.settings.remote.folder.startsWith("/dav/")) {
-          this.scanned = true;
-          return { tracks: 0, directories: 1 };
+          throw new Error(
+            `The server has no folder at ${this.settings.remote.folder}. ` +
+              `Check the Folder field — it is the full path on the server, ` +
+              `not the name of the folder.`,
+          );
         }
         this.scanned = true;
-        return { tracks: this.rows.length, directories: 3 };
+        return {
+          tracks: this.rows.length,
+          directories: 3,
+          unreadable: this.unreadableFolders,
+        };
       }
 
       // --- library ------------------------------------------------------

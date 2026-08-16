@@ -180,15 +180,26 @@ export function Settings() {
         return core.scanLibrary();
       },
       (report) => {
+      // A folder that is not there is now an error with the path in it
+      // (TD-49), so reaching here means the path was real. Zero tracks
+      // therefore means the folder holds no audio, which is a different
+      // problem and gets a different sentence.
+      const skipped =
+        report.unreadable > 0
+          ? ` ${report.unreadable.toLocaleString()} ` +
+            `${report.unreadable === 1 ? "folder" : "folders"} could not be ` +
+            `read and ${report.unreadable === 1 ? "was" : "were"} skipped.`
+          : "";
+
       setNote({
         card: "remote",
         text:
           report.tracks === 0
-            ? `No tracks found in ${report.directories.toLocaleString()} folders. ` +
-              `Check the folder path — for Koofr it looks like /dav/Koofr/Music, ` +
-              `not just Music.`
+            ? `That folder is there, but no audio files are in it or below it ` +
+              `(${report.directories.toLocaleString()} folders searched). ` +
+              `Check the folder path points at your music.${skipped}`
             : `Found ${report.tracks.toLocaleString()} tracks in ` +
-              `${report.directories.toLocaleString()} folders.`,
+              `${report.directories.toLocaleString()} folders.${skipped}`,
         });
         void refresh();
       },

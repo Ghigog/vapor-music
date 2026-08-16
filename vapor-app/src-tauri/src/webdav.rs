@@ -33,6 +33,9 @@ const DEPTH: &str = "1";
 pub enum DavError {
     NoCredentials,
     Auth,
+    /// The configured folder is not on the server. Carries the path that was
+    /// asked for, because the answer is almost always visible in it.
+    NoSuchFolder(String),
     Http(String),
     Network(String),
 }
@@ -55,6 +58,14 @@ impl std::fmt::Display for DavError {
             DavError::Auth => write!(
                 f,
                 "The server rejected those credentials. Check the username and app password."
+            ),
+            // Names the field and shows the path that was tried, because the
+            // mistake is usually legible in it — a Koofr library lives under
+            // /dav/Koofr/Music, and /Music looks more reasonable than it is.
+            DavError::NoSuchFolder(path) => write!(
+                f,
+                "The server has no folder at {path}. Check the Folder field — \
+                 it is the full path on the server, not the name of the folder."
             ),
             DavError::Http(s) => write!(f, "The server returned {s}."),
             DavError::Network(s) => write!(f, "Could not reach the server: {s}"),
@@ -171,6 +182,12 @@ pub struct ScanResult {
     /// Directories visited, so a slow scan can report progress honestly rather
     /// than showing an indeterminate spinner.
     pub directories: usize,
+    /// Subdirectories that could not be read and were skipped.
+    ///
+    /// Reported rather than swallowed: a scan that quietly walked past half a
+    /// library still says "found 40 tracks", and there is no way to tell that
+    /// from a library with 40 tracks in it.
+    pub unreadable: usize,
 }
 
 /// Recursively list audio files under `base`.
@@ -191,9 +208,29 @@ pub async fn scan(url: &str, username: &str, base: &str) -> Result<ScanResult, D
     );
 
     let origin = url.trim_end_matches('/').to_string();
-    let mut queue = vec![vapor_library::webdav::normalize_dir(base)];
+    walk(base, |dir| {
+        let (client, origin, auth) = (&client, &origin, &auth);
+        async move { propfind(client, origin, &dir, auth).await }
+    })
+    .await
+}
+
+/// The walk itself, with the transport supplied by the caller.
+///
+/// Separated from `scan` so both of its failure modes can be tested from
+/// captured responses instead of against a live server — which is what
+/// `docs/TESTING.md` means by a body tests cannot reach. `scan` is then the
+/// thin part: credentials, a client, and an origin.
+async fn walk<F, Fut>(base: &str, fetch: F) -> Result<ScanResult, DavError>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, DavError>>,
+{
+    let root = vapor_library::webdav::normalize_dir(base);
+    let mut queue = vec![root.clone()];
     let mut files = Vec::new();
     let mut directories = 0usize;
+    let mut unreadable = 0usize;
     let mut seen = std::collections::HashSet::new();
 
     while let Some(dir) = queue.pop() {
@@ -204,11 +241,24 @@ pub async fn scan(url: &str, username: &str, base: &str) -> Result<ScanResult, D
         }
         directories += 1;
 
-        let body = match propfind(&client, &origin, &dir, &auth).await {
+        let body = match fetch(dir.clone()).await {
             Ok(b) => b,
-            // One unreadable directory should not lose the whole library.
+            // The base directory is not "one unreadable folder" — it is the
+            // whole request. Skipping it drained the queue and returned an
+            // empty success, so a mistyped folder was indistinguishable from
+            // an empty library: both said "Found 0 tracks". The folder is the
+            // field most likely to be wrong, so that was the common case.
+            Err(DavError::Http(status)) if dir == root && status.starts_with("404") => {
+                return Err(DavError::NoSuchFolder(root))
+            }
+            Err(e) if dir == root => return Err(e),
+            // Below the root, one unreadable directory should not lose the
+            // whole library — but it is counted, and the caller says so.
             Err(DavError::Auth) => return Err(DavError::Auth),
-            Err(_) => continue,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
         };
 
         for href in vapor_library::parse_propfind(&body) {
@@ -221,7 +271,11 @@ pub async fn scan(url: &str, username: &str, base: &str) -> Result<ScanResult, D
 
     files.sort();
     files.dedup();
-    Ok(ScanResult { files, directories })
+    Ok(ScanResult {
+        files,
+        directories,
+        unreadable,
+    })
 }
 
 async fn propfind(
@@ -344,6 +398,132 @@ mod tests {
         assert_eq!(
             child_directories(xml, "/dav/Music/"),
             vec!["/dav/Music/Sub/"]
+        );
+    }
+
+    /// A server, as a map of path to canned response.
+    ///
+    /// `walk` takes its transport as a closure precisely so this can stand in
+    /// for one. Anything not in the map answers 404, which is what a real
+    /// server does.
+    fn server(pages: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pages
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a current-thread runtime")
+            .block_on(f)
+    }
+
+    fn walk_against(
+        base: &str,
+        pages: std::collections::HashMap<String, String>,
+    ) -> Result<ScanResult, DavError> {
+        block_on(walk(base, |dir| {
+            let pages = &pages;
+            async move {
+                pages
+                    .get(&dir)
+                    .cloned()
+                    .ok_or_else(|| DavError::Http("404 Not Found".into()))
+            }
+        }))
+    }
+
+    const ROOT: &str = r#"<d:multistatus xmlns:d="DAV:">
+  <d:response><d:href>/dav/Music/</d:href></d:response>
+  <d:response><d:href>/dav/Music/Aphex/</d:href></d:response>
+  <d:response><d:href>/dav/Music/Locked/</d:href></d:response>
+</d:multistatus>"#;
+
+    const APHEX: &str = r#"<d:multistatus xmlns:d="DAV:">
+  <d:response><d:href>/dav/Music/Aphex/</d:href></d:response>
+  <d:response><d:href>/dav/Music/Aphex/Xtal.mp3</d:href></d:response>
+</d:multistatus>"#;
+
+    /// TD-49, and the reason it was worth finding.
+    ///
+    /// A mistyped folder used to return `Ok` with no files, because the base
+    /// path went through the same "skip a directory we cannot read" branch as
+    /// every subdirectory. The screen then said "Found 0 tracks" — which is
+    /// also what an empty library says, so there was nothing to tell a person
+    /// their path was wrong.
+    #[test]
+    fn a_folder_that_does_not_exist_is_an_error_not_an_empty_library() {
+        let result = walk_against("/dav/Music", server(&[]));
+
+        match result {
+            Err(DavError::NoSuchFolder(path)) => assert_eq!(path, "/dav/Music/"),
+            Err(e) => panic!("wrong error: {e}"),
+            Ok(r) => panic!(
+                "a missing folder reported success with {} files",
+                r.files.len()
+            ),
+        }
+    }
+
+    /// The message has to be the one that fixes it: name the field, and show
+    /// the path that was tried.
+    #[test]
+    fn the_missing_folder_message_names_the_field_and_the_path() {
+        let message = DavError::NoSuchFolder("/Music/".into()).to_string();
+        assert!(message.contains("/Music/"), "no path: {message}");
+        assert!(
+            message.contains("Folder"),
+            "does not name the field: {message}"
+        );
+    }
+
+    /// The other half of the same branch: below the root, a folder that cannot
+    /// be read must not lose the rest of the library.
+    #[test]
+    fn one_unreadable_subdirectory_is_skipped_and_counted() {
+        let result = walk_against(
+            "/dav/Music",
+            server(&[("/dav/Music/", ROOT), ("/dav/Music/Aphex/", APHEX)]),
+        )
+        .expect("the root was readable, so the scan should succeed");
+
+        // Locked/ answered 404 and was skipped; Aphex/ was still walked.
+        assert_eq!(result.files, vec!["/dav/Music/Aphex/Xtal.mp3"]);
+        assert_eq!(result.unreadable, 1, "the skipped folder was not counted");
+    }
+
+    /// Nothing skipped means nothing to report, so the screen stays quiet.
+    #[test]
+    fn a_clean_walk_reports_nothing_unreadable() {
+        const FLAT: &str = r#"<d:multistatus xmlns:d="DAV:">
+  <d:response><d:href>/dav/Music/</d:href></d:response>
+  <d:response><d:href>/dav/Music/Xtal.mp3</d:href></d:response>
+</d:multistatus>"#;
+
+        let result =
+            walk_against("/dav/Music", server(&[("/dav/Music/", FLAT)])).expect("readable");
+
+        assert_eq!(result.files, vec!["/dav/Music/Xtal.mp3"]);
+        assert_eq!(result.unreadable, 0);
+        assert_eq!(result.directories, 1);
+    }
+
+    /// Auth still fails the whole scan wherever it happens: every directory is
+    /// behind the same credential, so one rejection means all of them.
+    #[test]
+    fn a_rejected_credential_below_the_root_fails_the_scan() {
+        let result = block_on(walk("/dav/Music", |dir| async move {
+            if dir == "/dav/Music/" {
+                Ok(ROOT.to_string())
+            } else {
+                Err(DavError::Auth)
+            }
+        }));
+        assert!(
+            matches!(result, Err(DavError::Auth)),
+            "an auth failure below the root was swallowed as an unreadable folder"
         );
     }
 

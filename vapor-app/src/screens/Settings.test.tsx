@@ -114,9 +114,17 @@ describe("Settings — connecting a server", () => {
     expect(remoteCard()).toContainElement(found);
   });
 
-  it("says plainly when a scan finds nothing, and why", async () => {
-    // A folder that is a name rather than a path is the real mistake: Koofr
-    // mounts under /dav/Koofr, so "Music" alone matches nothing.
+  /**
+   * TD-49. A folder that is a name rather than a path is the real mistake:
+   * Koofr mounts under /dav/Koofr, so "Music" alone matches nothing.
+   *
+   * This used to report "No tracks found", because the backend swallowed the
+   * 404 on the base directory the same way it skips an unreadable
+   * subdirectory, and returned an empty success. An empty library says exactly
+   * the same thing, so there was nothing to tell a person their path was
+   * wrong — which is the state Dylan was actually in.
+   */
+  it("says a missing folder is missing, not that the library is empty", async () => {
     useBackend({ connected: true });
     const user = userEvent.setup();
     render(<Settings />);
@@ -126,10 +134,37 @@ describe("Settings — connecting a server", () => {
     await user.type(folder, "Music");
     await user.click(screen.getByRole("button", { name: /scan library/i }));
 
-    const note = await screen.findByText(/no tracks found/i);
-    expect(note).toBeInTheDocument();
-    // Not just "0 tracks" — it has to point at the likely cause.
-    expect(note.textContent).toMatch(/folder path/i);
+    const alert = await screen.findByRole("alert");
+    // The path that was tried, so the mistake is legible in the message.
+    expect(alert.textContent).toMatch(/Music/);
+    // And the field to go and change.
+    expect(alert.textContent).toMatch(/folder/i);
+    // Emphatically not the old answer.
+    expect(alert.textContent).not.toMatch(/no tracks found/i);
+  });
+
+  it("says how many folders it could not read, rather than walking past them", async () => {
+    // A scan that skipped half a library still reports "found 4 tracks", and
+    // that is indistinguishable from a library with 4 tracks in it.
+    useBackend({ connected: true, unreadableFolders: 2 });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(await screen.findByRole("button", { name: /scan library/i }));
+
+    const note = await screen.findByText(/found 4 tracks/i);
+    expect(note.textContent).toMatch(/2 folders could not be read/i);
+  });
+
+  it("stays quiet about unreadable folders when there were none", async () => {
+    useBackend({ connected: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(await screen.findByRole("button", { name: /scan library/i }));
+
+    const note = await screen.findByText(/found 4 tracks/i);
+    expect(note.textContent).not.toMatch(/could not be read/i);
   });
 });
 

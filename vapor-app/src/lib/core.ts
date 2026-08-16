@@ -441,6 +441,14 @@ export interface ScanReport {
   tracks: number;
   /** Directories visited, so a slow scan reports progress honestly. */
   directories: number;
+  /**
+   * Folders the scan could not read and walked past.
+   *
+   * Reported rather than swallowed: a scan that skipped half a library still
+   * says "found 40 tracks", and that is indistinguishable from a library with
+   * 40 tracks in it.
+   */
+  unreadable: number;
 }
 
 export interface AnalysisStatus {
