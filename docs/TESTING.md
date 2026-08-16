@@ -3,8 +3,8 @@
 **Status:** Living document
 **Last reviewed:** 2026-08-16
 
-**Current counts:** 317 core (unit + property + fuzz), 78 shell (unit +
-integration), 85 component, 17 end-to-end including three monkey seeds.
+**Current counts:** 322 core (unit + property + fuzz), 119 shell (unit +
+integration), 155 component, 39 end-to-end including three monkey seeds.
 
 > What is tested, at which layer, and what is deliberately not. Read alongside
 > `docs/MIGRATION.md` (the plan) and `docs/TECH_DEBT.md` (what is knowingly
@@ -163,6 +163,11 @@ Recorded so nobody "fixes" the gap without reading why.
 * **The real WebDAV server.** Nothing in CI talks to Koofr. The transport is
   thin and the parsing is tested from captured responses; a live server in CI
   buys flakiness and a credential in a secret store.
+* **LRCLIB and Deezer.** Same reasoning, one degree worse: `metadata.rs` splits
+  its parsing from its transport so every response shape is driven from a
+  canned string, but those shapes were read out of `metadata_service.gd` rather
+  than off the wire, and nothing has ever confirmed them (TD-51). If a lookup
+  comes back empty on a real machine, suspect the shape before the parser.
 * **Analysis accuracy in CI.** The 563-track figures need a personal library
   (TD-43). CI runs the DSP against synthetic signals; the fixture numbers are
   produced by hand and recorded in `docs/MIGRATION.md`.
@@ -176,7 +181,7 @@ Recorded so nobody "fixes" the gap without reading why.
 
 ## Rules
 
-Six, each earned by a specific failure in this repository.
+Seven, each earned by a specific failure in this repository.
 
 **1. Assert behaviour, not wording.** `errors_are_actionable` asserted an error
 message contained the word "Settings". It did — while being displayed *on* the
@@ -214,6 +219,16 @@ The end-to-end sweep asserted, for this screen and seven others,
 a primary action — the reason a person opened it — and a test that never
 performs it has not tested the screen. Where a control exists, press it and
 assert what a person would look at to see whether it worked.
+
+**7. A fake that cannot be wrong cannot catch anything.** `mix_candidates` was
+faked by slicing three arbitrary rows and labelling them Match, Fresh and
+Switch in order — so "one card per kind" was true by construction and no
+fixture could have falsified it. The fake now classifies by the same rule the
+engine does. In the same file, `track_details` returned `cover: null`
+unconditionally while every other cover-bearing command honoured the `covers`
+option, so no test of Liner Notes could tell a track with artwork from one
+without. **A fake is allowed to be simpler than the backend; it is not allowed
+to be incapable of the answer the test is looking for.**
 
 ---
 

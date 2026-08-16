@@ -1173,6 +1173,19 @@ resolved by, not when it must be started.
 | MIG-032 | Verify OpenSubsonic extension names and field shapes against the actual specification before designing to them — the secondary sources reviewed contained errors. | 3 | Ecosystem research |
 | MIG-033 | Consume server-provided BPM/key via extended tags where available, to skip redundant on-device analysis. | 3 | OpenSubsonic decision |
 
+### The other direction — ported and unreachable
+
+Logic that came across faithfully and then had nothing wired to it. All four
+closed on 2026-08-16; kept as a class, because it recurred three times and the
+tell is the same each time — **an argument nobody varies**.
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| ~~MIG-050~~ | ~~Match / Fresh / Switch, the four-step cycle and the override.~~ **Done** — `_get_match_type_between` ported with its thresholds; its inputs (`harmonic_relation_cost`, `is_similar_genre`, `choose_transition`) were already here. The fourth step of the cycle alternates rather than flipping the original's coin: a set that cannot be reproduced cannot be reasoned about, and the proportions over a full period are unchanged. | 4 | DESIGN_DRIFT |
+| ~~MIG-051~~ | ~~Playlist folders.~~ **Done** — `FolderStore` and `Playlist::folder_id` were ported with tests at migration time and the shell exposed neither, so `folderId` reached the frontend as a field nothing could set. Deleting a folder returns its playlists, and a nested folder's, to the top level. | 4 | DESIGN_DRIFT |
+| ~~MIG-052~~ | ~~Lyrics and artwork.~~ **Done** — `metadata_service.gd`'s network half, which was never ported at all: LRCLIB and Deezer. **Off by default**, unlike the original, which fetched on every track and said nothing; what comes back is drawn apart from what the device measured. Two `parse_lrc` defects fixed on the way (fraction precision, multiple timestamps per line). Untested against the real services — TD-51. | 4 | DESIGN_DRIFT |
+| ~~MIG-053~~ | ~~The Vibe Limit.~~ **Done** — §6's Mix Tuner. `transition_cost` has taken the energy threshold as a parameter since the port and all three callers passed `DEFAULT_ENERGY_THRESHOLD`. | 4 | `ai_dj_workflow.md` §6 |
+
 ### Process
 
 | ID | Item | Phase | Source |

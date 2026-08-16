@@ -116,6 +116,10 @@ each carrying one of your six transitions, colour-coded green / accent / amber.
 | Phrase-aligned blend length | ✅ "8 bars", "phase +1.2ms" | ❌ absent |
 | Queue as "Conducted by Vibe" | ✅ | ❌ separate screen |
 
+*(The "In the React app" column describes the app as it stood when this was
+written. See "Closing the rest" at the foot of this file for what changed the
+same day — every ❌ above is now built.)*
+
 ---
 
 ## What did *not* drift
@@ -186,8 +190,53 @@ open product decisions.
   `ai_dj_workflow.md` verbatim, so the help cannot drift from the spec.
 * **1, 2, 3, 4, 5, 7** — done; see the commit.
 
-Still missing from `ai_dj_workflow.md`, and not yet restored: the
-Match / Fresh / Switch candidates, the four-step AI Choice cycle with override,
-and the Vibe Limit. The first two are specified precisely enough in the design
-to build exactly; the Vibe Limit appears only in the written spec and never in
-a mockup.
+## Closing the rest, 2026-08-16
+
+The three items left open above are now built, and the table in Finding 4 no
+longer has a ❌ in it.
+
+**Match / Fresh / Switch.** `_get_match_type_between` ported with its
+thresholds — a genre jump is a Switch whatever else is true, then 8 BPM or 0.2
+of energy separates Fresh from Match. One candidate per kind, each scored on
+what its kind is *for* rather than on one shared notion of "closest", since a
+Switch scored like a Match would just be a Match. The cards are transcribed
+from the design's `alternates`, tag colours included.
+
+**The four-step cycle and the override.** Match, Fresh, Match, then a change.
+The fourth step **alternates rather than flipping the original's coin**: a set
+that cannot be reproduced cannot be reasoned about, and the screen has to be
+able to say in advance what it will do. Over a full period the proportions are
+the same, which is what the coin was for. `selected` is a separate field from
+`aiChoice` so §4's behaviour holds — the badge stays where the DJ put it and
+the ring moves, and an override reads as an override.
+
+**The Vibe Limit.** `transition_cost` has taken the energy threshold as a
+parameter since the port and all three callers passed the same constant, so
+this was a control the engine was already built for. It is a slider under the
+curves, because the curve says where the set is going and this says how far it
+may jump getting there.
+
+### Three more of the same kind, found while looking
+
+The pattern in Finding 4 — logic ported faithfully, interface never built — was
+not confined to the Vibe screen.
+
+| What was ported | What was missing |
+|---|---|
+| `FolderStore` and `Playlist::folder_id`, both tested, from `playlist_folder_service.gd` | No command, no UI. `folderId` reached the frontend as a field nothing could set. |
+| `DEFAULT_ENERGY_THRESHOLD` as a parameter of `transition_cost` | Every caller passed the constant. |
+| Nothing — `metadata_service.gd`'s network half was never ported at all | No lyrics, no artist image, no album art, no genre lookup. |
+
+The first two are now exposed. The third is ported as `metadata.rs`, with one
+deliberate change: **it asks first.** Everything else the app knows about a
+track it works out on the device from the audio, which is what the sovereignty
+green in the palette means and what Liner Notes says on screen. A lookup sends
+the artist and title of what someone is listening to to a server they have no
+relationship with. The Godot build did that unconditionally and mentioned it
+nowhere. It is off by default, per track rather than per library, and what
+comes back is drawn in its own panel naming where it came from.
+
+Two bugs did not survive that port: `parse_lrc` divided whatever the fraction
+matched by 100, so LRCLIB's three-digit milliseconds landed ten times late, and
+it kept only the first timestamp on a line — which is how LRC writes a repeated
+chorus, so the words stopped moving the second time round.

@@ -19,9 +19,20 @@ reimplemented from scratch before anyone checked — all four already existed in
 `godot/`. The mid-cut was the clearest case: `vocal_presence` turned out to be
 `energy > 0.35`, not a detector, so no detector needed writing.
 
+**1b. And grep this tree too, for the inverse.** The same pattern runs the other
+way: logic ported faithfully, tested, and then reached by nothing. Playlist
+folders (`FolderStore`, `Playlist::folder_id`), the Vibe Limit
+(`transition_cost`'s energy threshold) and the Match/Fresh/Switch classifier's
+inputs were all sitting in `vapor-library`, working, with no way to reach them —
+so three of the four features built on 2026-08-16 were wiring, not engineering.
+**The tell in both directions is an argument nobody varies.** Before building a
+control, grep for the parameter it would set.
+
 **2. Nobody has heard this app.** Everything is verified by measurement and by
 browser tests against a stubbed IPC. No real server, no real library, no
-speaker. Do not describe anything as working end to end.
+speaker. Do not describe anything as working end to end. **This now extends to
+the network too**: `metadata.rs` is tested against canned response bodies and
+has never spoken to LRCLIB or Deezer (TD-51).
 
 ---
 
@@ -32,10 +43,10 @@ to be absolute — a compound `cd` triggers a permission prompt.
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-cd vapor-core           && cargo test --workspace   # 317: unit, property, fuzz
-cd vapor-app/src-tauri  && cargo test               #  72: unit, integration
-cd vapor-app            && npm test                 #  83: component
-cd vapor-app            && npm run e2e              #  17: journeys + monkey
+cd vapor-core           && cargo test --workspace   # 322: unit, property, fuzz
+cd vapor-app/src-tauri  && cargo test               # 119: unit, integration
+cd vapor-app            && npm test                 # 155: component
+cd vapor-app            && npm run e2e              #  39: journeys + monkey
 cd vapor-app            && npm run typecheck
 ```
 
@@ -48,8 +59,14 @@ the Ubuntu Playwright job that had never run anywhere but this Mac.
 
 The migration is essentially feature-complete against the Godot build. Every
 screen exists, audio plays, tracks mix with six transition types, playlists have
-a view, and a deck costs 1 MiB regardless of track length. A test suite was
-built from a starting point of zero frontend tests and now covers five layers.
+a view and folders to sit in, and a deck costs 1 MiB regardless of track length.
+The Vibe screen offers the three exits, badges the DJ's own choice and takes an
+override; the Mix Tuner sets the Vibe Limit. Lyrics and artwork can be looked up
+from LRCLIB and Deezer, off by default. A test suite was built from a starting
+point of zero frontend tests and now covers five layers.
+
+`docs/DESIGN_DRIFT.md` is the record of what the rewrite dropped and what was
+put back; its table of ❌s is now closed.
 
 What follows is what is still wrong.
 

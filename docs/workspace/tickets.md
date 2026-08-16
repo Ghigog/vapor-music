@@ -1814,3 +1814,98 @@ Optimize UI performance by dynamically toggling low processor mode, offloading w
 - Then the window moves and resizes natively without cursor lag.
 - Given any window resizing operation
 - Then the layout updates smoothly without freezing or rendering duplicate sidebar/mini-player elements.
+
+---
+
+### MIG-050 : Restore Match / Fresh / Switch and the AI Choice cycle (done)
+**User Story:**
+As a listener,
+I'd like the Vibe screen to show me the three ways out of the track that is playing and which one the DJ would take,
+So that I can see the choice being made and overrule it.
+
+**Context:** `docs/DESIGN_DRIFT.md` found that the React rewrite kept the planner (`generate_mood_path`) and dropped the chooser. The Daylight design specifies the three cards explicitly, tagged and colour-coded, and AI-007 specifies the behaviour. The engine inputs were all ported already — `harmonic_relation_cost`, `is_similar_genre`, `choose_transition`.
+
+**Description:**
+Port `_get_match_type_between` and the four-step cycle. Render one candidate per kind on the Vibe screen with the transition each would use, badge the DJ's choice, and let a person take another.
+
+**Requirements:**
+- Thresholds as the original: different genre → Switch; else ≥8 BPM or ≥0.2 energy → Fresh; else Match.
+- One candidate per kind, each scored on what its kind is for rather than on one shared distance.
+- Four-step cycle: Match, Fresh, Match, then a change. **Alternating rather than the original's 50/50 coin**, so a set can be reproduced and the screen can say in advance what it will do; the proportions over a full period are unchanged.
+- `selected` separate from `aiChoice`, so an override moves the highlight and leaves the badge (AI-007 §4).
+- Choosing by hand re-searches the tail along the same curve, so the arc is preserved.
+- Cards transcribed from the design's `alternates`, tag colours included.
+
+**Acceptance Criteria:**
+- Given Smart Mixing is on and the library has one track of each kind
+- When the Vibe screen loads
+- Then exactly three cards render, one marked as the AI's choice
+- When another is pressed
+- Then it becomes the next track, the badge stays where it was, and the cycle advances.
+
+---
+
+### MIG-051 : Playlist folders (done)
+**User Story:**
+As a listener with a lot of playlists,
+I'd like to group them into folders,
+So that the sidebar is navigable.
+
+**Context:** `playlist_folder_service.gd` was ported to `vapor-library` at migration time — `FolderStore`, and `folder_id` on a playlist, both with tests — and the shell exposed neither, so `folderId` reached the frontend as a field nothing could set.
+
+**Requirements:**
+- Commands for listing, creating, renaming and deleting folders, and for filing a playlist into one.
+- One level rendered, as the original rendered; `parent_id` stays representable so nesting needs no later migration.
+- **Deleting a folder does not delete the playlists in it** — they return to the top level, including a nested folder's, and the confirmation says so.
+- Filing is a drag, with a "Not in a folder" target so a playlist filed once is not filed forever.
+
+**Acceptance Criteria:**
+- Given a folder holding a playlist
+- When the folder is deleted
+- Then the playlist is still there, at the top level.
+
+---
+
+### MIG-052 : Lyrics and artwork, with consent (done)
+**User Story:**
+As a listener,
+I'd like to see the words to a track,
+So that I can read along — and I'd like to know when the app is talking to someone else to get them.
+
+**Context:** `metadata_service.gd`'s network half was never ported: LRCLIB for lyrics, Deezer for an artist portrait, album art and a genre. The original fetched unconditionally on every track and said nothing about it, which sits badly against an app whose whole claim is that it works everything out on the device.
+
+**Requirements:**
+- Port `fetch_lyrics`, `parse_lrc`, `fetch_artist_image`, `fetch_album_art` and the genre lookup.
+- **Off by default**, per track rather than per library; off also forgets what was found, including the downloaded images.
+- Parsing separate from the transport, so every response shape is tested from a canned string with no network.
+- Images fetched by Rust into a file named by URL — one sleeve per album, not per track — and served as a `data:` URI, since the window's CSP allows `data:` and no remote host.
+- Looked-up material drawn in its own panel that names where it came from; a looked-up sleeve is marked as such where it stands in for a file's own.
+- Fix `parse_lrc`'s two defects: the fraction divided by 100 regardless of its precision, and only the first of several timestamps on a line.
+
+**Acceptance Criteria:**
+- Given lookups are off
+- When Liner Notes opens
+- Then no request is made and the screen says what one would send.
+- Given lookups are on and the words exist
+- When one is asked for
+- Then the lines appear with their timings, credited to LRCLIB.
+
+---
+
+### MIG-053 : The Vibe Limit (Mix Tuner) (done)
+**User Story:**
+As a listener,
+I'd like to say how far the DJ may jump in energy between two tracks,
+So that a set can hold one intensity or swing between them as I choose.
+
+**Context:** §6 of `ai_dj_workflow.md`. `transition_cost` has taken the energy threshold as a parameter since the port and all three callers passed `DEFAULT_ENERGY_THRESHOLD` — the control the engine was built for was the missing piece.
+
+**Requirements:**
+- A slider on the Vibe screen, under the curves it governs, from strict to loose.
+- Band 0.1–1.0. Below 0.1 the penalty applies to nearly every pair and stops discriminating; 1.0 means no pair is ever over the limit.
+- `sanitised` handles the non-finite case *before* `clamp`, which passes NaN through — the value comes off disk.
+- Written on release, not on change.
+
+**Acceptance Criteria:**
+- Given the slider is moved and released
+- Then the limit is saved, and the next set the DJ conducts uses it.
