@@ -3,6 +3,9 @@
 **Status:** Living document
 **Last reviewed:** 2026-08-16
 
+**Current counts:** 317 core (unit + property + fuzz), 72 shell (unit +
+integration), 83 component, 17 end-to-end including three monkey seeds.
+
 > What is tested, at which layer, and what is deliberately not. Read alongside
 > `docs/MIGRATION.md` (the plan) and `docs/TECH_DEBT.md` (what is knowingly
 > left behind).
@@ -71,16 +74,24 @@ detection accuracy is a *number against a fixture set*, not a property.
 
 ### 3. Integration — the shell's command surface
 
-**Where:** `vapor-app/src-tauri/tests/`.
+**Where:** `vapor-app/src-tauri/src/lib.rs`'s test module, and `tests/`.
 **Runs:** `cargo test`.
 
-Every Tauri command driven against a real `AppState`, on a temporary data
-directory. This is the layer that would have caught the rename deleting a
-password, because that defect is entirely inside one command's behaviour and
+A real `AppState` on a temporary data directory, loaded, mutated and saved.
+This is the layer that would have caught the rename deleting a password,
+because that defect lived entirely inside one command's behaviour and was
 invisible to any unit test of the pieces.
 
-Covers per command: the happy path, bad input, missing prerequisites, and the
-ordering effects between commands (save then scan, rename then read).
+**A `#[tauri::command]` takes `State`, which cannot be constructed outside a
+running app** — so a command whose logic sits in its own body cannot be tested
+at this layer at all. That is why `set_remote_config` is now a thin wrapper
+over `apply_remote_config(&mut AppState, ..)`. Any command that grows real
+logic should be split the same way; a command body is a place tests cannot
+reach.
+
+Inside `lib.rs` rather than `tests/` because `AppState` is private and should
+stay so — the alternative is widening the crate's public surface for the
+benefit of tests, which is worse.
 
 ### 4. Component — screens, against a fake IPC
 
@@ -197,14 +208,17 @@ cd vapor-app         && npm run typecheck
 
 `.github/workflows/` runs every layer on every push.
 
-| Job | Layer | Platforms |
-|---|---|---|
-| `core` | unit, property | macOS, Windows, Linux |
-| `app` | unit, integration | macOS, Windows, Linux |
-| `frontend` | typecheck, component | Linux |
-| `e2e` | journeys, monkey | Linux |
-| `wasm` | the core still builds for the browser | Linux |
-| `godot` | the retiring tree, at a pinned baseline | macOS |
+| Workflow | Job | Layer | Platforms |
+|---|---|---|---|
+| `ci.yml` | `core` | unit, property, fuzz | macOS, Windows, Linux |
+| `ci.yml` | `wasm` | the core still builds for the browser | Linux |
+| `ci.yml` | `godot` | the retiring tree, at a pinned baseline | macOS |
+| `app.yml` | `frontend` | typecheck, component | Linux |
+| `app.yml` | `end-to-end` | journeys, monkey | Linux |
+| `app.yml` | `shell` | unit, integration | macOS, Linux |
+
+`app.yml` is path-filtered to `vapor-app/**` and `vapor-core/**`, so a commit
+touching only the Godot tree or the docs does not pay for a Tauri build.
 
 The three-platform matrix is not ceremony: the audio device, the keychain and
 the filesystem all differ, and the app has to open a device on each.
