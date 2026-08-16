@@ -25,6 +25,8 @@ import { YourData } from "./YourData";
 import { Onboarding } from "./Onboarding";
 import { Transport } from "../components/Transport";
 import { useBackend } from "../test/setup";
+import { makeRow } from "../test/ipc";
+import type * as core from "../lib/core";
 
 const A_TRACK = "/dav/Koofr/Music/windowlicker.m4a";
 
@@ -686,5 +688,114 @@ describe("Transport", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: /^pause$/i })).not.toBeInTheDocument();
     });
+  });
+});
+
+/**
+ * The three exits.
+ *
+ * `_get_match_type_between` and the four-step choice cycle were the half of the
+ * original DJ the rewrite dropped: it kept the planner and lost the chooser, so
+ * the screen could plan a set but never show the choice it was making or let
+ * anyone overrule it (docs/DESIGN_DRIFT.md).
+ */
+describe("Vibe DJ — Match, Fresh and Switch", () => {
+  /**
+   * A library with one of each kind in it, relative to the track playing:
+   * a near-identical tempo in the same genre, one 20 BPM away in the same
+   * genre, and one in a different genre altogether.
+   */
+  const HERE = "/here.m4a";
+  const MIXABLE: core.Row[] = [
+    makeRow({ href: HERE, title: "Here", bpm: 120, key: "8A", genre: "Electronic" }),
+    makeRow({ href: "/near.m4a", title: "Near", bpm: 122, key: "9A", genre: "Electronic" }),
+    makeRow({ href: "/lift.m4a", title: "Lift", bpm: 140, key: "10A", genre: "Electronic" }),
+    makeRow({ href: "/away.m4a", title: "Away", bpm: 121, key: "3B", genre: "Jazz" }),
+  ];
+
+  async function playing() {
+    const backend = useBackend({ rows: MIXABLE });
+    await backend.invoke("play_tracks", {
+      hrefs: MIXABLE.map((r) => r.href),
+      start: HERE,
+    });
+    return backend;
+  }
+
+  it("offers one way out of each kind", async () => {
+    await playing();
+    render(<Vibe />);
+
+    expect(await screen.findByText("MATCH")).toBeInTheDocument();
+    expect(screen.getByText("FRESH")).toBeInTheDocument();
+    expect(screen.getByText("SWITCH")).toBeInTheDocument();
+  });
+
+  /**
+   * Each card names the mix the engine would actually perform — the design's
+   * `fx` field, which is the whole reason the alternates are worth showing.
+   */
+  it("names the transition each one would use", async () => {
+    await playing();
+    render(<Vibe />);
+
+    expect(await screen.findByText(/bass swap/i)).toBeInTheDocument();
+    expect(screen.getByText(/filter sweep/i)).toBeInTheDocument();
+    expect(screen.getByText(/echo out/i)).toBeInTheDocument();
+  });
+
+  /** Exactly one, or the badge says nothing. */
+  it("marks the one the DJ would pick, and only that one", async () => {
+    await playing();
+    render(<Vibe />);
+
+    expect(await screen.findAllByText(/ai choice/i)).toHaveLength(1);
+  });
+
+  it("puts the chosen track next when one is pressed", async () => {
+    const backend = await playing();
+    const user = userEvent.setup();
+    render(<Vibe />);
+
+    await user.click(await screen.findByText("SWITCH"));
+
+    await waitFor(() => expect(backend.called("choose_next")).toBe(true));
+    expect(backend.lastArgs("choose_next")?.href).toBe("/away.m4a");
+    // Next in the queue, immediately after what is playing.
+    const queue = backend.state.queue;
+    expect(queue[queue.indexOf(HERE) + 1]).toBe("/away.m4a");
+  });
+
+  /**
+   * §4: the override moves the selection, not the badge. Taking a step by
+   * hand still advances the cycle, so the next transition is the next step of
+   * it either way.
+   */
+  it("advances the cycle when a step is taken by hand", async () => {
+    const backend = await playing();
+    const user = userEvent.setup();
+    render(<Vibe />);
+
+    // Step 0 is Match.
+    const first = await screen.findByText("MATCH");
+    expect(first.closest("button")).toHaveTextContent(/ai choice/i);
+
+    await user.click(screen.getByText("SWITCH"));
+
+    // Step 1 is Fresh, whatever was pressed.
+    await waitFor(() =>
+      expect(screen.getByText("FRESH").closest("button")).toHaveTextContent(
+        /ai choice/i,
+      ),
+    );
+    expect(backend.called("choose_next")).toBe(true);
+  });
+
+  it("says so rather than showing empty cards when nothing is analysed", async () => {
+    const backend = useBackend({ rows: [makeRow({ href: "/a.mp3", title: "A", bpm: 0 })] });
+    await backend.invoke("play_tracks", { hrefs: ["/a.mp3"], start: "/a.mp3" });
+    render(<Vibe />);
+
+    expect(await screen.findByText(/nothing analysed to choose from/i)).toBeInTheDocument();
   });
 });

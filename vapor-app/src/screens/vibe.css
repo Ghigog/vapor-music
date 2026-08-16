@@ -294,3 +294,158 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ---- The three exits (Match / Fresh / Switch) -------------------------
+ *
+ * Transcribed from the `alternates` rows in the Daylight file: a 70px row of
+ * sleeve, title, one mono line of "tempo · key · mix", and a tag pill on the
+ * right. The three tag colours are the design's own and they carry the
+ * meaning, so a glance says which kind of exit this is without reading it.
+ */
+
+.vibe__picks {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.vibe__pick {
+  width: 100%;
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px 10px 10px;
+  border-radius: var(--r-lg);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-rim);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.vibe__pick:hover {
+  border-color: rgba(var(--accent-rgb), 0.4);
+}
+
+.vibe__pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* What is actually queued next. Separate from the AI badge: picking another
+   card moves this ring and leaves the badge where it was, so an override
+   reads as an override (ai_dj_workflow.md §4). */
+.vibe__pick--on {
+  border-color: var(--accent);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--accent);
+}
+
+.vibe__pick-art {
+  width: 50px;
+  height: 50px;
+  flex: none;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  /* A sleeveless track still holds the row's shape rather than collapsing it. */
+  background: linear-gradient(150deg, #7d9de8, #3a58a8 55%, #1b2a58);
+}
+
+.vibe__pick-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vibe__pick-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vibe__pick-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vibe__pick-facts {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vibe__dot {
+  opacity: 0.5;
+}
+
+/* What the DJ *would* have chosen. It stays put when another card is picked. */
+.vibe__ai {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-dim);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.vibe__tag {
+  height: 24px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+}
+
+.vibe__tag--match {
+  color: var(--sov-ink);
+  background: rgba(var(--sov-rgb), 0.12);
+  border: 1px solid rgba(var(--sov-rgb), 0.3);
+}
+
+.vibe__tag--fresh {
+  color: var(--accent-dim);
+  background: rgba(var(--accent-rgb), 0.1);
+  border: 1px solid rgba(var(--accent-rgb), 0.26);
+}
+
+.vibe__tag--switch {
+  color: var(--amber-ink);
+  background: rgba(var(--amber-rgb), 0.14);
+  border: 1px solid rgba(var(--amber-rgb), 0.36);
+}

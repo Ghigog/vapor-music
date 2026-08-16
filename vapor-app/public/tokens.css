@@ -27,6 +27,12 @@
   --sov-rgb: 46, 158, 107;
   --sov-ink: #237a52;
 
+  /* Amber. The third of the three tag colours on the Vibe alternates, where
+     it means "a genre switch" against the green of a match and the accent of
+     a fresh one. Taken from the SWITCH tag in the Daylight file. */
+  --amber-rgb: 214, 158, 32;
+  --amber-ink: #9a6a12;
+
   /* Iridescence, used by the generative mark and blend states. */
   --iri-a: #7b6ef6;
   --iri-b: #3dd6c8;

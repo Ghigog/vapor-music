@@ -74,17 +74,21 @@ export function Vibe({
   const [blend, setBlend] = useState<core.BlendPreview | null>(null);
   const [curve, setCurve] = useState<core.Curve>("build");
   const [conducting, setConducting] = useState(false);
+  /** The three ways out of the playing track (docs/ai_dj_workflow.md §2–§4). */
+  const [candidates, setCandidates] = useState<core.MixCandidate[]>([]);
   const [helping, setHelping] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [p, b] = await Promise.allSettled([
+    const [p, b, c] = await Promise.allSettled([
       core.playbackState(),
       core.blendPreview(),
+      core.mixCandidates(),
     ]);
     if (p.status === "fulfilled") setPlayback(p.value);
     if (b.status === "fulfilled") setBlend(b.value);
+    if (c.status === "fulfilled") setCandidates(c.value);
   }, []);
 
   useEffect(() => {
@@ -128,6 +132,23 @@ export function Vibe({
       setError(messageOf(e));
     } finally {
       setConducting(false);
+    }
+  }
+
+  /**
+   * Take one of the three exits by hand.
+   *
+   * The badge stays on whatever the DJ would have chosen, so the override is
+   * visible as an override rather than rewriting history — the original's
+   * "AI Choice" badge behaviour.
+   */
+  async function pick(candidate: core.MixCandidate) {
+    setError(null);
+    try {
+      await core.chooseNext(candidate.href, curve);
+      await refresh();
+    } catch (e: unknown) {
+      setError(messageOf(e));
     }
   }
 
@@ -272,6 +293,58 @@ export function Vibe({
               Nothing queued after this track, so there is no blend to describe.
             </p>
           )}
+        </section>
+
+        <section className="vibe__card glass">
+          <h2 className="label">or blend into</h2>
+          {candidates.length === 0 ? (
+            <p className="vibe__note">
+              Nothing analysed to choose from yet. The DJ needs a tempo and a
+              key before it can offer a way out of this track.
+            </p>
+          ) : (
+            <ul className="vibe__picks">
+              {candidates.map((c) => (
+                <li key={c.href}>
+                  <button
+                    className={
+                      "vibe__pick" + (c.selected ? " vibe__pick--on" : "")
+                    }
+                    aria-pressed={c.selected}
+                    onClick={() => void pick(c)}
+                  >
+                    <span className="vibe__pick-art" aria-hidden="true">
+                      {c.cover && <img src={c.cover} alt="" />}
+                    </span>
+                    <span className="vibe__pick-text">
+                      <span className="vibe__pick-title">
+                        {c.title}
+                        {c.aiChoice && (
+                          <span className="vibe__ai">AI choice</span>
+                        )}
+                      </span>
+                      {/* The design's one mono line: tempo, key, and the mix
+                          that gets you there. */}
+                      <span className="vibe__pick-facts numeric">
+                        <span>{fmtBpm(c.bpm)}</span>
+                        <span className="vibe__dot">·</span>
+                        <span>{c.key || "—"}</span>
+                        <span className="vibe__dot">·</span>
+                        <span>{c.transition}</span>
+                      </span>
+                    </span>
+                    <span className={"vibe__tag vibe__tag--" + c.kind}>
+                      {c.label}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="vibe__note">
+            The curve decides where the set is going; this decides the next step.
+            Picking one re-plans the rest along the same curve.
+          </p>
         </section>
 
         <section className="vibe__card glass">

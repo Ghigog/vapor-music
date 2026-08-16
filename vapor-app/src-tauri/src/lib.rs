@@ -95,6 +95,8 @@ struct AppState {
     /// automatic pass was invisible.
     analysing: bool,
     analysing_title: String,
+    /// Where the four-step choice cycle has got to (§3 of the workflow doc).
+    mix_step: u64,
     cache: cache::Cache,
     store: Store,
 
@@ -176,6 +178,7 @@ impl AppState {
             analysis_generation: 0,
             analysing: false,
             analysing_title: String::new(),
+            mix_step: 0,
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
             // small to be worth having.
@@ -1918,6 +1921,230 @@ fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<V
     })
 }
 
+/// How a candidate relates to the track playing.
+///
+/// Ported from `_get_match_type_between` in `audio_manager.gd`, thresholds
+/// included: a genre jump is a Switch whatever else is true; otherwise 8 BPM or
+/// 0.2 of energy makes it Fresh; anything closer is a Match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum MatchKind {
+    Match,
+    Fresh,
+    Switch,
+}
+
+impl MatchKind {
+    fn label(self) -> &'static str {
+        match self {
+            MatchKind::Match => "MATCH",
+            MatchKind::Fresh => "FRESH",
+            MatchKind::Switch => "SWITCH",
+        }
+    }
+}
+
+fn match_kind_between(from: &TrackMeta, to: &TrackMeta, similar_genre: bool) -> MatchKind {
+    if !similar_genre {
+        return MatchKind::Switch;
+    }
+    let bpm_diff = (from.bpm - to.bpm).abs();
+    let energy_diff = (from.energy_level - to.energy_level).abs();
+    if bpm_diff >= 8.0 || energy_diff >= 0.2 {
+        MatchKind::Fresh
+    } else {
+        MatchKind::Match
+    }
+}
+
+/// Which kind the DJ takes at `step` of the repeating cycle.
+///
+/// §3 of the workflow document: Match, Fresh, Match, then Switch or Fresh.
+/// The original flipped a coin for the fourth; this alternates, because a set
+/// that cannot be reproduced cannot be reasoned about and the screen has to be
+/// able to say in advance what it will do.
+fn cycle_choice(step: u64) -> MatchKind {
+    match step % 4 {
+        0 | 2 => MatchKind::Match,
+        1 => MatchKind::Fresh,
+        _ if step % 8 == 3 => MatchKind::Switch,
+        _ => MatchKind::Fresh,
+    }
+}
+
+/// One option for what plays next.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MixCandidate {
+    href: String,
+    title: String,
+    artist: String,
+    bpm: f32,
+    key: String,
+    /// "match" | "fresh" | "switch".
+    kind: MatchKind,
+    /// The badge text, as the design writes it.
+    label: String,
+    /// The mix the engine would actually perform to get there.
+    transition: String,
+    /// Whether the four-step cycle would pick this one unprompted.
+    ai_choice: bool,
+    /// Whether this is what is actually queued next.
+    ///
+    /// Separate from `ai_choice` on purpose: §4 moves the selection to a manual
+    /// override and leaves the badge where it was, so an override reads as one
+    /// rather than as the DJ having chosen it all along.
+    selected: bool,
+    /// The sleeve, as the design's alternates carry one.
+    cover: Option<String>,
+}
+
+/// The three ways out of the playing track, and which one the DJ would take.
+///
+/// §2–§4 of `docs/ai_dj_workflow.md`. The curve decides where the set is going;
+/// this decides the next step. Both existed in the original — `play_harmonic_
+/// shuffle` planned the arc and this chose each transition — and the rewrite
+/// shipped only the first, so the screen could plan a set but never show the
+/// choice it was making or let anyone overrule it.
+///
+/// One candidate per kind, each the best of its kind rather than the best
+/// overall, because the point is to offer three genuinely different exits.
+#[tauri::command]
+fn mix_candidates(state: State<'_, Shared>) -> Result<Vec<MixCandidate>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let Some(current) = app.playing.clone() else {
+        return Ok(Vec::new());
+    };
+    let pool = track_meta_pool(&app);
+    let Some(from) = pool.get(&current) else {
+        return Ok(Vec::new());
+    };
+
+    // Everything analysed except the track playing and what it has already
+    // been through: offering the track you just heard is not an option.
+    let played: std::collections::HashSet<&str> = app
+        .queue
+        .tracks()
+        .iter()
+        .take(app.queue.current_index().unwrap_or(0))
+        .map(String::as_str)
+        .collect();
+
+    let mut best: [Option<(f32, &TrackMeta, MatchKind)>; 3] = [None, None, None];
+
+    for (href, to) in &pool {
+        if href == &current || played.contains(href.as_str()) {
+            continue;
+        }
+        let similar = same_genre(&app, &current, href);
+        let kind = match_kind_between(from, to, similar);
+        let bpm_diff = (from.bpm - to.bpm).abs();
+        let energy_diff = (from.energy_level - to.energy_level).abs();
+        let key_cost = vapor_library::harmonic_relation_cost(&from.musical_key, &to.musical_key);
+
+        // Each kind is scored on what it is *for*, not on one shared notion of
+        // "closest" — a Switch that scored like a Match would just be a Match.
+        let (slot, score) = match kind {
+            // Smoothest harmonic step available.
+            MatchKind::Match => (0, key_cost * 4.0 + bpm_diff),
+            // §2's target: about 15 BPM and 0.25 of energy of movement.
+            MatchKind::Fresh => (1, (bpm_diff - 15.0).abs() + (energy_diff - 0.25).abs() * 40.0),
+            // Key is ignored — the effect masks it — so rhythm carries it.
+            MatchKind::Switch => (2, bpm_diff + energy_diff * 40.0),
+        };
+
+        if best[slot].is_none_or(|(s, _, _)| score < s) {
+            best[slot] = Some((score, to, kind));
+        }
+    }
+
+    let wanted = cycle_choice(app.mix_step);
+    // What is queued next, whether the DJ put it there or a person did.
+    let queued_next = app.queue.peek_next(None).map(str::to_string);
+
+    Ok(best
+        .iter()
+        .filter_map(|slot| slot.as_ref())
+        .map(|(_, to, kind)| {
+            let row = app.rows.iter().find(|r| r.href == to.href);
+            MixCandidate {
+                href: to.href.clone(),
+                title: row.map(|r| r.title.clone()).unwrap_or_default(),
+                artist: row
+                    .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
+                    .map(|r| r.artist.clone())
+                    .unwrap_or_default(),
+                bpm: to.bpm,
+                key: to.musical_key.clone(),
+                kind: *kind,
+                label: kind.label().to_string(),
+                transition: transition_name(choose_transition(
+                    &from.musical_key,
+                    &to.musical_key,
+                    (from.bpm - to.bpm).abs(),
+                    same_genre(&app, &current, &to.href),
+                )),
+                // Only ever one, and only if that kind had a candidate at all.
+                ai_choice: *kind == wanted,
+                selected: queued_next.as_deref() == Some(to.href.as_str()),
+                cover: app.tags.get(&to.href).and_then(|t| t.cover.clone()),
+            }
+        })
+        .collect())
+}
+
+/// Take one of the three exits, and re-plan the set behind it.
+///
+/// The curve owns the destination and the match type owns the next step, so
+/// overriding one step must not throw away the arc: the tail is re-searched
+/// from the chosen track along the same curve. Being 60% through a Build stays
+/// 60% through a Build — the route changes, not where it is going.
+#[tauri::command]
+fn choose_next(href: String, curve: String, state: State<'_, Shared>) -> Result<()> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    if !app.queue.set_next(&href) {
+        return Err(Error("That track is no longer in the queue.".to_string()));
+    }
+    // Advance the cycle, so the next transition is the next step of it whether
+    // this one was taken by hand or left to the DJ.
+    app.mix_step = app.mix_step.wrapping_add(1);
+
+    let pool = track_meta_pool(&app);
+    if !pool.contains_key(&href) {
+        // Unanalysed: it can still play next, there is simply nothing to plan
+        // a route from.
+        return Ok(());
+    }
+
+    let tail = vapor_library::generate_mood_path(
+        &pool,
+        &href,
+        Curve::parse(&curve),
+        vapor_library::DEFAULT_ENERGY_THRESHOLD,
+        &skip_penalties(&app),
+    );
+
+    // Everything up to and including the track playing is history and stays
+    // put; the tail is what the DJ is still free to arrange.
+    let played: Vec<String> = app
+        .queue
+        .tracks()
+        .iter()
+        .take(app.queue.current_index().unwrap_or(0) + 1)
+        .cloned()
+        .collect();
+    let mut next: Vec<String> = played;
+    for h in tail {
+        if !next.contains(&h) {
+            next.push(h);
+        }
+    }
+    let current = app.queue.current().map(str::to_string);
+    app.queue.set_tracks(next, current.as_deref());
+    Ok(())
+}
+
 /// What the next blend will do, in the terms the Vibe screen states them.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3004,6 +3231,8 @@ pub fn run() {
             analyse_library,
             cancel_analysis,
             library_entities,
+            mix_candidates,
+            choose_next,
             track_cover,
             analysis_status,
             cache_status,
@@ -3330,5 +3559,79 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn meta(bpm: f32, key: &str, energy: f32) -> TrackMeta {
+        TrackMeta {
+            href: format!("/{bpm}-{key}"),
+            bpm,
+            musical_key: key.to_string(),
+            intro_key: key.to_string(),
+            outro_key: key.to_string(),
+            energy_level: energy,
+            genre: String::new(),
+        }
+    }
+
+    /// The thresholds are the original's, from `_get_match_type_between`.
+    #[test]
+    fn a_close_neighbour_in_the_same_genre_is_a_match() {
+        let from = meta(128.0, "8A", 0.5);
+        let to = meta(130.0, "9A", 0.55);
+
+        assert_eq!(match_kind_between(&from, &to, true), MatchKind::Match);
+    }
+
+    #[test]
+    fn eight_bpm_apart_is_fresh_rather_than_a_match() {
+        let from = meta(128.0, "8A", 0.5);
+        // Exactly the boundary: the original uses >=, so this is Fresh.
+        let to = meta(136.0, "8A", 0.5);
+
+        assert_eq!(match_kind_between(&from, &to, true), MatchKind::Fresh);
+    }
+
+    #[test]
+    fn a_fifth_of_energy_apart_is_fresh_even_at_the_same_tempo() {
+        let from = meta(128.0, "8A", 0.4);
+        let to = meta(128.0, "8A", 0.6);
+
+        assert_eq!(match_kind_between(&from, &to, true), MatchKind::Fresh);
+    }
+
+    /// A genre jump outranks everything: it is a Switch however close the
+    /// tempo and energy are.
+    #[test]
+    fn a_different_genre_is_a_switch_however_close_the_rest_is() {
+        let from = meta(128.0, "8A", 0.5);
+        let to = meta(128.0, "8A", 0.5);
+
+        assert_eq!(match_kind_between(&from, &to, false), MatchKind::Switch);
+    }
+
+    /// The four-step cycle, as §3 of the workflow document sets it out:
+    /// Match, Fresh, Match, then Switch or Fresh.
+    #[test]
+    fn the_choice_cycle_runs_match_fresh_match_then_a_change() {
+        assert_eq!(cycle_choice(0), MatchKind::Match);
+        assert_eq!(cycle_choice(1), MatchKind::Fresh);
+        assert_eq!(cycle_choice(2), MatchKind::Match);
+        assert_eq!(cycle_choice(3), MatchKind::Switch);
+        // Second time round the fourth step is the other option, so the cycle
+        // alternates rather than flipping a coin — a set that cannot be
+        // reproduced cannot be reasoned about.
+        assert_eq!(cycle_choice(7), MatchKind::Fresh);
+    }
+
+    /// Half the steps are Matches, and the other two kinds get a quarter each
+    /// over the full eight-step period. The property the coin flip was for —
+    /// that the set does not settle into one texture — without the randomness.
+    #[test]
+    fn the_cycle_keeps_its_proportions_over_a_full_period() {
+        let kinds: Vec<MatchKind> = (0..8).map(cycle_choice).collect();
+
+        assert_eq!(kinds.iter().filter(|k| **k == MatchKind::Match).count(), 4);
+        assert_eq!(kinds.iter().filter(|k| **k == MatchKind::Fresh).count(), 3);
+        assert_eq!(kinds.iter().filter(|k| **k == MatchKind::Switch).count(), 1);
     }
 }

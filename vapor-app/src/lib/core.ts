@@ -138,6 +138,35 @@ export interface TrackMeta {
 
 export type Curve = "build" | "chill" | "wave" | "flat";
 
+/** How a candidate relates to the track playing (docs/ai_dj_workflow.md §2). */
+export type MatchKind = "match" | "fresh" | "switch";
+
+/** One option for what plays next. */
+export interface MixCandidate {
+  href: string;
+  title: string;
+  artist: string;
+  bpm: number;
+  key: string;
+  kind: MatchKind;
+  /** The badge text, as the design writes it. */
+  label: string;
+  /** The mix the engine would actually perform to get there. */
+  transition: string;
+  /** Whether the four-step cycle would pick this one unprompted. */
+  aiChoice: boolean;
+  /**
+   * Whether this is what is actually queued next.
+   *
+   * Separate from `aiChoice` on purpose: an override moves the selection and
+   * leaves the badge where it was, so it reads as an override rather than as
+   * the DJ having chosen it all along (ai_dj_workflow.md §4).
+   */
+  selected: boolean;
+  /** The sleeve, as the design's alternates carry one. */
+  cover: string | null;
+}
+
 export interface RemoteConfig {
   url: string;
   username: string;
@@ -193,6 +222,28 @@ export function libraryEntities(view: LibraryView = {}): Promise<LibraryEntity[]
  */
 export function trackCover(href: string): Promise<string | null> {
   return invoke<string | null>("track_cover", { href });
+}
+
+/**
+ * The three ways out of the track playing.
+ *
+ * One candidate per kind — each the best of its kind rather than the best
+ * overall — so the three are genuinely different exits rather than three
+ * shades of the same one.
+ */
+export function mixCandidates(): Promise<MixCandidate[]> {
+  return invoke<MixCandidate[]>("mix_candidates");
+}
+
+/**
+ * Take one of them, and re-plan the set behind it.
+ *
+ * The curve owns the destination and the match type owns the next step, so
+ * overriding one step re-searches the tail along the same curve rather than
+ * abandoning the arc.
+ */
+export function chooseNext(href: string, curve: Curve): Promise<void> {
+  return invoke<void>("choose_next", { href, curve });
 }
 
 export function playlists(): Promise<Playlist[]> {

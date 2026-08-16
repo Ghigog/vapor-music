@@ -91,6 +91,16 @@ export function makeRow(over: Partial<core.Row> = {}): core.Row {
   };
 }
 
+/**
+ * A fake sleeve: a real data URI, so the UI renders an actual `<img>` rather
+ * than being tested against a string it never receives.
+ */
+const A_SLEEVE =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+
+/** The four-step cycle of ai_dj_workflow.md §3, as the backend runs it. */
+const MIX_CYCLE: core.MatchKind[] = ["match", "fresh", "match", "switch"];
+
 const DEFAULT_ROWS: core.Row[] = [
   makeRow({
     href: "/dav/Koofr/Music/windowlicker.m4a",
@@ -164,6 +174,8 @@ export class FakeBackend {
   private analysing: boolean;
   private analysingTitle: string;
   private deleted = false;
+  /** Where the four-step choice cycle has got to (ai_dj_workflow.md §3). */
+  private mixStep = 0;
 
   constructor(options: FakeOptions = {}) {
     const connected = options.connected ?? true;
@@ -391,12 +403,74 @@ export class FakeBackend {
         });
       }
 
+      case "mix_candidates": {
+        const from = this.rows.find((r) => r.href === this.current);
+        if (!from) return [];
+        // The same rule the engine applies, minus energy, which rows do not
+        // carry: a genre jump is a Switch whatever else is true, then 8 BPM
+        // separates Fresh from Match. Classifying rather than slicing is what
+        // makes "one card per kind" a claim a test can actually falsify.
+        const best = new Map<core.MatchKind, core.Row>();
+        for (const r of this.rows) {
+          if (r.href === this.current || r.bpm <= 0) continue;
+          const diff = Math.abs(from.bpm - r.bpm);
+          const kind: core.MatchKind =
+            r.genre !== from.genre ? "switch" : diff >= 8 ? "fresh" : "match";
+          const held = best.get(kind);
+          // Match wants the closest tempo, Fresh a change of about 15 BPM,
+          // Switch the closest tempo again since its key is masked.
+          const target = kind === "fresh" ? 15 : 0;
+          if (
+            !held ||
+            Math.abs(diff - target) < Math.abs(Math.abs(from.bpm - held.bpm) - target)
+          ) {
+            best.set(kind, r);
+          }
+        }
+        const wanted = MIX_CYCLE[this.mixStep % MIX_CYCLE.length]!;
+        const queuedNext = this.queue[this.queue.indexOf(from.href) + 1];
+        const order: core.MatchKind[] = ["match", "fresh", "switch"];
+        return order.flatMap((kind) => {
+          const r = best.get(kind);
+          if (!r) return [];
+          return [
+            {
+              href: r.href,
+              title: r.title,
+              artist: r.artist,
+              bpm: r.bpm,
+              key: r.key,
+              kind,
+              label: kind.toUpperCase(),
+              transition:
+                kind === "match"
+                  ? "Bass Swap"
+                  : kind === "fresh"
+                    ? "Filter Sweep"
+                    : "Echo Out",
+              aiChoice: kind === wanted,
+              selected: r.href === queuedNext,
+              cover: this.covers ? A_SLEEVE : null,
+            },
+          ];
+        });
+      }
+
+      case "choose_next": {
+        const href = String(a.href ?? "");
+        const at = this.current ? this.queue.indexOf(this.current) : -1;
+        this.queue = this.queue.filter((h) => h !== href);
+        this.queue.splice(at + 1, 0, href);
+        // The cycle advances whether the step was taken by hand or left to
+        // the DJ, so the badge moves on either way.
+        this.mixStep += 1;
+        return null;
+      }
+
       case "track_cover": {
-        // A fake sleeve: a real data URI, so the UI renders an actual <img>
-        // rather than being tested against a string it never receives.
         const href = String(a.href ?? "");
         return this.rows.some((r) => r.href === href) && this.covers
-          ? "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+          ? A_SLEEVE
           : null;
       }
 
