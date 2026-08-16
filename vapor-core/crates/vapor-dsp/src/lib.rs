@@ -48,12 +48,10 @@ pub struct Analysis {
     /// short for a segment to mean anything separate from the whole.
     pub intro_key: String,
     pub outro_key: String,
-    /// Perceived energy, 0–1 (TD-42b).
+    /// Perceived energy, 0–1.
     ///
-    /// Loudness, brightness and tempo averaged with equal weight. Equal
-    /// because there is no ground truth here to justify anything else —
-    /// weighting them by feel would be a tuned constant pretending to be a
-    /// measurement. See [`energy`].
+    /// A dynamics ratio, not a loudness — see [`loudness::energy_level`], which
+    /// is the `audio_dsp.cpp` measure ported unchanged.
     pub energy: f32,
     /// Envelope peaks across the whole track, for drawing a waveform.
     ///
@@ -78,43 +76,6 @@ const SEGMENT_SECS: f64 = 45.0;
 /// whole are all the same music, and reporting three keys would imply a
 /// distinction that is not there.
 const MIN_SEGMENTED_SECS: f64 = SEGMENT_SECS * 3.0;
-
-/// Tempo mapped onto 0–1 for the energy average.
-///
-/// 60 BPM is about as slow as recorded music gets before it stops reading as a
-/// pulse; 180 is about as fast before the perceived tempo halves.
-fn tempo_energy(bpm: f32) -> f32 {
-    ((bpm - 60.0) / 120.0).clamp(0.0, 1.0)
-}
-
-/// Loudness mapped onto 0–1 for the energy average.
-///
-/// Anchored on the range a mastered library actually occupies: about −20 LUFS
-/// for something gentle, about −6 for something relentless.
-fn loudness_energy(lufs: f32) -> f32 {
-    if !lufs.is_finite() {
-        return 0.0;
-    }
-    ((lufs + 20.0) / 14.0).clamp(0.0, 1.0)
-}
-
-/// Perceived energy from its three ingredients.
-///
-/// Loudness alone orders a set badly — it cannot tell a loud ballad from a
-/// quiet banger, which is exactly the pair the DJ has to keep apart. Brightness
-/// separates them spectrally and tempo separates them rhythmically.
-///
-/// Equal weights, deliberately. There is no annotated corpus here to fit
-/// against, and picking weights by ear would produce a tuned constant that
-/// looks like a measurement — the mistake MIG-002b was reverted for twice.
-pub fn energy(lufs: f32, brightness: f32, bpm: f32) -> f32 {
-    let parts = [
-        loudness_energy(lufs),
-        brightness.clamp(0.0, 1.0),
-        tempo_energy(bpm),
-    ];
-    parts.iter().sum::<f32>() / parts.len() as f32
-}
 
 #[derive(Debug)]
 pub enum AnalysisError {
@@ -264,8 +225,6 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         (String::new(), String::new())
     };
 
-    let brightness = spectrum::brightness(&key_spec);
-
     Ok(Analysis {
         bpm: tempo.bpm,
         beats,
@@ -280,7 +239,7 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         channels: audio.channels,
         intro_key,
         outro_key,
-        energy: energy(lufs, brightness, tempo.bpm),
+        energy: loudness::energy_level(&audio.samples, rate as f32),
         // Computed from the same decoded signal every other stage used, so it
         // costs a pass over memory rather than another decode.
         waveform: loudness::waveform_peaks(&audio.samples, WAVEFORM_BINS),
@@ -290,48 +249,6 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The pair the DJ has to keep apart, and the reason loudness alone was not
-    /// good enough: a loud ballad and a quiet banger.
-    #[test]
-    fn energy_separates_a_loud_ballad_from_a_quiet_banger() {
-        // Loud, dark, slow.
-        let ballad = energy(-7.0, 0.10, 68.0);
-        // Quieter, bright, fast.
-        let banger = energy(-13.0, 0.55, 168.0);
-
-        assert!(
-            banger > ballad,
-            "a quiet banger ({banger:.2}) did not out-energise a loud ballad ({ballad:.2})"
-        );
-        // And loudness alone would have got it backwards, which is the whole
-        // point of the change.
-        assert!(loudness_energy(-7.0) > loudness_energy(-13.0));
-    }
-
-    #[test]
-    fn energy_is_bounded_for_any_input() {
-        for lufs in [-60.0f32, -20.0, -14.0, -6.0, 0.0, f32::NAN, f32::INFINITY] {
-            for brightness in [-1.0f32, 0.0, 0.5, 1.0, 9.0] {
-                for bpm in [0.0f32, 60.0, 128.0, 400.0] {
-                    let e = energy(lufs, brightness, bpm);
-                    assert!(
-                        (0.0..=1.0).contains(&e),
-                        "energy({lufs}, {brightness}, {bpm}) = {e}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// Each ingredient has to move the answer, or it is not an ingredient.
-    #[test]
-    fn every_ingredient_changes_the_result() {
-        let base = energy(-14.0, 0.3, 120.0);
-        assert!(energy(-8.0, 0.3, 120.0) > base, "loudness had no effect");
-        assert!(energy(-14.0, 0.8, 120.0) > base, "brightness had no effect");
-        assert!(energy(-14.0, 0.3, 175.0) > base, "tempo had no effect");
-    }
 
     /// A track shorter than three segments has no separate intro or outro, and
     /// claiming otherwise would imply a distinction that is not there.

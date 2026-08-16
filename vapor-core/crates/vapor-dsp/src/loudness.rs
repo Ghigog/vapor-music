@@ -283,3 +283,118 @@ mod tests {
         assert!(peaks[9] > 0.7, "second half should be loud: {}", peaks[9]);
     }
 }
+
+/// Window used for the energy envelope, in seconds. From `audio_dsp.cpp`,
+/// which uses a flat 44100 samples — one second at its assumed rate.
+const ENERGY_WINDOW_SECS: f32 = 1.0;
+
+/// Perceived energy, 0–1.
+///
+/// **Ported from `audio_dsp.cpp`**, which computes it as the mean of a
+/// one-second RMS envelope divided by that envelope's peak.
+///
+/// It is a dynamics ratio rather than a loudness, and that is the point: a
+/// track that sits near its own peak the whole way through reads as relentless,
+/// while one with quiet verses and a loud chorus reads as varied — at identical
+/// LUFS. That distinction is exactly what a DJ ordering a set needs, and it is
+/// why loudness alone was the wrong measure.
+///
+/// Returns 0.5 for a signal too short or too quiet to measure, matching the
+/// original's fallback: an unknown energy sits in the middle rather than at an
+/// end, where it would drag a curve toward it.
+pub fn energy_level(samples: &[f32], sample_rate: f32) -> f32 {
+    let window = (sample_rate * ENERGY_WINDOW_SECS) as usize;
+    if window == 0 {
+        return 0.5;
+    }
+    let windows = samples.len() / window;
+    if windows == 0 {
+        return 0.5;
+    }
+
+    let mut peak = 0.0f32;
+    let mut total = 0.0f32;
+    for i in 0..windows {
+        let slice = &samples[i * window..(i + 1) * window];
+        let sum_squares: f32 = slice.iter().map(|s| s * s).sum();
+        let rms = (sum_squares / window as f32).sqrt();
+        peak = peak.max(rms);
+        total += rms;
+    }
+
+    // The original's guard: below this the ratio is noise divided by noise.
+    if peak <= 0.001 {
+        return 0.5;
+    }
+    ((total / windows as f32) / peak).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod energy_tests {
+    use super::*;
+
+    const RATE: f32 = 44_100.0;
+
+    fn tone(secs: f32, amplitude: impl Fn(usize) -> f32) -> Vec<f32> {
+        let n = (RATE * secs) as usize;
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / RATE;
+                (t * 220.0 * std::f32::consts::TAU).sin() * amplitude(i)
+            })
+            .collect()
+    }
+
+    /// The distinction the measure exists to make, and the one loudness cannot:
+    /// a track that holds its level against one that swings.
+    #[test]
+    fn a_relentless_track_out_energises_a_dynamic_one() {
+        let steady = tone(20.0, |_| 0.5);
+        // Same peak, but half the time it is nearly silent.
+        let swinging = tone(20.0, |i| {
+            if (i / (RATE as usize * 2)).is_multiple_of(2) {
+                0.5
+            } else {
+                0.02
+            }
+        });
+
+        let a = energy_level(&steady, RATE);
+        let b = energy_level(&swinging, RATE);
+        assert!(a > 0.9, "a steady track should sit near its own peak: {a}");
+        assert!(b < 0.7, "a swinging track should not: {b}");
+    }
+
+    /// Loudness cannot tell those two apart, which is why this is not loudness.
+    #[test]
+    fn energy_is_independent_of_absolute_level() {
+        let loud = tone(20.0, |_| 0.8);
+        let quiet = tone(20.0, |_| 0.05);
+        let (a, b) = (energy_level(&loud, RATE), energy_level(&quiet, RATE));
+        assert!(
+            (a - b).abs() < 0.05,
+            "halving the volume changed the energy: {a} vs {b}"
+        );
+    }
+
+    /// Unknown sits in the middle rather than at an end, where it would drag a
+    /// curve toward it.
+    #[test]
+    fn too_short_or_too_quiet_reports_the_middle() {
+        assert_eq!(energy_level(&[], RATE), 0.5);
+        assert_eq!(energy_level(&vec![0.0; 44_100 * 5], RATE), 0.5);
+        assert_eq!(
+            energy_level(&vec![0.1; 100], RATE),
+            0.5,
+            "shorter than a window"
+        );
+    }
+
+    #[test]
+    fn energy_is_bounded() {
+        for amp in [0.0f32, 0.001, 0.5, 1.0] {
+            let e = energy_level(&tone(5.0, |_| amp), RATE);
+            assert!((0.0..=1.0).contains(&e), "amp {amp} gave {e}");
+        }
+    }
+}

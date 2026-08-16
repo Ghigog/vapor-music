@@ -35,7 +35,7 @@ Things that would be a defect if the app shipped today.
 | TD-11 | **Key detection is 56% exact / 81% harmonically compatible.** Good enough to port with, not good enough to be proud of. Segmented analysis is the remaining lever. | MIG-001 |
 | ~~TD-12~~ | ~~One malformed AAC file decodes to zero samples.~~ **Done** — permanent failures are recorded and persisted, so playback refuses immediately with the reason instead of re-downloading the file to fail the same way, and Liner Notes says why. Distinguished from "not downloaded yet", which is retryable and must not condemn a library analysed before its cache warmed. | MIG-004 |
 | ~~TD-13~~ | ~~`vapor-dsp` does not emit segment keys.~~ **Done** — key estimation now runs over a 45 s span from `cue_in` and a 45 s span back from `cue_out`, so the pathfinder judges a mix on the keys at the *seam* rather than on the whole-track average. Measured from the audible content, not the file, so a silent lead-in cannot become the intro. Tracks under 135 s report no segments rather than three names for the same music. | — |
-| ~~TD-14~~ | ~~Skip history is not persisted or wired.~~ **Done** — pressing next inside the first third of a track records a penalty against that specific transition, persisted and fed to both `vibe_path` and `mood_path`. Capped so a pair can never become unpickable, and small per skip: leaving a track is an ambiguous signal — a phone call, a wrong mood — and treating one as a verdict would make the DJ timid after a single evening. | — |
+| ~~TD-14~~ | ~~Skip history is not persisted or wired.~~ **Done** — ported from AI-010 rather than reinvented: a skip is logged when next is pressed *during* a mix or within ten seconds of one ending, and adds 15.0 to that pair's cost, uncapped. An earlier attempt used a first-third rule and a penalty of 1.5, both invented; see the note below. | — |
 
 ## Engine
 
@@ -47,7 +47,7 @@ Things that would be a defect if the app shipped today.
 | ~~TD-23~~ | ~~Standard Crossfade is not equal-power.~~ **Done** — now a `cos`/`sin` pair whose squares sum to one at every instant, so the level holds across the whole transition. The original interpolated both gains linearly in dB, putting both decks at −30 dB at the midpoint: a hole in the middle of every mix. Carried across the port so the rest could be verified against it, then fixed — a known defect surviving a migration is an argument against having migrated. | MIG-015 |
 | TD-24 | **cpal is unvalidated on iOS and Android.** The least battle-tested part of the audio stack, and phase 4 is where it would be discovered late. TD-03 exercises it on macOS desktop only; that says nothing about either mobile target. | MIG-011 |
 | ~~TD-25~~ | ~~The app plays tracks, it does not mix them.~~ **Done** — the supervisor decodes the next track ~30 s before the outgoing one's `cue_out` and schedules a beat-matched mix. Beat grids never cross to the audio thread: the alignment is computed on the control side and only a ratio and a cue position are sent (`Mixer::schedule_prepared`). A mix falls back to plain sequential playback whenever it cannot be arranged — no analysis, or tempi more than ±6% apart — which on a queue in title order is the common case, not an error. **What is still missing: choosing the transition *type* per pair.** Every mix is a Standard Crossfade; the Godot build picked from context. | MIG-008, TD-27 |
-| ~~TD-27~~ | ~~Every mix is a Standard Crossfade.~~ **Done** — chosen per pair from the harmonic relation at the seam: compatible keys get a Bass Swap (they can be overlapped), clashing keys get a Filter Sweep (the filter is what hides the clash), an unknown key gets the least opinionated crossfade. Uses `harmonic_relation_cost`, the same function the pathfinder prices with, so the choice and the ordering cannot disagree. | MIG-008 |
+| ~~TD-27~~ | ~~Every mix is a Standard Crossfade.~~ **Partly done** — ported the structure of `get_transition_type_between`: bucketed by harmonic distance, tempo distance and genre jump. Three of its six types need delay and reverb (TD-20), so their weight falls onto the nearest available: Echo Out and Reverb Freeze become Filter Sweep, Tempo Morph becomes Bass Swap. That collapses two of the original's tempo buckets — lost nuance, restored when TD-20 lands. | MIG-008, TD-20 |
 | ~~TD-26~~ | ~~No repeat or shuffle, and the queue always wraps.~~ **Done** — `Repeat::{Off, All, One}`, defaulting to the wrapping behaviour it always had, plus shuffle with the original order restorable. The permutation is generated in the shell because the core owns no randomness on purpose. Thirteen tests, including the ones that matter: repeat-off leaves the playhead where it stopped, an explicit "play this next" outranks any mode, and unshuffling respects tracks removed while shuffled. | `queue.rs` |
 
 ## Shell and UI
@@ -59,7 +59,7 @@ Things that would be a defect if the app shipped today.
 | ~~TD-37~~ | ~~Nine backend commands had no frontend binding.~~ **Done** — `tests/command_bindings.rs` reads the `generate_handler!` list and `core.ts` and fails if a command cannot be called. Verified to fail by removing a binding. It cannot check argument shapes; that would need real type extraction. | `core.ts` |
 | ~~TD-38~~ | ~~Changing the username orphans the old keychain entry.~~ **Done** — `set_remote_config` deletes the previous entry when the name changes. Best effort: a keychain that will not release an entry is not a reason to refuse the rename. | `webdav.rs` |
 | ~~TD-41b~~ | ~~Liner Notes has no written notes or credits.~~ **Partly done** — the file's own comment field is shown where it has one, and the screen now says honestly whether what it displays came from tags or from the path. The design's commissioned prose and per-role credits are not there, because no file carries them and nothing writes them. | TD-39 |
-| ~~TD-42b~~ | ~~Energy is estimated from loudness.~~ **Done** — loudness, spectral brightness and tempo, averaged with equal weight. Equal because there is no annotated corpus to fit against and picking weights by ear produces a tuned constant pretending to be a measurement. A test pins the case that motivated it: a quiet banger now out-energises a loud ballad, which loudness alone got backwards. | `spectrum.rs` |
+| ~~TD-42b~~ | ~~Energy is estimated from loudness.~~ **Done** — ported `audio_dsp.cpp`'s measure: the mean of a one-second RMS envelope over its peak. A dynamics ratio, not a loudness, so a track that sits near its own peak throughout reads as relentless and one with quiet verses reads as varied *at identical LUFS*. An earlier attempt averaged loudness, brightness and tempo, which was invented. | — |
 | ~~TD-43b~~ | ~~Vibe DJ conducts from what is analysed, silently.~~ **Done** — the path reports how many tracks it passed over for want of analysis. | `Vibe.tsx` |
 | ~~TD-39~~ | ~~No cover art anywhere.~~ **Done** — embedded artwork and tags are read by `lofty` during the analysis pass, when the file is already local and already open, so there is no second walk of the library. Art reaches Now Playing, the Queue and Liner Notes as a data URI. Tags fill *gaps* only: a path-derived artist wins over a tag, because a library filed as `Artist/Album/Track` is a statement and a disagreeing tag is usually the tag being wrong. | — |
 | ~~TD-31~~ | ~~No drag and drop.~~ **Partly done** — the Queue reorders by dragging, using the platform's own HTML5 drag events rather than `dnd-kit`; explicit up/down buttons cover the keyboard, which a pointer-only implementation would have needed anyway. Dragging tracks *onto* playlists is still not wired. | — |
@@ -76,6 +76,19 @@ Things that would be a defect if the app shipped today.
 | TD-41 | **The Godot CI job runs without the GDExtension**, so DSP-dependent tests are not covered. Deliberate — building Essentia from a HEAD-only tap on every run is worse — but the gap is real. | MIG-040 |
 | TD-42 | **12 GUT tests fail** and are pinned as a known-failing baseline. Never diagnosed. | — |
 | TD-43 | **The fixture set is not reproducible by anyone else.** Validation runs against a personal library via `extract-fixtures.mjs`; there is no synthetic corpus, so no one else can verify the analysis numbers. | — |
+
+## A note on invented behaviour
+
+Three things were built as new inventions when the Godot tree already specified
+them, and have since been replaced with ports: the skip-history rule (AI-010),
+the transition-type selection (`get_transition_type_between`), and the energy
+measure (`audio_dsp.cpp`). All three now follow the original.
+
+`docs/MIGRATION.md` states the rule they broke: *"When a choice arises between
+matching existing behaviour and improving on it, match it."* Worth re-reading
+before adding anything that looks like a product decision — the Godot tree is
+still the specification, and it is easy to reimplement a feature that is already
+there because the port left only its parameter behind.
 
 ## Deliberately not debt
 

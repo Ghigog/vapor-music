@@ -51,6 +51,14 @@ struct AppState {
     /// Analysis results, keyed by href. Persisted so a library is analysed
     /// once rather than on every launch.
     analysis: analysis::Cache,
+    /// The most recent blend, as (outgoing, incoming), until it is judged.
+    ///
+    /// A skip is a verdict on a *transition*, so the pair has to outlive the
+    /// transition: by the time a person reacts, the mixer has already swapped
+    /// decks and forgotten which two tracks were involved.
+    last_mix: Option<(String, String)>,
+    /// When that blend finished, for the ten-second window.
+    last_mix_ended: Option<std::time::Instant>,
     /// Learned dislike of specific transitions, keyed "from\u{1f}to" (TD-14).
     ///
     /// Persisted, because the whole value is that it accumulates. A tuple key
@@ -121,6 +129,8 @@ impl AppState {
             playlists,
             queue: Queue::default(),
             rows: Vec::new(),
+            last_mix: None,
+            last_mix_ended: None,
             analysis,
             skips,
             tags,
@@ -450,40 +460,12 @@ fn play_tracks(hrefs: Vec<String>, start: Option<String>, state: State<'_, Share
     Ok(())
 }
 
-/// Fraction of a track that counts as "heard" rather than skipped.
-///
-/// Leaving in the first third is a rejection; leaving at the end is just
-/// impatience with the outro, and treating that as a verdict would poison the
-/// cost model with transitions a person was actually happy with.
-const SKIP_THRESHOLD: f64 = 0.33;
-
 #[tauri::command]
 fn next_track(state: State<'_, Shared>) -> Result<Option<String>> {
     let shared: Shared = Arc::clone(&state);
     let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
 
-    // Pressing next early is the only signal the app gets about a transition it
-    // chose, so it is the one worth recording (TD-14).
-    if let (Some(from), Some(current)) = (
-        app.queue
-            .current_index()
-            .and_then(|i| i.checked_sub(1))
-            .and_then(|i| app.queue.tracks().get(i).cloned()),
-        app.playing.clone(),
-    ) {
-        let snapshot = app.player.as_ref().map(|p| p.snapshot());
-        let played = snapshot
-            .filter(|s| s.duration > 0.0)
-            .map(|s| s.position / s.duration)
-            .unwrap_or(1.0);
-        if played < SKIP_THRESHOLD && from != current {
-            let key = skip_key(&from, &current);
-            let penalty =
-                (app.skips.get(&key).copied().unwrap_or(0.0) + SKIP_INCREMENT).min(SKIP_MAX);
-            app.skips.insert(key, penalty);
-            let _ = app.save_skips();
-        }
-    }
+    record_skip_if_reacting_to_a_blend(&mut app);
 
     let next = app.queue.next(None).map(str::to_string);
     if let Some(href) = next.clone() {
@@ -756,34 +738,92 @@ const TRANSITION_ARM_LEAD: f64 = 30.0;
 /// meant every mix inherited Standard Crossfade's ~3 dB midpoint dip (TD-23)
 /// whether or not it suited the pair.
 ///
-/// The rule is the harmonic relation between the two keys, because that is what
-/// decides whether the two can be heard *together* at all:
+/// **Ported from `audio_manager.gd::get_transition_type_between`.**
 ///
-/// * **Compatible keys** — the tracks can overlap, so Bass Swap does the
-///   characteristic DJ move: hold the outgoing low end, bring the incoming in
-///   over it, swap the bass at the midpoint. It is the longest of the three and
-///   the most musical when it fits.
-/// * **Clashing keys** — overlapping two dissonant tonalities is exactly what a
-///   filter hides, so Filter Sweep rolls the outgoing off as the incoming opens
-///   up and the clash never sounds.
-/// * **Unknown key** — no basis to choose, so the least opinionated option.
-///   Standard Crossfade alters neither track's character on the way past.
+/// An earlier version of this was a two-way branch of my own devising. The
+/// original is a weighted choice over six transition types, bucketed by
+/// harmonic distance *and* tempo distance, with a genre jump treated as its own
+/// case — and seeded by the pair, so the same two tracks always get the same
+/// mix. That structure is what belongs here.
 ///
-/// `harmonic_relation_cost` is the same function the pathfinder prices
-/// transitions with, so the choice here and the ordering there cannot form
-/// different opinions about the same pair.
-fn choose_transition(from_key: &str, to_key: &str) -> vapor_engine::TransitionType {
-    use vapor_engine::TransitionType;
+/// ## What cannot be ported yet
+///
+/// Three of the six — Echo Out, Reverb Freeze and Tempo Morph — need delay and
+/// reverb, which `vapor-engine` does not have (TD-20). They carry most of the
+/// weight in the original's buckets, particularly where the keys clash or the
+/// tempi are far apart.
+///
+/// So their weight falls onto the three that exist, by nearest relative:
+///
+/// | Original | Stands in as | Why |
+/// |---|---|---|
+/// | Echo Out | Filter Sweep | Both hide the outgoing track behind an effect |
+/// | Reverb Freeze | Filter Sweep | Same |
+/// | Tempo Morph | Bass Swap | Both are "these two fit, ride it out" |
+///
+/// A mix that should be an Echo Out is a Filter Sweep today. That is a
+/// downgrade rather than a design, it is visible — the Vibe screen names the
+/// mix it will perform — and it resolves when TD-20 lands.
+fn choose_transition(
+    from_key: &str,
+    to_key: &str,
+    bpm_diff: f32,
+    same_genre: bool,
+) -> vapor_engine::TransitionType {
+    use vapor_engine::TransitionType::{BassSwap, FilterSweep, StandardCrossfade};
 
+    // Unanalysed. The original hashes the pair and takes any of the six; with
+    // three available and nothing to reason from, the least opinionated one is
+    // a better answer than a third of a coin flip.
     if from_key.is_empty() || to_key.is_empty() {
-        return TransitionType::StandardCrossfade;
+        return StandardCrossfade;
     }
-    // Below the clash threshold the relation is one a DJ would actually play.
-    if vapor_library::harmonic_relation_cost(from_key, to_key) < vapor_library::CLASH_COST {
-        TransitionType::BassSwap
+
+    let key_cost = vapor_library::harmonic_relation_cost(from_key, to_key);
+    // The original's "creative" match type: a genre jump is steered the same
+    // way as a key clash, because both are a deliberate gear change.
+    if key_cost >= vapor_library::CLASH_COST || !same_genre {
+        // Echo Out / Reverb Freeze in every tempo bucket of the original.
+        return FilterSweep;
+    }
+
+    // Otherwise the original leans on Bass Swap and Tempo Morph while the tempi
+    // are within 8 BPM, and hands over to the effect-led pair beyond that.
+    //
+    // Its two inner buckets — under 3 BPM and under 8 — differ only in which of
+    // Bass Swap and Tempo Morph leads, and both map onto Bass Swap here, so
+    // they collapse. That is lost nuance, not a simplification.
+    if bpm_diff < 8.0 {
+        BassSwap
     } else {
-        TransitionType::FilterSweep
+        FilterSweep
     }
+}
+
+/// A track's tempo, honouring a manual correction.
+fn bpm_of(analysis: &analysis::Analysis, app: &AppState, href: &str) -> f32 {
+    app.settings.bpm_override(href).unwrap_or(analysis.bpm)
+}
+
+/// Whether two tracks sit in the same genre family.
+///
+/// `_get_match_type_between` calls a genre jump "creative" and steers it toward
+/// an effect-led transition. `is_similar_genre` is already ported, so this asks
+/// the original's question with the original's answer.
+fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
+    let genre_of = |href: &str| {
+        app.rows
+            .iter()
+            .find(|r| r.href == href)
+            .map(|r| r.genre.clone())
+            .unwrap_or_default()
+    };
+    let (ga, gb) = (genre_of(a), genre_of(b));
+    // Unknown on either side is not evidence of a jump.
+    if ga.is_empty() || gb.is_empty() {
+        return true;
+    }
+    vapor_library::is_similar_genre(&ga, &gb)
 }
 
 /// Build the mixer's beat grid for a track, honouring a manual tempo.
@@ -849,7 +889,12 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
     } else {
         &incoming.intro_key
     };
-    let kind = choose_transition(out_key, in_key);
+    let kind = choose_transition(
+        out_key,
+        in_key,
+        (bpm_of(outgoing, app, current) - bpm_of(incoming, app, &next)).abs(),
+        same_genre(app, current, &next),
+    );
     let duration = kind.default_duration();
     // Start early enough that the mix finishes as the outgoing track's audible
     // content ends, rather than after it has already fallen silent.
@@ -1047,8 +1092,15 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
             // is now what is playing. Nothing needs loading — the audio is
             // already running — the queue just has to agree about where it is.
             if app.player.as_ref().is_some_and(|p| p.take_swapped()) {
+                let from = app.playing.clone();
                 app.queue.next(None);
                 app.playing = app.armed_next.take();
+                // Remember what was blended into what, so a skip in the next
+                // ten seconds can be attributed to this pair (TD-14).
+                if let (Some(from), Some(to)) = (from, app.playing.clone()) {
+                    app.last_mix = Some((from, to));
+                    app.last_mix_ended = Some(std::time::Instant::now());
+                }
                 drop(app);
                 let _ = app_handle.emit("playback-changed", ());
                 continue;
@@ -1310,18 +1362,56 @@ fn transition_name(kind: vapor_engine::TransitionType) -> String {
 /// would teach the pathfinder the wrong lesson.
 const SKIP_KEY_SEP: char = '\u{1f}';
 
-/// How much a single skip adds to a transition's cost.
+/// Cost a single skip adds to a transition.
 ///
-/// Roughly the cost of a harmonic step, so one skip nudges and a handful
-/// genuinely rules a pair out. Deliberately not large: skipping a track is an
-/// ambiguous signal — a phone call, a wrong mood, a song heard too often — and
-/// treating one as a verdict would make the DJ timid after a single evening.
-const SKIP_INCREMENT: f32 = 1.5;
-/// Ceiling on accumulated dislike, so a pair can never become unpickable.
-const SKIP_MAX: f32 = 8.0;
+/// **15.0, from `dj_pathfinder.gd::get_skip_penalty`** — the existing value, not
+/// a new one. The port kept `WEIGHT_KEY`, `WEIGHT_BPM`, `WEIGHT_ENERGY` and
+/// `WEIGHT_GENRE` unchanged, so this sits on the same scale it always did and
+/// means what it always meant: one skip outweighs almost any harmonic argument
+/// for putting that pair together again.
+///
+/// The original accumulates without a ceiling, by counting log entries. That is
+/// kept too — a pair skipped five times has been rejected five times, and
+/// capping it would be second-guessing the person.
+const SKIP_PENALTY: f32 = 15.0;
+
+/// How long after a mix ends that pressing next still counts as rejecting it.
+///
+/// From `audio_manager.gd::_check_and_log_skip`: a skip is logged when next is
+/// pressed **during** a transition, or within ten seconds of one finishing —
+/// the window in which a person is reacting to the *blend* rather than to the
+/// track.
+const SKIP_WINDOW_SECS: f64 = 10.0;
 
 fn skip_key(from: &str, to: &str) -> String {
     format!("{from}{SKIP_KEY_SEP}{to}")
+}
+
+/// Record a rejected blend when next is pressed in reaction to one (TD-14).
+///
+/// The signal is the original's and it is deliberately narrow: a skip counts
+/// only while a mix is running, or within [`SKIP_WINDOW_SECS`] of one ending.
+/// Outside that window, pressing next is a judgement about the *track* — heard
+/// too often, wrong mood — and recording it would teach the pathfinder to avoid
+/// a transition nobody objected to.
+fn record_skip_if_reacting_to_a_blend(app: &mut AppState) {
+    let Some((from, to)) = app.last_mix.clone() else {
+        return;
+    };
+
+    let mixing_now = app.player.as_ref().is_some_and(|p| p.transition_armed());
+    let just_ended = app
+        .last_mix_ended
+        .is_some_and(|t| t.elapsed().as_secs_f64() <= SKIP_WINDOW_SECS);
+    if !mixing_now && !just_ended {
+        return;
+    }
+
+    // One verdict per blend. Pressing next twice in a row is one opinion about
+    // one transition, not two.
+    app.last_mix = None;
+    *app.skips.entry(skip_key(&from, &to)).or_insert(0.0) += SKIP_PENALTY;
+    let _ = app.save_skips();
 }
 
 /// The skip map in the shape the pathfinder wants.
@@ -1529,6 +1619,8 @@ fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
             } else {
                 &inc.intro_key
             },
+            (from_bpm - to_bpm).abs(),
+            same_genre(&app, &current, &next),
         )),
     }))
 }
