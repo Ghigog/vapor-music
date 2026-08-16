@@ -152,8 +152,7 @@ pub fn pending(hrefs: &[String], cache: &Cache) -> Vec<String> {
 /// because the queue repeats it.
 pub fn pending_first(hrefs: &[String], cache: &Cache, first: &[String]) -> Vec<String> {
     let todo = pending(hrefs, cache);
-    let outstanding: std::collections::HashSet<&str> =
-        todo.iter().map(String::as_str).collect();
+    let outstanding: std::collections::HashSet<&str> = todo.iter().map(String::as_str).collect();
 
     let mut ordered = Vec::with_capacity(todo.len());
     let mut taken = std::collections::HashSet::new();
@@ -379,7 +378,10 @@ mod tests {
         let replacement = Cancel::new();
 
         assert!(running.is_stopped(), "the replaced pass must stay stopped");
-        assert!(!replacement.is_stopped(), "the new pass must be able to run");
+        assert!(
+            !replacement.is_stopped(),
+            "the new pass must be able to run"
+        );
     }
 
     /// A clone is the same flag — that is how the worker thread sees a stop.
@@ -429,7 +431,10 @@ mod tests {
 
     #[test]
     fn priority_never_drops_or_duplicates_work() {
-        let hrefs: Vec<String> = ["a", "b", "c", "d", "e"].iter().map(|s| s.to_string()).collect();
+        let hrefs: Vec<String> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let cache = Cache::new();
 
         let plain = pending(&hrefs, &cache);

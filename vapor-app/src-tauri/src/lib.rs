@@ -39,7 +39,7 @@ use tauri::{Manager, State};
 use vapor_engine::TrackSource;
 use vapor_library::{
     index::{GroupBy, Row, SortKey},
-    Curve, PlaylistStore, Queue, Settings, TrackMeta,
+    Curve, FolderStore, PlaylistStore, Queue, Settings, TrackMeta,
 };
 
 /// Everything the shell holds between commands.
@@ -50,6 +50,9 @@ use vapor_library::{
 struct AppState {
     settings: Settings,
     playlists: PlaylistStore,
+    /// Folders that playlists are filed into. A folder owns no tracks — a
+    /// playlist carries a `folder_id` pointing at one.
+    folders: FolderStore,
     queue: Queue,
     /// The library table's rows, rebuilt on scan.
     rows: Vec<Row>,
@@ -153,6 +156,7 @@ impl AppState {
             .sanitised();
         let cache_max_bytes = settings.cache_max_bytes;
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
+        let folders = store.load("folders").unwrap_or(None).unwrap_or_default();
         let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
         let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
         let tags = store.load("tags").unwrap_or(None).unwrap_or_default();
@@ -166,6 +170,7 @@ impl AppState {
         AppState {
             settings,
             playlists,
+            folders,
             queue: Queue::default(),
             rows,
             last_mix: None,
@@ -290,6 +295,11 @@ impl AppState {
     /// has to be atomic.
     fn save_playlists(&self) -> Result<()> {
         self.store.save("playlists", &self.playlists)?;
+        Ok(())
+    }
+
+    fn save_folders(&self) -> Result<()> {
+        self.store.save("folders", &self.folders)?;
         Ok(())
     }
 
@@ -595,14 +605,127 @@ fn playlists(state: State<'_, Shared>) -> Result<Vec<vapor_library::Playlist>> {
 }
 
 #[tauri::command]
-fn create_playlist(name: String, state: State<'_, Shared>) -> Result<vapor_library::Playlist> {
+fn create_playlist(
+    name: String,
+    folder_id: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<vapor_library::Playlist> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     // Ids are generated here rather than in the core so the core stays
     // deterministic and testable — see the note on PlaylistStore::create.
     let id = new_id("playlist");
-    let created = app.playlists.create(id, name).clone();
+    // A folder that has since been deleted would file the playlist somewhere
+    // the rail cannot draw, so an unknown one means the top level.
+    let folder = folder_id
+        .filter(|f| app.folders.get(f).is_some())
+        .unwrap_or_default();
+    let created = app.playlists.create_in_folder(id, name, folder).clone();
     app.save_playlists()?;
     Ok(created)
+}
+
+// ---------------------------------------------------------------------------
+// Playlist folders
+// ---------------------------------------------------------------------------
+//
+// A thin organisational layer over playlists, ported from
+// `playlist_folder_service.gd`. A folder never owns tracks; a playlist carries
+// a `folder_id` pointing at one.
+//
+// `vapor-library` has had `FolderStore` and `Playlist::folder_id` since the
+// port, both tested, and the shell exposed neither — so `folderId` arrived on
+// the frontend's `Playlist` type as a field nothing could ever set. That is
+// the failure mode the handover names: a parameter carried across without its
+// behaviour.
+//
+// `parent_id` is representable so nesting needs no later migration, but
+// nothing here creates a nested folder and the rail draws one level, which is
+// what the original did too.
+
+#[tauri::command]
+fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folder>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.folders.all().to_vec())
+}
+
+#[tauri::command]
+fn create_folder(name: String, state: State<'_, Shared>) -> Result<vapor_library::Folder> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error("A folder needs a name.".to_string()));
+    }
+    let id = new_id("folder");
+    let created = app.folders.create(id, name, "").clone();
+    app.save_folders()?;
+    Ok(created)
+}
+
+#[tauri::command]
+fn rename_folder(id: String, name: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if name.trim().is_empty() {
+        return Err(Error("A folder needs a name.".to_string()));
+    }
+    let renamed = app.folders.rename(&id, name.trim());
+    if renamed {
+        app.save_folders()?;
+    }
+    Ok(renamed)
+}
+
+/// Delete a folder. The playlists inside it move to the top level.
+///
+/// Deleting a container must not delete what it contains — a folder is an
+/// organisational convenience, and losing playlists to one would make filing
+/// them a risk rather than a tidy-up. `FolderStore::delete` deliberately
+/// returns the ids it orphaned instead of cascading, so reassigning them is
+/// this layer's job.
+#[tauri::command]
+fn delete_folder(id: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if !remove_folder(&mut app, &id) {
+        return Ok(false);
+    }
+    app.save_folders()?;
+    app.save_playlists()?;
+    Ok(true)
+}
+
+/// The body of [`delete_folder`], split out so it is reachable from a test —
+/// a `#[tauri::command]` takes `State`, which cannot be built outside a
+/// running app.
+fn remove_folder(app: &mut AppState, id: &str) -> bool {
+    if app.folders.get(id).is_none() {
+        return false;
+    }
+    let orphaned = app.folders.delete(id);
+
+    let homeless: Vec<String> = app
+        .playlists
+        .all()
+        .iter()
+        .filter(|p| p.folder_id == id || orphaned.contains(&p.folder_id))
+        .map(|p| p.id.clone())
+        .collect();
+    for playlist in homeless {
+        app.playlists.set_folder(&playlist, "");
+    }
+    true
+}
+
+/// File a playlist into a folder, or out of one with an empty `folder_id`.
+#[tauri::command]
+fn set_playlist_folder(id: String, folder_id: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if !folder_id.is_empty() && app.folders.get(&folder_id).is_none() {
+        return Err(Error("That folder no longer exists.".to_string()));
+    }
+    let moved = app.playlists.set_folder(&id, folder_id);
+    if moved {
+        app.save_playlists()?;
+    }
+    Ok(moved)
 }
 
 #[tauri::command]
@@ -2048,7 +2171,10 @@ fn mix_candidates(state: State<'_, Shared>) -> Result<Vec<MixCandidate>> {
             // Smoothest harmonic step available.
             MatchKind::Match => (0, key_cost * 4.0 + bpm_diff),
             // §2's target: about 15 BPM and 0.25 of energy of movement.
-            MatchKind::Fresh => (1, (bpm_diff - 15.0).abs() + (energy_diff - 0.25).abs() * 40.0),
+            MatchKind::Fresh => (
+                1,
+                (bpm_diff - 15.0).abs() + (energy_diff - 0.25).abs() * 40.0,
+            ),
             // Key is ignored — the effect masks it — so rhythm carries it.
             MatchKind::Switch => (2, bpm_diff + energy_diff * 40.0),
         };
@@ -3142,6 +3268,7 @@ fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     }
     app.settings = Settings::default();
     app.playlists = PlaylistStore::default();
+    app.folders = FolderStore::default();
     app.queue = Queue::default();
     app.rows.clear();
     Ok(())
@@ -3197,6 +3324,11 @@ pub fn run() {
             remove_playlist_track,
             reorder_playlist_track,
             playlist_rows,
+            playlist_folders,
+            create_folder,
+            rename_folder,
+            delete_folder,
+            set_playlist_folder,
             queue_state,
             queue_view,
             remove_from_queue,
@@ -3429,6 +3561,64 @@ mod tests {
         let playlist = reloaded.playlists.get("p1").expect("playlist survived");
         assert_eq!(playlist.name, "Late Night");
         assert_eq!(playlist.tracks, vec!["/a.m4a".to_string()]);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Deleting a container must not delete what it contains. A folder is an
+    /// organisational convenience; if filing a playlist into one risked losing
+    /// it, nobody would file anything.
+    #[test]
+    fn deleting_a_folder_keeps_the_playlists_that_were_in_it() {
+        let (mut app, dir) = app();
+        app.folders.create("f1", "Sets", "");
+        app.playlists.create_in_folder("p1", "Late Night", "f1");
+        app.playlists.add_track("p1", "/a.m4a");
+
+        assert!(remove_folder(&mut app, "f1"));
+
+        let playlist = app.playlists.get("p1").expect("playlist survived");
+        assert_eq!(playlist.tracks, vec!["/a.m4a".to_string()]);
+        // Back at the top level, where the rail can still draw it. A playlist
+        // pointing at a folder that no longer exists would be invisible.
+        assert_eq!(playlist.folder_id, "");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A nested folder's playlists are the case that needs the reassignment to
+    /// follow what `FolderStore::delete` reports rather than only the id asked
+    /// for — those playlists point at the *child*, which was never deleted.
+    #[test]
+    fn a_nested_folders_playlists_come_home_too() {
+        let (mut app, dir) = app();
+        app.folders.create("parent", "Sets", "");
+        app.folders.create("child", "Warmups", "parent");
+        app.playlists.create_in_folder("p1", "Openers", "child");
+
+        assert!(remove_folder(&mut app, "parent"));
+
+        assert_eq!(app.playlists.get("p1").expect("survived").folder_id, "");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn folders_survive_a_restart() {
+        let (mut app, dir) = app();
+        app.folders.create("f1", "Sets", "");
+        app.playlists.create_in_folder("p1", "Late Night", "f1");
+        app.save_folders().expect("save folders");
+        app.save_playlists().expect("save playlists");
+        drop(app);
+
+        let reloaded = AppState::load(Store::new(dir.clone()));
+        assert_eq!(reloaded.folders.get("f1").expect("folder").name, "Sets");
+        // The two files are written separately, so a playlist keeping its
+        // `folder_id` across a restart is a claim worth making explicitly.
+        assert_eq!(
+            reloaded.playlists.get("p1").expect("playlist").folder_id,
+            "f1"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

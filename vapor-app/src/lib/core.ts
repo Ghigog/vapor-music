@@ -85,7 +85,21 @@ export interface Playlist {
   name: string;
   customCoverPath: string;
   tracks: string[];
+  /** The folder it is filed in, or "" for the top level. */
   folderId: string;
+}
+
+/**
+ * A folder of playlists.
+ *
+ * An organisational layer only — a folder never owns tracks, a playlist points
+ * at one. `parentId` makes nesting representable so it needs no later
+ * migration, but nothing creates a nested folder and the rail draws one level.
+ */
+export interface Folder {
+  id: string;
+  name: string;
+  parentId: string;
 }
 
 export interface QueueState {
@@ -250,8 +264,38 @@ export function playlists(): Promise<Playlist[]> {
   return invoke<Playlist[]>("playlists");
 }
 
-export function createPlaylist(name: string): Promise<Playlist> {
-  return invoke<Playlist>("create_playlist", { name });
+export function createPlaylist(
+  name: string,
+  folderId?: string,
+): Promise<Playlist> {
+  return invoke<Playlist>("create_playlist", { name, folderId: folderId ?? null });
+}
+
+// --- Playlist folders -------------------------------------------------------
+
+export function playlistFolders(): Promise<Folder[]> {
+  return invoke<Folder[]>("playlist_folders");
+}
+
+export function createFolder(name: string): Promise<Folder> {
+  return invoke<Folder>("create_folder", { name });
+}
+
+export function renameFolder(id: string, name: string): Promise<boolean> {
+  return invoke<boolean>("rename_folder", { id, name });
+}
+
+/** Delete a folder. The playlists inside it move back to the top level. */
+export function deleteFolder(id: string): Promise<boolean> {
+  return invoke<boolean>("delete_folder", { id });
+}
+
+/** File a playlist into a folder, or out of one with an empty `folderId`. */
+export function setPlaylistFolder(
+  id: string,
+  folderId: string,
+): Promise<boolean> {
+  return invoke<boolean>("set_playlist_folder", { id, folderId });
 }
 
 /** Returns how many were actually added — duplicates are skipped. */

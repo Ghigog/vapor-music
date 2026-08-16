@@ -38,6 +38,8 @@ export interface FakeOptions {
   /** Tracks in the library. Defaults to a small mixed set. */
   rows?: core.Row[];
   playlists?: core.Playlist[];
+  /** Playlist folders. Not to be confused with `unreadableFolders` below. */
+  folders?: core.Folder[];
   /**
    * Folders the scan cannot read and walks past (TD-49). The real backend
    * counts them and reports them; this is how a test reaches that sentence.
@@ -159,6 +161,7 @@ export class FakeBackend {
   private rows: core.Row[];
   private scanned: boolean;
   private playlists: core.Playlist[];
+  private folders: core.Folder[];
   private queue: string[] = [];
   private current: string | null = null;
   private status: core.PlaybackStatus = "idle";
@@ -213,6 +216,7 @@ export class FakeBackend {
     // A connected library is one that has been scanned; a fresh one has not.
     this.scanned = connected;
     this.playlists = options.playlists ?? [];
+    this.folders = options.folders ?? [];
     this.analysed = connected ? this.rows.length : 0;
     this.unreadableFolders = options.unreadableFolders ?? 0;
     this.cacheBytes = options.cacheBytes ?? 1_200_000_000;
@@ -247,6 +251,7 @@ export class FakeBackend {
       settings: this.settings,
       hasPassword: this.password !== null,
       playlists: this.playlists,
+      folders: this.folders,
       queue: this.queue,
       current: this.current,
       status: this.status,
@@ -496,15 +501,73 @@ export class FakeBackend {
         return this.playlists;
 
       case "create_playlist": {
+        const wanted = a.folderId == null ? "" : String(a.folderId);
         const made: core.Playlist = {
           id: `playlist-${this.nextId++}`,
           name: String(a.name ?? ""),
           customCoverPath: "",
           tracks: [],
-          folderId: "",
+          folderId: this.folders.some((f) => f.id === wanted) ? wanted : "",
         };
         this.playlists = [...this.playlists, made];
         return made;
+      }
+
+      case "playlist_folders":
+        return this.folders;
+
+      case "create_folder": {
+        const name = String(a.name ?? "").trim();
+        if (!name) throw new Error("A folder needs a name.");
+        const made: core.Folder = {
+          id: `folder-${this.nextId++}`,
+          name,
+          parentId: "",
+        };
+        // Newest first, as the store inserts them.
+        this.folders = [made, ...this.folders];
+        return made;
+      }
+
+      case "rename_folder": {
+        const name = String(a.name ?? "").trim();
+        if (!name) throw new Error("A folder needs a name.");
+        const id = String(a.id ?? "");
+        if (!this.folders.some((f) => f.id === id)) return false;
+        this.folders = this.folders.map((f) =>
+          f.id === id ? { ...f, name } : f,
+        );
+        return true;
+      }
+
+      case "delete_folder": {
+        const id = String(a.id ?? "");
+        if (!this.folders.some((f) => f.id === id)) return false;
+        const orphaned = this.folders
+          .filter((f) => f.parentId === id)
+          .map((f) => f.id);
+        this.folders = this.folders
+          .filter((f) => f.id !== id)
+          .map((f) => (f.parentId === id ? { ...f, parentId: "" } : f));
+        // Deleting a container does not delete what it contains.
+        const gone = new Set([id, ...orphaned]);
+        this.playlists = this.playlists.map((p) =>
+          gone.has(p.folderId) ? { ...p, folderId: "" } : p,
+        );
+        return true;
+      }
+
+      case "set_playlist_folder": {
+        const id = String(a.id ?? "");
+        const folderId = String(a.folderId ?? "");
+        if (folderId && !this.folders.some((f) => f.id === folderId)) {
+          throw new Error("That folder no longer exists.");
+        }
+        if (!this.playlists.some((p) => p.id === id)) return false;
+        this.playlists = this.playlists.map((p) =>
+          p.id === id ? { ...p, folderId } : p,
+        );
+        return true;
       }
 
       case "add_tracks_to_playlist": {

@@ -265,3 +265,122 @@
   color: var(--ink-2);
   font-size: var(--fs-small);
 }
+
+/* ---- Folders ------------------------------------------------------------
+   A single level, as `playlist_folder_service.gd` drew: nesting is
+   representable in the store so it needs no migration later, but a tree of
+   playlist folders is a filing cabinet nobody asked for.
+------------------------------------------------------------------------- */
+
+.rail__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.rail__sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rail__folder {
+  margin-bottom: 4px;
+  border-radius: var(--r-md);
+}
+
+/* Unmistakable while a drag is in flight: the pointer is somewhere else and
+   this is the only thing saying where the playlist will land. */
+.rail__folder--over {
+  background: rgba(255, 255, 255, 0.7);
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.rail__folder-head {
+  display: flex;
+  align-items: center;
+}
+
+.rail__folder-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 4px 7px 8px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+}
+
+.rail__folder-name:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+
+.rail__chevron {
+  width: 10px;
+  flex: none;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.rail__folder-del {
+  flex: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-3);
+  /* Revealed on hover or focus: a delete control on every folder, always lit,
+     turns the rail into a row of things you might destroy by accident. */
+  opacity: 0;
+}
+
+.rail__folder:hover .rail__folder-del,
+.rail__folder-del:focus-visible {
+  opacity: 1;
+}
+
+.rail__folder-del:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+
+/* Playlists inside a folder are indented to the depth of the chevron, so the
+   nesting reads without a rule or a box. */
+.rail__sublist .rail__item {
+  padding-left: 26px;
+}
+
+.rail__empty--in {
+  margin: 2px 12px 4px 26px;
+  list-style: none;
+}
+
+/* The way out of a folder. Only drawn when there is a folder to be in. */
+.rail__loose {
+  margin: 6px 0 2px;
+  padding: 4px 12px;
+  border-radius: var(--r-md);
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+}
+
+.rail__loose--over {
+  background: rgba(255, 255, 255, 0.7);
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+  color: var(--ink);
+}

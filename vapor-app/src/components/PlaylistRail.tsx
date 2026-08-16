@@ -22,12 +22,29 @@
  * (TD-33) and dragging six rows one at a time to the same playlist is not a
  * feature anyone wants. A drag on an unselected row carries just that row,
  * which is what makes the single-track case still feel direct.
+ *
+ * ## Folders
+ *
+ * `playlist_folder_service.gd` is ported — `FolderStore` and the `folder_id`
+ * on a playlist have been in `vapor-library`, tested, since the migration —
+ * and until now the shell exposed neither, so `folderId` reached this side as
+ * a field nothing could set. One level is drawn, as the original drew: nesting
+ * is representable so it needs no migration later, but a tree of playlist
+ * folders is a filing cabinet nobody asked for.
+ *
+ * A playlist is filed by dragging it onto a folder, which is the same gesture
+ * as dropping tracks onto a playlist, on a different payload type. Dropping on
+ * "All playlists" takes it back out.
  */
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import { messageOf } from "./ErrorNotice";
 
 /** The drag payload: a JSON array of hrefs. */
 export const TRACK_DRAG_TYPE = "application/x-vapor-tracks";
+
+/** A playlist being filed: its id, as plain text under our own type. */
+export const PLAYLIST_DRAG_TYPE = "application/x-vapor-playlist";
 
 /** Read the dragged hrefs, or `null` when this drag is not ours. */
 export function draggedTracks(e: React.DragEvent): string[] | null {
@@ -53,6 +70,9 @@ export function startTrackDrag(e: React.DragEvent, hrefs: string[]) {
   e.dataTransfer.setData("text/plain", hrefs.join("\n"));
 }
 
+/** What a new-name box is being opened for. */
+type Creating = null | { kind: "playlist"; folderId: string } | { kind: "folder" };
+
 export function PlaylistRail({
   activeId,
   onOpen,
@@ -61,9 +81,12 @@ export function PlaylistRail({
   onOpen: (id: string) => void;
 }) {
   const [playlists, setPlaylists] = useState<core.Playlist[]>([]);
+  const [folders, setFolders] = useState<core.Folder[]>([]);
   const [over, setOver] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<Creating>(null);
   const [name, setName] = useState("");
+  /** Folders currently collapsed, by id. Open is the default. */
+  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   /** What the last drop did, so a drag that lands has an answer. */
   const [flash, setFlash] = useState<string | null>(null);
 
@@ -72,6 +95,10 @@ export function PlaylistRail({
       .playlists()
       .then(setPlaylists)
       .catch(() => setPlaylists([]));
+    core
+      .playlistFolders()
+      .then(setFolders)
+      .catch(() => setFolders([]));
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -93,18 +120,28 @@ export function PlaylistRail({
 
   async function create() {
     const trimmed = name.trim();
-    if (!trimmed) {
-      setCreating(false);
+    const what = creating;
+    if (!trimmed || !what) {
+      setCreating(null);
+      setName("");
       return;
     }
     try {
-      const made = await core.createPlaylist(trimmed);
+      if (what.kind === "folder") {
+        await core.createFolder(trimmed);
+        setName("");
+        setCreating(null);
+        refresh();
+        return;
+      }
+      const made = await core.createPlaylist(trimmed, what.folderId);
       setName("");
-      setCreating(false);
+      setCreating(null);
       refresh();
       onOpen(made.id);
-    } catch {
-      setCreating(false);
+    } catch (e: unknown) {
+      setCreating(null);
+      setFlash(messageOf(e));
     }
   }
 
@@ -126,20 +163,129 @@ export function PlaylistRail({
     );
   }
 
+  /** File the dragged playlist into `folder`, or out of one when it is null. */
+  async function fileInto(e: React.DragEvent, folder: core.Folder | null) {
+    e.preventDefault();
+    setOver(null);
+    const id = e.dataTransfer.getData(PLAYLIST_DRAG_TYPE);
+    if (!id) return;
+
+    const playlist = playlists.find((p) => p.id === id);
+    // Already where it was dropped: say so rather than reporting a move.
+    if (playlist && playlist.folderId === (folder?.id ?? "")) {
+      setFlash(
+        folder ? `Already in ${folder.name}` : "Already outside any folder",
+      );
+      return;
+    }
+
+    try {
+      await core.setPlaylistFolder(id, folder?.id ?? "");
+      refresh();
+      setFlash(
+        folder
+          ? `Moved ${playlist?.name ?? "playlist"} to ${folder.name}`
+          : `Moved ${playlist?.name ?? "playlist"} out of its folder`,
+      );
+    } catch (err: unknown) {
+      setFlash(messageOf(err));
+    }
+  }
+
+  /**
+   * Delete a folder.
+   *
+   * Confirmed because it is not undoable, but not alarming: the playlists come
+   * back out to the top level rather than going with it, and the prompt says
+   * so — otherwise a person declines a safe action for fear of an unsafe one.
+   */
+  async function removeFolder(folder: core.Folder) {
+    const inside = playlists.filter((p) => p.folderId === folder.id).length;
+    const fate =
+      inside === 0
+        ? ""
+        : `\n\nThe ${inside} ${inside === 1 ? "playlist" : "playlists"} inside will move back to the top level, not be deleted.`;
+    if (!window.confirm(`Delete the folder "${folder.name}"?${fate}`)) return;
+
+    try {
+      await core.deleteFolder(folder.id);
+      refresh();
+      setFlash(`Deleted ${folder.name}`);
+    } catch (e: unknown) {
+      setFlash(messageOf(e));
+    }
+  }
+
+  function toggle(id: string) {
+    setShut((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+
+  /** The rows for one folder, or the top level when `folderId` is "". */
+  function itemsIn(folderId: string) {
+    return playlists.filter((p) => p.folderId === folderId);
+  }
+
+  const item = (p: core.Playlist) => (
+    <li key={p.id}>
+      <button
+        className={
+          "rail__item" +
+          (activeId === p.id ? " rail__item--on" : "") +
+          (over === p.id ? " rail__item--over" : "")
+        }
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData(PLAYLIST_DRAG_TYPE, p.id);
+          // Firefox refuses to start a drag without a standard type present.
+          e.dataTransfer.setData("text/plain", p.name);
+        }}
+        onClick={() => onOpen(p.id)}
+        onDragOver={(e) => {
+          // Only claim the drop when the payload is ours, or the cursor
+          // promises something this cannot accept.
+          if (!e.dataTransfer.types.includes(TRACK_DRAG_TYPE)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setOver(p.id);
+        }}
+        onDragLeave={() => setOver((cur) => (cur === p.id ? null : cur))}
+        onDrop={(e) => void drop(e, p)}
+      >
+        <span className="rail__name">{p.name}</span>
+        <span className="rail__count numeric">{p.tracks.length}</span>
+      </button>
+    </li>
+  );
+
   return (
     <div className="rail">
       <div className="rail__head">
         <span className="rail__title label">Playlists</span>
         {/* The glyph is the content, so the name has to be explicit — see
             the note on the row actions in Playlist.tsx. */}
-        <button
-          className="rail__new"
-          aria-label="New playlist"
-          title="New playlist"
-          onClick={() => setCreating(true)}
-        >
-          +
-        </button>
+        <span className="rail__actions">
+          <button
+            className="rail__new"
+            aria-label="New folder"
+            title="New folder"
+            onClick={() => setCreating({ kind: "folder" })}
+          >
+            <span aria-hidden="true">🗀</span>
+          </button>
+          <button
+            className="rail__new"
+            aria-label="New playlist"
+            title="New playlist"
+            onClick={() => setCreating({ kind: "playlist", folderId: "" })}
+          >
+            +
+          </button>
+        </span>
       </div>
 
       {creating && (
@@ -147,48 +293,102 @@ export function PlaylistRail({
           className="rail__input"
           autoFocus
           value={name}
-          placeholder="Playlist name"
+          aria-label={creating.kind === "folder" ? "Folder name" : "Playlist name"}
+          placeholder={
+            creating.kind === "folder" ? "Folder name" : "Playlist name"
+          }
           onChange={(e) => setName(e.target.value)}
           onBlur={() => void create()}
           onKeyDown={(e) => {
             if (e.key === "Enter") void create();
             if (e.key === "Escape") {
               setName("");
-              setCreating(false);
+              setCreating(null);
             }
           }}
         />
       )}
 
-      <ul className="rail__list">
-        {playlists.map((p) => (
-          <li key={p.id}>
-            <button
+      <div className="rail__list">
+        {folders.map((f) => {
+          const inside = itemsIn(f.id);
+          const open = !shut.has(f.id);
+          return (
+            <section
+              key={f.id}
               className={
-                "rail__item" +
-                (activeId === p.id ? " rail__item--on" : "") +
-                (over === p.id ? " rail__item--over" : "")
+                "rail__folder" + (over === f.id ? " rail__folder--over" : "")
               }
-              onClick={() => onOpen(p.id)}
               onDragOver={(e) => {
-                // Only claim the drop when the payload is ours, or the cursor
-                // promises something this cannot accept.
-                if (!e.dataTransfer.types.includes(TRACK_DRAG_TYPE)) return;
+                if (!e.dataTransfer.types.includes(PLAYLIST_DRAG_TYPE)) return;
                 e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-                setOver(p.id);
+                e.dataTransfer.dropEffect = "move";
+                setOver(f.id);
               }}
-              onDragLeave={() => setOver((cur) => (cur === p.id ? null : cur))}
-              onDrop={(e) => void drop(e, p)}
+              onDragLeave={() => setOver((cur) => (cur === f.id ? null : cur))}
+              onDrop={(e) => void fileInto(e, f)}
             >
-              <span className="rail__name">{p.name}</span>
-              <span className="rail__count numeric">{p.tracks.length}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
+              <div className="rail__folder-head">
+                <button
+                  className="rail__folder-name"
+                  aria-expanded={open}
+                  onClick={() => toggle(f.id)}
+                >
+                  <span className="rail__chevron" aria-hidden="true">
+                    {open ? "⌄" : "›"}
+                  </span>
+                  <span className="rail__name">{f.name}</span>
+                  <span className="rail__count numeric">{inside.length}</span>
+                </button>
+                {/* The glyph is the content, so the name has to be explicit. */}
+                <button
+                  className="rail__folder-del"
+                  aria-label={`Delete folder ${f.name}`}
+                  title={`Delete folder ${f.name}`}
+                  onClick={() => void removeFolder(f)}
+                >
+                  ×
+                </button>
+              </div>
 
-      {playlists.length === 0 && !creating && (
+              {open && (
+                <ul className="rail__sublist">
+                  {inside.map(item)}
+                  {inside.length === 0 && (
+                    <li className="rail__empty rail__empty--in">
+                      Drag a playlist here.
+                    </li>
+                  )}
+                </ul>
+              )}
+            </section>
+          );
+        })}
+
+        {/* The way back out. Without a target for "no folder", a playlist
+            dragged into one could never be dragged out again. */}
+        {folders.length > 0 && (
+          <p
+            className={
+              "rail__loose" + (over === "" ? " rail__loose--over" : "")
+            }
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes(PLAYLIST_DRAG_TYPE)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setOver("");
+            }}
+            onDragLeave={() => setOver((cur) => (cur === "" ? null : cur))}
+            onDrop={(e) => void fileInto(e, null)}
+          >
+            Not in a folder
+          </p>
+        )}
+
+        <ul className="rail__sublist">{itemsIn("").map(item)}</ul>
+      </div>
+
+      {playlists.length === 0 && folders.length === 0 && !creating && (
         <p className="rail__empty">
           None yet. Drag tracks here once you make one.
         </p>
