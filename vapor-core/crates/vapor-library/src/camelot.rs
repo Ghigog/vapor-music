@@ -2,8 +2,7 @@
 //!
 //! Direct port of the key half of `scripts/services/dj_pathfinder.gd`. Every
 //! constant and every branch matches the GDScript, and the tests below are the
-//! assertions from `tests/unit/test_dj_pathfinder.gd` — this is a refactor, so
-//! agreement with the existing behaviour is the specification.
+//! assertions from `tests/unit/test_dj_pathfinder.gd`.
 
 /// A Camelot key: a number 1–12 and a mode, A (minor) or B (major).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

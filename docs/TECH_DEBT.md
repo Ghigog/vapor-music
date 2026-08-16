@@ -77,18 +77,13 @@ Things that would be a defect if the app shipped today.
 | TD-42 | **12 GUT tests fail** and are pinned as a known-failing baseline. Never diagnosed. | — |
 | TD-43 | **The fixture set is not reproducible by anyone else.** Validation runs against a personal library via `extract-fixtures.mjs`; there is no synthetic corpus, so no one else can verify the analysis numbers. | — |
 
-## A note on invented behaviour
+## Check the Godot tree before writing a feature
 
-Three things were built as new inventions when the Godot tree already specified
-them, and have since been replaced with ports: the skip-history rule (AI-010),
-the transition-type selection (`get_transition_type_between`), and the energy
-measure (`audio_dsp.cpp`). All three now follow the original.
-
-`docs/MIGRATION.md` states the rule they broke: *"When a choice arises between
-matching existing behaviour and improving on it, match it."* Worth re-reading
-before adding anything that looks like a product decision — the Godot tree is
-still the specification, and it is easy to reimplement a feature that is already
-there because the port left only its parameter behind.
+The port often carried a *parameter* across without its behaviour, so an unused
+argument looks like a feature request when it is a half-finished port. Skip
+history (`dj_pathfinder.gd`), transition selection
+(`audio_manager.gd::get_transition_type_between`) and energy (`audio_dsp.cpp`)
+were each reimplemented from scratch before anyone checked. `grep` first.
 
 ## Deliberately not debt
 

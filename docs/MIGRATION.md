@@ -827,11 +827,8 @@ running a server — is not this product.
 
 ## Scope
 
-**This is a refactor, not a quality project.** The goal is the same app, off
-Godot. Analysis accuracy, key detection and mixing polish are explicitly *later*
-work — they are tracked so they are not forgotten, not because they gate the
-port. When a choice arises between matching existing behaviour and improving on
-it, match it.
+The goal is the same app, off Godot. Analysis accuracy, key detection and mixing
+polish are tracked separately and do not gate the port.
 
 ---
 
