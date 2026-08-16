@@ -838,7 +838,7 @@ polish are tracked separately and do not gate the port.
 |---|---|
 | Tempo | **Accept ~81% agreement.** Ship a manual BPM override in the UI. Refine later. |
 | Key | **Defer.** 56.1% exact / 80.9% compatible is good enough to port with. |
-| Dolby Atmos | **Transcode on import** to AAC or FLAC once, at add time. |
+| Dolby Atmos | **Won't fix (2026-08-15).** Not a DJ-able format; see TD-05. |
 | Crossfade | **Keep Godot's dB-linear envelope**, midpoint dip and all. Fidelity over correctness. |
 
 ---
@@ -883,7 +883,7 @@ resolved by, not when it must be started.
 | MIG-001 | Key detection. **Partly done** — harmonic-weighted chroma and per-frame normalisation took it from 34.3% to 48.1% exact on a 108-track subset. Segmented analysis (`segment_keys` / `intro_key` / `outro_key`) is still outstanding. | 1 | Spike results |
 | ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
 | MIG-002b | Resolve the ~10% tempo **metrical** errors. **Two attempts made and reverted; the beat-level approach is closed** — the signal is anti-correlated, and the errors are triple relations, not octaves. A third attempt means bar-level metre detection. Read *Phase 1 progress* first, and settle the product question before starting. | 1 | Phase 1 |
-| MIG-003 | Decide the E-AC-3 / Dolby Atmos path. Shipping on macOS without one is a silent regression on 22 tracks. | 4 | Spike results, BUG-001 |
+| ~~MIG-003~~ | ~~Decide the E-AC-3 / Dolby Atmos path.~~ **Won't fix** — a spatial format with no stable stereo image to mix with. See TD-05. | 4 | Spike results, BUG-001 |
 | MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
 | ~~MIG-005~~ | ~~Port the portable parts of `audio_dsp.cpp`.~~ **Mostly done** — cue in/out, LUFS and waveform peaks ported and validated (LUFS agrees to 0.003 LU). Transients now ported too. **Dynamic range was never computed** — `metadata_service.gd` reads the field and defaults it to 0.0, and nothing in `audio_dsp.cpp` produces it, so there is nothing to port. | 1 | `audio_dsp.cpp` |
 | ~~MIG-006~~ | ~~Bass Swap clips.~~ **Done** — three-band RMS guard ported *and* a master peak limiter added. The RMS port alone did not fix it: the clipping is peak-domain (RMS 0.257 vs a 0.630 threshold, crest factor 3.9x), so the Godot original would not have caught it either. All three transitions now measure 0 clipped samples. | 2 | Mixer spike |
