@@ -668,8 +668,12 @@ mod tests {
         let inc = grid(126.0, 0.0, 400);
 
         let mut mixer = Mixer::new(RATE, 512);
-        mixer.deck_a.load(vec![[0.5f32; 2]; (RATE * 60.0) as usize]);
-        mixer.deck_b.load(vec![[0.5f32; 2]; (RATE * 60.0) as usize]);
+        mixer
+            .deck_a
+            .load(vec![[16_384i16; 2]; (RATE * 60.0) as usize]);
+        mixer
+            .deck_b
+            .load(vec![[16_384i16; 2]; (RATE * 60.0) as usize]);
         mixer.deck_a.play();
         mixer
             .start_transition(TransitionType::BassSwap, 6.0, &out, &inc, 10.0, 1.0)

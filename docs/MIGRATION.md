@@ -856,8 +856,13 @@ polish are tracked separately and do not gate the port.
 
    Not a blocker for phases 1–3, but it must be settled before the macOS cutover
    or it ships as a silent regression.
-2. **Web tier scope.** Full parity, or cloud-only with analysis deferred to a
-   desktop instance? Affects how state is split in phase 4.
+2. ~~**Web tier scope.**~~ **Decided (2026-08-15): full parity.** The browser
+   build does its own analysis and its own playback, with nothing deferred to a
+   desktop instance. A web tier that phoned a desktop would contradict the
+   product's central claim — that the device in front of you does the work —
+   and there is no sync mechanism to build such a split on. Analysis in wasm
+   will be slower than native; it already has a progress bar, a stop button and
+   a per-track cache, which is what makes that acceptable rather than fatal.
 3. **Time-stretch library.** WSOLA is in place and works; `signalsmith-stretch`
    vs Rubber Band is a quality question, so it falls under *later*.
 4. **UI framework** inside Tauri. Not yet chosen; defer until phase 4 so the

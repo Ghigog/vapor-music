@@ -99,13 +99,13 @@ enum Command {
     /// Replace the loaded track. `play` starts it immediately, which is what
     /// every caller wants — cueing without playing has no UI yet.
     Load {
-        frames: Vec<[f32; 2]>,
+        frames: Vec<[i16; 2]>,
         play: bool,
     },
     /// Put the next track on the other deck — silent, cued, ready to be mixed
     /// in. The transition is what makes it audible.
     Preload {
-        frames: Vec<[f32; 2]>,
+        frames: Vec<[i16; 2]>,
     },
     /// Begin a transition once the outgoing deck reaches `start_at`.
     ///
@@ -138,7 +138,7 @@ struct Channel {
     to_audio: VecDeque<Command>,
     /// Track buffers the audio thread has finished with, awaiting a free on the
     /// control thread. See the module docs.
-    retired: VecDeque<Vec<[f32; 2]>>,
+    retired: VecDeque<Vec<[i16; 2]>>,
 }
 
 /// Everything shared between the control side and the audio thread.
@@ -232,7 +232,7 @@ impl Link {
             // Take the finished buffers out under the lock but drop them
             // outside it: freeing tens of megabytes while holding the lock
             // would make the audio thread defer its drain for that whole time.
-            let retired: Vec<Vec<[f32; 2]>> = channel.retired.drain(..).collect();
+            let retired: Vec<Vec<[i16; 2]>> = channel.retired.drain(..).collect();
             let accepted = channel.to_audio.len() < COMMAND_CAPACITY;
             if accepted {
                 channel.to_audio.push_back(command);
@@ -244,12 +244,12 @@ impl Link {
     }
 
     /// Hand a decoded track to the deck and start it.
-    pub fn load(&self, frames: Vec<[f32; 2]>, play: bool) -> bool {
+    pub fn load(&self, frames: Vec<[i16; 2]>, play: bool) -> bool {
         self.send(Command::Load { frames, play })
     }
 
     /// Cue the next track on the other deck, silent.
-    pub fn preload(&self, frames: Vec<[f32; 2]>) -> bool {
+    pub fn preload(&self, frames: Vec<[i16; 2]>) -> bool {
         self.send(Command::Preload { frames })
     }
 
@@ -783,8 +783,9 @@ where
 mod tests {
     use super::*;
 
-    fn frames(n: usize, value: f32) -> Vec<[f32; 2]> {
-        vec![[value, value * 0.5]; n]
+    fn frames(n: usize, value: f32) -> Vec<[i16; 2]> {
+        let q = vapor_engine::stretch::from_f32(value);
+        vec![[q, q / 2]; n]
     }
 
     /// The invariant the module depends on: the audio thread can retire a

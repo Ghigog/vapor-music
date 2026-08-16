@@ -81,9 +81,9 @@ fn stop_measuring() -> usize {
 const RATE: f32 = 44100.0;
 const BLOCK: usize = 512;
 
-fn click_track(bpm: f32, secs: f32) -> (Vec<[f32; 2]>, BeatGrid) {
+fn click_track(bpm: f32, secs: f32) -> (Vec<[i16; 2]>, BeatGrid) {
     let n = (secs * RATE) as usize;
-    let mut samples = vec![[0.0f32; 2]; n];
+    let mut samples = vec![[0i16; 2]; n];
     let period = 60.0 / bpm;
 
     let mut beats = Vec::new();
@@ -98,7 +98,8 @@ fn click_track(bpm: f32, secs: f32) -> (Vec<[f32; 2]>, BeatGrid) {
             let tt = k as f32 / RATE;
             let env = (1.0 - tt / 0.005).max(0.0);
             let v = env * (2.0 * std::f32::consts::PI * 2000.0 * tt).sin() * 0.8;
-            samples[start + k] = [v, v];
+            let q = vapor_engine::stretch::from_f32(v);
+            samples[start + k] = [q, q];
         }
         t += period;
     }

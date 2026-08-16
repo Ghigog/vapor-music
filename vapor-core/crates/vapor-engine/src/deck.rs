@@ -3,6 +3,14 @@
 //! Mirrors one `AudioStreamPlayer` + its `DeckA`/`DeckB` bus in the Godot
 //! build: source audio, a stretch ratio, an EQ/filter chain, and a gain.
 //!
+//! ## Samples are stored as `i16`
+//!
+//! A deck holds a whole decoded track, which makes the sample format the app's
+//! largest memory cost: a five-minute track at 48 kHz is 110 MB as stereo `f32`
+//! and 55 MB as `i16`, and two decks are loaded near a transition. The sources
+//! are lossy AAC and MP3 whose own noise floor sits far above 16 bit, so this
+//! discards nothing that was in the recording.
+//!
 //! The critical structural difference: Godot polled `get_playback_position()`
 //! every frame from three separate `_process` loops and drove bus parameters
 //! through tweens on the main thread. Here the deck advances by exactly the
@@ -23,7 +31,7 @@ const FREEZE_ROOM: f32 = 0.95;
 const FREEZE_DAMPING: f32 = 0.1;
 
 pub struct Deck {
-    samples: Vec<[f32; 2]>,
+    samples: Vec<[i16; 2]>,
     sample_rate: f32,
     stretcher: Stretcher,
     eq: EqChain,
@@ -70,7 +78,7 @@ impl Deck {
         }
     }
 
-    pub fn load(&mut self, samples: Vec<[f32; 2]>) {
+    pub fn load(&mut self, samples: Vec<[i16; 2]>) {
         drop(self.swap_samples(samples));
     }
 
@@ -85,7 +93,7 @@ impl Deck {
     /// Returning it lets the caller move the buffer back to a control thread
     /// and drop it there. Everything else about the two is identical, so
     /// `load` is written in terms of this rather than beside it.
-    pub fn swap_samples(&mut self, samples: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
+    pub fn swap_samples(&mut self, samples: Vec<[i16; 2]>) -> Vec<[i16; 2]> {
         let previous = std::mem::replace(&mut self.samples, samples);
         self.stretcher.reset(0.0);
         self.eq.reset();

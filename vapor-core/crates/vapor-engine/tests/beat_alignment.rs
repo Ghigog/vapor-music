@@ -17,9 +17,9 @@ const RATE: f32 = 44100.0;
 const BLOCK: usize = 512;
 
 /// A click track: a short decaying burst at each beat.
-fn click_track(bpm: f32, secs: f32, first_beat: f32) -> (Vec<[f32; 2]>, BeatGrid) {
+fn click_track(bpm: f32, secs: f32, first_beat: f32) -> (Vec<[i16; 2]>, BeatGrid) {
     let n = (secs * RATE) as usize;
-    let mut samples = vec![[0.0f32; 2]; n];
+    let mut samples = vec![[0i16; 2]; n];
     let period = 60.0 / bpm;
 
     let mut beats = Vec::new();
@@ -36,7 +36,8 @@ fn click_track(bpm: f32, secs: f32, first_beat: f32) -> (Vec<[f32; 2]>, BeatGrid
             let tt = k as f32 / RATE;
             let env = (1.0 - tt / 0.005).max(0.0);
             let v = env * (2.0 * std::f32::consts::PI * 2000.0 * tt).sin() * 0.8;
-            samples[start + k] = [v, v];
+            let q = vapor_engine::stretch::from_f32(v);
+            samples[start + k] = [q, q];
         }
         t += period;
     }
@@ -353,11 +354,12 @@ fn bass_swap_does_not_clip_two_loud_decks() {
     let secs = 90.0;
     let n = (secs * RATE) as usize;
 
-    let tone = |freq: f32, amp: f32| -> Vec<[f32; 2]> {
+    let tone = |freq: f32, amp: f32| -> Vec<[i16; 2]> {
         (0..n)
             .map(|i| {
                 let v = amp * (2.0 * std::f32::consts::PI * freq * i as f32 / RATE).sin();
-                [v, v]
+                let q = vapor_engine::stretch::from_f32(v);
+                [q, q]
             })
             .collect()
     };
@@ -379,7 +381,8 @@ fn bass_swap_does_not_clip_two_loud_decks() {
     for src in [&a_samples, &b_samples] {
         let peak = src
             .iter()
-            .flat_map(|s| [s[0].abs(), s[1].abs()])
+            .flat_map(|s| [s[0], s[1]])
+            .map(|v| (v as f32 / 32_768.0).abs())
             .fold(0.0f32, f32::max);
         assert!(peak < 0.99, "fixture deck already peaks at {peak:.3}");
     }

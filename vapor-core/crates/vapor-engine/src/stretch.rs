@@ -65,7 +65,7 @@ impl Stretcher {
     /// `ratio > 1.0` plays faster (consumes more source), `< 1.0` slower.
     /// At exactly 1.0 this is a pass-through copy — no grain machinery, so the
     /// common case costs nothing and cannot colour the signal.
-    pub fn process(&mut self, src: &[[f32; 2]], ratio: f64, out: &mut [[f32; 2]]) -> usize {
+    pub fn process(&mut self, src: &[[i16; 2]], ratio: f64, out: &mut [[f32; 2]]) -> usize {
         if (ratio - 1.0).abs() < 1e-6 {
             return self.passthrough(src, out);
         }
@@ -83,17 +83,19 @@ impl Stretcher {
         written
     }
 
-    fn passthrough(&mut self, src: &[[f32; 2]], out: &mut [[f32; 2]]) -> usize {
+    fn passthrough(&mut self, src: &[[i16; 2]], out: &mut [[f32; 2]]) -> usize {
         let start = self.read_pos as usize;
         let avail = src.len().saturating_sub(start);
         let n = out.len().min(avail);
-        out[..n].copy_from_slice(&src[start..start + n]);
+        for i in 0..n {
+            out[i] = [to_f32(src[start + i][0]), to_f32(src[start + i][1])];
+        }
         self.read_pos += n as f64;
         n
     }
 
     /// Emit one grain of `n` frames.
-    fn grain(&mut self, src: &[[f32; 2]], ratio: f64, n: usize, out: &mut [[f32; 2]]) -> bool {
+    fn grain(&mut self, src: &[[i16; 2]], ratio: f64, n: usize, out: &mut [[f32; 2]]) -> bool {
         if self.read_pos < 0.0 {
             return false;
         }
@@ -120,19 +122,24 @@ impl Stretcher {
         for i in 0..n.min(OVERLAP) {
             let w = self.window[i];
             for ch in 0..2 {
-                out[i][ch] = self.tail[i][ch] * (1.0 - w) + src[start + i][ch] * w;
+                out[i][ch] = self.tail[i][ch] * (1.0 - w) + to_f32(src[start + i][ch]) * w;
             }
         }
 
         // Any frames past the overlap region come straight from the source.
         if n > OVERLAP {
-            out[OVERLAP..n].copy_from_slice(&src[start + OVERLAP..start + n]);
+            for i in OVERLAP..n {
+                out[i] = [to_f32(src[start + i][0]), to_f32(src[start + i][1])];
+            }
         }
 
         // Stash the next tail.
         let tail_start = start + n;
         for i in 0..OVERLAP {
-            self.tail[i] = src.get(tail_start + i).copied().unwrap_or([0.0; 2]);
+            self.tail[i] = src
+                .get(tail_start + i)
+                .map(|f| [to_f32(f[0]), to_f32(f[1])])
+                .unwrap_or([0.0; 2]);
         }
 
         self.read_pos += n as f64 * ratio;
@@ -143,7 +150,7 @@ impl Stretcher {
     /// leading frames best correlate with the stored tail. This is the entire
     /// point of WSOLA: splicing at a waveform-similar point avoids the phase
     /// discontinuity that a naive overlap-add would produce as a click.
-    fn best_offset(&self, src: &[[f32; 2]], ideal: usize, need: usize) -> usize {
+    fn best_offset(&self, src: &[[i16; 2]], ideal: usize, need: usize) -> usize {
         let lo = ideal.saturating_sub(SEARCH);
         let hi = (ideal + SEARCH).min(src.len().saturating_sub(need + 1));
         if hi <= lo {
@@ -162,7 +169,7 @@ impl Stretcher {
             for i in (0..OVERLAP).step_by(4) {
                 let a = self.tail[i];
                 let b = src[cand + i];
-                score += a[0] * b[0] + a[1] * b[1];
+                score += a[0] * to_f32(b[0]) + a[1] * to_f32(b[1]);
             }
             if score > best_score {
                 best_score = score;
@@ -172,6 +179,25 @@ impl Stretcher {
         }
         best
     }
+}
+
+/// One stored sample as a float.
+///
+/// Divided by 32768 rather than 32767, so the conversion is an exact power of
+/// two and the round trip through `from_f32` is lossless for every value it can
+/// represent.
+#[inline]
+fn to_f32(sample: i16) -> f32 {
+    sample as f32 / 32_768.0
+}
+
+/// One float as a stored sample.
+///
+/// Clamped before scaling: a value above full scale would otherwise wrap to the
+/// opposite sign, turning a hot master into a burst of noise.
+#[inline]
+pub fn from_f32(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * 32_768.0).clamp(-32_768.0, 32_767.0) as i16
 }
 
 /// Rising equal-power cross-fade ramp: 0 at the start of the overlap, 1 at the
@@ -194,15 +220,33 @@ fn crossfade_ramp(n: usize) -> Vec<f32> {
 mod tests {
     use super::*;
 
-    fn sine(freq: f32, secs: f32, rate: f32) -> Vec<[f32; 2]> {
+    fn sine(freq: f32, secs: f32, rate: f32) -> Vec<[i16; 2]> {
         let n = (secs * rate) as usize;
         (0..n)
             .map(|i| {
                 let t = i as f32 / rate;
-                let v = (2.0 * std::f32::consts::PI * freq * t).sin() * 0.5;
+                let v = from_f32((2.0 * std::f32::consts::PI * freq * t).sin() * 0.5);
                 [v, v]
             })
             .collect()
+    }
+
+    /// The conversion has to be exact in the direction that matters: whatever
+    /// was stored comes back unchanged, so a passthrough is still a passthrough.
+    #[test]
+    fn the_sample_conversion_round_trips() {
+        for raw in [i16::MIN, -32_767, -1, 0, 1, 16_384, i16::MAX] {
+            assert_eq!(from_f32(to_f32(raw)), raw, "{raw} did not survive");
+        }
+    }
+
+    /// A float above full scale must clamp rather than wrap, or a hot master
+    /// becomes a burst of noise.
+    #[test]
+    fn conversion_clamps_instead_of_wrapping() {
+        assert_eq!(from_f32(2.0), i16::MAX);
+        assert_eq!(from_f32(-2.0), i16::MIN);
+        assert!(from_f32(1.0) > 0, "full scale flipped sign");
     }
 
     #[test]
@@ -212,7 +256,11 @@ mod tests {
         let mut out = vec![[0.0f32; 2]; 4096];
         let n = s.process(&src, 1.0, &mut out);
         assert_eq!(n, 4096);
-        assert_eq!(&out[..], &src[..4096]);
+        let expected: Vec<[f32; 2]> = src[..4096]
+            .iter()
+            .map(|f| [to_f32(f[0]), to_f32(f[1])])
+            .collect();
+        assert_eq!(&out[..], &expected[..]);
     }
 
     /// The property that matters for beat-matching: output duration scales by

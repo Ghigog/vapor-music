@@ -58,7 +58,7 @@ pub fn parse_kind(s: Option<&str>) -> Option<TransitionType> {
 }
 
 pub struct Track {
-    pub frames: Vec<[f32; 2]>,
+    pub frames: Vec<[i16; 2]>,
     pub sample_rate: u32,
     pub grid: BeatGrid,
 }
@@ -78,7 +78,14 @@ pub fn load_track(path: &Path, bpm_override: Option<f32>) -> Result<Track, Offli
 
     // `decode_to_mono` gives the analysis signal; duplicating to stereo keeps
     // this tooling simple. A real player keeps the stereo decode.
-    let frames: Vec<[f32; 2]> = mono.samples.iter().map(|&s| [s, s]).collect();
+    let frames: Vec<[i16; 2]> = mono
+        .samples
+        .iter()
+        .map(|&s| {
+            let v = crate::stretch::from_f32(s);
+            [v, v]
+        })
+        .collect();
 
     let bpm = bpm_override.unwrap_or(analysis.bpm);
 
@@ -187,7 +194,7 @@ pub fn prepare_mix(
     let rate = a.sample_rate;
     let b = if b.sample_rate != rate {
         Track {
-            frames: vapor_dsp::resample::resample(&b.frames, b.sample_rate, rate),
+            frames: resample_i16(&b.frames, b.sample_rate, rate),
             sample_rate: rate,
             grid: b.grid,
         }
@@ -252,6 +259,23 @@ pub fn prepare_mix(
         lead_in_frames: lead_frames,
         total_frames: lead_frames + ((duration + TAIL_SECS) * rate as f32) as usize,
     })
+}
+
+/// Rate-convert stored samples.
+///
+/// The resampler works in floats, so this converts out and back. Only the
+/// offline tools use it — the app resamples before the deck ever sees the
+/// audio, when it is still float.
+fn resample_i16(input: &[[i16; 2]], from: u32, to: u32) -> Vec<[i16; 2]> {
+    use crate::stretch::from_f32;
+    let as_f32: Vec<[f32; 2]> = input
+        .iter()
+        .map(|f| [f[0] as f32 / 32_768.0, f[1] as f32 / 32_768.0])
+        .collect();
+    vapor_dsp::resample::resample(&as_f32, from, to)
+        .into_iter()
+        .map(|f| [from_f32(f[0]), from_f32(f[1])])
+        .collect()
 }
 
 /// Minimal 16-bit PCM WAV writer — avoids a dependency for something this small.

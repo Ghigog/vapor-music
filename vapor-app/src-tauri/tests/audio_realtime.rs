@@ -91,14 +91,15 @@ const BLOCK: usize = 512;
 
 /// A tone rather than silence, so the limiter and the EQ chain have real signal
 /// to work on rather than a path of zeroes that skips work.
-fn tone(seconds: f32) -> Vec<[f32; 2]> {
+fn tone(seconds: f32) -> Vec<[i16; 2]> {
+    use vapor_engine::stretch::from_f32;
     let n = (seconds * RATE as f32) as usize;
     (0..n)
         .map(|i| {
             let t = i as f32 / RATE as f32;
             let l = (t * 220.0 * std::f32::consts::TAU).sin() * 0.6;
             let r = (t * 330.0 * std::f32::consts::TAU).sin() * 0.6;
-            [l, r]
+            [from_f32(l), from_f32(r)]
         })
         .collect()
 }
