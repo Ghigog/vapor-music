@@ -289,7 +289,26 @@ export function Songs({
         </header>
       )}
 
-      <div className="songs__cols" role="row">
+      {/*
+        Sort controls, not a table header (TD-46).
+
+        These were a `role="row"` of `role="columnheader"` buttons sitting
+        above a `listbox` of `option`s. A `row` must live inside a `table`,
+        `grid` or `treegrid` and there is none, so a screen reader was told
+        about a table header with no table.
+
+        Of the two ways out, this is the one that keeps what already works.
+        Making the whole table a `grid` would buy cell-level navigation and
+        cost the listbox model TD-33 built deliberately — where the cursor is
+        separate from the selection, so an arrow key cannot silently change
+        what a person is about to add to a playlist. A sortable list is a
+        listbox with a set of sort buttons above it, and that is what this is.
+
+        `aria-sort` goes with the role: it is only defined on a `columnheader`
+        or `rowheader`. The state it carried is now in each button's own
+        accessible name, which is where a button's state belongs.
+      */}
+      <div className="songs__cols" role="group" aria-label="Sort the tracks">
         {/* Grouped by cell so the header grid has exactly as many children as
             the row grid, rather than five controls fighting over four cells. */}
         {[3, 4, 5, 6].map((cell) => {
@@ -306,14 +325,9 @@ export function Songs({
               {inCell.map((col) => (
                 <button
                   key={col.id}
-                  role="columnheader"
-                  aria-sort={
-                    sortKey === col.id
-                      ? ascending
-                        ? "ascending"
-                        : "descending"
-                      : "none"
-                  }
+                  // Which control is doing the sorting, for anyone who cannot
+                  // see which one is lit.
+                  aria-pressed={sortKey === col.id}
                   className={
                     "songs__col" + (sortKey === col.id ? " songs__col--on" : "")
                   }
@@ -321,7 +335,15 @@ export function Songs({
                 >
                   {col.label}
                   {sortKey === col.id && (
-                    <span aria-hidden="true">{ascending ? " ↑" : " ↓"}</span>
+                    <>
+                      <span aria-hidden="true">{ascending ? " ↑" : " ↓"}</span>
+                      {/* The arrow is the sighted reader's copy of this. Both
+                          are needed: an arrow glyph read aloud is "up arrow",
+                          which does not say what it is sorting. */}
+                      <span className="a11y-only">
+                        , sorted {ascending ? "ascending" : "descending"}
+                      </span>
+                    </>
                   )}
                 </button>
               ))}

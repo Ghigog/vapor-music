@@ -24,6 +24,7 @@ mod cache;
 /// Public for the same reason as `audio`: the real-time test drives a real
 /// streaming deck rather than a stand-in for one.
 pub mod decoder;
+mod media;
 mod metadata;
 mod store;
 mod sync;
@@ -1797,7 +1798,7 @@ fn spawn_prefetcher(shared: Shared) {
 /// moving whether or not a window is open, focused or even rendering — a
 /// webview that stops running timers when hidden is a normal thing for an OS to
 /// do, and music stopping because of it is not.
-fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
+fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<media::Controls>) {
     use tauri::Emitter;
 
     let spawned = std::thread::Builder::new()
@@ -1808,6 +1809,13 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
             let Ok(mut app) = shared.lock() else {
                 return;
             };
+
+            // The one place that already knows, four times a second, what is
+            // playing and whether it still is. `publish` drops anything that
+            // has not meaningfully changed, so this is not four round trips a
+            // second — see `media::worth_sending`.
+            let showing = now_playing(&app);
+            controls.publish(&showing);
 
             // A mix completed, so the decks have changed roles: what was cued
             // is now what is playing. Nothing needs loading — the audio is
@@ -1874,6 +1882,105 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
 
     if let Err(e) = spawned {
         eprintln!("could not start the playback supervisor: {e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System media controls (MIG-023)
+// ---------------------------------------------------------------------------
+
+/// Do what a hardware key or a Control Center button asked for.
+///
+/// Deliberately routed through the same functions the commands use rather than
+/// through the commands themselves — a `#[tauri::command]` takes `State`,
+/// which exists only inside an invocation. Two code paths that must agree
+/// about what "next" means is exactly how they stop agreeing.
+fn handle_media_press(shared: &Shared, app_handle: &tauri::AppHandle, press: media::Press) {
+    use tauri::Emitter as _;
+
+    let Ok(mut app) = shared.lock() else { return };
+
+    match press {
+        media::Press::Play => {
+            if let Some(p) = app.player.as_ref() {
+                p.play();
+            }
+        }
+        media::Press::Pause => {
+            if let Some(p) = app.player.as_ref() {
+                p.pause();
+            }
+        }
+        media::Press::Toggle => {
+            if let Some(p) = app.player.as_ref() {
+                if p.snapshot().status == audio::Status::Playing {
+                    p.pause();
+                } else {
+                    p.play();
+                }
+            }
+        }
+        media::Press::Next => {
+            record_skip_if_reacting_to_a_blend(&mut app);
+            if let Some(href) = app.queue.next(None).map(str::to_string) {
+                begin_playback(shared, &mut app, href);
+            }
+        }
+        media::Press::Previous => {
+            if let Some(href) = app.queue.previous().map(str::to_string) {
+                begin_playback(shared, &mut app, href);
+            }
+        }
+    }
+
+    drop(app);
+    // The screen has to follow the keys. Without this the transport keeps
+    // showing the previous track until something else happens to refresh it.
+    let _ = app_handle.emit("playback-changed", ());
+}
+
+/// The native window, for the one platform that needs one.
+///
+/// Windows hangs SMTC off a window handle; macOS and Linux ignore it entirely,
+/// so asking for one there would be a `tauri::Window` lookup that can only
+/// fail. Written as two functions rather than one with a `cfg!` inside,
+/// because the Windows body does not compile elsewhere.
+#[cfg(target_os = "windows")]
+fn window_handle(handle: &tauri::AppHandle) -> Option<*mut std::ffi::c_void> {
+    use tauri::Manager as _;
+    handle
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map(|hwnd| hwnd.0 as *mut std::ffi::c_void)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn window_handle(_handle: &tauri::AppHandle) -> Option<*mut std::ffi::c_void> {
+    None
+}
+
+/// What the system should be showing, from what the app is doing.
+fn now_playing(app: &AppState) -> media::NowPlaying {
+    let snapshot = app.player.as_ref().map(|p| p.snapshot());
+    let row = app
+        .playing
+        .as_ref()
+        .and_then(|href| app.rows.iter().find(|r| &r.href == href))
+        .cloned()
+        .map(|mut row| {
+            app.apply_tags(&mut row);
+            row
+        });
+
+    media::NowPlaying {
+        title: row.as_ref().map(|r| r.title.clone()).unwrap_or_default(),
+        artist: row.as_ref().map(|r| r.artist.clone()).unwrap_or_default(),
+        album: row.as_ref().map(|r| r.album.clone()).unwrap_or_default(),
+        duration: snapshot.as_ref().map_or(0.0, |s| s.duration),
+        playing: snapshot
+            .as_ref()
+            .is_some_and(|s| s.status == audio::Status::Playing),
+        position: snapshot.as_ref().map_or(0.0, |s| s.position),
     }
 }
 
@@ -3506,7 +3613,23 @@ pub fn run() {
             // Only worth a thread if there is a device for it to watch.
             let has_audio = shared.lock().map(|s| s.player.is_some()).unwrap_or(false);
             if has_audio {
-                spawn_supervisor(app.handle().clone(), Arc::clone(&shared));
+                // Registered here, on the main thread, because that is where
+                // macOS wants its remote command centre built (MIG-023).
+                //
+                // Only when there is a device: media keys that answer on a
+                // machine with no audio output would be a set of controls for
+                // something that cannot happen.
+                let for_press = Arc::clone(&shared);
+                let handle_for_press = app.handle().clone();
+                let controls = media::Controls::attach(window_handle(app.handle()), move |press| {
+                    handle_media_press(&for_press, &handle_for_press, press);
+                });
+
+                spawn_supervisor(
+                    app.handle().clone(),
+                    Arc::clone(&shared),
+                    Arc::clone(&controls),
+                );
                 // Only useful alongside playback: without a device there is no
                 // queue moving forward to run ahead of.
                 spawn_prefetcher(Arc::clone(&shared));

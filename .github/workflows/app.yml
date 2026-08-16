@@ -123,8 +123,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Tauri's Linux backend is WebKitGTK; cpal also needs ALSA headers.
-      # Neither is present on a bare runner.
+      # Tauri's Linux backend is WebKitGTK; cpal needs ALSA headers; keyring
+      # and souvlaki (MPRIS, MIG-023) both need D-Bus. None is present on a
+      # bare runner.
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |

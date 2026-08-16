@@ -43,6 +43,11 @@ vapor-dsp = { path = "../../vapor-core/crates/vapor-dsp" }
 vapor-engine = { path = "../../vapor-core/crates/vapor-engine" }
 vapor-library = { path = "../../vapor-core/crates/vapor-library" }
 lofty = "0.25.1"
+# System media controls: hardware keys, macOS Control Center, Windows SMTC,
+# Linux MPRIS (MIG-023). One crate for all three desktop targets, which is why
+# MIG-022 decided not to port the Godot build's 191 lines of C++/WinRT — three
+# platform ports maintained separately is what this replaces.
+souvlaki = "0.8.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

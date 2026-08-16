@@ -260,7 +260,7 @@ describe("Songs — sorting", () => {
     render(<Songs />);
 
     await screen.findByText("Windowlicker");
-    const bpm = screen.getByRole("columnheader", { name: /bpm/i });
+    const bpm = screen.getByRole("button", { name: /^bpm/i });
 
     await user.click(bpm);
     await waitFor(() => {
@@ -274,6 +274,50 @@ describe("Songs — sorting", () => {
     });
   });
 
+  /**
+   * TD-46. The sort controls were `role="columnheader"` inside a
+   * `role="row"`, above a `listbox` of `option`s — a row must live in a
+   * table, grid or treegrid, and there is none, so a screen reader was told
+   * about a table header with no table.
+   */
+  it("has no table roles above a listbox that is not a table", async () => {
+    useBackend();
+    render(<Songs />);
+
+    await screen.findByText("Windowlicker");
+
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.queryAllByRole("row")).toHaveLength(0);
+    expect(screen.queryAllByRole("columnheader")).toHaveLength(0);
+  });
+
+  /**
+   * Which control is sorting, and which way, without seeing the arrow. The
+   * arrow is `aria-hidden` — read aloud it is "up arrow", which does not say
+   * what it is sorting.
+   */
+  it("says in each control's own name which one is sorting and which way", async () => {
+    const user = userEvent.setup();
+    useBackend();
+    render(<Songs />);
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("button", { name: /^bpm/i }));
+
+    const bpm = await screen.findByRole("button", { name: /bpm, sorted ascending/i });
+    expect(bpm).toHaveAttribute("aria-pressed", "true");
+    // And the ones that are not sorting say so by not being pressed.
+    expect(screen.getByRole("button", { name: /^artist$/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await user.click(bpm);
+    expect(
+      await screen.findByRole("button", { name: /bpm, sorted descending/i }),
+    ).toBeInTheDocument();
+  });
+
   it("can sort by artist from the header", async () => {
     // Artist used to be `display: none` in the header, so the table could not
     // be sorted by it from its own header at all (TD-32).
@@ -282,7 +326,7 @@ describe("Songs — sorting", () => {
     render(<Songs />);
 
     await screen.findByText("Windowlicker");
-    await user.click(screen.getByRole("columnheader", { name: /^artist$/i }));
+    await user.click(screen.getByRole("button", { name: /^artist$/i }));
 
     await waitFor(() => {
       expect(

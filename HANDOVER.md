@@ -103,24 +103,15 @@ practice. This is the top item: everything downstream — analysis, playback,
 mixing — is unexercised against real files, and none of it can be trusted until
 one real library has been through it.
 
-### 2. The Songs table's header is orphaned ARIA — TD-46
+### 2. Nothing on this list has been used by a person
 
-A `role="row"` of `role="columnheader"` buttons sitting above a `listbox` of
-`option`s. A `row` must live inside a `table`, `grid` or `treegrid`, and there is
-none, so a screen reader announces a table header with no table. Pick one model:
-make the whole table a `grid` (which also buys cell-level navigation) or have the
-header shed its roles and become plain sort buttons. Announced oddly rather than
-unusable, but it gets more expensive as the table grows.
+Not one bug, but the shape of all of them. The media controls (MIG-023) are
+compiled on three platforms and pressed on none (TD-54). The lyrics lookup
+(MIG-052) is parsed from canned bodies and has never spoken to LRCLIB (TD-51).
+The credential store is fixed and unconfirmed. Everything below the top item
+follows from the top item.
 
-### 3. No media controls on any platform — MIG-023
-
-A parity regression, not a gap. The Godot build answers hardware keys, Control
-Center and SMTC (`MediaControlsManager.gd` plus a macOS `.mm` and a Windows
-`.cpp`). `vapor-app` answers none of them, **including on macOS, where the old
-build works**. One crate (`souvlaki` or equivalent) covers all three desktop
-targets from the shell.
-
-### 4. Key detection is 60.6% exact — TD-11
+### 3. Key detection is 60.6% exact — TD-11
 
 Up from 56.1%; feeding the chroma from spectral peaks rather than every bin is
 what did it, because a drum hit is broadband and was depositing energy into all
@@ -129,7 +120,7 @@ them: **segmented analysis shipped** (TD-13) and is not the remaining lever, and
 **tuning correction measures 58.1%** — worse than doing nothing — and was
 reverted. Needs the personal fixture library to go further (TD-43).
 
-### 5. Process gaps
+### 4. Process gaps
 
 * **TD-41** — the Godot CI job runs without the GDExtension, so DSP-dependent
   tests are uncovered. Deliberate; the tree is being archived, not repaired.

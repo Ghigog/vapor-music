@@ -226,7 +226,7 @@ describe("Library", () => {
 
     // The table, identifiable by its sortable columns — the grid has none.
     expect(
-      await screen.findByRole("columnheader", { name: /album/i }),
+      await screen.findByRole("button", { name: /^album/i }),
     ).toBeInTheDocument();
   });
 
