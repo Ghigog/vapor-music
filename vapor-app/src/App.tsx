@@ -44,7 +44,7 @@ import "./screens/playlist.css";
  *
  * Songs and Search were sidebar entries because the Daylight file ships twelve
  * screen *drawings* and the rewrite built one nav item per drawing — see
- * docs/DESIGN_DRIFT.md. The design's own navigation is three tabs, and its
+ * docs/FINDINGS.md. The design's own navigation is three tabs, and its
  * Library carries a search field and a Songs tab. Both now live inside Library.
  */
 type Screen =

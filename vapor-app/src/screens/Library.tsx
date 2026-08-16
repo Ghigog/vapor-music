@@ -21,7 +21,7 @@ import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
  * "Songs" was called "All" and showed the same card grid ungrouped, while a
  * separate Songs screen in the sidebar held the actual table. The Daylight
  * design has no such screen — its Library tabs are Albums, Songs, Artists,
- * Playlists, and the flat list is one of them (docs/DESIGN_DRIFT.md). It is one
+ * Playlists, and the flat list is one of them (docs/FINDINGS.md). It is one
  * of them here now too, and it renders the table.
  */
 const TABS: ReadonlyArray<{ id: GroupBy; label: string }> = [

@@ -1833,7 +1833,7 @@ As a listener,
 I'd like the Vibe screen to show me the three ways out of the track that is playing and which one the DJ would take,
 So that I can see the choice being made and overrule it.
 
-**Context:** `docs/DESIGN_DRIFT.md` found that the React rewrite kept the planner (`generate_mood_path`) and dropped the chooser. The Daylight design specifies the three cards explicitly, tagged and colour-coded, and AI-007 specifies the behaviour. The engine inputs were all ported already — `harmonic_relation_cost`, `is_similar_genre`, `choose_transition`.
+**Context:** `docs/FINDINGS.md` found that the React rewrite kept the planner (`generate_mood_path`) and dropped the chooser. The Daylight design specifies the three cards explicitly, tagged and colour-coded, and AI-007 specifies the behaviour. The engine inputs were all ported already — `harmonic_relation_cost`, `is_similar_genre`, `choose_transition`.
 
 **Description:**
 Port `_get_match_type_between` and the four-step cycle. Render one candidate per kind on the Vibe screen with the transition each would use, badge the DJ's choice, and let a person take another.

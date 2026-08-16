@@ -85,7 +85,7 @@ export function Transport({
 
           It was a sidebar entry, which the Daylight design never had — its Now
           Playing opens with a "⌄" dismiss chevron, the control of a sheet
-          pushed up from this bar (docs/DESIGN_DRIFT.md). Pressing the title of
+          pushed up from this bar (docs/FINDINGS.md). Pressing the title of
           the thing you are listening to is how every other player opens it.
 
           Only when there is something to open: with nothing playing this is the

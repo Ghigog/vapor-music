@@ -13,7 +13,7 @@ import { expect, test, type Page } from "@playwright/test";
  * Open the flat track table.
  *
  * It is a tab inside Library now, not a sidebar destination — the Daylight
- * design never had a Songs screen (docs/DESIGN_DRIFT.md).
+ * design never had a Songs screen (docs/FINDINGS.md).
  */
 async function openSongs(page: Page) {
   await page.getByRole("button", { name: "Library", exact: true }).click();
@@ -333,7 +333,7 @@ test.describe("Every screen opens", () => {
  * Both were sidebar destinations. The Daylight design has neither: its Now
  * Playing opens with a "⌄" dismiss chevron from the player bar, and its Queue
  * is labelled "06 Queue — bottom sheet" and reads "Conducted by Vibe"
- * (docs/DESIGN_DRIFT.md). The rewrite made twelve mockups into twelve tabs.
+ * (docs/FINDINGS.md). The rewrite made twelve mockups into twelve tabs.
  */
 test.describe("Navigation", () => {
   test("the sidebar no longer offers Now Playing or Queue", async ({ page }) => {

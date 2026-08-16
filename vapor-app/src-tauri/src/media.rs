@@ -181,15 +181,6 @@ impl Controls {
         })
     }
 
-    /// Whether the platform will actually deliver media keys to this process.
-    ///
-    /// Reported so the Settings screen can say so, rather than leaving a
-    /// person to conclude the feature is broken when it is the *build* that
-    /// cannot receive keys.
-    pub fn deliverable(&self) -> bool {
-        self.inner.lock().map(|c| c.is_some()).unwrap_or(false) && bundled()
-    }
-
     /// Tell the system what is playing.
     ///
     /// Skipped when nothing meaningful has changed — see [`worth_sending`].

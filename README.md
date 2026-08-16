@@ -53,7 +53,7 @@ Traditional players shuffle by picking `Random Song A` and crossfading it into `
 **Key Differentiator:** All analysis and mixing logic runs entirely **on-device**. No cloud AI, no subscriptions, no privacy compromise.
 
 > [!NOTE]
-> A critical analysis of the current transition limitations and a technical roadmap for professional-grade mixing can be found in the [AI DJ Refactor Plan](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/ai_dj_refactor_plan.md).
+> A critical analysis of the current transition limitations and a technical roadmap for professional-grade mixing can be found in the [AI DJ Refactor Plan](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/FINDINGS.md).
 
 ---
 
@@ -180,60 +180,31 @@ vapor-music/
 
 ---
 
-## C++ DSP GDExtension Layer
+## How it is built
 
-Vapor Music utilizes a native C++ GDExtension (`AudioDSP`) to handle digital signal processing (DSP) operations such as high-performance analysis (via **Essentia**) and pitch-independent time-stretching (via the **Rubber Band Library**).
+Two pieces, and one of them is being retired.
 
-### Compilation Instructions
+**`vapor-core/`** — three Rust crates with no I/O and no platform code.
+`vapor-dsp` decodes, and finds tempo, key and cue points. `vapor-engine` is two
+decks, the EQ and filter chain, and the six transitions. `vapor-library` is
+playlists, grouping, the queue, the Camelot pathfinder and device sync. Because
+none of it touches a socket or a file, all of it is testable without an app,
+and it compiles to wasm as well as native.
 
-To compile the C++ GDExtension on macOS:
-1. Ensure SCons, Essentia tap, and dependencies are installed via Homebrew:
-   ```bash
-   brew install scons rubberband eigen libyaml fftw ffmpeg libsamplerate taglib chromaprint pkg-config
-   brew tap mtg/essentia
-   ```
-2. Initialize and check out the `godot-cpp` bindings library:
-   ```bash
-   git submodule update --init --recursive
-   ```
-3. Install Essentia from the tap:
-   ```bash
-   brew install --HEAD mtg/essentia/essentia
-   ```
-4. Compile the root GDExtension dynamic library:
-   ```bash
-   scons platform=macos target=template_debug
-   ```
+**`vapor-app/`** — a Tauri shell: a React frontend and a Rust backend holding
+everything the core deliberately does not. The audio device (`cpal`), WebDAV,
+the keychain, the filesystem cache, media keys, and the network. Commands are
+the only way in, and `tests/command_bindings.rs` fails the build if one has no
+frontend binding.
 
-### Troubleshooting
+**`scripts/`, `src/`, `scenes/`** — the original Godot build and its C++
+`AudioDSP` GDExtension (Essentia, Rubber Band). Kept for reference while the
+port is checked against it, and scheduled for archiving. Everything it does now
+lives in the Rust core, which is what removed the Homebrew dependency tail and
+the macOS-only DSP.
 
-#### Godot Crashes immediately on Startup with `nil URL argument`
-If the Godot editor or headless runner crashes immediately on startup with the following error:
-`*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '*** -[NSBundle initWithURL:]: nil URL argument'`
-This means the compiled `.dylib` library is missing from the [bin/](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/bin) directory, triggering a known macOS Godot engine bug. Compile the GDExtension library using the steps above to resolve this.
-
-#### Essentia Installation fails on macOS (Homebrew)
-- **`Failed to execute: .../python3`**: The tap's formula expects a generic `python3` executable in the python 3.9 opt bin, which may be missing. Fix it by symlinking `python3` to `python3.9`:
-  ```bash
-  ln -s python3.9 /opt/homebrew/opt/python@3.9/bin/python3
-  ```
-- **`avcodec_receive_frame` or `ch_layout` compilation errors**: The tap's formula by default uses the deprecated `ffmpeg@2.8` package, which is incompatible with modern Essentia source code. Run `brew edit essentia` and change `depends_on "ffmpeg@2.8"` to `depends_on "ffmpeg"`.
-
-> [!WARNING]
-> **Exporting / Bundling Tech Debt Note**
-> For local development and unit tests, the compiled dynamic library (`bin/libaudio_dsp.macos.debug.dylib`) links dynamically to Homebrew's paths (via `-Wl,-rpath,/opt/homebrew/lib`).
-> Before exporting a production app bundle (`.app`), these external `.dylib` dependencies (specifically `libessentia.dylib` and `librubberband.dylib`) must be copied directly into the app bundle's `Frameworks` directory and re-linked using `install_name_tool`, and then code-signed, to make the exported application self-contained.
->
-> Phase 1 of the [Cross-Platform DSP plan](docs/CROSS_PLATFORM_DSP.md) removes this problem at the root by dropping the Essentia file loaders — and with them the entire ffmpeg/taglib/chromaprint dependency tail — rather than bundling them.
-
-> [!NOTE]
-> **Licensing.** Vapor Music is licensed under the **AGPL-3.0**, because it links Essentia (AGPL-3.0) and Rubber Band (GPL-2.0-or-later) for its analysis and time-stretching. See [License](#license) below and [Licensing & Compliance](docs/LICENSING.md).
-
-### Platform Support
-
-The `AudioDSP` GDExtension is currently **macOS-only**. On Windows and Android the app falls back to `scripts/services/audio_dsp_stub.gd`: playback, library, playlists and WebDAV all work, but BPM/key analysis and beat-matched time-stretching are unavailable, and tracks stay unanalyzed rather than showing fabricated values.
-
-[Cross-Platform DSP](docs/CROSS_PLATFORM_DSP.md) documents what it would take to close that gap, why the current `analyze_file()` design is the blocker, and a four-phase plan.
+The full account of what was measured and decided along the way is in
+[docs/FINDINGS.md](docs/FINDINGS.md).
 
 ---
 
@@ -247,13 +218,6 @@ The `AudioDSP` GDExtension is currently **macOS-only**. On Windows and Android t
 
 ---
 
-## Android Export
-- **Bundle ID:** `com.dylangrowcoot.vapormusic`
-- **Application Name:** Vapor Music
-- **Permissions:** `INTERNET`, `ACCESS_NETWORK_STATE` (for WebDAV sync)
-- **Features:** Full edge-to-edge support, portrait/landscape responsive UI, hardware volume key integration.
-
----
 
 ## Status
 

@@ -43,7 +43,7 @@ LGPL-2.1-or-later, some builds GPL), **TagLib** (LGPL-2.1 / MPL-1.1),
 **Chromaprint** (LGPL-2.1-or-later), **libsamplerate** (BSD-2-Clause),
 **FFTW3** (GPL-2.0-or-later), **libyaml** (MIT).
 
-Phase 1 of `docs/CROSS_PLATFORM_DSP.md` removes this entire set by replacing
+Phase 1 of `docs/FINDINGS.md` removes this entire set by replacing
 Essentia's file loaders with self-contained decoders.
 
 ---

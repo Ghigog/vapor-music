@@ -21,7 +21,7 @@
 //! it to find, and `tests/pll_drift.rs` measures no difference between running
 //! it and not. The waveform correlation is the term that does the work, because
 //! it is the only one that looks at the audio rather than at what the analysis
-//! claimed about it. See `docs/MIGRATION.md`.
+//! claimed about it. See `docs/FINDINGS.md`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

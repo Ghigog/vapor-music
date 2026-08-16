@@ -251,7 +251,7 @@ describe("Library", () => {
    *
    * Songs and Search were separate sidebar destinations, which the Daylight
    * design never had: its Library carries the search field and the flat list
-   * as a tab (docs/DESIGN_DRIFT.md).
+   * as a tab (docs/FINDINGS.md).
    */
   it("shows the track table under the Songs tab", async () => {
     useBackend();
@@ -392,7 +392,7 @@ describe("Vibe DJ", () => {
    *
    * `dj_pathfinder.gd` matches on "build vibe" and "chill down"; the rewrite
    * displayed "Build" and "Wind down", and named the unnamed `_` fallback
-   * "Steady" (docs/DESIGN_DRIFT.md). Pinned here because a label with no source
+   * "Steady" (docs/FINDINGS.md). Pinned here because a label with no source
    * is invisible to every other kind of test.
    */
   it("offers the curves under the names the original gave them", async () => {
@@ -883,7 +883,7 @@ describe("Transport", () => {
  * `_get_match_type_between` and the four-step choice cycle were the half of the
  * original DJ the rewrite dropped: it kept the planner and lost the chooser, so
  * the screen could plan a set but never show the choice it was making or let
- * anyone overrule it (docs/DESIGN_DRIFT.md).
+ * anyone overrule it (docs/FINDINGS.md).
  */
 describe("Vibe DJ — Match, Fresh and Switch", () => {
   /**

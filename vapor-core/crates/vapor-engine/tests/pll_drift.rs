@@ -35,7 +35,7 @@ const BLOCK: usize = 512;
 /// analysis that decided `claimed_bpm` would have produced for it.
 ///
 /// The gap between the two is the whole subject. Tempo agreement is ~81%
-/// (`docs/MIGRATION.md`), and the disagreements are not all wild — a track
+/// (`docs/FINDINGS.md`), and the disagreements are not all wild — a track
 /// called 124.0 that is really 124.6 passes every check the mixer makes and
 /// then slips a beat's width every twenty seconds. That is precisely the error
 /// a drift correction is for, and precisely the size the ±0.5% clamp was

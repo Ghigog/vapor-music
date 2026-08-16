@@ -301,7 +301,7 @@ mod tests {
     ///
     /// Not "close enough" — identical. Anything else means playback would sound
     /// different depending on how the track happened to be loaded, and every
-    /// measurement in `docs/MIGRATION.md` was taken through the loaded path.
+    /// measurement in `docs/FINDINGS.md` was taken through the loaded path.
     #[test]
     fn streaming_matches_decoding_the_whole_file() {
         let path = wav_file(44_100, 3.0);

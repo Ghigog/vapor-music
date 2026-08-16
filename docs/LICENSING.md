@@ -5,7 +5,7 @@
 **Last reviewed:** 2026-07-31
 
 > What Vapor Music depends on, what those licenses require, and the options for
-> complying. Read alongside `docs/CROSS_PLATFORM_DSP.md`.
+> complying. Read alongside `docs/FINDINGS.md`.
 >
 > This is an engineering summary of publicly documented license terms, not legal
 > advice. Confirm with a lawyer before any commercial distribution.
@@ -43,9 +43,9 @@ formula metadata (`rubberband: GPL-2.0-or-later`).
 > whatsoever. The moment a binary is given to *anyone else* — a friend, a
 > tester, a store listing, a download link — the AGPL and GPL terms attach.
 >
-> Note that the macOS `.dmg` currently ships without the Essentia and Rubber
-> Band dylibs bundled (they resolve to Homebrew paths at runtime), which
-> muddies the picture rather than avoiding it. The DSP plan makes the binary
+> Note that the Godot-era macOS `.dmg` shipped without the Essentia and Rubber
+> Band dylibs bundled (they resolved to Homebrew paths at runtime), which
+> muddied the picture rather than avoiding it. The DSP plan makes the binary
 > genuinely self-contained, at which point the obligation is unambiguous.
 
 ---
@@ -143,8 +143,8 @@ therefore AGPL-3.0-or-later.
 - [x] Vendor the third-party license texts into `licenses/` so they can ship
       with the application.
 - [x] State the license and source location in the README.
-- [ ] **Make `github.com/Ghigog/vapor-music` public** — currently private.
-      Until then, complete source must be handed to every recipient on request.
+- [ ] **Make `github.com/Ghigog/vapor-music` public.** While it is private,
+      complete source must be handed to every recipient on request.
       *(Owner action — must be done before sharing any build.)*
 - [ ] Include `licenses/` in the export. The Android and Windows presets use
       `export_filter="all_resources"` with an empty `include_filter`, so plain
@@ -190,7 +190,7 @@ leaving Essentia/AGPL as the only remaining obligation to decide about.
 
 ## Consequences for the DSP plan
 
-Option A removes the licensing constraint on `docs/CROSS_PLATFORM_DSP.md` —
+Option A removes the licensing constraint on `docs/FINDINGS.md` —
 both libraries may be used freely on every platform.
 
 One choice is still worth making deliberately in **phase 2**: vendoring

@@ -144,7 +144,7 @@ Two things to know:
   budget: **max 4 active blur passes simultaneously** (see `DESIGN_LANGUAGE.md §13`).
 
 Blur strength uses `textureLod`, which depends on screen-texture mipmaps. Whether the
-Compatibility renderer provides those is unconfirmed — see `PERFORMANCE_AUDIT.md §2.2`.
+Compatibility renderer provides those is unconfirmed — see `docs/FINDINGS.md`.
 
 ### Dynamic Palette (Phase 2)
 When a track loads, dominant colours are extracted from album art (k-means on a

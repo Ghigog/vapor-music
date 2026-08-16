@@ -158,7 +158,7 @@ impl Pll {
         // original compared the two directly, which biases the error by
         // `dt_out * (ratio - 1)` — a sawtooth at the beat rate reaching 30 ms
         // at full stretch, which a loop with a 0.15 gain then chases. See the
-        // measurement in `docs/MIGRATION.md`: the faithful version made beat
+        // measurement in `docs/FINDINGS.md`: the faithful version made beat
         // alignment worse, this one makes it better.
         let dt_in = (incoming.beats[expected as usize] - pos_in) / ratio as f32;
 

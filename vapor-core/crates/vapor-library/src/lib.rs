@@ -6,7 +6,7 @@
 //!
 //! Ported from GDScript with the existing GUT tests as the specification. This
 //! is a refactor: where behaviour and improvement conflict, behaviour wins, and
-//! anything worth improving is recorded in `docs/MIGRATION.md` rather than
+//! anything worth improving is recorded in `docs/FINDINGS.md` rather than
 //! changed in passing.
 //!
 //! Like the other core crates it has no I/O and no platform code.

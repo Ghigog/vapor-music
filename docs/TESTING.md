@@ -3,19 +3,16 @@
 **Status:** Living document
 **Last reviewed:** 2026-08-16
 
-**Current counts:** 357 core (unit + property + fuzz), 136 shell (unit +
-integration), 174 component, 39 end-to-end including three monkey seeds.
 
 > What is tested, at which layer, and what is deliberately not. Read alongside
-> `docs/MIGRATION.md` (the plan) and `docs/TECH_DEBT.md` (what is knowingly
-> left behind).
+> `docs/FINDINGS.md` — what was measured, and what was decided and why.
 
 ---
 
 ## Why this document exists
 
-The suite had 357 tests and shipped five defects to the first person who tried
-to connect a real server in one sitting:
+The suite was large and green, and it shipped five defects to the first person
+who tried to connect a real server, in one sitting:
 
 | What happened | What was wrong |
 |---|---|
@@ -45,7 +42,7 @@ question, which is the only good reason to add a layer.
 **Where:** beside the code, in `#[cfg(test)] mod tests`.
 **Runs:** `cargo test` in `vapor-core` and `vapor-app/src-tauri`.
 
-The existing strength: 295 tests over the DSP, the mixer, the library logic.
+The existing strength was the core: the DSP, the mixer, the library logic.
 Camelot arithmetic, WSOLA behaviour, LUFS against the standard, envelope shapes,
 queue semantics.
 
@@ -170,7 +167,7 @@ Recorded so nobody "fixes" the gap without reading why.
   comes back empty on a real machine, suspect the shape before the parser.
 * **Analysis accuracy in CI.** The 563-track figures need a personal library
   (TD-43). CI runs the DSP against synthetic signals; the fixture numbers are
-  produced by hand and recorded in `docs/MIGRATION.md`.
+  produced by hand and recorded in `docs/FINDINGS.md`.
 * **The Godot tree.** Pinned at a known-failing baseline and diagnosed in TD-42.
   It is being archived, not repaired.
 * **Visual appearance.** No screenshot diffing. The design is still moving and a

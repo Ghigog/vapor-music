@@ -35,7 +35,7 @@ import workflow from "../../../docs/ai_dj_workflow.md?raw";
  * The rewrite had relabelled these: "Chill Down" became "Wind down", and the
  * `_` fallback case — which the original never gave a display name, because it
  * never offered the curves in a UI — became "Steady". Both were inventions
- * (see docs/DESIGN_DRIFT.md). The ids were always right; only the words drifted.
+ * (see docs/FINDINGS.md). The ids were always right; only the words drifted.
  *
  * "Hold Steady" is the one label with no origin in the original, since there is
  * nothing to restore it to. Rename it here and nowhere else.
@@ -62,7 +62,7 @@ export function Vibe({
    *
    * Off, the queue plays in its own order and this screen is the shuffle
    * screen — which is what the Daylight design calls it, relabelling the tab
-   * from "Vibe" to "Shuffle" (docs/DESIGN_DRIFT.md). The queue is shown either
+   * from "Vibe" to "Shuffle" (docs/FINDINGS.md). The queue is shown either
    * way, because the question "what is coming next, and who decided" has the
    * same answer in both modes and it should not need two screens.
    */

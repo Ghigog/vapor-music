@@ -1,6 +1,6 @@
 # vapor-core
 
-Portable Rust core for Vapor Music. See [`docs/MIGRATION.md`](../docs/MIGRATION.md)
+Portable Rust core for Vapor Music. See [`docs/FINDINGS.md`](../docs/FINDINGS.md)
 for why this exists and where it is going.
 
 At this stage it is a **spike**, not a product: it exists to answer one question
@@ -24,7 +24,7 @@ binary, which is why cpal is a target-gated dependency rather than a crate one.
 ### Where things stand, measured
 
 Against 563 real tracks, using the Essentia results the Godot app already
-produced as ground truth. See `docs/MIGRATION.md` for how to read these — they
+produced as ground truth. See `docs/FINDINGS.md` for how to read these — they
 are agreement with another estimator, not a correctness score.
 
 | | Result |
