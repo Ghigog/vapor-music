@@ -11,13 +11,27 @@
 
 use crate::biquad::{EqChain, Sweep};
 use crate::clipping::{BandRms, Bands};
+use crate::delay::{Delay, Reverb};
 use crate::stretch::Stretcher;
+
+/// Echo Out's delay time — 350 ms, from `feedback_delay_ms`.
+const ECHO_TIME_SECS: f32 = 0.35;
+/// Its feedback: −10 dB, from `feedback_level_db`.
+const ECHO_FEEDBACK: f32 = 0.316;
+/// Reverb Freeze's room and damping, from `room_size` and `damping`.
+const FREEZE_ROOM: f32 = 0.95;
+const FREEZE_DAMPING: f32 = 0.1;
 
 pub struct Deck {
     samples: Vec<[f32; 2]>,
     sample_rate: f32,
     stretcher: Stretcher,
     eq: EqChain,
+    /// Echo Out and Reverb Freeze. Always present, dry unless a transition asks
+    /// for them — allocating one mid-transition is exactly what the audio
+    /// thread cannot do.
+    delay: Delay,
+    reverb: Reverb,
 
     /// Linear gain. The transition scheduler writes dB; conversion happens once
     /// per block, not per sample.
@@ -44,6 +58,8 @@ impl Deck {
             sample_rate,
             stretcher: Stretcher::new(),
             eq: EqChain::new(sample_rate),
+            delay: Delay::new(sample_rate),
+            reverb: Reverb::new(sample_rate),
             gain: 1.0,
             ratio: 1.0,
             playing: false,
@@ -73,6 +89,9 @@ impl Deck {
         let previous = std::mem::replace(&mut self.samples, samples);
         self.stretcher.reset(0.0);
         self.eq.reset();
+        // A new track must not inherit the tail of the one before it.
+        self.delay.reset();
+        self.reverb.reset();
         self.meter.reset();
         self.last_rms = Bands::default();
         self.clip_atten = Bands::default();
@@ -156,6 +175,21 @@ impl Deck {
         self.eq.set_sweep(sweep);
     }
 
+    /// Delay wet/dry for an Echo Out. The time and feedback are fixed at the
+    /// values `audio_manager.gd` configures the bus with.
+    pub fn set_delay_mix(&mut self, mix: f32) {
+        self.delay.set_time(ECHO_TIME_SECS);
+        self.delay.set_feedback(ECHO_FEEDBACK);
+        self.delay.set_mix(mix);
+    }
+
+    /// Reverb wet/dry for a Reverb Freeze.
+    pub fn set_reverb_mix(&mut self, mix: f32) {
+        self.reverb.set_room(FREEZE_ROOM);
+        self.reverb.set_damping(FREEZE_DAMPING);
+        self.reverb.set_mix(mix);
+    }
+
     /// Render `out.len()` frames, **adding** into `out` rather than replacing.
     /// Both decks sum into the same buffer, which is what makes the crossfade a
     /// true mix rather than a switch.
@@ -183,10 +217,17 @@ impl Deck {
         self.last_rms = self.meter.measure(&scratch[..produced]);
 
         for i in 0..produced {
-            for ch in 0..2 {
-                let s = self.eq.process(ch, scratch[i][ch]);
-                out[i][ch] += s * self.gain;
-            }
+            let mut frame = [
+                self.eq.process(0, scratch[i][0]),
+                self.eq.process(1, scratch[i][1]),
+            ];
+            // After the EQ, before the gain: the effects should hear the track
+            // as shaped by the transition, and the gain envelope should apply
+            // to the result including its tail.
+            frame = self.delay.process(frame);
+            frame = self.reverb.process(frame);
+            out[i][0] += frame[0] * self.gain;
+            out[i][1] += frame[1] * self.gain;
         }
 
         if produced < n {

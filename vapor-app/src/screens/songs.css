@@ -77,46 +77,37 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.7);
 }
 
-/* The first grid cell under the header is the artwork column, which has no
-   label — the header starts at the title. */
-.songs__cols {
-  grid-template-columns: 48px minmax(0, 2.2fr) minmax(0, 1.6fr) 56px 52px;
+/*
+ * One cell per grid column, with the controls inside it.
+ *
+ * The row stacks title and artist in a single cell, so the header cannot have
+ * five columns of its own — it used to resolve that by hiding the artist
+ * control, which meant the table could not be sorted by artist from its own
+ * header. Both controls now sit in the cell above the stack they sort.
+ */
+.songs__cell {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.songs__cell--num {
+  justify-content: flex-end;
 }
 
 .songs__col {
-  grid-column: auto;
   background: none;
   border: 0;
   padding: 4px 0;
   text-align: left;
   cursor: pointer;
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--fs-label);
   letter-spacing: var(--ls-label);
   text-transform: uppercase;
   color: var(--ink-4);
-}
-
-.songs__col--title {
-  grid-column: 2;
-}
-.songs__col--artist {
-  /* Artist shares the names cell with the title, so its header sits over the
-     album column's left edge rather than getting a column of its own. */
-  display: none;
-}
-.songs__col--album {
-  grid-column: 3;
-}
-.songs__col--bpm {
-  grid-column: 4;
-}
-.songs__col--key {
-  grid-column: 5;
-}
-
-.songs__col--num {
-  text-align: right;
 }
 
 .songs__col--on {

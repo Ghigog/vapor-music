@@ -770,7 +770,9 @@ fn choose_transition(
     bpm_diff: f32,
     same_genre: bool,
 ) -> vapor_engine::TransitionType {
-    use vapor_engine::TransitionType::{BassSwap, FilterSweep, StandardCrossfade};
+    use vapor_engine::TransitionType::{
+        BassSwap, EchoOut, ReverbFreeze, StandardCrossfade, TempoMorph,
+    };
 
     // Unanalysed. The original hashes the pair and takes any of the six; with
     // three available and nothing to reason from, the least opinionated one is
@@ -782,21 +784,24 @@ fn choose_transition(
     let key_cost = vapor_library::harmonic_relation_cost(from_key, to_key);
     // The original's "creative" match type: a genre jump is steered the same
     // way as a key clash, because both are a deliberate gear change.
-    if key_cost >= vapor_library::CLASH_COST || !same_genre {
-        // Echo Out / Reverb Freeze in every tempo bucket of the original.
-        return FilterSweep;
-    }
+    let clashing = key_cost >= vapor_library::CLASH_COST || !same_genre;
 
-    // Otherwise the original leans on Bass Swap and Tempo Morph while the tempi
-    // are within 8 BPM, and hands over to the effect-led pair beyond that.
-    //
-    // Its two inner buckets — under 3 BPM and under 8 — differ only in which of
-    // Bass Swap and Tempo Morph leads, and both map onto Bass Swap here, so
-    // they collapse. That is lost nuance, not a simplification.
-    if bpm_diff < 8.0 {
-        BassSwap
-    } else {
-        FilterSweep
+    // The original's buckets, now that all six types exist. It picks between
+    // two or three candidates per bucket with a hash of the pair; a single
+    // deterministic choice is taken here instead, favouring the type that
+    // carries the most weight in each — the variety it adds is not worth a
+    // second source of "which mix will this be" for the screen to predict.
+    match (clashing, bpm_diff) {
+        // Clash or gear change: hide it behind an effect, whatever the tempo.
+        (true, d) if d < 8.0 => EchoOut,
+        (true, _) => EchoOut,
+        // Closely related keys and close tempi: the characteristic DJ move.
+        (false, d) if d < 3.0 => BassSwap,
+        // Still related, tempi a few BPM apart: bend them together.
+        (false, d) if d < 8.0 => TempoMorph,
+        // Too far apart to stretch — the engine would refuse a beat-match
+        // anyway, so let the outgoing track dissolve rather than collide.
+        (false, _) => ReverbFreeze,
     }
 }
 
@@ -856,6 +861,7 @@ struct ArmedMix {
     duration: f32,
     incoming_pos: f32,
     ratio: f64,
+    outgoing_ratio: f64,
     start_at: f64,
 }
 
@@ -917,12 +923,22 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
     )
     .ok()?;
 
+    // A Tempo Morph meets in the middle, so both decks are stretched; every
+    // other transition leaves the outgoing track alone.
+    let (ratio, outgoing_ratio) = if kind.morphs_tempo() {
+        let target = (out_grid.bpm + in_grid.bpm) as f64 / 2.0;
+        (target / in_grid.bpm as f64, target / out_grid.bpm as f64)
+    } else {
+        (ratio, 1.0)
+    };
+
     Some(ArmedMix {
         next,
         kind,
         duration,
         incoming_pos,
         ratio,
+        outgoing_ratio,
         start_at,
     })
 }
@@ -972,6 +988,7 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
                     mix.duration,
                     mix.incoming_pos,
                     mix.ratio,
+                    mix.outgoing_ratio,
                     mix.start_at,
                 );
             }
@@ -1347,10 +1364,14 @@ fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<Strin
 }
 
 fn transition_name(kind: vapor_engine::TransitionType) -> String {
+    use vapor_engine::TransitionType as T;
     match kind {
-        vapor_engine::TransitionType::StandardCrossfade => "crossfade",
-        vapor_engine::TransitionType::BassSwap => "bass swap",
-        vapor_engine::TransitionType::FilterSweep => "filter sweep",
+        T::StandardCrossfade => "crossfade",
+        T::BassSwap => "bass swap",
+        T::FilterSweep => "filter sweep",
+        T::EchoOut => "echo out",
+        T::ReverbFreeze => "reverb freeze",
+        T::TempoMorph => "tempo morph",
     }
     .to_string()
 }

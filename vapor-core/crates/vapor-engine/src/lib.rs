@@ -20,6 +20,7 @@
 pub mod biquad;
 pub mod clipping;
 pub mod deck;
+pub mod delay;
 pub mod limiter;
 pub mod mixer;
 pub mod offline;

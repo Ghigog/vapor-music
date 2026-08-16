@@ -56,6 +56,11 @@ struct PendingTransition {
     duration: f32,
     incoming_pos: f32,
     ratio: f64,
+    /// Stretch applied to the *outgoing* deck.
+    ///
+    /// 1.0 for every transition but Tempo Morph, where both tracks bend toward
+    /// a tempo between them rather than one being dragged to the other.
+    outgoing_ratio: f64,
     delay_frames: usize,
 }
 
@@ -263,7 +268,27 @@ impl Mixer {
         let incoming_pos =
             Self::aligned_incoming_position(outgoing_grid, incoming_grid, start_time_out, cue_in)?;
 
-        self.schedule_prepared(kind, duration, incoming_pos, ratio, delay_frames);
+        // Tempo Morph meets in the middle: the target is the mean of the two
+        // tempi, so each deck travels half the distance. `audio_manager.gd`
+        // sets `_incoming_base_pitch` to `target / bpm_in` for exactly this.
+        let (ratio, outgoing_ratio) = if kind.morphs_tempo() {
+            let target = (outgoing_grid.bpm + incoming_grid.bpm) as f64 / 2.0;
+            (
+                target / incoming_grid.bpm as f64,
+                target / outgoing_grid.bpm as f64,
+            )
+        } else {
+            (ratio, 1.0)
+        };
+
+        self.schedule_prepared(
+            kind,
+            duration,
+            incoming_pos,
+            ratio,
+            outgoing_ratio,
+            delay_frames,
+        );
         Ok(())
     }
 
@@ -289,6 +314,7 @@ impl Mixer {
         duration: f32,
         incoming_pos: f32,
         ratio: f64,
+        outgoing_ratio: f64,
         delay_frames: usize,
     ) {
         let pending = PendingTransition {
@@ -296,6 +322,7 @@ impl Mixer {
             duration,
             incoming_pos,
             ratio,
+            outgoing_ratio,
             delay_frames,
         };
 
@@ -334,6 +361,8 @@ impl Mixer {
             outgoing.set_eq_db(0.0, 0.0, 0.0);
             outgoing.set_clip_attenuation(clipping::Bands::default());
             outgoing.set_sweep(None);
+            outgoing.set_delay_mix(0.0);
+            outgoing.set_reverb_mix(0.0);
             outgoing.ratio = 1.0;
         }
     }
@@ -350,6 +379,9 @@ impl Mixer {
         inc.ratio = p.ratio;
         inc.set_gain_db(-60.0);
         inc.play();
+        // Only a Tempo Morph moves the outgoing deck; for everything else this
+        // is 1.0 and the assignment is a no-op.
+        self.outgoing().ratio = p.outgoing_ratio;
         self.transition = Some(Transition::new(p.kind, p.duration));
     }
 
@@ -391,6 +423,10 @@ impl Mixer {
                 now_playing.set_eq_db(0.0, 0.0, 0.0);
                 now_playing.set_clip_attenuation(crate::clipping::Bands::default());
                 now_playing.set_sweep(None);
+                // The deck that just became the one playing must not keep the
+                // effects the transition left switched on.
+                now_playing.set_delay_mix(0.0);
+                now_playing.set_reverb_mix(0.0);
 
                 // Tempo returns to the track's own — but eased, not snapped.
                 // See TEMPO_GLIDE_SECS and test_post_transition_speed_glide.
@@ -488,6 +524,8 @@ fn apply(deck: &mut Deck, a: &crate::transition::DeckAutomation) {
     deck.set_gain_db(a.gain_db);
     deck.set_eq_db(a.eq_low_db, a.eq_mid_db, a.eq_high_db);
     deck.set_sweep(a.sweep);
+    deck.set_delay_mix(a.delay_mix);
+    deck.set_reverb_mix(a.reverb_mix);
 }
 
 /// Convenience for callers that only have a Sweep to clear.
@@ -611,7 +649,7 @@ mod tests {
         let ratio = Mixer::tempo_ratio(&out, &inc).expect("ratio");
         let pos = Mixer::aligned_incoming_position(&out, &inc, start, cue).expect("position");
         let mut prepared = Mixer::new(RATE, 512);
-        prepared.schedule_prepared(TransitionType::BassSwap, 6.0, pos, ratio, 0);
+        prepared.schedule_prepared(TransitionType::BassSwap, 6.0, pos, ratio, 1.0, 0);
 
         assert!((from_grids.incoming().ratio - prepared.incoming().ratio).abs() < 1e-12);
         assert!(

@@ -53,6 +53,9 @@ pub struct Analysis {
     /// A dynamics ratio, not a loudness — see [`loudness::energy_level`], which
     /// is the `audio_dsp.cpp` measure ported unchanged.
     pub energy: f32,
+    /// Times of the track's strongest hits, in seconds. See
+    /// [`loudness::transients`].
+    pub transients: Vec<f32>,
     /// Envelope peaks across the whole track, for drawing a waveform.
     ///
     /// A fixed number of bins rather than a fixed resolution, so a five-minute
@@ -240,6 +243,7 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         intro_key,
         outro_key,
         energy: loudness::energy_level(&audio.samples, rate as f32),
+        transients: loudness::transients(&audio.samples, rate as f32),
         // Computed from the same decoded signal every other stage used, so it
         // costs a pass over memory rather than another decode.
         waveform: loudness::waveform_peaks(&audio.samples, WAVEFORM_BINS),

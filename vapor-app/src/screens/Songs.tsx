@@ -33,16 +33,31 @@ const ROW_GAP = 4;
 interface Column {
   id: SortKey;
   label: string;
+  /** Which grid cell this control sits in. Title and artist share cell 2,
+   *  because the row stacks them in one cell too — see COLUMNS. */
+  cell: number;
   /** Right-aligned mono columns carry data; the rest carry names. */
   numeric?: boolean;
 }
 
+/**
+ * The header controls, and the cell each occupies.
+ *
+ * The row renders five grid children: art, names, album, bpm, key — with title
+ * and artist *stacked inside* the names cell, which is what the design shows.
+ * The header therefore cannot have five columns of its own, and previously
+ * resolved that by hiding the artist control entirely: you could not sort by
+ * artist from the header at all, and the two grids agreed only by convention.
+ *
+ * Now both sort controls live in cell 2, side by side over the stack they sort.
+ * One column definition, five cells, every control reachable.
+ */
 const COLUMNS: readonly Column[] = [
-  { id: "title", label: "Title" },
-  { id: "artist", label: "Artist" },
-  { id: "album", label: "Album" },
-  { id: "bpm", label: "BPM", numeric: true },
-  { id: "key", label: "Key", numeric: true },
+  { id: "title", label: "Title", cell: 2 },
+  { id: "artist", label: "Artist", cell: 2 },
+  { id: "album", label: "Album", cell: 3 },
+  { id: "bpm", label: "BPM", cell: 4, numeric: true },
+  { id: "key", label: "Key", cell: 5, numeric: true },
 ];
 
 type Load =
@@ -190,31 +205,44 @@ export function Songs({
       </header>
 
       <div className="songs__cols" role="row">
-        {COLUMNS.map((col) => (
-          <button
-            key={col.id}
-            role="columnheader"
-            aria-sort={
-              sortKey === col.id
-                ? ascending
-                  ? "ascending"
-                  : "descending"
-                : "none"
-            }
-            className={
-              "songs__col songs__col--" +
-              col.id +
-              (col.numeric ? " songs__col--num" : "") +
-              (sortKey === col.id ? " songs__col--on" : "")
-            }
-            onClick={() => toggleSort(col.id)}
-          >
-            {col.label}
-            {sortKey === col.id && (
-              <span aria-hidden="true">{ascending ? " ↑" : " ↓"}</span>
-            )}
-          </button>
-        ))}
+        {/* Grouped by cell so the header grid has exactly as many children as
+            the row grid, rather than five controls fighting over four cells. */}
+        {[2, 3, 4, 5].map((cell) => {
+          const inCell = COLUMNS.filter((c) => c.cell === cell);
+          return (
+            <div
+              key={cell}
+              className={
+                "songs__cell" +
+                (inCell[0]?.numeric ? " songs__cell--num" : "")
+              }
+              style={{ gridColumn: cell }}
+            >
+              {inCell.map((col) => (
+                <button
+                  key={col.id}
+                  role="columnheader"
+                  aria-sort={
+                    sortKey === col.id
+                      ? ascending
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                  className={
+                    "songs__col" + (sortKey === col.id ? " songs__col--on" : "")
+                  }
+                  onClick={() => toggleSort(col.id)}
+                >
+                  {col.label}
+                  {sortKey === col.id && (
+                    <span aria-hidden="true">{ascending ? " ↑" : " ↓"}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          );
+        })}
       </div>
 
       {bpmError && (

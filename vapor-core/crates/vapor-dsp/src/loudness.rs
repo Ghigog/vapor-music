@@ -398,3 +398,115 @@ mod energy_tests {
         }
     }
 }
+
+/// Hop for transient detection, in seconds. From `audio_dsp.cpp`, which uses a
+/// flat 2205 samples and labels it 50 ms.
+const TRANSIENT_HOP_SECS: f32 = 0.05;
+/// A hop counts as a transient above this share of the track's loudest hop.
+const TRANSIENT_THRESHOLD: f32 = 0.7;
+
+/// Times of the track's strongest hits, in seconds.
+///
+/// **Ported from `audio_dsp.cpp`.** RMS in 50 ms hops; a hop is a transient when
+/// it is above 70% of the loudest hop *and* louder than both its neighbours.
+///
+/// A deliberately blunt measure — it finds the handful of biggest moments in a
+/// track, not every drum hit. That is what it is for: the Godot build uses these
+/// to place structural markers, where a dense onset list would be noise.
+pub fn transients(samples: &[f32], sample_rate: f32) -> Vec<f32> {
+    let hop = (sample_rate * TRANSIENT_HOP_SECS) as usize;
+    if hop == 0 || samples.len() < hop * 3 {
+        return Vec::new();
+    }
+
+    let hops = samples.len() / hop;
+    let mut energies = Vec::with_capacity(hops);
+    let mut peak = 0.0f32;
+    for i in 0..hops {
+        let slice = &samples[i * hop..(i + 1) * hop];
+        let rms = (slice.iter().map(|s| s * s).sum::<f32>() / hop as f32).sqrt();
+        peak = peak.max(rms);
+        energies.push(rms);
+    }
+
+    let threshold = peak * TRANSIENT_THRESHOLD;
+    (1..energies.len().saturating_sub(1))
+        .filter(|&i| {
+            energies[i] > threshold
+                && energies[i] > energies[i - 1]
+                && energies[i] > energies[i + 1]
+        })
+        .map(|i| (i * hop) as f32 / sample_rate)
+        .collect()
+}
+
+#[cfg(test)]
+mod transient_tests {
+    use super::*;
+
+    const RATE: f32 = 44_100.0;
+
+    /// Bursts at known times must come back at those times.
+    #[test]
+    fn finds_hits_where_they_were_put() {
+        let secs = 10.0;
+        let n = (RATE * secs) as usize;
+        let mut samples = vec![0.02f32; n];
+        let hits = [1.0f32, 3.5, 7.25];
+        for &at in &hits {
+            let start = (at * RATE) as usize;
+            for k in 0..(RATE * 0.03) as usize {
+                if start + k < n {
+                    samples[start + k] = 0.9;
+                }
+            }
+        }
+
+        let found = transients(&samples, RATE);
+        assert!(
+            !found.is_empty(),
+            "found no transients in an obvious signal"
+        );
+        for &at in &hits {
+            assert!(
+                found
+                    .iter()
+                    .any(|t| (t - at).abs() <= TRANSIENT_HOP_SECS * 2.0),
+                "missed the hit at {at}s; found {found:?}"
+            );
+        }
+    }
+
+    /// A steady signal has no *relative* peaks, so it must report none rather
+    /// than every hop that happens to clear an absolute threshold.
+    #[test]
+    fn a_steady_signal_has_no_transients() {
+        let steady = vec![0.5f32; (RATE * 5.0) as usize];
+        assert!(transients(&steady, RATE).is_empty());
+    }
+
+    #[test]
+    fn silence_and_short_input_are_handled() {
+        assert!(transients(&[], RATE).is_empty());
+        assert!(transients(&vec![0.0; 100], RATE).is_empty());
+        assert!(transients(&vec![0.0; (RATE * 3.0) as usize], RATE).is_empty());
+    }
+
+    /// Times must be in order and inside the track, since callers place markers
+    /// with them.
+    #[test]
+    fn times_are_ordered_and_within_the_track() {
+        let secs = 20.0;
+        let n = (RATE * secs) as usize;
+        let samples: Vec<f32> = (0..n)
+            .map(|i| if (i / 4410) % 7 == 0 { 0.9 } else { 0.05 })
+            .collect();
+
+        let found = transients(&samples, RATE);
+        assert!(
+            found.windows(2).all(|w| w[1] > w[0]),
+            "not ordered: {found:?}"
+        );
+        assert!(found.iter().all(|&t| t >= 0.0 && t < secs));
+    }
+}

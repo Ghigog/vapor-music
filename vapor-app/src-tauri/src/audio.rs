@@ -115,6 +115,9 @@ enum Command {
         duration: f32,
         incoming_pos: f32,
         ratio: f64,
+        /// Stretch for the outgoing deck. 1.0 except for a Tempo Morph, where
+        /// both tracks bend toward a tempo between them.
+        outgoing_ratio: f64,
         /// Position **within the outgoing track** at which to start mixing.
         ///
         /// A position rather than a delay, because only the audio thread knows
@@ -254,12 +257,14 @@ impl Link {
     ///
     /// The alignment is computed by the caller — see `Mixer::schedule_prepared`
     /// for why the grids stay on this side of the boundary.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_transition(
         &self,
         kind: TransitionType,
         duration: f32,
         incoming_pos: f32,
         ratio: f64,
+        outgoing_ratio: f64,
         start_at: f64,
     ) -> bool {
         self.send(Command::ScheduleTransition {
@@ -267,6 +272,7 @@ impl Link {
             duration,
             incoming_pos,
             ratio,
+            outgoing_ratio,
             start_at,
         })
     }
@@ -610,6 +616,7 @@ impl Engine {
                     duration,
                     incoming_pos,
                     ratio,
+                    outgoing_ratio,
                     start_at,
                 } => {
                     // The delay is derived here, against the playhead as it
@@ -619,8 +626,14 @@ impl Engine {
                     let now = self.mixer.outgoing().position_seconds();
                     let ahead = (start_at - now).max(0.0);
                     let delay_frames = (ahead * self.link.sample_rate as f64) as usize;
-                    self.mixer
-                        .schedule_prepared(kind, duration, incoming_pos, ratio, delay_frames);
+                    self.mixer.schedule_prepared(
+                        kind,
+                        duration,
+                        incoming_pos,
+                        ratio,
+                        outgoing_ratio,
+                        delay_frames,
+                    );
                 }
 
                 Command::CancelTransition => self.mixer.cancel_transition(),

@@ -37,6 +37,9 @@ pub enum TransitionType {
     StandardCrossfade,
     BassSwap,
     FilterSweep,
+    EchoOut,
+    ReverbFreeze,
+    TempoMorph,
 }
 
 impl TransitionType {
@@ -46,7 +49,20 @@ impl TransitionType {
             TransitionType::StandardCrossfade => 3.0,
             TransitionType::BassSwap => 6.0,
             TransitionType::FilterSweep => 4.0,
+            TransitionType::EchoOut => 5.0,
+            TransitionType::ReverbFreeze => 5.0,
+            TransitionType::TempoMorph => 6.0,
         }
+    }
+
+    /// Whether the incoming deck should meet the outgoing one halfway in tempo
+    /// rather than matching it outright.
+    ///
+    /// Only Tempo Morph does: `audio_manager.gd` sets the incoming pitch to
+    /// `((bpm_out + bpm_in) / 2) / bpm_in`, so both tracks bend toward a tempo
+    /// between them instead of one being dragged to the other.
+    pub fn morphs_tempo(&self) -> bool {
+        matches!(self, TransitionType::TempoMorph)
     }
 }
 
@@ -58,6 +74,11 @@ pub struct DeckAutomation {
     pub eq_mid_db: f32,
     pub eq_high_db: f32,
     pub sweep: Option<Sweep>,
+    /// Delay wet/dry, 0 = dry. Godot automates the *dry* level; this is its
+    /// complement, because the effect takes a mix.
+    pub delay_mix: f32,
+    /// Reverb wet/dry, 0 = dry.
+    pub reverb_mix: f32,
 }
 
 impl DeckAutomation {
@@ -68,6 +89,8 @@ impl DeckAutomation {
             eq_mid_db: 0.0,
             eq_high_db: 0.0,
             sweep: None,
+            delay_mix: 0.0,
+            reverb_mix: 0.0,
         }
     }
 }
@@ -100,6 +123,11 @@ fn gain_to_db(gain: f32) -> f32 {
 }
 /// Bass cut depth for a Bass Swap (`_transition_eq_gains` bands 0 and 1).
 const BASS_CUT_DB: f32 = -40.0;
+/// Mid and high duck applied by `apply_mid_cut` during an Echo Out.
+const MID_CUT_DB: f32 = -24.0;
+/// Level the outgoing deck is trimmed to as reverb wet ramps up, so the wet
+/// signal adding to the dry one does not swell the mix.
+const REVERB_TRIM_DB: f32 = -6.0;
 
 impl Transition {
     pub fn new(kind: TransitionType, duration: f32) -> Self {
@@ -127,7 +155,93 @@ impl Transition {
             TransitionType::StandardCrossfade => self.standard_crossfade(),
             TransitionType::BassSwap => self.bass_swap(),
             TransitionType::FilterSweep => self.filter_sweep(),
+            TransitionType::EchoOut => self.echo_out(),
+            TransitionType::ReverbFreeze => self.reverb_freeze(),
+            TransitionType::TempoMorph => self.tempo_morph(),
         }
+    }
+
+    /// The incoming track arrives over the first half; at the midpoint the
+    /// outgoing track's dry signal is cut and only its echo is left to decay.
+    ///
+    /// From `audio_manager.gd`: 350 ms delay, −10 dB feedback, dry cut over
+    /// 0.1 s at the midpoint, tail decaying through the remainder. The effect
+    /// is that the outgoing track does not fade — it stops, and its echo
+    /// finishes the sentence.
+    fn echo_out(&self) -> Automation {
+        let half = self.duration * 0.5;
+        let cut = if self.duration > 1.0 {
+            0.1
+        } else {
+            self.duration * 0.02
+        };
+
+        let in_gain = lerp(SILENCE_DB, 0.0, sine_in_out(self.elapsed / half));
+        // Dry goes 1 -> 0 over `cut` starting at the midpoint, so the mix goes
+        // 0 -> 1 across the same span.
+        let delay_mix = ((self.elapsed - half) / cut).clamp(0.0, 1.0);
+        // The mid-cut from `apply_mid_cut`: the outgoing mids duck across the
+        // first half so the incoming vocal has room.
+        let mid_cut = lerp(0.0, MID_CUT_DB, (self.elapsed / half).clamp(0.0, 1.0));
+
+        Automation {
+            outgoing: DeckAutomation {
+                eq_mid_db: mid_cut,
+                eq_high_db: mid_cut,
+                delay_mix,
+                ..DeckAutomation::neutral()
+            },
+            incoming: DeckAutomation {
+                gain_db: in_gain,
+                ..DeckAutomation::neutral()
+            },
+        }
+    }
+
+    /// The outgoing track dissolves into its own reverb, which is then frozen
+    /// and allowed to decay under the incoming track.
+    ///
+    /// From `audio_manager.gd`: wet ramps 0 → 1 across the first half while the
+    /// outgoing bus drops to −6 dB — the level trim exists because a wet signal
+    /// added to a dry one swells, and the original compensates rather than
+    /// letting the mix jump. At the midpoint the outgoing deck stops, so what
+    /// remains is tail with nothing feeding it.
+    fn reverb_freeze(&self) -> Automation {
+        let half = self.duration * 0.5;
+        let first = (self.elapsed / half).clamp(0.0, 1.0);
+        let past_midpoint = self.elapsed >= half;
+
+        let in_gain = lerp(SILENCE_DB, 0.0, sine_in_out(first));
+        let (out_gain, reverb_mix) = if past_midpoint {
+            // Frozen: the deck is silenced and only the tail continues.
+            let second = ((self.elapsed - half) / half).clamp(0.0, 1.0);
+            (lerp(REVERB_TRIM_DB, SILENCE_DB, sine_in_out(second)), 1.0)
+        } else {
+            (lerp(0.0, REVERB_TRIM_DB, sine_in_out(first)), first)
+        };
+
+        Automation {
+            outgoing: DeckAutomation {
+                gain_db: out_gain,
+                reverb_mix,
+                ..DeckAutomation::neutral()
+            },
+            incoming: DeckAutomation {
+                gain_db: in_gain,
+                ..DeckAutomation::neutral()
+            },
+        }
+    }
+
+    /// A long equal-power blend, with both tracks bending toward a tempo
+    /// between them.
+    ///
+    /// The envelope is the crossfade's; what makes it a Tempo Morph lives in
+    /// the stretch ratio, which the mixer sets from
+    /// [`TransitionType::morphs_tempo`]. Keeping it here would mean the
+    /// envelope knew about tempo, which it otherwise does not.
+    fn tempo_morph(&self) -> Automation {
+        self.standard_crossfade()
     }
 
     /// Both decks cross with **constant power** (TD-23, MIG-015).
