@@ -24,7 +24,7 @@ Documented in `docs/TESTING.md` — read that first, it is the spec.
 |---|---|---|
 | 1 | `docs/TESTING.md` written | done |
 | 2 | Frontend harness — Vitest, Testing Library, committed IPC fake | done |
-| 3 | Component tests — Settings done (16), rest to do | in progress |
+| 3 | Component tests — Settings 16, Songs 17, Playlist 21. Remaining: Library, Search, Queue, Vibe, NowPlaying, LinerNotes, YourData, Onboarding, Transport | in progress |
 | 4 | Backend integration tests over the command surface | not started |
 | 5 | Property/fuzz tests for the core | not started |
 | 6 | E2E journeys + monkey | not started |

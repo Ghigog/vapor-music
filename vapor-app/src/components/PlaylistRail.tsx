@@ -130,8 +130,11 @@ export function PlaylistRail({
     <div className="rail">
       <div className="rail__head">
         <span className="rail__title label">Playlists</span>
+        {/* The glyph is the content, so the name has to be explicit — see
+            the note on the row actions in Playlist.tsx. */}
         <button
           className="rail__new"
+          aria-label="New playlist"
           title="New playlist"
           onClick={() => setCreating(true)}
         >

@@ -64,7 +64,9 @@ const DEFAULT_ROWS: core.Row[] = [
     href: "/dav/Koofr/Music/windowlicker.m4a",
     title: "Windowlicker",
     artist: "Aphex Twin",
-    album: "Windowlicker",
+    // Deliberately not the same as the title: a fixture where a track and its
+    // album share a name makes every text query ambiguous.
+    album: "Windowlicker EP",
     bpm: 124.3,
     key: "8A",
   }),

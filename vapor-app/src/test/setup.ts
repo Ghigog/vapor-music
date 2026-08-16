@@ -49,15 +49,110 @@ afterEach(() => {
 });
 
 /**
- * jsdom implements neither of these, and the app uses both: the virtualiser
- * measures with `ResizeObserver`, and `scrollIntoView` is how the keyboard
- * cursor keeps itself visible. Absent them, a screen throws on mount and the
- * failure looks like a bug in the screen.
+ * jsdom has no layout engine, and the table depends on one.
+ *
+ * Everything has a zero-sized bounding rect, so `@tanstack/react-virtual`
+ * measures a viewport of height 0 and correctly renders no rows at all. A test
+ * then sees an empty table and reads as "the screen is broken" when the screen
+ * is fine and the environment has no pixels.
+ *
+ * So: give elements a plausible size. 1024x800 is arbitrary but has to be big
+ * enough to hold several rows, or the virtualisation tests measure nothing.
  */
+const VIEWPORT = { width: 1024, height: 800 };
+
 class ResizeObserverStub {
-  observe() {}
+  constructor(private readonly callback: ResizeObserverCallback) {}
+  observe(target: Element) {
+    // Report a size immediately. The virtualiser subscribes and then waits;
+    // without a first callback it never learns the viewport is not zero.
+    this.callback(
+      [{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
   unobserve() {}
   disconnect() {}
 }
 globalThis.ResizeObserver ??= ResizeObserverStub as never;
+
+Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
+  return {
+    width: VIEWPORT.width,
+    height: VIEWPORT.height,
+    top: 0,
+    left: 0,
+    right: VIEWPORT.width,
+    bottom: VIEWPORT.height,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect;
+};
+
+for (const [prop, value] of [
+  ["offsetWidth", VIEWPORT.width],
+  ["offsetHeight", VIEWPORT.height],
+  ["clientWidth", VIEWPORT.width],
+  ["clientHeight", VIEWPORT.height],
+] as const) {
+  Object.defineProperty(HTMLElement.prototype, prop, {
+    configurable: true,
+    value,
+  });
+}
+
+// The keyboard cursor keeps itself visible with this; jsdom does not have it,
+// and its absence throws on the first arrow key.
 Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+
+/**
+ * jsdom implements `DragEvent` but not `DataTransfer`, so a drag payload cannot
+ * be constructed — which makes drag and drop untestable, which is how it
+ * shipped untested.
+ *
+ * This is the whole contract the app uses: set a typed payload, read it back,
+ * and ask which types are present so a foreign drag can be refused.
+ */
+class DataTransferStub {
+  private data = new Map<string, string>();
+  dropEffect = "none";
+  effectAllowed = "all";
+  readonly files: File[] = [];
+
+  get types(): string[] {
+    return [...this.data.keys()];
+  }
+
+  setData(format: string, value: string) {
+    this.data.set(format, value);
+  }
+
+  getData(format: string): string {
+    return this.data.get(format) ?? "";
+  }
+
+  clearData(format?: string) {
+    if (format) this.data.delete(format);
+    else this.data.clear();
+  }
+
+  setDragImage() {}
+}
+
+globalThis.DataTransfer ??= DataTransferStub as never;
+
+/**
+ * jsdom has no `DragEvent` either — it is a `MouseEvent` carrying a
+ * `dataTransfer`, which is exactly what this provides. Without it every drag
+ * and drop path in the app is untestable, and untestable is how it shipped.
+ */
+class DragEventStub extends MouseEvent {
+  readonly dataTransfer: DataTransfer | null;
+  constructor(type: string, init: MouseEventInit & { dataTransfer?: DataTransfer } = {}) {
+    super(type, init);
+    this.dataTransfer = init.dataTransfer ?? new DataTransfer();
+  }
+}
+
+globalThis.DragEvent ??= DragEventStub as never;

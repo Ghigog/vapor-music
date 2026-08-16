@@ -180,7 +180,11 @@ export function Playlist({
           >
             Play
           </button>
-          <button className="playlist__delete" onClick={() => void destroy()}>
+          <button
+            className="playlist__delete"
+            aria-label={`Delete the playlist ${meta.name}`}
+            onClick={() => void destroy()}
+          >
             Delete
           </button>
         </div>
@@ -246,8 +250,14 @@ export function Playlist({
                 {row.bpm > 0 ? Math.round(row.bpm) : "—"}
               </span>
               <span className="playlist__key numeric">{row.key || "—"}</span>
+              {/* Labelled, not just titled. The glyph is the visible content,
+                  so without an explicit label a screen reader announces
+                  "up arrow" and "multiplication x" — `title` is a tooltip, and
+                  a tooltip is not a name. Each label names the track too, or
+                  four rows of "Remove" are indistinguishable. */}
               <div className="playlist__row-actions">
                 <button
+                  aria-label={`Move ${row.title} up`}
                   title="Move up"
                   disabled={index === 0}
                   onClick={() => void move(index, index - 1)}
@@ -255,16 +265,25 @@ export function Playlist({
                   ↑
                 </button>
                 <button
+                  aria-label={`Move ${row.title} down`}
                   title="Move down"
                   disabled={!rows || index === rows.length - 1}
                   onClick={() => void move(index, index + 1)}
                 >
                   ↓
                 </button>
-                <button title="Liner notes" onClick={() => onOpen(row.href)}>
+                <button
+                  aria-label={`Liner notes for ${row.title}`}
+                  title="Liner notes"
+                  onClick={() => onOpen(row.href)}
+                >
                   ⓘ
                 </button>
-                <button title="Remove" onClick={() => void remove(index)}>
+                <button
+                  aria-label={`Remove ${row.title}`}
+                  title="Remove"
+                  onClick={() => void remove(index)}
+                >
                   ✕
                 </button>
               </div>
