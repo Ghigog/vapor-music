@@ -13,3 +13,9 @@ bin/libaudio_dsp.*
 
 # macOS Finder metadata
 .DS_Store
+
+# Playwright
+/vapor-app/test-results/
+/vapor-app/playwright-report/
+/vapor-app/blob-report/
+/vapor-app/.playwright/

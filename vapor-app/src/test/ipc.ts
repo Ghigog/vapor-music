@@ -415,9 +415,30 @@ export class FakeBackend {
         this.current = null;
         return null;
 
+      case "set_bpm_override": {
+        // Stored *and applied*, as the backend does: a correction that did not
+        // reach the rows would make the table look like it had ignored it.
+        const href = String(a.href ?? "");
+        const bpm = Number(a.bpm ?? 0);
+        const overrides = { ...this.settings.bpmOverrides };
+        if (bpm > 0) {
+          // The real command refuses an implausible tempo rather than clamping.
+          if (bpm < 40 || bpm > 250) {
+            throw new Error(`A tempo of ${bpm} is not plausible.`);
+          }
+          overrides[href] = bpm;
+        } else {
+          delete overrides[href];
+        }
+        this.settings = { ...this.settings, bpmOverrides: overrides };
+        this.rows = this.rows.map((r) =>
+          r.href === href ? { ...r, bpm: overrides[href] ?? 0 } : r,
+        );
+        return null;
+      }
+
       case "seek":
       case "set_volume":
-      case "set_bpm_override":
       case "evict_track":
       case "cancel_analysis":
         return null;

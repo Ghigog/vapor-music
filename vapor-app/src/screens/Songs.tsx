@@ -256,6 +256,15 @@ export function Songs({
         <ErrorNotice error={bpmError} onDismiss={() => setBpmError(null)} />
       )}
 
+      {/* Overlaid rather than inserted above the table.
+       *
+       * In the flow it pushed every row down the moment a row was selected —
+       * so the row you had just clicked moved out from under the pointer, and
+       * the second click of a double-click landed on this bar instead. Double
+       * -clicking a BPM cell opened the "Add to…" dropdown rather than the
+       * editor, and the tempo correction (TD-10) was unreachable by the
+       * gesture that is supposed to reach it. Found by an end-to-end test;
+       * invisible in jsdom, where nothing has a position. */}
       {selected.size > 0 && (
         <SelectionBar
           count={selected.size}

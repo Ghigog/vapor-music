@@ -277,7 +277,21 @@
 
 /* ---- Selection bar --------------------------------------------------- */
 
+/* Overlaid on the table rather than inserted above it.
+ *
+ * In the flow, appearing pushed every row down — so the row just clicked moved
+ * out from under the pointer and the second click of a double-click landed
+ * here instead. That made double-clicking a BPM cell open the "Add to…"
+ * dropdown, leaving the tempo correction unreachable by its own gesture.
+ *
+ * Anchored to the bottom of the table so it is nowhere near the rows a person
+ * is clicking, and out of the flow so its arrival moves nothing. */
 .selbar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 16px;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -286,6 +300,12 @@
   border-radius: var(--r-md);
   font-size: var(--fs-sm);
   color: var(--ink-2);
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.14));
+}
+
+/* The bar positions against this. */
+.songs {
+  position: relative;
 }
 
 .selbar__actions {
