@@ -143,11 +143,17 @@ impl AppState {
         let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
         let tags = store.load("tags").unwrap_or(None).unwrap_or_default();
         let skips = store.load("skips").unwrap_or(None).unwrap_or_default();
+        // The scanned index. Without this the library was rebuilt from the
+        // server on every launch: the app opened on "0 tracks" and stayed
+        // there until someone found Settings and pressed Scan — a walk of
+        // every directory on the server to rediscover a list that had not
+        // changed since the last time it was walked.
+        let rows = store.load("index").unwrap_or(None).unwrap_or_default();
         AppState {
             settings,
             playlists,
             queue: Queue::default(),
-            rows: Vec::new(),
+            rows,
             last_mix: None,
             last_mix_ended: None,
             analysis,
@@ -179,6 +185,17 @@ impl AppState {
             next_stream: None,
             drift: None,
         }
+    }
+
+    /// Persist the scanned index.
+    ///
+    /// Written only by a scan, which is the only thing that changes it. The
+    /// rows carry what the *path* said; tags and analysis are applied on read
+    /// from their own files, so this stays small — a few hundred KB for a
+    /// library of thousands — and cannot go stale against them.
+    fn save_index(&self) -> Result<()> {
+        self.store.save("index", &self.rows)?;
+        Ok(())
     }
 
     fn save_analysis(&self) -> Result<()> {
@@ -2372,6 +2389,11 @@ async fn scan_library(
             .map(|href| build_row(href, &folder))
             .collect();
 
+        // Saved here rather than at exit: a scan is the only thing that
+        // changes the index, and writing it now means a crash mid-analysis
+        // still leaves a library to come back to.
+        app.save_index()?;
+
         ScanReport {
             tracks: app.rows.len(),
             directories: result.directories,
@@ -3197,6 +3219,57 @@ mod tests {
         // the behaviour `Store::load` exists to avoid.
         let app = AppState::load(Store::new(dir.clone()));
         assert!(app.settings.remote.url.is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The library survives a restart.
+    ///
+    /// The scanned index was the one thing built at scan and never written, so
+    /// every launch opened on "0 tracks" and stayed there until someone found
+    /// Settings and pressed Scan — re-walking every directory on the server to
+    /// rediscover a list that had not changed.
+    ///
+    /// Loaded through a *second* `AppState` over the same directory, because
+    /// that is the boundary the app crosses: one process saves, the next one
+    /// reads. Asserting on the first one's own field would prove nothing.
+    #[test]
+    fn a_scanned_library_is_still_there_next_launch() {
+        let (mut first, dir) = app();
+        first.rows = vec![
+            row("/dav/Koofr/Music/a.mp3", "A"),
+            row("/dav/Koofr/Music/b.mp3", "B"),
+        ];
+        first.save_index().expect("the index should save");
+
+        let second = AppState::load(Store::new(dir.clone()));
+
+        assert_eq!(
+            second.rows.len(),
+            2,
+            "the library was empty on the next launch"
+        );
+        assert_eq!(second.rows[0].title, "A");
+        assert_eq!(second.rows[1].href, "/dav/Koofr/Music/b.mp3");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// "Delete everything" includes the index, or the next launch restores a
+    /// library the person asked to be rid of.
+    #[test]
+    fn deleting_everything_does_not_leave_the_index_behind() {
+        let (mut app_state, dir) = app();
+        app_state.rows = vec![row("/dav/Koofr/Music/a.mp3", "A")];
+        app_state.save_index().expect("the index should save");
+
+        app_state.store.clear().expect("clearing should succeed");
+
+        let next = AppState::load(Store::new(dir.clone()));
+        assert!(
+            next.rows.is_empty(),
+            "the library came back after being deleted"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
