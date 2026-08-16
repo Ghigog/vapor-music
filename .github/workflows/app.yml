@@ -134,7 +134,8 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libasound2-dev
+            libasound2-dev \
+            libdbus-1-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

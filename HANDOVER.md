@@ -61,15 +61,21 @@ Ranked by what would bite a person first.
 
 ### 1. Nothing has ever talked to a real server
 
-Five separate defects reached Dylan when he first tried, and all five are now
+**The credential store was a mock for the entire life of the project (TD-50)** —
+`keyring = "3"` with no backend feature keeps the secret in one `Entry` object
+and reports success. Nothing ever reached the keychain, so the WebDAV path has
+never worked once, on any machine. That is now fixed, and it means every
+downstream claim about the remote path is untested against reality.
+
+Six separate defects reached Dylan when he first tried, and all six are now
 fixed: a rename deleting the keychain entry, scan reading the keychain instead
 of the form, the password box claiming "unchanged" when nothing was stored, the
 result rendering off screen, and **TD-49 — a mistyped folder reporting "Found 0
 tracks" instead of saying the folder was not there**, which is the likeliest
 explanation for "doesn't show anything to analyze".
 
-**He has never confirmed a scan works**, and the keychain had no entry at all
-when last checked:
+**He has never confirmed a scan works.** The keychain had no entry when checked,
+which was read at the time as "he never typed one in" — it was TD-50's symptom:
 
 ```bash
 security find-generic-password -s com.dylangrowcoot.vapormusic.webdav -a "$USERNAME"

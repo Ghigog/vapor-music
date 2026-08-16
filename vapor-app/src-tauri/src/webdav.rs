@@ -527,6 +527,52 @@ mod tests {
         );
     }
 
+    /// The test that was missing, and the reason it was missing.
+    ///
+    /// `keyring`'s platform backends are opt-in features. With none enabled,
+    /// version 3 falls back to a **mock** store that keeps the secret inside
+    /// the one `Entry` object it was set on — `set_password` returns `Ok(())`
+    /// and nothing reaches the keychain. The app saves in one command and
+    /// reads in the next, constructing a fresh `Entry` each time, so every
+    /// read returned `NoEntry` while every save reported success. The screen
+    /// said "Saved. The password is in your keychain" and then, immediately
+    /// below, "No password saved for this account".
+    ///
+    /// Every existing test passed against the mock, because none of them ever
+    /// crossed an `Entry` boundary — which is exactly the boundary the app
+    /// crosses on every single call. **Reading it back through a new `Entry`
+    /// is the whole test**; `save_password(..).is_ok()` asserts nothing.
+    ///
+    /// Not run on Linux: the secret-service backend needs a session bus and a
+    /// running keyring daemon, and the CI container has neither. macOS and
+    /// Windows have a store available to any logged-in user.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn a_saved_password_is_readable_by_the_next_command() {
+        // Distinctive and obviously disposable: this writes to the real
+        // keychain, because a fake keychain is what caused this.
+        let user = "vapor-music-test@example.invalid";
+        let _ = delete_password(user);
+
+        save_password(user, "an-app-password").expect("saving should succeed");
+
+        // Through the public API, which builds its own Entry — the crossing
+        // the mock could not survive.
+        assert!(
+            has_password(user),
+            "a password that was just saved could not be read back: the store \
+             is not persisting across Entry instances"
+        );
+        assert_eq!(
+            load_password(user).expect("readable"),
+            "an-app-password",
+            "the wrong secret came back"
+        );
+
+        delete_password(user).expect("cleanup");
+        assert!(!has_password(user), "delete did not remove it");
+    }
+
     /// The messages are shown to a person, so they must say what to do.
     #[test]
     fn errors_are_actionable() {

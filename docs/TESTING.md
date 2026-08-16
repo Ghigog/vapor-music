@@ -3,7 +3,7 @@
 **Status:** Living document
 **Last reviewed:** 2026-08-16
 
-**Current counts:** 317 core (unit + property + fuzz), 77 shell (unit +
+**Current counts:** 317 core (unit + property + fuzz), 78 shell (unit +
 integration), 85 component, 17 end-to-end including three monkey seeds.
 
 > What is tested, at which layer, and what is deliberately not. Read alongside
@@ -169,7 +169,7 @@ Recorded so nobody "fixes" the gap without reading why.
 
 ## Rules
 
-Four, each earned by a specific failure in this repository.
+Five, each earned by a specific failure in this repository.
 
 **1. Assert behaviour, not wording.** `errors_are_actionable` asserted an error
 message contained the word "Settings". It did — while being displayed *on* the
@@ -186,7 +186,15 @@ empty range — assert the precondition explicitly.
 inverted tempo ratio that a unit test had asserted *the wrong way round* and
 passed. Where the answer is a number, produce the number.
 
-**4. One fake, shared.** The IPC fake is a committed module. Three separate
+**4. Cross the boundary the app crosses.** The keychain was a mock store for
+the whole life of the project (TD-50): saving returned `Ok(())` and the secret
+lived inside that one `Entry` object. Every test passed, because no test ever
+saved in one `Entry` and read in another — which is what the app does on every
+call, since each command builds its own. `save(..).is_ok()` asserted nothing.
+Where a component is used across a process, a request or an object lifetime,
+the test has to cross that same line.
+
+**5. One fake, shared.** The IPC fake is a committed module. Three separate
 hand-rolled stubs had already been written and thrown away, each with slightly
 different shapes, which is how a fake drifts from the thing it fakes.
 

@@ -22,7 +22,16 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 base64 = "0.22"
-keyring = "3"
+# keyring's platform backends are opt-in features, and with none of them
+# enabled version 3 silently falls back to a *mock* store: `set_password`
+# returns `Ok(())` and keeps the secret inside that one `Entry` object. The app
+# saves in one command and reads in the next — a fresh `Entry` each time — so
+# every read returned `NoEntry` while every save reported success. Nothing had
+# ever reached the keychain. See the platform blocks below; the bare
+# `keyring = "3"` that used to be here is the bug.
+#
+# Declared per target rather than as one feature list so macOS does not pull in
+# the Linux secret-service stack and vice versa.
 
 # Audio output (TD-03). The engine itself stays platform-free — a device only
 # exists here, in the shell, and behind an AudioWorklet in the browser build.
@@ -34,3 +43,20 @@ vapor-dsp = { path = "../../vapor-core/crates/vapor-dsp" }
 vapor-engine = { path = "../../vapor-core/crates/vapor-engine" }
 vapor-library = { path = "../../vapor-core/crates/vapor-library" }
 lofty = "0.25.1"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+# Linux is not a shipping target — it exists so CI has a third platform to
+# compile and test on. `sync-secret-service` is still the right store rather
+# than `linux-native`, whose kernel keyring does not survive a reboot: a
+# credential store that quietly forgets is the same class of bug as the mock
+# above. It needs `libdbus-1-dev`, which the workflow installs.
+#
+# `crypto-rust` encrypts the D-Bus session without an OpenSSL build
+# dependency, matching the rustls choice made for reqwest above.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
