@@ -201,6 +201,13 @@ export interface Settings {
   bpmOverrides: Record<string, number>;
   /** Ceiling on the local audio cache, in bytes. */
   cacheMaxBytes: number;
+  /**
+   * Whether the app may look up lyrics and artwork from public services.
+   *
+   * Off by default. Everything else the app knows is worked out on the device;
+   * a lookup sends the artist and title of what is playing to a third party.
+   */
+  metadataLookupEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +276,55 @@ export function createPlaylist(
   folderId?: string,
 ): Promise<Playlist> {
   return invoke<Playlist>("create_playlist", { name, folderId: folderId ?? null });
+}
+
+// --- Lyrics and artwork from public services --------------------------------
+
+/** One line of time-aligned lyrics. */
+export interface LyricLine {
+  /** Seconds from the start of the track. */
+  time: number;
+  text: string;
+}
+
+export interface Lyrics {
+  /** Whether `lines` carry usable timings. */
+  synced: boolean;
+  lines: LyricLine[];
+  /** The unaligned text, empty when a synced version was available. */
+  plain: string;
+}
+
+/**
+ * What is known about a track from outside this device.
+ *
+ * Kept apart from analysis and tags, which are what this device measured and
+ * what the file itself carries. A screen has to be able to say which is which.
+ */
+export interface LookedUp {
+  lyrics: Lyrics | null;
+  artistImage: string;
+  albumArt: string;
+  genre: string;
+  /** Whether a lookup has been made for this track at all. */
+  attempted: boolean;
+  /** Whether the setting permits making one. */
+  allowed: boolean;
+}
+
+/** What has already been looked up. Never makes a request. */
+export function trackLookup(href: string): Promise<LookedUp> {
+  return invoke<LookedUp>("track_lookup", { href });
+}
+
+/** Look a track up, and remember what came back. Rejects when switched off. */
+export function lookUpTrack(href: string, force = false): Promise<LookedUp> {
+  return invoke<LookedUp>("look_up_track", { href, force });
+}
+
+/** Turn lookups on or off. Off also forgets everything already found. */
+export function setMetadataLookup(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_metadata_lookup", { enabled });
 }
 
 // --- Playlist folders -------------------------------------------------------

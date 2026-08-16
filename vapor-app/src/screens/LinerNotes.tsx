@@ -1,17 +1,24 @@
 /**
  * Liner Notes — everything known about one track.
  *
- * The design shows written notes and credits. Neither exists: nothing reads
- * embedded tags yet, and there is no place a person could type them. Rather
- * than mock them up, this shows what the app genuinely knows — which after
- * analysis is a great deal more than a tag would carry, and all of it derived
- * here rather than fetched from anyone.
+ * The design shows written notes and credits. Neither exists in a file: nothing
+ * writes them, so rather than mock them up this shows what the app genuinely
+ * knows — which after analysis is a great deal more than a tag would carry.
  *
- * That is the honest version of the same screen, and it is the one the
- * sovereignty claim is actually about.
+ * ## Two kinds of knowledge, kept apart
+ *
+ * Everything above the lyrics panel was worked out on this device from the
+ * audio itself, and the screen says so. The lyrics were not: they come from
+ * LRCLIB, which means the artist and title were sent to a server the person
+ * has no relationship with. The Godot build did that unconditionally and said
+ * nothing about it; here it is off until asked, and what it returns is drawn
+ * in its own panel that names where it came from.
+ *
+ * That separation is the point. A screen that mixed the two would make the
+ * sovereignty claim on the rest of it untrue.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Loading } from "../components/States";
@@ -25,6 +32,9 @@ export function LinerNotes({
 }) {
   const [track, setTrack] = useState<core.TrackDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [looked, setLooked] = useState<core.LookedUp | null>(null);
+  const [looking, setLooking] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +51,37 @@ export function LinerNotes({
     return () => {
       cancelled = true;
     };
+  }, [href]);
+
+  // Read-only, and separate from the fetch: opening this screen must never be
+  // the thing that sends a request.
+  useEffect(() => {
+    let cancelled = false;
+    setLooked(null);
+    setLookupError(null);
+    core
+      .trackLookup(href)
+      .then((l) => {
+        if (!cancelled) setLooked(l);
+      })
+      .catch(() => {
+        if (!cancelled) setLooked(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [href]);
+
+  const lookUp = useCallback(async () => {
+    setLooking(true);
+    setLookupError(null);
+    try {
+      setLooked(await core.lookUpTrack(href));
+    } catch (e: unknown) {
+      setLookupError(messageOf(e));
+    } finally {
+      setLooking(false);
+    }
   }, [href]);
 
   if (error) {
@@ -145,6 +186,76 @@ export function LinerNotes({
           </p>
         </section>
       )}
+
+      <section className="liner__card glass">
+        <h2 className="label">lyrics</h2>
+        {lookupError && <ErrorNotice error={lookupError} />}
+
+        {looked?.lyrics ? (
+          <>
+            {looked.lyrics.synced ? (
+              /* Timed lines are shown as a list with their timings, because a
+                 person reading them wants to know the words *and* that the
+                 file is aligned. Following the playhead is a separate job for
+                 Now Playing, which is the screen that has one. */
+              <ol className="liner__lyrics">
+                {looked.lyrics.lines.map((line, i) => (
+                  <li key={i} className="liner__lyric">
+                    <span className="liner__lyric-at numeric">
+                      {clock(line.time)}
+                    </span>
+                    {/* An empty line is an instrumental break, not a gap in
+                        the data — LRCLIB writes one deliberately. */}
+                    <span className="liner__lyric-text">
+                      {line.text || <span className="liner__rest">♪</span>}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="liner__prose liner__prose--lyrics">
+                {looked.lyrics.plain}
+              </p>
+            )}
+            <p className="liner__note">
+              From LRCLIB, not from this file or this device.
+              {looked.lyrics.synced
+                ? " Timed to the recording by whoever transcribed them, so the alignment is theirs, not ours."
+                : " No timed version was available, so these are the words without the timings."}
+            </p>
+          </>
+        ) : looked?.attempted ? (
+          <p className="liner__note">
+            LRCLIB has no words for this track.{" "}
+            <button className="liner__link" onClick={() => void lookUp()}>
+              Ask again
+            </button>
+            {" — a transcription may have been added since."}
+          </p>
+        ) : looked?.allowed ? (
+          <>
+            <p className="liner__note">
+              Not looked up yet. This is the one thing on this screen that
+              leaves the device: the artist and title go to LRCLIB and Deezer,
+              and nothing else does.
+            </p>
+            <button
+              className="liner__lookup"
+              disabled={looking}
+              onClick={() => void lookUp()}
+            >
+              {looking ? "Looking…" : "Look up lyrics and artwork"}
+            </button>
+          </>
+        ) : (
+          <p className="liner__note">
+            Lyrics come from LRCLIB, which means sending this track's artist and
+            title to a server that is not yours. That is switched off, and
+            everything else on this screen was worked out here without it. Turn
+            it on in Settings if you want the words.
+          </p>
+        )}
+      </section>
 
       {track.notes && (
         <section className="liner__card glass">

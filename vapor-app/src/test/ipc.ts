@@ -40,6 +40,10 @@ export interface FakeOptions {
   playlists?: core.Playlist[];
   /** Playlist folders. Not to be confused with `unreadableFolders` below. */
   folders?: core.Folder[];
+  /** Start with lyric and artwork lookups permitted. Off by default, as ships. */
+  metadataLookup?: boolean;
+  /** What a lookup would find, by href. Anything absent finds nothing. */
+  lyrics?: Record<string, core.Lyrics>;
   /**
    * Folders the scan cannot read and walks past (TD-49). The real backend
    * counts them and reports them; this is how a test reaches that sentence.
@@ -179,6 +183,29 @@ export class FakeBackend {
   private deleted = false;
   /** Where the four-step choice cycle has got to (ai_dj_workflow.md §3). */
   private mixStep = 0;
+  /** Tracks a lookup has been made for. */
+  private attempted = new Set<string>();
+  private readonly lyricsFor: Record<string, core.Lyrics>;
+
+  /**
+   * What a lookup has found, or would find.
+   *
+   * A track only has lyrics here if the test said so, because "the service
+   * has nothing for this track" is the common case and the screen has to say
+   * something sensible in it.
+   */
+  private lookedUp(href: string): core.LookedUp {
+    const attempted = this.attempted.has(href);
+    const found = attempted ? this.lyricsFor[href] : undefined;
+    return {
+      lyrics: found ?? null,
+      artistImage: attempted && found ? "https://example.invalid/artist.jpg" : "",
+      albumArt: attempted && found ? "https://example.invalid/album.jpg" : "",
+      genre: attempted && found ? "Electronic" : "",
+      attempted,
+      allowed: this.settings.metadataLookupEnabled,
+    };
+  }
 
   constructor(options: FakeOptions = {}) {
     const connected = options.connected ?? true;
@@ -198,7 +225,9 @@ export class FakeBackend {
       headphoneCalibrationEnabled: false,
       bpmOverrides: {},
       cacheMaxBytes: 8_000_000_000,
+      metadataLookupEnabled: options.metadataLookup ?? false,
     };
+    this.lyricsFor = options.lyrics ?? {};
     this.keychainSilentlyFails = options.keychainSilentlyFails ?? false;
     // A store that never keeps anything cannot already be holding something.
     // Seeding a password here made `keychainSilentlyFails` unobservable: the
@@ -511,6 +540,33 @@ export class FakeBackend {
         };
         this.playlists = [...this.playlists, made];
         return made;
+      }
+
+      case "track_lookup":
+        return this.lookedUp(String(a.href ?? ""));
+
+      case "look_up_track": {
+        const href = String(a.href ?? "");
+        if (!this.settings.metadataLookupEnabled) {
+          throw new Error(
+            "Looking up lyrics and artwork is switched off. Turn it on in Settings.",
+          );
+        }
+        if (a.force !== true && this.attempted.has(href)) {
+          return this.lookedUp(href);
+        }
+        this.attempted.add(href);
+        return this.lookedUp(href);
+      }
+
+      case "set_metadata_lookup": {
+        this.settings = {
+          ...this.settings,
+          metadataLookupEnabled: a.enabled === true,
+        };
+        // Off forgets what was found, as the backend does.
+        if (!this.settings.metadataLookupEnabled) this.attempted.clear();
+        return this.settings;
       }
 
       case "playlist_folders":

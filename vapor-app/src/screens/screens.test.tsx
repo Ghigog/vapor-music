@@ -542,6 +542,114 @@ describe("Liner Notes", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/not in the library/i);
   });
+
+  /**
+   * Lyrics, and the consent around them.
+   *
+   * Ported from `metadata_service.gd`, which fetched from LRCLIB and Deezer
+   * unconditionally and said nothing about it. Every other field on this
+   * screen was worked out on the device from the audio; these were not, and
+   * the screen has to keep the two apart or the claim on the rest is untrue.
+   */
+  describe("lyrics", () => {
+    const WORDS: core.Lyrics = {
+      synced: true,
+      lines: [
+        { time: 12, text: "The first line" },
+        { time: 18, text: "The second line" },
+      ],
+      plain: "",
+    };
+
+    it("does not look anything up merely because the screen was opened", async () => {
+      const backend = useBackend({ metadataLookup: true });
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await screen.findByText("Windowlicker");
+      expect(backend.called("look_up_track")).toBe(false);
+    });
+
+    /**
+     * Off is the shipped default, and the screen has to say what turning it on
+     * would cost rather than showing an empty panel.
+     */
+    it("says what a lookup would send when lookups are switched off", async () => {
+      const backend = useBackend();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      expect(await screen.findByText(/artist and title to a server/i))
+        .toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /look up/i }),
+      ).not.toBeInTheDocument();
+      expect(backend.called("look_up_track")).toBe(false);
+    });
+
+    it("looks a track up when asked, and shows the words with their timings", async () => {
+      useBackend({ metadataLookup: true, lyrics: { [A_TRACK]: WORDS } });
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+
+      expect(await screen.findByText("The first line")).toBeInTheDocument();
+      expect(screen.getByText("The second line")).toBeInTheDocument();
+      // 12 seconds in, written as a clock rather than as a number of seconds.
+      expect(screen.getByText("0:12")).toBeInTheDocument();
+    });
+
+    it("names where the words came from", async () => {
+      useBackend({ metadataLookup: true, lyrics: { [A_TRACK]: WORDS } });
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+
+      expect(await screen.findByText(/from lrclib/i)).toBeInTheDocument();
+    });
+
+    /**
+     * "Found nothing" and "not asked yet" are different states, and a panel
+     * that renders them the same asks the service again on every visit.
+     */
+    it("says so when the service has no words for a track", async () => {
+      useBackend({ metadataLookup: true });
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+
+      expect(await screen.findByText(/no words for this track/i))
+        .toBeInTheDocument();
+    });
+
+    it("surfaces a refused lookup rather than failing silently", async () => {
+      const backend = useBackend({ metadataLookup: true });
+      backend.fail("look_up_track", "Looking up lyrics and artwork is switched off.");
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(/switched off/i);
+    });
+
+    it("shows plain words when there is no timed version", async () => {
+      useBackend({
+        metadataLookup: true,
+        lyrics: {
+          [A_TRACK]: { synced: false, lines: [], plain: "Just the words" },
+        },
+      });
+      const user = userEvent.setup();
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+      await user.click(await screen.findByRole("button", { name: /look up/i }));
+
+      expect(await screen.findByText("Just the words")).toBeInTheDocument();
+      expect(screen.getByText(/without the timings/i)).toBeInTheDocument();
+    });
+  });
 });
 
 describe("Your Data", () => {

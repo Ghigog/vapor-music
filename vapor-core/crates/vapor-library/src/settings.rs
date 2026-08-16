@@ -123,6 +123,18 @@ pub struct Settings {
     /// entitled to. It belongs to the person, not to a constant.
     #[serde(default = "default_cache_max_bytes")]
     pub cache_max_bytes: u64,
+
+    /// Whether the app may look up lyrics and artwork from public services.
+    ///
+    /// **Off by default, and this is the one setting whose default is a
+    /// position rather than a preference.** Everything else the app knows
+    /// about a track is worked out on the device from the audio itself; a
+    /// lookup sends the artist and title of what someone is listening to to a
+    /// third party, which is exactly the thing the rest of the design refuses
+    /// to do. The Godot build fetched unconditionally. Asking first is the
+    /// change, not the feature.
+    #[serde(default)]
+    pub metadata_lookup_enabled: bool,
 }
 
 impl Default for Settings {
@@ -139,6 +151,7 @@ impl Default for Settings {
             headphone_calibration_enabled: false,
             bpm_overrides: std::collections::HashMap::new(),
             cache_max_bytes: default_cache_max_bytes(),
+            metadata_lookup_enabled: false,
         }
     }
 }

@@ -24,6 +24,7 @@ mod cache;
 /// Public for the same reason as `audio`: the real-time test drives a real
 /// streaming deck rather than a stand-in for one.
 pub mod decoder;
+mod metadata;
 mod store;
 mod sync;
 mod tags;
@@ -53,6 +54,13 @@ struct AppState {
     /// Folders that playlists are filed into. A folder owns no tracks — a
     /// playlist carries a `folder_id` pointing at one.
     folders: FolderStore,
+    /// Lyrics and artwork looked up from public services, keyed by href.
+    ///
+    /// Kept apart from `analysis` and `tags` on purpose: those are what this
+    /// device measured and what the file itself carries, and this is what a
+    /// stranger said. Merging them would make the screen unable to tell a
+    /// person which is which.
+    looked: metadata::Cache,
     queue: Queue,
     /// The library table's rows, rebuilt on scan.
     rows: Vec<Row>,
@@ -157,6 +165,7 @@ impl AppState {
         let cache_max_bytes = settings.cache_max_bytes;
         let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
         let folders = store.load("folders").unwrap_or(None).unwrap_or_default();
+        let looked = store.load("metadata").unwrap_or(None).unwrap_or_default();
         let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
         let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
         let tags = store.load("tags").unwrap_or(None).unwrap_or_default();
@@ -171,6 +180,7 @@ impl AppState {
             settings,
             playlists,
             folders,
+            looked,
             queue: Queue::default(),
             rows,
             last_mix: None,
@@ -300,6 +310,11 @@ impl AppState {
 
     fn save_folders(&self) -> Result<()> {
         self.store.save("folders", &self.folders)?;
+        Ok(())
+    }
+
+    fn save_looked(&self) -> Result<()> {
+        self.store.save("metadata", &self.looked)?;
         Ok(())
     }
 
@@ -568,6 +583,130 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
 fn track_cover(href: String, state: State<'_, Shared>) -> Result<Option<String>> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
     Ok(app.tags.get(&href).and_then(|t| t.cover.clone()))
+}
+
+// ---------------------------------------------------------------------------
+// Lyrics and artwork looked up from public services
+// ---------------------------------------------------------------------------
+//
+// The network half of `metadata_service.gd`. See `metadata.rs` for why this is
+// the one part of the app that talks to a stranger, and why it asks first.
+
+/// What is known about a track from outside this device.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LookedUp {
+    lyrics: Option<metadata::Lyrics>,
+    artist_image: String,
+    album_art: String,
+    genre: String,
+    /// Whether a lookup has been made for this track at all.
+    attempted: bool,
+    /// Whether the setting permits making one.
+    ///
+    /// The screen needs this to tell "we looked and found nothing" from "we
+    /// have not been allowed to look" — two states that otherwise render as
+    /// the same empty panel.
+    allowed: bool,
+}
+
+impl LookedUp {
+    fn of(app: &AppState, href: &str) -> Self {
+        let allowed = app.settings.metadata_lookup_enabled;
+        match app.looked.get(href) {
+            Some(l) => LookedUp {
+                lyrics: l.lyrics.clone(),
+                artist_image: l.artist_image.clone(),
+                album_art: l.album_art.clone(),
+                genre: l.genre.clone(),
+                attempted: l.attempted,
+                allowed,
+            },
+            None => LookedUp {
+                allowed,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+/// What has already been looked up for a track. Never makes a request.
+#[tauri::command]
+fn track_lookup(href: String, state: State<'_, Shared>) -> Result<LookedUp> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(LookedUp::of(&app, &href))
+}
+
+/// Look a track up, and remember what came back.
+///
+/// Refuses when the setting is off rather than quietly doing nothing, because
+/// a button that appears to work and does not is worse than one that explains
+/// itself. Returns the cached result unchanged when the track has been looked
+/// up before, so opening Liner Notes repeatedly is not repeated traffic —
+/// `attempted` is what distinguishes "found nothing" from "not yet asked", and
+/// without it a track with no lyrics would be requested on every visit.
+#[tauri::command]
+fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<LookedUp> {
+    // The lock is taken, the identity read, and the lock *dropped* before the
+    // request goes out. Holding it across an eight-second network call would
+    // freeze playback control, the queue and every other command behind it.
+    let (artist, album, title) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        if !app.settings.metadata_lookup_enabled {
+            return Err(Error(
+                "Looking up lyrics and artwork is switched off. Turn it on in Settings — \
+                 it sends the artist and title to LRCLIB and Deezer."
+                    .to_string(),
+            ));
+        }
+        if !force && app.looked.get(&href).is_some_and(|l| l.attempted) {
+            return Ok(LookedUp::of(&app, &href));
+        }
+        let row = app
+            .rows
+            .iter()
+            .find(|r| r.href == href)
+            .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
+        let mut row = row.clone();
+        app.apply_tags(&mut row);
+        (row.artist, row.album, row.title)
+    };
+
+    let lookup = metadata::Lookup::new().map_err(Error)?;
+    let lyrics = lookup.lyrics(&artist, &title);
+    let artist_image = lookup.artist_image(&artist);
+    let (album_art, genre) = lookup.album(&artist, &album);
+
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.looked.insert(
+        href.clone(),
+        metadata::Looked {
+            lyrics,
+            artist_image,
+            album_art,
+            genre,
+            attempted: true,
+        },
+    );
+    app.save_looked()?;
+    Ok(LookedUp::of(&app, &href))
+}
+
+/// Turn lookups on or off.
+///
+/// Switching it off forgets what was found as well as stopping further
+/// requests: leaving a cache of third-party data behind after someone has said
+/// no is not what "off" means to the person pressing it.
+#[tauri::command]
+fn set_metadata_lookup(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.settings.metadata_lookup_enabled = enabled;
+    if !enabled {
+        app.looked.clear();
+        app.save_looked()?;
+    }
+    app.save_settings()?;
+    Ok(app.settings.clone())
 }
 
 fn parse_sort_key(s: &str) -> Option<SortKey> {
@@ -3269,6 +3408,7 @@ fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     app.settings = Settings::default();
     app.playlists = PlaylistStore::default();
     app.folders = FolderStore::default();
+    app.looked.clear();
     app.queue = Queue::default();
     app.rows.clear();
     Ok(())
@@ -3329,6 +3469,9 @@ pub fn run() {
             rename_folder,
             delete_folder,
             set_playlist_folder,
+            track_lookup,
+            look_up_track,
+            set_metadata_lookup,
             queue_state,
             queue_view,
             remove_from_queue,

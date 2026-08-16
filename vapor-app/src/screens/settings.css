@@ -244,3 +244,26 @@
   color: #8c2f2f;
   border-radius: var(--r-sm);
 }
+
+/* A plain switch for a setting that has no draft state — a checkbox is not
+   edited before being saved, so it reads and writes the real value. */
+.settings__switch {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+.settings__switch input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.settings__switch:has(input:disabled) {
+  cursor: default;
+  color: var(--ink-3);
+}

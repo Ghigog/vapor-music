@@ -201,3 +201,84 @@
   text-wrap: pretty;
   max-width: 62ch;
 }
+
+/* ---- Lyrics -------------------------------------------------------------
+   Drawn in their own card, and the card says where they came from. This is
+   the only thing on the screen that was not worked out on this device, and a
+   screen that blurred the two would make the claim on the rest untrue.
+------------------------------------------------------------------------- */
+
+.liner__prose--lyrics {
+  /* Lines are short and deliberate; wrapping them like prose loses the
+     line breaks the transcription put there. */
+  text-wrap: initial;
+}
+
+.liner__lyrics {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  max-width: 62ch;
+}
+
+.liner__lyric {
+  display: flex;
+  gap: 14px;
+  padding: 2px 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+}
+
+.liner__lyric-at {
+  flex: none;
+  width: 4.5ch;
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+  /* Sits on the baseline of the words it belongs to rather than the top of
+     the row, which is where a smaller font otherwise lands. */
+  padding-top: 3px;
+}
+
+.liner__lyric-text {
+  color: var(--ink);
+}
+
+/* An instrumental break: LRCLIB writes a timed empty line for it. */
+.liner__rest {
+  color: var(--ink-3);
+}
+
+.liner__lookup {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 8px 16px;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-pill);
+  background: var(--glass-fill);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+
+.liner__lookup:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.liner__lookup:disabled {
+  cursor: default;
+  color: var(--ink-3);
+}
+
+/* A button that reads as part of the sentence it sits in. */
+.liner__link {
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+}

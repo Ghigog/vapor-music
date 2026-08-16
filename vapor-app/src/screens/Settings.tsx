@@ -47,6 +47,13 @@ export function Settings() {
    *  next to the thing that asked the question. */
   const [note, setNote] = useState<{ card: Card; text: string } | null>(null);
 
+  /** The settings as the backend holds them.
+   *
+   *  The remote fields above are unpacked into their own state because they are
+   *  edited before being saved. This is for the ones that are a switch: there
+   *  is no draft of a checkbox, so it reads and writes the real value. */
+  const [settings, setSettings] = useState<core.Settings | null>(null);
+
   const [status, setStatus] = useState<core.AnalysisStatus | null>(null);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
   const [cache, setCache] = useState<core.CacheStatus | null>(null);
@@ -98,6 +105,7 @@ export function Settings() {
     core
       .settings()
       .then((s) => {
+        setSettings(s);
         setUrl(s.remote.url);
         setUsername(s.remote.username);
         setFolder(s.remote.folder);
@@ -480,6 +488,48 @@ export function Settings() {
           Everything is a plain file here. No account, nothing shared, nothing
           leaves unless you move it.
         </p>
+
+        {/*
+          The one exception to the line above, so it sits directly under it
+          rather than somewhere the claim cannot be read against it.
+
+          Off by default. Tempo, key, energy and cue points are worked out on
+          this device from the audio; lyrics and artist portraits cannot be,
+          because they are not in the audio. Fetching them means telling
+          someone what is being listened to, and that is a decision for the
+          person listening.
+        */}
+        <label className="settings__switch">
+          <input
+            type="checkbox"
+            checked={settings?.metadataLookupEnabled ?? false}
+            disabled={!settings}
+            onChange={(e) => {
+              const on = e.target.checked;
+              void core
+                .setMetadataLookup(on)
+                .then(setSettings)
+                .then(() =>
+                  setNote({
+                    card: "data",
+                    text: on
+                      ? "Lyrics and artwork can now be looked up, one track at a time, from Liner Notes."
+                      : "Lookups are off, and everything already found has been forgotten.",
+                  }),
+                )
+                .catch((e: unknown) =>
+                  setNote({ card: "data", text: messageOf(e) }),
+                );
+            }}
+          />
+          <span>Look up lyrics and artwork</span>
+        </label>
+        <p className="settings__hint">
+          Sends the artist and title of a track to LRCLIB and Deezer when you
+          ask for its words on the Liner Notes screen — never automatically, and
+          never for anything else. Turning it off forgets what was found.
+        </p>
+        {note?.card === "data" && <p className="settings__note">{note.text}</p>}
         <div className="settings__actions">
           <button
             className="settings__button settings__button--danger"
