@@ -25,6 +25,10 @@ pub mod limiter;
 pub mod mixer;
 pub mod offline;
 pub mod pll;
+/// Signalsmith Stretch. Native only — it is C++ behind a `cc` build and does
+/// not compile to wasm, where `stretch`'s WSOLA carries on.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod signalsmith;
 pub mod source;
 pub mod stretch;
 pub mod transition;

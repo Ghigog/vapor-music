@@ -25,7 +25,7 @@ use crate::biquad::{EqChain, Sweep};
 use crate::clipping::{BandRms, Bands};
 use crate::delay::{Delay, Reverb};
 use crate::source::TrackSource;
-use crate::stretch::Stretcher;
+use crate::stretch::{Any as Stretcher, Quality};
 
 /// Echo Out's delay time — 350 ms, from `feedback_delay_ms`.
 const ECHO_TIME_SECS: f32 = 0.35;
@@ -71,7 +71,7 @@ impl Deck {
         Deck {
             source: TrackSource::Empty,
             sample_rate,
-            stretcher: Stretcher::new(),
+            stretcher: Stretcher::default(),
             eq: EqChain::new(sample_rate),
             delay: Delay::new(sample_rate),
             reverb: Reverb::new(sample_rate),

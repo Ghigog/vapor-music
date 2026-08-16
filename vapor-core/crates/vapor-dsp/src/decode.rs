@@ -244,7 +244,35 @@ pub(crate) fn open(source: Source) -> Result<Opened, DecodeError> {
 
 /// Decode everything in `source` into `sink`, returning the sample rate and the
 /// source's channel count.
+///
+/// **A panic inside the codec becomes a `DecodeError`.** Symphonia's AAC
+/// decoder subtracts with overflow on some malformed ADTS headers — found by
+/// `arbitrary_bytes_never_panic_the_decoder`, which is a property test over
+/// random bytes and had not happened to generate that shape before. It is a
+/// third-party crate, so the panic cannot be fixed here; what can be fixed is
+/// that a single bad file in someone's library takes down the thread decoding
+/// it. Contained, it is an unplayable track with a reason attached, which is
+/// machinery the app already has (TD-12).
+///
+/// `catch_unwind` is the right tool and a blunt one. It needs `AssertUnwindSafe`
+/// because `sink` is borrowed mutably across it: a panic part-way through may
+/// leave partially-decoded samples in it. That is acceptable here precisely
+/// because the result is discarded on the error path — the caller gets `Err`
+/// and never sees the sink.
 fn decode_stream<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), DecodeError> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_stream_inner(source, sink)
+    }));
+    match outcome {
+        Ok(result) => result,
+        Err(_) => Err(DecodeError::Decode(
+            "the decoder failed on this file — it is malformed in a way the codec cannot handle"
+                .to_string(),
+        )),
+    }
+}
+
+fn decode_stream_inner<S: Sink>(source: Source, sink: &mut S) -> Result<(u32, usize), DecodeError> {
     let Opened {
         mut format,
         mut decoder,

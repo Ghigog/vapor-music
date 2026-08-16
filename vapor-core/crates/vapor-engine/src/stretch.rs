@@ -255,7 +255,7 @@ pub struct Rendered {
 /// two and the round trip through `from_f32` is lossless for every value it can
 /// represent.
 #[inline]
-fn to_f32(sample: i16) -> f32 {
+pub(crate) fn to_f32(sample: i16) -> f32 {
     sample as f32 / 32_768.0
 }
 
@@ -508,5 +508,105 @@ mod tests {
             before,
             "the playhead moved through audio that was never rendered"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Choosing one
+// ---------------------------------------------------------------------------
+
+/// Which time-stretcher a deck uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    /// Signalsmith Stretch. The answer to MIG-012 on quality; not the default,
+    /// because as integrated here it does not hold the beat grid.
+    Signalsmith,
+    /// The WSOLA in this module. What wasm uses, since Signalsmith is C++ and
+    /// does not compile there — and what the other half of an A/B is.
+    #[default]
+    Wsola,
+}
+
+impl Quality {
+    pub fn parse(s: &str) -> Quality {
+        match s {
+            "wsola" => Quality::Wsola,
+            _ => Quality::Signalsmith,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Quality::Signalsmith => "signalsmith",
+            Quality::Wsola => "wsola",
+        }
+    }
+}
+
+/// A deck's stretcher, whichever it is.
+///
+/// An enum rather than a boxed trait: this is called once per audio block, the
+/// set of implementations is closed, and a virtual call on the audio thread is
+/// the sort of thing that gets looked at later and cannot be explained.
+pub enum Any {
+    Wsola(Stretcher),
+    #[cfg(not(target_arch = "wasm32"))]
+    Signalsmith(crate::signalsmith::Signalsmith),
+}
+
+impl Any {
+    pub fn new(quality: Quality) -> Any {
+        match quality {
+            #[cfg(not(target_arch = "wasm32"))]
+            Quality::Signalsmith => Any::Signalsmith(crate::signalsmith::Signalsmith::new()),
+            // wasm has one option, and asking for the other one there is a
+            // configuration mistake rather than a reason to fail.
+            #[cfg(target_arch = "wasm32")]
+            Quality::Signalsmith => Any::Wsola(Stretcher::new()),
+            Quality::Wsola => Any::Wsola(Stretcher::new()),
+        }
+    }
+
+    pub fn quality(&self) -> Quality {
+        match self {
+            Any::Wsola(_) => Quality::Wsola,
+            #[cfg(not(target_arch = "wasm32"))]
+            Any::Signalsmith(_) => Quality::Signalsmith,
+        }
+    }
+
+    pub fn reset(&mut self, position_frames: f64) {
+        match self {
+            Any::Wsola(s) => s.reset(position_frames),
+            #[cfg(not(target_arch = "wasm32"))]
+            Any::Signalsmith(s) => s.reset(position_frames),
+        }
+    }
+
+    pub fn source_position(&self) -> f64 {
+        match self {
+            Any::Wsola(s) => s.source_position(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Any::Signalsmith(s) => s.source_position(),
+        }
+    }
+
+    pub fn process(
+        &mut self,
+        src: &crate::source::SourceView<'_>,
+        ratio: f64,
+        out: &mut [[f32; 2]],
+    ) -> Rendered {
+        match self {
+            Any::Wsola(s) => s.process(src, ratio, out),
+            #[cfg(not(target_arch = "wasm32"))]
+            Any::Signalsmith(s) => s.process(src, ratio, out),
+        }
+    }
+}
+
+impl Default for Any {
+    fn default() -> Self {
+        Any::new(Quality::default())
     }
 }

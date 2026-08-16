@@ -109,6 +109,29 @@ either. A master peak limiter did. All transitions measure 0 clipped samples.
 **`vocal_presence` was never a detector.** It is `energy > 0.35`. Half a day
 went into planning a vocal detector before anyone grepped for it.
 
+**Signalsmith Stretch is the right library and the integration is not
+finished.** Chosen over Rubber Band (GPL plus a C++ build system, which is the
+dependency tail the migration existed to remove) and élastique (proprietary).
+MIT, maintained Rust wrapper, allocation-free on the audio thread across 200
+blocks, finite at every ratio, exact pass-through at unity.
+
+It fails beat alignment as integrated, and by a lot:
+
+| Stretcher | Worst onset error, 128 BPM grid |
+|---|---|
+| WSOLA | 28.29 ms |
+| Signalsmith, as integrated 2026-08-16 | 118.4 ms |
+
+The preset reports 2646 frames latency each way at 44.1 kHz — 60 ms in, 60 ms
+out — which matches the error to within a rounding error. Three corrections
+were tried (prime with upcoming audio, `seek` pre-roll, flush the latency
+through `process` and discard) and **the measured figure did not change by a
+single millisecond under any of them**, which says the offset enters somewhere
+other than where it was being corrected. Measure the wrapper's impulse response
+before trying a fourth.
+
+WSOLA stays the default until that is resolved.
+
 **±6% is the stretch refusal.** Past that it stops sounding like the record, so
 the pair plays sequentially instead of mixing.
 

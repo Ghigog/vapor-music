@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+signalsmith-stretch = "0.1.3"
 vapor-dsp = { path = "../vapor-dsp" }
 
 # Audio output. Not a dependency of the library — the engine itself stays
