@@ -122,6 +122,8 @@ export class FakeBackend {
   private status: core.PlaybackStatus = "idle";
   private analysed = 0;
   private nextId = 1;
+  private repeat: core.RepeatMode = "off";
+  private shuffled = false;
 
   constructor(options: FakeOptions = {}) {
     const connected = options.connected ?? true;
@@ -458,10 +460,125 @@ export class FakeBackend {
               href,
               title: row?.title ?? href,
               artist: row?.artist ?? "",
+              cover: null,
+              bpm: row?.bpm ?? 0,
+              key: row?.key ?? "",
               current: href === this.current,
             };
           }),
+          repeat: this.repeat,
+          shuffled: this.shuffled,
+          current: this.current ? this.queue.indexOf(this.current) : null,
+          remainingSecs: this.queue.length * 240,
         };
+
+      case "remove_from_queue": {
+        const href = String(a.href ?? "");
+        const before = this.queue.length;
+        this.queue = this.queue.filter((h) => h !== href);
+        return this.queue.length < before;
+      }
+
+      case "move_in_queue": {
+        const from = Number(a.from ?? -1);
+        const to = Number(a.to ?? -1);
+        if (from < 0 || from >= this.queue.length) return false;
+        if (to < 0 || to >= this.queue.length) return false;
+        const next = [...this.queue];
+        const [moved] = next.splice(from, 1);
+        if (moved !== undefined) next.splice(to, 0, moved);
+        this.queue = next;
+        return true;
+      }
+
+      case "play_next": {
+        const href = String(a.href ?? "");
+        const at = this.current ? this.queue.indexOf(this.current) : -1;
+        this.queue = this.queue.filter((h) => h !== href);
+        this.queue.splice(at + 1, 0, href);
+        return true;
+      }
+
+      case "set_repeat":
+        this.repeat = String(a.mode ?? "off") as core.RepeatMode;
+        return null;
+
+      case "set_shuffled":
+        this.shuffled = Boolean(a.shuffled);
+        return this.shuffled;
+
+      case "vibe_path": {
+        // Only analysed tracks can be planned with; the rest are reported as
+        // skipped rather than silently dropped (TD-43b).
+        const usable = this.rows.filter((r) => r.bpm > 0);
+        return {
+          hrefs: usable.map((r) => r.href),
+          considered: usable.length,
+          skipped: this.rows.length - usable.length,
+        };
+      }
+
+      case "blend_preview": {
+        if (!this.current) return null;
+        const at = this.queue.indexOf(this.current);
+        const from = this.rows.find((r) => r.href === this.current);
+        const to = this.rows.find((r) => r.href === this.queue[at + 1]);
+        if (!from || !to) return null;
+        const matchable =
+          from.bpm > 0 && to.bpm > 0 && Math.abs(from.bpm - to.bpm) / from.bpm <= 0.06;
+        return {
+          fromTitle: from.title,
+          toTitle: to.title,
+          fromBpm: from.bpm,
+          toBpm: to.bpm,
+          fromKey: from.key,
+          toKey: to.key,
+          shiftPercent: from.bpm > 0 ? ((to.bpm - from.bpm) / from.bpm) * 100 : 0,
+          gainDelta: 0,
+          matchable,
+          reason: matchable ? "" : "Their tempos are too far apart to bridge.",
+          transition: "Standard Crossfade",
+        };
+      }
+
+      case "track_details": {
+        const row = this.rows.find((r) => r.href === String(a.href ?? ""));
+        if (!row) throw new Error("That track is not in the library.");
+        return {
+          href: row.href,
+          title: row.title,
+          artist: row.artist,
+          album: row.album,
+          year: row.year,
+          genre: row.genre,
+          analysed: row.bpm > 0,
+          bpm: row.bpm,
+          bpmIsManual: false,
+          key: row.key,
+          lufs: -9.4,
+          duration: 240,
+          cueIn: 0.2,
+          cueOut: 238,
+          energy: 0.6,
+          beats: 512,
+          waveform: [],
+          hrefPath: row.href,
+          cached: true,
+          unplayable: null,
+          cover: null,
+          notes: null,
+          tagged: false,
+        };
+      }
+
+      case "data_breakdown":
+        return [
+          { label: "Audio cache", path: "/tmp/vapor-music/cache", bytes: 1_200_000_000, local: true },
+          { label: "Analysis", path: "/tmp/vapor-music/analysis.json", bytes: 240_000, local: true },
+        ];
+
+      case "reveal_data_folder":
+        return null;
 
       // --- analysis, cache, data ---------------------------------------
       case "analyse_library":

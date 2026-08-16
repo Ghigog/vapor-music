@@ -79,7 +79,9 @@ export function Vibe() {
           // Silence about the rest would make a set built from a tenth of the
           // library look identical to one built from all of it.
           (path.skipped > 0
-            ? ` ${path.skipped.toLocaleString()} were passed over — not analysed yet.`
+            ? ` ${path.skipped.toLocaleString()} ${
+                path.skipped === 1 ? "was" : "were"
+              } passed over — not analysed yet.`
             : ""),
       );
       await refresh();

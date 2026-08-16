@@ -50,6 +50,14 @@ export function YourData() {
     if (r.status === "fulfilled") setRows(r.value);
     if (c.status === "fulfilled") setCache(c.value);
     if (l.status === "fulfilled") setLocation(l.value);
+
+    // `allSettled` and then only reading the fulfilled ones swallows every
+    // failure. On this screen in particular that is the wrong thing to do: it
+    // exists to let someone check what is stored, and a read that failed shows
+    // as an empty list — which reads as "nothing is stored" rather than as
+    // "this could not be read". Whatever loaded still shows; the rest is said.
+    const failed = [r, c, l].find((x) => x.status === "rejected");
+    setError(failed ? messageOf(failed.reason) : null);
   }, []);
 
   useEffect(() => {
