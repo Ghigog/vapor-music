@@ -2109,7 +2109,22 @@ fn set_remote_config(
     state: State<'_, Shared>,
 ) -> Result<Settings> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    apply_remote_config(&mut app, &url, &username, &folder)?;
+    Ok(app.settings.clone())
+}
 
+/// The body of [`set_remote_config`], separated from the Tauri wrapper.
+///
+/// A `#[tauri::command]` takes `State`, which cannot be built outside a running
+/// app — so a command whose logic lives entirely in its own body is a command
+/// that cannot be integration-tested. Both defects this function carries were
+/// found by a person rather than by a test, for exactly that reason.
+pub(crate) fn apply_remote_config(
+    app: &mut AppState,
+    url: &str,
+    username: &str,
+    folder: &str,
+) -> Result<()> {
     // Refused rather than stored, because everything downstream treats this as
     // an origin to hang paths off: a value that is not one produces a scan that
     // finds nothing and reports no error, which reads as "my library is empty"
@@ -2137,15 +2152,13 @@ fn set_remote_config(
         let _ = webdav::move_password(&previous, username.trim());
     }
 
-    app.settings.remote.url = url.trim().to_string();
+    app.settings.remote.url = trimmed.to_string();
     app.settings.remote.username = username.trim().to_string();
     app.settings.remote.folder = folder.trim().to_string();
     // An empty folder means the library root, which `sanitised` spells as the
     // default rather than as "".
     app.settings = std::mem::take(&mut app.settings).sanitised();
-    app.save_settings()?;
-
-    Ok(app.settings.clone())
+    app.save_settings()
 }
 
 /// Whether a password is stored for `username`.
@@ -2688,6 +2701,23 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    /// A real `AppState` on a throwaway directory.
+    ///
+    /// Integration rather than unit: this exercises load, mutate and save
+    /// against the actual `Store`, which is where the shell's own bugs live.
+    /// A counter rather than a timestamp in the name — macOS resolves the
+    /// clock coarsely enough that two tests starting together collide.
+    fn app() -> (AppState, std::path::PathBuf) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "vapor-app-test-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        (AppState::load(Store::new(dir.clone())), dir)
+    }
+
     fn row(href: &str, title: &str) -> Row {
         Row {
             href: href.to_string(),
@@ -2747,5 +2777,189 @@ mod tests {
         let library = vec![row("/a", "Anna")];
         assert!(rows_in_order(&library, &[]).is_empty());
         assert!(rows_in_order(&[], &["/a".to_string()]).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // The remote configuration — where both reported credential defects lived
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_server_address_must_be_one() {
+        let (mut app, dir) = app();
+
+        // A Koofr app password pasted into the address field: the way it
+        // actually happens, and previously stored without complaint.
+        let refused = apply_remote_config(&mut app, "4wg9ie7xi8v7nbi6", "someone", "Music");
+        assert!(refused.is_err(), "a non-address was accepted");
+        assert!(
+            app.settings.remote.url.is_empty(),
+            "the refused value was stored anyway"
+        );
+
+        assert!(apply_remote_config(
+            &mut app,
+            "https://app.koofr.net",
+            "someone",
+            "/dav/Koofr/Music"
+        )
+        .is_ok());
+        assert_eq!(app.settings.remote.url, "https://app.koofr.net");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_empty_address_is_allowed_because_it_means_not_configured_yet() {
+        let (mut app, dir) = app();
+        assert!(apply_remote_config(&mut app, "", "", "").is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_configuration_survives_a_restart() {
+        let (mut app, dir) = app();
+        apply_remote_config(&mut app, "https://example.com", "someone", "/dav/Music")
+            .expect("save");
+        drop(app);
+
+        // A second load of the same directory is what a relaunch is.
+        let reloaded = AppState::load(Store::new(dir.clone()));
+        assert_eq!(reloaded.settings.remote.url, "https://example.com");
+        assert_eq!(reloaded.settings.remote.username, "someone");
+        assert_eq!(reloaded.settings.remote.folder, "/dav/Music");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The password must never reach the settings file. A test asserts it
+    /// cannot be serialised; this asserts it is not there in practice either.
+    #[test]
+    fn no_password_is_ever_written_to_disk() {
+        let (mut app, dir) = app();
+        apply_remote_config(&mut app, "https://example.com", "someone", "/dav/Music")
+            .expect("save");
+
+        let written = std::fs::read_to_string(dir.join("settings.json")).expect("settings file");
+        assert!(
+            !written.to_lowercase().contains("password"),
+            "the settings file mentions a password: {written}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn whitespace_around_a_field_is_not_stored() {
+        let (mut app, dir) = app();
+        apply_remote_config(
+            &mut app,
+            "  https://example.com  ",
+            "  someone  ",
+            "  /dav/Music  ",
+        )
+        .expect("save");
+
+        assert_eq!(app.settings.remote.url, "https://example.com");
+        assert_eq!(app.settings.remote.username, "someone");
+        assert_eq!(app.settings.remote.folder, "/dav/Music");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Playlists, through the state rather than through the commands
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn playlists_survive_a_restart() {
+        let (mut app, dir) = app();
+        app.playlists.create("p1", "Late Night");
+        app.playlists.add_track("p1", "/a.m4a");
+        app.save_playlists().expect("save");
+        drop(app);
+
+        let reloaded = AppState::load(Store::new(dir.clone()));
+        let playlist = reloaded.playlists.get("p1").expect("playlist survived");
+        assert_eq!(playlist.name, "Late Night");
+        assert_eq!(playlist.tracks, vec!["/a.m4a".to_string()]);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_playlist_holding_a_missing_track_still_lists_the_rest() {
+        let library = vec![row("/a", "Anna"), row("/c", "Cleo")];
+        let wanted = vec!["/a".to_string(), "/gone".to_string(), "/c".to_string()];
+        assert_eq!(rows_in_order(&library, &wanted).len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Analysis records
+    // -----------------------------------------------------------------------
+
+    /// A record written at an older version must be re-analysed rather than
+    /// trusted, or a library ends up with some tracks measured one way and
+    /// some another with no way to tell which.
+    #[test]
+    fn stale_analysis_records_are_not_trusted() {
+        use crate::analysis::{Analysis, ANALYSIS_VERSION};
+
+        let (mut app, dir) = app();
+        app.analysis.insert(
+            "/a.m4a".to_string(),
+            Analysis {
+                bpm: 128.0,
+                key: "8A".to_string(),
+                version: ANALYSIS_VERSION - 1,
+                ..Default::default()
+            },
+        );
+
+        let stale = app
+            .analysis
+            .get("/a.m4a")
+            .map(|a| a.version < ANALYSIS_VERSION)
+            .unwrap_or(false);
+        assert!(stale, "an older record was treated as current");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings that a hand-edited file could make nonsense of
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn an_absurd_cache_bound_is_corrected_on_load() {
+        let (app, dir) = app();
+        // Whatever the default is, it has to be big enough to hold a track —
+        // a bound below one track evicts everything the moment it arrives.
+        assert!(
+            app.settings.cache_max_bytes > 50_000_000,
+            "the default cache bound is {} bytes",
+            app.settings.cache_max_bytes
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_corrupt_settings_file_does_not_silently_start_empty() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "vapor-corrupt-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("settings.json"), "{ not json at all").expect("write");
+
+        // Loading must not panic. Starting empty on a read failure would show
+        // someone an empty library while their data sits unreadable on disk —
+        // the behaviour `Store::load` exists to avoid.
+        let app = AppState::load(Store::new(dir.clone()));
+        assert!(app.settings.remote.url.is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -25,8 +25,8 @@ Documented in `docs/TESTING.md` — read that first, it is the spec.
 | 1 | `docs/TESTING.md` written | done |
 | 2 | Frontend harness — Vitest, Testing Library, committed IPC fake | done |
 | 3 | Component tests — 83 across every screen | done |
-| 4 | Backend integration tests over the command surface | in progress |
-| 5 | Property/fuzz tests for the core | not started |
+| 4 | Backend integration tests — 10 added, set_remote_config extracted so it is testable | done |
+| 5 | Property/fuzz tests for the core | in progress |
 | 6 | E2E journeys + monkey | not started |
 | 7 | CI wiring | not started |
 
