@@ -17,9 +17,6 @@ import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
-import { Songs } from "./screens/Songs";
-import { Search } from "./screens/Search";
-import { Queue } from "./screens/Queue";
 import { Vibe } from "./screens/Vibe";
 import { NowPlaying } from "./screens/NowPlaying";
 import { LinerNotes } from "./screens/LinerNotes";
@@ -30,9 +27,9 @@ import * as core from "./lib/core";
 import "./components/transport.css";
 import "./components/states.css";
 import "./components/notice.css";
+import "./components/help.css";
 import "./screens/library.css";
 import "./screens/songs.css";
-import "./screens/search.css";
 import "./screens/queue.css";
 import "./screens/vibe.css";
 import "./screens/settings.css";
@@ -42,10 +39,16 @@ import "./screens/liner.css";
 import "./screens/yourdata.css";
 import "./screens/playlist.css";
 
+/*
+ * Destinations, not mockups.
+ *
+ * Songs and Search were sidebar entries because the Daylight file ships twelve
+ * screen *drawings* and the rewrite built one nav item per drawing — see
+ * docs/DESIGN_DRIFT.md. The design's own navigation is three tabs, and its
+ * Library carries a search field and a Songs tab. Both now live inside Library.
+ */
 type Screen =
   | "library"
-  | "songs"
-  | "search"
   | "playing"
   | "queue"
   | "vibe"
@@ -56,10 +59,6 @@ type Screen =
  *  it, then the things about the app itself. */
 const NAV: { id: Screen; label: string; group: number }[] = [
   { id: "library", label: "Library", group: 0 },
-  { id: "songs", label: "Songs", group: 0 },
-  { id: "search", label: "Search", group: 0 },
-  { id: "playing", label: "Now Playing", group: 1 },
-  { id: "queue", label: "Queue", group: 1 },
   { id: "vibe", label: "Vibe DJ", group: 1 },
   { id: "data", label: "Your Data", group: 2 },
   { id: "settings", label: "Settings", group: 2 },
@@ -83,6 +82,14 @@ export function App() {
    *  a nav destination, so it lives beside `screen` rather than in it — but it
    *  is reachable from the rail on every screen, so it has no "from". */
   const [playlist, setPlaylist] = useState<string | null>(null);
+  /**
+   * Whether the DJ is conducting the queue.
+   *
+   * Held here rather than in Settings because it decides what the Vibe tab is
+   * called, and the design relabels that tab "Shuffle" when the DJ is off.
+   * Not persisted yet — it resets to conducting on launch.
+   */
+  const [djMode, setDjMode] = useState(true);
 
   useEffect(() => {
     // Settings is the round trip worth making at boot: it decides where to
@@ -147,7 +154,7 @@ export function App() {
                   setScreen(item.id);
                 }}
               >
-                {item.label}
+                {item.id === "vibe" && !djMode ? "Shuffle" : item.label}
               </button>
             </div>
           ))}
@@ -174,12 +181,15 @@ export function App() {
             />
           ) : (
             <>
-              {screen === "library" && <Library />}
-              {screen === "songs" && <Songs onOpen={openLiner} />}
-              {screen === "search" && <Search onOpen={openLiner} />}
+              {screen === "library" && <Library onOpen={openLiner} />}
               {screen === "playing" && <NowPlaying />}
-              {screen === "queue" && <Queue onOpen={openLiner} />}
-              {screen === "vibe" && <Vibe />}
+              {screen === "vibe" && (
+                <Vibe
+                  djMode={djMode}
+                  onDjModeChange={setDjMode}
+                  onOpen={openLiner}
+                />
+              )}
               {screen === "data" && <YourData />}
               {screen === "settings" && <Settings />}
             </>
@@ -188,7 +198,11 @@ export function App() {
 
         {/* Outside the content column: the shell grid spans it across both, and
             playback outlives whichever screen started it. */}
-        <Transport />
+        <Transport onOpenNowPlaying={() => {
+          setLiner(null);
+          setPlaylist(null);
+          setScreen("playing");
+        }} />
       </div>
     );
   }

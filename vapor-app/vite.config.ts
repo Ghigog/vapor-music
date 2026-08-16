@@ -16,6 +16,12 @@ export default defineConfig({
       // frontend to reload on every backend rebuild.
       ignored: ["**/src-tauri/**"],
     },
+    fs: {
+      // The Vibe help sheet imports docs/ai_dj_workflow.md verbatim, the way
+      // the Godot original read it from res://. That file is above this root,
+      // so the dev server has to be allowed to serve the repo root.
+      allow: [".."],
+    },
   },
   // Component tests run in jsdom against the fake IPC in src/test/ipc.ts.
   // Screens are driven the way a person drives them, which is why the

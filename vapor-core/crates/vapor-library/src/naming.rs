@@ -199,10 +199,30 @@ pub fn parse_path(path: &str, base_folder: &str) -> TrackInfo {
         .unwrap_or(filename);
 
     // Folders between the library root and the file.
-    let start = segments
-        .iter()
-        .position(|s| s.eq_ignore_ascii_case(base_folder))
-        .map(|i| i + 1);
+    //
+    // `base_folder` is a path, not a name: the shell passes
+    // `settings.remote.folder`, which is what the server calls the library —
+    // "/dav/Koofr/Music". This used to compare it against one segment at a
+    // time, so a multi-segment base never matched and the fallback below
+    // treated the server's own path components as meaningful, turning
+    // "/dav/Koofr/Music/track.m4a" into artist "dav", album "Koofr".
+    //
+    // Matched as a run of segments so that either form works, since a
+    // single-segment base is still a run of one.
+    let base_segments: Vec<&str> = base_folder.split('/').filter(|s| !s.is_empty()).collect();
+    let start = if base_segments.is_empty() || base_segments.len() > segments.len() {
+        None
+    } else {
+        segments
+            .windows(base_segments.len())
+            .position(|window| {
+                window
+                    .iter()
+                    .zip(&base_segments)
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b))
+            })
+            .map(|i| i + base_segments.len())
+    };
     let relative: Vec<&str> = match start {
         Some(i) if i < segments.len() => segments[i..segments.len() - 1].to_vec(),
         _ if segments.len() >= 2 => segments[..segments.len() - 1].to_vec(),
@@ -421,5 +441,47 @@ mod tests {
         let info = parse_path("/song.mp3", "Music");
         assert_eq!(info.title, "song");
         assert!(info.artist.is_empty());
+    }
+
+    /// The form the app actually passes.
+    ///
+    /// Every test here used `"Music"` — a single segment — while the shell
+    /// passes `settings.remote.folder`, which is a full server path like
+    /// `/dav/Koofr/Music`. The base was located with
+    /// `segments.iter().position(|s| s == base_folder)`, comparing one path
+    /// segment against the whole path, so it never matched and the fallback
+    /// treated *every* folder as meaningful: `/dav/Koofr/Music/track.m4a`
+    /// became artist "dav", album "Koofr".
+    ///
+    /// The album mattered twice over. `apply_tags` fills gaps only, so a row
+    /// carrying the album "Koofr" was not a gap, and the real album from the
+    /// file's own tags was never applied.
+    #[test]
+    fn a_base_folder_given_as_a_full_path_is_stripped() {
+        let info = parse_path(
+            "/dav/Koofr/Music/37 - The Glitch Mob - A Dream Within A Dream.m4a",
+            "/dav/Koofr/Music",
+        );
+
+        assert_eq!(info.artist, "The Glitch Mob");
+        assert_eq!(info.title, "A Dream Within A Dream");
+        assert_eq!(
+            info.album, "",
+            "a track sitting directly in the library root has no album, and \
+             saying it has one blocks the file's own tags from supplying the \
+             real one"
+        );
+    }
+
+    #[test]
+    fn folders_below_a_full_base_path_still_give_artist_and_album() {
+        let info = parse_path(
+            "/dav/Koofr/Music/Boards of Canada/Music Has the Right/03 - Roygbiv.mp3",
+            "/dav/Koofr/Music",
+        );
+
+        assert_eq!(info.artist, "Boards of Canada");
+        assert_eq!(info.album, "Music Has the Right");
+        assert_eq!(info.title, "Roygbiv");
     }
 }

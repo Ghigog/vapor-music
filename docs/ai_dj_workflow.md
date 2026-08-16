@@ -52,3 +52,56 @@ Transition loading is triggered `duration + 4.0` seconds before the track ends, 
 - **Vibe Limit**: Sets the maximum energy difference allowed between consecutive tracks.
 - **Strict (Low Value)**: Restricts the AI DJ to very smooth transitions with consistent energy, keeping the overall vibe stable.
 - **Loose (High Value)**: Permits larger energy shifts between tracks, allowing for dramatic drops and climbs in set intensity.
+
+---
+
+## 7. Conduct a Set (the Mood Path)
+
+This is the other half of the DJ, and it was never reachable from the Godot UI —
+`play_harmonic_shuffle()` called `DJPathfinder.generate_mood_path()` with two
+arguments, so `target_curve` always fell to its default of `"build"`. The other
+three curves were implemented and unreachable. The Vibe screen exposes all four.
+
+Where §2–§4 decide **which track comes next**, this decides **where the whole
+set is going**. It plans the running order in advance with an A\* search over
+the Camelot wheel, scoring each candidate on two things at once:
+
+- **Transition cost** — the same harmonic and tempo distance used everywhere
+  else, so consecutive tracks stay mixable.
+- **Curve cost** — how far a candidate sits from where the set is *supposed* to
+  be by that point.
+
+### The curves
+
+For step `i` of `N`, with `t = i / (N - 1)`, the target is:
+
+| Curve | Target energy | Target tempo |
+|---|---|---|
+| **Build Vibe** | start → start + 0.4 | start → start + 15 BPM |
+| **Chill Down** | start → start − 0.4 | start → start − 15 BPM |
+| **Wave** | start + 0.3·sin(2πt) | start + 10·sin(2πt) |
+| **Hold Steady** | start, unchanged | start, unchanged |
+
+Build and Chill are linear ramps across the set. Wave completes one full cycle —
+up, back through the middle, down, and home. Hold Steady sets a flat target, so
+only transition cost decides the order.
+
+Energy is loudness, brightness and tempo in equal parts, which is what separates
+a loud ballad from a quiet banger; loudness alone cannot.
+
+Tracks with no analysis are not placed, because the cost model has no tempo or
+key to place them by. They are appended at the end and the screen says how many.
+
+### How it works with Match / Fresh / Switch
+
+The two are layers, not alternatives:
+
+- The **curve** owns the destination — where the set should be at step `i`.
+- **Match / Fresh / Switch** owns the next step — which specific track, and how
+  it is mixed in.
+
+The four-step cycle in §3 is the *default* answer for each transition. Choosing
+one by hand overrides that single step; the remaining plan is then re-searched
+from the new track, against the same curve and the same step positions, so the
+set still arrives where it was going. Being 60% through a Build stays 60%
+through a Build — the arc is preserved, the route to it changes.

@@ -6,8 +6,10 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 1100px;
-  margin: 0 auto;
+  /* Fills the content column. The 1100px cap was extrapolated from the
+     design's 390px phone frames and left a third of a desktop window empty
+     while the grid wrapped to fewer columns than it had room for. */
+  width: 100%;
 }
 
 /* ---- Header ---------------------------------------------------------- */
@@ -181,11 +183,42 @@
 
 /* ---- Card ------------------------------------------------------------ */
 
+/*
+ * A card is a <button>, so the native chrome has to go: without this reset the
+ * grid renders as four grey OS buttons with centred text. `font: inherit` is
+ * the one that is easy to miss — a button does not inherit the page font.
+ */
 .card {
   display: flex;
   flex-direction: column;
   gap: 9px;
   min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  /* The card is the primary target on the home screen and had no pointer
+     affordance at all, which is part of why it read as decoration. */
+  cursor: pointer;
+}
+
+/* The art lifts, not the text: moving the label would make the title jitter as
+   the pointer crosses the grid. */
+.card:hover .card__art {
+  transform: translateY(-2px);
+}
+
+/* Matches the tabs above it, so keyboard focus looks the same everywhere on
+   this screen. */
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--r-md);
 }
 
 .card__art {
@@ -194,6 +227,7 @@
   border-radius: 18px;
   position: relative;
   overflow: hidden;
+  transition: transform var(--dur-fast) var(--ease);
   /* Placeholder until artwork loads. Blue-tinted shadow, per the design —
      a neutral grey shadow reads as dirt against warm paper. */
   background: linear-gradient(150deg, #cfe0f2 0%, #dfe3ea 55%, #efe9de 100%);

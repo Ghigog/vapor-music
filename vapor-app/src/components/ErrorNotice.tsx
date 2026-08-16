@@ -48,6 +48,22 @@ export function ErrorNotice({
   onRetry?: (() => void) | undefined;
 }) {
   const [showRaw, setShowRaw] = useState(false);
+
+  /*
+   * No error, no notice.
+   *
+   * This used to render regardless of what it was handed, so an unguarded
+   * `<ErrorNotice error={maybeNull} />` was a permanent red alert reading
+   * "Something went wrong, and the reason did not survive the trip" — the
+   * fallback message, shown because nothing had gone wrong at all. Every call
+   * site guarded it by hand and one of them eventually will not.
+   *
+   * `""` counts as nothing: a caller holding `string | null` for its error
+   * state will pass the empty string, and an alert with no text is the same
+   * lie with no words in it.
+   */
+  if (error === null || error === undefined || error === "") return null;
+
   const message = messageOf(error);
   const raw = typeof error === "string" ? "" : String(error);
   // Only worth offering when it says something the message does not.

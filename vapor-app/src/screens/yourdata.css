@@ -4,9 +4,10 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Was 640px and centred while Settings was 620px and left-aligned, so the
+     two screens disagreed about where the page begins and the content jumped
+     sideways when moving between them. Both now fill the column. */
   width: 100%;
-  max-width: 640px;
-  margin: 0 auto;
   padding-bottom: 16px;
 }
 

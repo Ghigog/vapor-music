@@ -5,8 +5,7 @@
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  max-width: 640px;
-  margin: 0 auto;
+  width: 100%;
   padding-bottom: 16px;
 }
 
@@ -206,4 +205,92 @@
   border: 1px solid rgba(179, 38, 30, 0.22);
   color: #8c1d18;
   font-size: var(--fs-sm);
+}
+
+/* ---- Help ------------------------------------------------------------ */
+
+/*
+ * Pushed to the right of the header, so the title keeps the left edge it
+ * shares with every other screen.
+ */
+.vibe__help {
+  margin-left: auto;
+  align-self: flex-start;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 17px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--glass-rim);
+  cursor: pointer;
+}
+
+.vibe__help:hover {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--ink);
+}
+
+.vibe__help:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* With nothing playing the screen is only the empty state, so the button
+   needs a row of its own to sit in. */
+.vibe__help-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---- DJ toggle ------------------------------------------------------- */
+
+.vibe__head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  align-self: flex-start;
+}
+
+/* The head's help button is inside the actions row now, so it no longer needs
+   to push itself over. */
+.vibe__head-actions .vibe__help {
+  margin-left: 0;
+}
+
+.vibe__dj {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--glass-rim);
+}
+
+.vibe__dj input {
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+.vibe__dj:has(input:checked) {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.vibe__dj:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

@@ -139,6 +139,40 @@ pub fn pending(hrefs: &[String], cache: &Cache) -> Vec<String> {
         .collect()
 }
 
+/// Pending work, with `first` brought to the front in the order given.
+///
+/// A pass over a real library takes minutes per hundred tracks, so on a fresh
+/// scan the tempo and key of whatever someone actually presses play on would
+/// otherwise arrive somewhere near the end — the one track they are listening
+/// to being the last one described. `first` is the play queue: the current
+/// track, then what follows it.
+///
+/// Everything else keeps library order behind them. Nothing is dropped and
+/// nothing is duplicated, including when a track appears in `first` twice
+/// because the queue repeats it.
+pub fn pending_first(hrefs: &[String], cache: &Cache, first: &[String]) -> Vec<String> {
+    let todo = pending(hrefs, cache);
+    let outstanding: std::collections::HashSet<&str> =
+        todo.iter().map(String::as_str).collect();
+
+    let mut ordered = Vec::with_capacity(todo.len());
+    let mut taken = std::collections::HashSet::new();
+
+    for href in first {
+        // Only tracks that genuinely need work: a queue full of already
+        // analysed tracks must not push anything to the back of the list.
+        if outstanding.contains(href.as_str()) && taken.insert(href.as_str()) {
+            ordered.push(href.clone());
+        }
+    }
+    for href in &todo {
+        if taken.insert(href.as_str()) {
+            ordered.push(href.clone());
+        }
+    }
+    ordered
+}
+
 /// A running pass, so the UI can stop one.
 ///
 /// Cancellation matters more than it looks: analysis saturates a core for
@@ -160,9 +194,13 @@ impl Cancel {
         self.0.load(Ordering::Relaxed)
     }
 
-    pub fn reset(&self) {
-        self.0.store(false, Ordering::Relaxed);
-    }
+    // There is deliberately no `reset`.
+    //
+    // Restarting a pass used to reset this flag, which is unsound: the pass
+    // already running holds a clone of the same `Arc`, so clearing the flag it
+    // watches un-cancels it and two passes then analyse the same library at
+    // once. `start_analysis` builds a new `Cancel` per pass instead, leaving
+    // the old one stopped for good.
 }
 
 /// Run a pass, calling `on_progress` after each track.
@@ -327,12 +365,81 @@ mod tests {
         assert_eq!(count, 3, "kept going after cancellation");
     }
 
+    /// Restarting a pass must not un-cancel the one it replaced.
+    ///
+    /// This replaces a test that asserted `reset` cleared the flag. Clearing it
+    /// was the bug: the running pass holds a clone of the same `Arc`, so the
+    /// reset that armed the new pass also revived the old one, and both then
+    /// analysed the same library at once. Passes now get a flag each.
     #[test]
-    fn a_cancel_can_be_reused_after_reset() {
+    fn a_new_pass_does_not_revive_the_one_it_replaced() {
+        let running = Cancel::new();
+        running.stop();
+
+        let replacement = Cancel::new();
+
+        assert!(running.is_stopped(), "the replaced pass must stay stopped");
+        assert!(!replacement.is_stopped(), "the new pass must be able to run");
+    }
+
+    /// A clone is the same flag — that is how the worker thread sees a stop.
+    #[test]
+    fn a_clone_shares_the_flag_with_the_pass_it_came_from() {
         let cancel = Cancel::new();
+        let worker = cancel.clone();
+
         cancel.stop();
-        assert!(cancel.is_stopped());
-        cancel.reset();
-        assert!(!cancel.is_stopped());
+
+        assert!(worker.is_stopped());
+    }
+
+    /// The queue jumps the line, and nothing is lost doing it.
+    #[test]
+    fn tracks_in_the_queue_are_analysed_first() {
+        let hrefs: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let cache = Cache::new();
+
+        let order = pending_first(&hrefs, &cache, &["c".to_string(), "a".to_string()]);
+
+        assert_eq!(order, vec!["c", "a", "b", "d"]);
+    }
+
+    #[test]
+    fn an_already_analysed_track_in_the_queue_is_not_reordered_in() {
+        let hrefs: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let mut cache = Cache::new();
+        cache.insert("c".to_string(), analysed(ANALYSIS_VERSION));
+
+        let order = pending_first(&hrefs, &cache, &["c".to_string()]);
+
+        // "c" needs nothing, so it neither appears nor displaces anything.
+        assert_eq!(order, vec!["a", "b"]);
+    }
+
+    /// A queue that repeats a track must not analyse it twice.
+    #[test]
+    fn a_repeated_queue_entry_appears_once() {
+        let hrefs: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        let cache = Cache::new();
+
+        let order = pending_first(&hrefs, &cache, &["b".to_string(), "b".to_string()]);
+
+        assert_eq!(order, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn priority_never_drops_or_duplicates_work() {
+        let hrefs: Vec<String> = ["a", "b", "c", "d", "e"].iter().map(|s| s.to_string()).collect();
+        let cache = Cache::new();
+
+        let plain = pending(&hrefs, &cache);
+        let order = pending_first(&hrefs, &cache, &["e".to_string(), "b".to_string()]);
+
+        assert_eq!(order.len(), plain.len());
+        let mut sorted = order.clone();
+        sorted.sort();
+        let mut expected = plain.clone();
+        expected.sort();
+        assert_eq!(sorted, expected);
     }
 }

@@ -567,12 +567,31 @@ fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {
 }
 
 #[tauri::command]
-fn play_tracks(hrefs: Vec<String>, start: Option<String>, state: State<'_, Shared>) -> Result<()> {
+fn play_tracks(
+    app_handle: tauri::AppHandle,
+    hrefs: Vec<String>,
+    start: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<()> {
     let shared: Shared = Arc::clone(&state);
-    let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
-    app.queue.set_tracks(hrefs, start.as_deref());
-    if let Some(current) = app.queue.current().map(str::to_string) {
-        begin_playback(&shared, &mut app, current);
+
+    let jump_the_queue = {
+        let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
+        app.queue.set_tracks(hrefs, start.as_deref());
+        let current = app.queue.current().map(str::to_string);
+        if let Some(current) = current.clone() {
+            begin_playback(&shared, &mut app, current);
+        }
+        // Only when the track being started is one analysis has not described
+        // yet. Restarting the pass costs the track in flight, and paying that
+        // to re-order a queue of already-analysed tracks would be worse than
+        // leaving the pass where it is.
+        current.is_some_and(|href| needs_analysis(&app, &href))
+    };
+
+    if jump_the_queue {
+        // Lock released above: `start_analysis` takes it.
+        start_analysis(&app_handle, &shared)?;
     }
     Ok(())
 }
@@ -2185,7 +2204,10 @@ fn save_webdav_password(username: String, password: String) -> Result<()> {
 
 /// Walk the configured WebDAV tree and rebuild the library index.
 #[tauri::command]
-async fn scan_library(state: State<'_, Shared>) -> Result<ScanReport> {
+async fn scan_library(
+    app_handle: tauri::AppHandle,
+    state: State<'_, Shared>,
+) -> Result<ScanReport> {
     // The remote config is copied out and the lock released before the network
     // call: holding it across an await would block every other command for the
     // length of a scan, which can be minutes on a large library.
@@ -2204,18 +2226,36 @@ async fn scan_library(state: State<'_, Shared>) -> Result<ScanReport> {
         .await
         .map_err(|e| Error(e.to_string()))?;
 
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.rows = result
-        .files
-        .iter()
-        .map(|href| build_row(href, &folder))
-        .collect();
+    let report = {
+        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+        app.rows = result
+            .files
+            .iter()
+            .map(|href| build_row(href, &folder))
+            .collect();
 
-    Ok(ScanReport {
-        tracks: app.rows.len(),
-        directories: result.directories,
-        unreadable: result.unreadable,
-    })
+        ScanReport {
+            tracks: app.rows.len(),
+            directories: result.directories,
+            unreadable: result.unreadable,
+        }
+    };
+
+    // Analyse what was just found, without being asked.
+    //
+    // A scan produces rows that know a filename and nothing else — no tempo,
+    // no key, so no Vibe DJ and no blends. That used to wait behind a button on
+    // the Settings screen, which is a strange place to have to go to make the
+    // library work, and an easy one never to find. Starting here is also the
+    // only way the automatic pass can know there is new work.
+    //
+    // `pending` skips everything already done, so a rescan of a known library
+    // costs nothing. The lock is released above first: `start_analysis` takes
+    // it, and this mutex is not reentrant.
+    let shared: Shared = Arc::clone(&state);
+    start_analysis(&app_handle, &shared)?;
+
+    Ok(report)
 }
 
 /// Derive a table row from a path.
@@ -2288,16 +2328,64 @@ fn cancel_analysis(state: State<'_, Shared>) -> Result<()> {
 /// task sharing it.
 #[tauri::command]
 async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>) -> Result<()> {
+    let shared: Shared = Arc::clone(&state);
+    start_analysis(&app_handle, &shared)
+}
+
+/// Whether the track is one analysis still owes an answer for.
+///
+/// Used to decide if starting playback is worth restarting a pass for: if the
+/// track already has its tempo and key, the running pass is doing more good
+/// where it is.
+fn needs_analysis(app: &AppState, href: &str) -> bool {
+    app.analysis
+        .get(href)
+        .is_none_or(|a| a.version < analysis::ANALYSIS_VERSION)
+}
+
+/// Begin a pass, replacing whatever pass was running.
+///
+/// ## Why this exists rather than being the command's body
+///
+/// Analysis used to start only when someone pressed a button on the Settings
+/// screen, which meant a freshly scanned library sat there knowing nothing but
+/// filenames until they found it. Scanning and playing both start a pass now,
+/// so this is called from three places and lives on its own.
+///
+/// ## Each pass carries its own cancel flag
+///
+/// The old code reset one shared flag, which made restarting unsafe: the pass
+/// already running holds a clone, and resetting the flag it is watching would
+/// un-cancel it, leaving two passes analysing the same library at once. A new
+/// flag per pass means stopping the old one stays stopped.
+///
+/// Ordering comes from the play queue, so the track being listened to is
+/// described first — see `analysis::pending_first`.
+fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> {
     use tauri::Emitter;
 
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
     let (todo, (cache_dir, cache_max), cancel, remote) = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
         let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
-        app.cancel.reset();
+
+        // What the person is listening to, then what follows it.
+        let priority: Vec<String> = app
+            .queue
+            .tracks()
+            .iter()
+            .skip(app.queue.current_index().unwrap_or(0))
+            .cloned()
+            .collect();
+
+        // Stop the pass that is running, and hand the new one a fresh flag.
+        app.cancel.stop();
+        let cancel = analysis::Cancel::new();
+        app.cancel = cancel.clone();
+
         (
-            analysis::pending(&hrefs, &app.analysis),
+            analysis::pending_first(&hrefs, &app.analysis, &priority),
             (app.cache.dir().to_path_buf(), app.cache.max_bytes()),
             app.cancel.clone(),
             app.settings.remote.clone(),
@@ -2308,20 +2396,27 @@ async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>)
         return Ok(());
     }
 
-    let state_arc: Shared = Arc::clone(&state);
+    let state_arc: Shared = Arc::clone(shared);
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let cache = cache::Cache::new(cache_dir, cache_max);
+
+        // One session for the whole pass: one keychain read and one connection,
+        // rather than one of each per track. See `webdav::Fetcher`.
+        //
+        // A pass that cannot read the credential has no way to fetch anything,
+        // so it ends here rather than failing every track in turn and marking
+        // the whole library unreadable.
+        let Ok(fetcher) = webdav::Fetcher::new(&remote) else {
+            return;
+        };
+
         analysis::run(
             &todo,
             // Fetch on demand. Analysis needs local bytes; this is where they
             // come from, and a cached track costs nothing.
-            |href| {
-                cache
-                    .store(href, || webdav::fetch_blocking(&remote, href))
-                    .ok()
-            },
+            |href| cache.store(href, || fetcher.fetch(href)).ok(),
             &cancel,
             |progress| {
                 // Persist as each track lands rather than at the end: quitting

@@ -23,7 +23,21 @@ import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
 import { Empty } from "../components/States";
 
-export function Queue({ onOpen }: { onOpen: (href: string) => void }) {
+export function Queue({
+  onOpen,
+  conducted,
+}: {
+  onOpen?: ((href: string) => void) | undefined;
+  /**
+   * Whether the order came from the DJ.
+   *
+   * Stated rather than implied. The design's queue reads "Up next · Conducted
+   * by Vibe · 47 min", and a queue that says only how many tracks are left
+   * cannot tell you whether the thing choosing them is the pathfinder or the
+   * shuffle — which is the single most useful fact about it.
+   */
+  conducted?: boolean | undefined;
+}) {
   const [view, setView] = useState<core.QueueView | null>(null);
   const [dragging, setDragging] = useState<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
@@ -93,8 +107,13 @@ export function Queue({ onOpen }: { onOpen: (href: string) => void }) {
       <header className="queue__head">
         <div className="queue__head-row">
           <div>
-            <h1 className="queue__title">Queue</h1>
+            <h1 className="queue__title">Up next</h1>
             <p className="queue__sub label">
+              {conducted === undefined
+                ? ""
+                : conducted
+                  ? "conducted by Vibe · "
+                  : "standard shuffle · "}
               {upNext.length} to come
               {view.remainingSecs > 0 && ` · ${minutes(view.remainingSecs)}`}
             </p>
@@ -196,7 +215,7 @@ export function Queue({ onOpen }: { onOpen: (href: string) => void }) {
               </span>
               <button
                 className="queue__row"
-                onDoubleClick={() => onOpen(entry.href)}
+                onDoubleClick={() => onOpen?.(entry.href)}
                 onClick={() => {
                   // Play from here, keeping the rest of the order intact.
                   void core

@@ -12,14 +12,23 @@
 import { useEffect, useMemo, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
+import { Songs } from "./Songs";
 import type { GroupBy, LibrarySection, Row } from "../lib/core";
 
-/** Tabs map onto the index's grouping, so the UI cannot invent a category. */
+/**
+ * Tabs map onto the index's grouping, so the UI cannot invent a category.
+ *
+ * "Songs" was called "All" and showed the same card grid ungrouped, while a
+ * separate Songs screen in the sidebar held the actual table. The Daylight
+ * design has no such screen — its Library tabs are Albums, Songs, Artists,
+ * Playlists, and the flat list is one of them (docs/DESIGN_DRIFT.md). It is one
+ * of them here now too, and it renders the table.
+ */
 const TABS: ReadonlyArray<{ id: GroupBy; label: string }> = [
   { id: "album", label: "Albums" },
   { id: "artist", label: "Artists" },
   { id: "genre", label: "Genres" },
-  { id: "none", label: "All" },
+  { id: "none", label: "Songs" },
 ];
 
 type Load =
@@ -27,10 +36,17 @@ type Load =
   | { kind: "ready"; sections: LibrarySection[] }
   | { kind: "error"; message: string };
 
-export function Library() {
+export function Library({
+  onOpen,
+}: {
+  /** Opens a track's liner notes — the table's double-click. */
+  onOpen?: ((href: string) => void) | undefined;
+}) {
   const [query, setQuery] = useState("");
   const [groupBy, setGroupBy] = useState<GroupBy>("album");
   const [load, setLoad] = useState<Load>({ kind: "loading" });
+  /** A failure to start playback belongs on screen, not in the console. */
+  const [playError, setPlayError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +70,24 @@ export function Library() {
       clearTimeout(t);
     };
   }, [query, groupBy]);
+
+  /**
+   * Play a card, queueing everything currently on screen behind it.
+   *
+   * The same rule as the Songs table: what you can see is what goes in the
+   * queue, in the order you can see it. Library previously had no click
+   * handling at all — the cards were an `<article>` with no interaction, so
+   * the home screen, the first thing anyone sees, could not start a track.
+   */
+  async function play(href: string) {
+    const visible =
+      load.kind === "ready" ? load.sections.flatMap((s) => s.rows.map((r) => r.href)) : [];
+    try {
+      await core.playTracks(visible, href);
+    } catch (e: unknown) {
+      setPlayError(messageOf(e));
+    }
+  }
 
   const trackCount = useMemo(() => {
     if (load.kind !== "ready") return 0;
@@ -103,7 +137,15 @@ export function Library() {
         ))}
       </div>
 
+      {/* The flat list is the table, not an ungrouped grid of cards: the whole
+          point of it is the columns — artist, album, tempo, key — and sorting
+          by them. It gets the search field above rather than one of its own. */}
+      {groupBy === "none" ? (
+        <Songs onOpen={onOpen} query={query} />
+      ) : (
       <div className="library__body">
+        <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
+
         {load.kind === "loading" && <p className="label">reading library</p>}
 
         {load.kind === "error" && (
@@ -124,12 +166,13 @@ export function Library() {
               )}
               <div className="library__grid">
                 {section.rows.map((row) => (
-                  <Card key={row.href} row={row} />
+                  <Card key={row.href} row={row} onPlay={() => void play(row.href)} />
                 ))}
               </div>
             </section>
           ))}
       </div>
+      )}
     </div>
   );
 }
@@ -161,13 +204,26 @@ function EmptyLibrary({ query }: { query: string }) {
   );
 }
 
-function Card({ row }: { row: Row }) {
+function Card({ row, onPlay }: { row: Row; onPlay: () => void }) {
   // Unknown fields are rendered as a quiet dash rather than "Unknown Artist" —
   // the index uses the same convention for group headers.
   const artist = row.artistSource === "unknown" ? "—" : row.artist;
 
   return (
-    <article className="card">
+    /* A real button, not an `<article>` with an onClick bolted on: it is
+     * focusable, it answers Enter and Space without any code here, and a
+     * screen reader announces it as something that can be pressed. The name
+     * says what pressing it does, because "Adrenaline" alone does not.
+     *
+     * Single click, unlike the Songs table's double click. A grid of cards is
+     * a set of targets rather than a list with a selection, so there is no
+     * second gesture for selecting that a single click would collide with. */
+    <button
+      type="button"
+      className="card"
+      onClick={onPlay}
+      aria-label={`Play ${row.title}${artist === "—" ? "" : ` by ${artist}`}`}
+    >
       <div className="card__art">
         <div className="card__art-sheen" aria-hidden="true" />
         {row.bpm > 0 && (
@@ -182,7 +238,7 @@ function Card({ row }: { row: Row }) {
           {artist}
         </span>
       </div>
-    </article>
+    </button>
   );
 }
 

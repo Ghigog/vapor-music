@@ -53,12 +53,18 @@ interface Column {
  * Now both sort controls live in cell 2, side by side over the stack they sort.
  * One column definition, five cells, every control reachable.
  */
+/*
+ * Cell 1 is the selection checkbox and cell 2 the artwork; neither is sortable,
+ * so the header starts at 3. These numbers are grid columns and must stay in
+ * step with `grid-template-columns` in songs.css and with the children
+ * `SongRow` renders.
+ */
 const COLUMNS: readonly Column[] = [
-  { id: "title", label: "Title", cell: 2 },
-  { id: "artist", label: "Artist", cell: 2 },
-  { id: "album", label: "Album", cell: 3 },
-  { id: "bpm", label: "BPM", cell: 4, numeric: true },
-  { id: "key", label: "Key", cell: 5, numeric: true },
+  { id: "title", label: "Title", cell: 3 },
+  { id: "artist", label: "Artist", cell: 3 },
+  { id: "album", label: "Album", cell: 4 },
+  { id: "bpm", label: "BPM", cell: 5, numeric: true },
+  { id: "key", label: "Key", cell: 6, numeric: true },
 ];
 
 type Load =
@@ -66,16 +72,41 @@ type Load =
   | { kind: "ready"; rows: Row[] }
   | { kind: "error"; message: string };
 
+/**
+ * The flat track table.
+ *
+ * Rendered on its own, it brings a heading and a filter box. Rendered inside
+ * Library — which is where it now lives, as the "Songs" tab — it brings
+ * neither: Library already has a title and a search field, and a screen with
+ * two search boxes that filter the same list is a screen nobody can use.
+ *
+ * `query` is therefore optional. Supplied, it is the search field above; left
+ * out, the table owns its own.
+ */
 export function Songs({
   onOpen,
+  query: externalQuery,
 }: {
   onOpen?: ((href: string) => void) | undefined;
+  query?: string | undefined;
 }) {
-  const [query, setQuery] = useState("");
+  const embedded = externalQuery !== undefined;
+  const [ownQuery, setOwnQuery] = useState("");
+  const query = externalQuery ?? ownQuery;
+  const setQuery = setOwnQuery;
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [ascending, setAscending] = useState(true);
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  /**
+   * Where a shift-click ranges from: the last row selected on purpose.
+   *
+   * Kept apart from the keyboard cursor deliberately. If the cursor were the
+   * anchor, arrowing down after a shift-click would quietly move the far end
+   * of the range, and the next shift-click would select something other than
+   * what the person had marked.
+   */
+  const [anchor, setAnchor] = useState<number | null>(null);
 
   /** Which hrefs carry a manual tempo, so a correction can be marked as one.
    *  The table shows a number; this is what says where it came from. */
@@ -173,6 +204,37 @@ export function Songs({
     });
   }
 
+  /**
+   * Extend the selection from the anchor to `index`.
+   *
+   * The anchor is the last row selected deliberately — by checkbox or by
+   * modifier-click — not the keyboard cursor, so arrowing around after a
+   * shift-click does not silently move the far end of the range.
+   *
+   * Shift-click had never been implemented at all: the row handled `metaKey`
+   * and `ctrlKey` and nothing else, which left selecting a run of tracks
+   * possible only one modifier-click at a time.
+   */
+  function selectRange(index: number) {
+    const from = anchor ?? index;
+    const lo = Math.min(from, index);
+    const hi = Math.max(from, index);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (let i = lo; i <= hi; i++) {
+        const r = rows[i];
+        if (r) next.add(r.href);
+      }
+      return next;
+    });
+  }
+
+  /** Select deliberately, and remember where a later shift-click ranges from. */
+  function selectAt(index: number, href: string) {
+    toggleSelected(href);
+    setAnchor(index);
+  }
+
   async function playFrom(href: string) {
     await core.playTracks(
       rows.map((r) => r.href),
@@ -193,25 +255,27 @@ export function Songs({
 
   return (
     <div className="songs">
-      <header className="songs__head">
-        <h1 className="songs__title">Songs</h1>
-        <div className="songs__search glass">
-          <input
-            className="songs__search-input"
-            type="search"
-            value={query}
-            placeholder="Filter"
-            onChange={(e) => setQuery(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </div>
-      </header>
+      {!embedded && (
+        <header className="songs__head">
+          <h1 className="songs__title">Songs</h1>
+          <div className="songs__search glass">
+            <input
+              className="songs__search-input"
+              type="search"
+              value={query}
+              placeholder="Filter"
+              onChange={(e) => setQuery(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </header>
+      )}
 
       <div className="songs__cols" role="row">
         {/* Grouped by cell so the header grid has exactly as many children as
             the row grid, rather than five controls fighting over four cells. */}
-        {[2, 3, 4, 5].map((cell) => {
+        {[3, 4, 5, 6].map((cell) => {
           const inCell = COLUMNS.filter((c) => c.cell === cell);
           return (
             <div
@@ -375,15 +439,48 @@ export function Songs({
                     : [row.href];
                   startTrackDrag(e, hrefs);
                 }}
-                onDoubleClick={() => void playFrom(row.href)}
+                /* Double-click opens the track, the way double-clicking a file
+                 * opens it. It used to play — but playing is now the single
+                 * click, and the liner notes were reachable only through a
+                 * small button that appears on hover over the artwork, which
+                 * is not a place anyone looks for them. */
+                onDoubleClick={() => onOpen?.(row.href)}
                 onClick={(e) => {
-                  // Plain click selects; double-click plays. Modifier-click is
-                  // the multi-select gesture people expect from a table.
+                  /*
+                   * One click plays, like tapping a row on a phone.
+                   *
+                   * This used to select, and selecting was the only thing a
+                   * plain click did — on a screen whose entire purpose is
+                   * playing something. Selection has moved to the checkbox,
+                   * where it is visible and where a shift-click can extend it.
+                   *
+                   * `detail` counts the clicks in the sequence: the second
+                   * click of a double-click reports 2, and ignoring it stops
+                   * the track restarting from 0:00 on the way to opening the
+                   * liner notes.
+                   */
+                  if (e.detail > 1) return;
                   setFocused(item.index);
-                  if (e.metaKey || e.ctrlKey) toggleSelected(row.href);
-                  else setSelected(new Set([row.href]));
+
+                  if (e.shiftKey) {
+                    selectRange(item.index);
+                    return;
+                  }
+                  if (e.metaKey || e.ctrlKey) {
+                    selectAt(item.index, row.href);
+                    return;
+                  }
+                  void playFrom(row.href);
                 }}
               >
+                <SelectBox
+                  checked={selected.has(row.href)}
+                  title={row.title}
+                  onPick={(shift) => {
+                    if (shift) selectRange(item.index);
+                    else selectAt(item.index, row.href);
+                  }}
+                />
                 <SongRow
                   row={row}
                   onOpen={onOpen}
@@ -399,6 +496,48 @@ export function Songs({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The row's selection control.
+ *
+ * A real `<input type="checkbox">`, so it announces its state, answers Space,
+ * and looks like what it is. Selection used to have no visible control at all —
+ * it was a side effect of clicking the row, which meant there was nothing on
+ * screen to tell you selecting was possible, and nothing to click to undo it.
+ *
+ * The click is stopped here rather than being allowed to reach the row: the
+ * row plays now, and ticking a box to mark a track must not also start it.
+ */
+function SelectBox({
+  checked,
+  title,
+  onPick,
+}: {
+  checked: boolean;
+  title: string;
+  onPick: (shift: boolean) => void;
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="songrow__pick"
+      checked={checked}
+      aria-label={`Select ${title}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        // Shift extends from the last deliberate selection. Read from the
+        // click rather than from a keydown listener, so it works on the first
+        // interaction with no prior focus.
+        onPick(e.shiftKey);
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+      // React warns about a checked input with no handler; the click above is
+      // what actually drives it, because it is the only place the modifier is
+      // available.
+      onChange={() => {}}
+    />
   );
 }
 

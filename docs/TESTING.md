@@ -132,6 +132,13 @@ few thousand actions and asserts the app never throws, never blanks, and never
 leaves a spinner running. Seeded so a failure is reproducible from its seed —
 an unreproducible monkey failure is a rumour.
 
+Plus an **affordance sweep** (`affordances.spec.ts`). For every screen that
+lists tracks it asserts three things: that no visible track title sits outside
+something pressable, that pressing one puts that track in the transport, and
+that the keyboard can do the same. The first of those is generic — it walks the
+content column and reports any title with no operable ancestor — so it covers
+screens nobody has written a test for yet. See rule 6.
+
 #### Why not drive the real Tauri binary
 
 `tauri-driver` exists and would exercise the true Rust backend. It is not used
@@ -169,7 +176,7 @@ Recorded so nobody "fixes" the gap without reading why.
 
 ## Rules
 
-Five, each earned by a specific failure in this repository.
+Six, each earned by a specific failure in this repository.
 
 **1. Assert behaviour, not wording.** `errors_are_actionable` asserted an error
 message contained the word "Settings". It did — while being displayed *on* the
@@ -197,6 +204,16 @@ the test has to cross that same line.
 **5. One fake, shared.** The IPC fake is a committed module. Three separate
 hand-rolled stubs had already been written and thrown away, each with slightly
 different shapes, which is how a fake drifts from the thing it fakes.
+
+**6. Rendering is not working.** Library's album cards were `<article>`
+elements with no click handler for the whole life of the screen: the home
+screen, showing the user their own music, and pressing a track did nothing. The
+component test asked whether the grid rendered and whether the tabs regrouped.
+The end-to-end sweep asserted, for this screen and seven others,
+`expect(page.getByRole("main")).not.toBeEmpty()`. Every one passed. A screen has
+a primary action — the reason a person opened it — and a test that never
+performs it has not tested the screen. Where a control exists, press it and
+assert what a person would look at to see whether it worked.
 
 ---
 

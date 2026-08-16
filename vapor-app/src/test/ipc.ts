@@ -43,6 +43,19 @@ export interface FakeOptions {
    * counts them and reports them; this is how a test reaches that sentence.
    */
   unreadableFolders?: number;
+  /**
+   * A keychain that accepts a password and does not keep it — TD-50 exactly.
+   * `save_webdav_password` succeeds and `has_webdav_password` stays false.
+   *
+   * Modelled rather than imagined: this is the state the app shipped in, and
+   * the screen reported it as success. A store that can only succeed is a
+   * store no test can catch lying.
+   */
+  keychainSilentlyFails?: boolean;
+  /** Cached bytes on disk. */
+  cacheBytes?: number;
+  /** Clearing the cache reports bytes freed but leaves them on disk. */
+  cacheResistsClearing?: boolean;
 }
 
 /** A library row with sensible defaults, so a test states only what it cares
@@ -130,6 +143,10 @@ export class FakeBackend {
   private repeat: core.RepeatMode = "off";
   private shuffled = false;
   private unreadableFolders: number;
+  private keychainSilentlyFails: boolean;
+  private cacheBytes: number;
+  private cacheResistsClearing: boolean;
+  private deleted = false;
 
   constructor(options: FakeOptions = {}) {
     const connected = options.connected ?? true;
@@ -150,13 +167,27 @@ export class FakeBackend {
       bpmOverrides: {},
       cacheMaxBytes: 8_000_000_000,
     };
-    this.password = options.withPassword ?? connected ? "app-password" : null;
+    this.keychainSilentlyFails = options.keychainSilentlyFails ?? false;
+    // A store that never keeps anything cannot already be holding something.
+    // Seeding a password here made `keychainSilentlyFails` unobservable: the
+    // screen asked "is one stored?", got yes, and reported the success it was
+    // supposed to be incapable of reporting.
+    //
+    // Parenthesised deliberately — `a ?? b ? c : d` is `(a ?? b) ? c : d`,
+    // which is the intent here but reads as though it were not.
+    this.password = this.keychainSilentlyFails
+      ? null
+      : (options.withPassword ?? connected)
+        ? "app-password"
+        : null;
     this.rows = options.rows ?? DEFAULT_ROWS;
     // A connected library is one that has been scanned; a fresh one has not.
     this.scanned = connected;
     this.playlists = options.playlists ?? [];
     this.analysed = connected ? this.rows.length : 0;
     this.unreadableFolders = options.unreadableFolders ?? 0;
+    this.cacheBytes = options.cacheBytes ?? 1_200_000_000;
+    this.cacheResistsClearing = options.cacheResistsClearing ?? false;
   }
 
   /** Make `cmd` reject with `message` until cleared. */
@@ -230,7 +261,9 @@ export class FakeBackend {
       }
 
       case "save_webdav_password":
-        this.password = String(a.password ?? "");
+        // Succeeds either way. That is the point: the command returning
+        // without throwing has never been evidence that anything was stored.
+        if (!this.keychainSilentlyFails) this.password = String(a.password ?? "");
         return null;
 
       case "has_webdav_password":
@@ -254,6 +287,11 @@ export class FakeBackend {
           );
         }
         this.scanned = true;
+        // Scanning starts an analysis pass, without being asked. The real
+        // shell spawns one at the end of `scan_library`; here it completes at
+        // once, which is the part the screens can observe — that a scanned
+        // library describes itself without anyone pressing Analyse.
+        this.analysed = this.rows.length;
         return {
           tracks: this.rows.length,
           directories: 3,
@@ -610,8 +648,18 @@ export class FakeBackend {
 
       case "data_breakdown":
         return [
-          { label: "Audio cache", path: "/tmp/vapor-music/cache", bytes: 1_200_000_000, local: true },
-          { label: "Analysis", path: "/tmp/vapor-music/analysis.json", bytes: 240_000, local: true },
+          {
+            label: "Audio cache",
+            path: "/tmp/vapor-music/cache",
+            bytes: this.cacheBytes,
+            local: this.cacheBytes > 0,
+          },
+          {
+            label: "Analysis",
+            path: "/tmp/vapor-music/analysis.json",
+            bytes: this.deleted ? 0 : 240_000,
+            local: !this.deleted,
+          },
         ];
 
       case "reveal_data_folder":
@@ -627,7 +675,7 @@ export class FakeBackend {
 
       case "cache_status":
         return {
-          bytes: 1_200_000_000,
+          bytes: this.cacheBytes,
           maxBytes: this.settings.cacheMaxBytes,
           tracksCached: this.scanned ? this.rows.length : 0,
           tracksTotal: this.scanned ? this.rows.length : 0,
@@ -638,8 +686,14 @@ export class FakeBackend {
         this.settings = { ...this.settings, cacheMaxBytes: Number(a.bytes ?? 0) };
         return this.settings;
 
-      case "clear_audio_cache":
-        return 1_200_000_000;
+      case "clear_audio_cache": {
+        const freed = this.cacheBytes;
+        // The real command deletes files and returns what it freed. It used to
+        // be modelled as a number with no effect, so the screen's claim that
+        // the cache was empty could never be contradicted here.
+        if (!this.cacheResistsClearing) this.cacheBytes = 0;
+        return freed;
+      }
 
       case "data_location":
         return "/tmp/vapor-music";
@@ -649,6 +703,8 @@ export class FakeBackend {
         this.rows = [];
         this.playlists = [];
         this.scanned = false;
+        this.cacheBytes = 0;
+        this.deleted = true;
         return null;
 
       case "mood_path":

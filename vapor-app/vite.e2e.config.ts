@@ -20,6 +20,8 @@ export default defineConfig({
       "@tauri-apps/api/event": path.resolve(__dirname, "src/test/browser-event.ts"),
     },
   },
-  server: { port: 1421, strictPort: true },
+  // Same allowance as the dev config: the Vibe help sheet imports
+  // docs/ai_dj_workflow.md, which sits above this root.
+  server: { port: 1421, strictPort: true, fs: { allow: [".."] } },
   preview: { port: 1421, strictPort: true },
 });

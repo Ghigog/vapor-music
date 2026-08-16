@@ -306,3 +306,126 @@ describe("Songs — a large library", () => {
     expect(screen.getAllByRole("option").length).toBeLessThan(200);
   });
 });
+
+/**
+ * The gestures.
+ *
+ * The table shipped with a plain click that only *selected*, on a screen whose
+ * purpose is playing something, and with the liner notes reachable only from a
+ * small button that fades in over the artwork on hover. Selecting a run of
+ * tracks was impossible: the row read `metaKey` and `ctrlKey` and nothing else,
+ * so shift-click did nothing at all.
+ *
+ * The model now: one click plays, two open the track, and the checkbox selects.
+ */
+describe("Songs — gestures", () => {
+  it("plays the track that was clicked once", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await user.click(await screen.findByText("Xtal"));
+
+    await waitFor(() => expect(backend.state.status).toBe("playing"));
+    expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a");
+  });
+
+  it("queues the whole visible table behind it, in the order shown", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await user.click(await screen.findByText("Xtal"));
+
+    await waitFor(() => expect(backend.state.queue.length).toBe(4));
+  });
+
+  it("does not select the row it plays", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await user.click(await screen.findByText("Xtal"));
+
+    // A selection bar appearing after a plain click is the old behaviour.
+    expect(screen.queryByText(/1 selected/i)).not.toBeInTheDocument();
+  });
+
+  it("opens the track on a double click", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    const opened: string[] = [];
+    render(<Songs onOpen={(href) => opened.push(href)} />);
+
+    await user.dblClick(await screen.findByText("Xtal"));
+
+    expect(opened).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
+  });
+
+  /** The second click must not re-issue the queue and restart the track. */
+  it("does not restart the track while opening it", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Songs onOpen={() => {}} />);
+
+    await user.dblClick(await screen.findByText("Xtal"));
+
+    const plays = backend.calls.filter((c) => c.cmd === "play_tracks").length;
+    expect(plays).toBe(1);
+  });
+
+  it("selects with the checkbox without playing anything", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await screen.findByText("Xtal");
+    await user.click(screen.getByRole("checkbox", { name: /select xtal/i }));
+
+    expect(await screen.findByText(/1 selected/i)).toBeInTheDocument();
+    expect(backend.called("play_tracks")).toBe(false);
+  });
+
+  it("extends the selection with shift, across a range of rows", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    // Sorted by title: Not Yet Analysed, Roygbiv, Windowlicker, Xtal.
+    await screen.findByText("Roygbiv");
+    await user.click(screen.getByRole("checkbox", { name: /select roygbiv/i }));
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("checkbox", { name: /select xtal/i }));
+    await user.keyboard("{/Shift}");
+
+    expect(await screen.findByText(/3 selected/i)).toBeInTheDocument();
+  });
+
+  it("extends the selection with shift-click on the row itself", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await screen.findByText("Roygbiv");
+    await user.click(screen.getByRole("checkbox", { name: /select roygbiv/i }));
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByText("Xtal"));
+    await user.keyboard("{/Shift}");
+
+    expect(await screen.findByText(/3 selected/i)).toBeInTheDocument();
+  });
+
+  it("still toggles one row at a time with the platform modifier", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await screen.findByText("Xtal");
+    await user.keyboard("{Meta>}");
+    await user.click(screen.getByText("Xtal"));
+    await user.click(screen.getByText("Roygbiv"));
+    await user.keyboard("{/Meta}");
+
+    expect(await screen.findByText(/2 selected/i)).toBeInTheDocument();
+  });
+});

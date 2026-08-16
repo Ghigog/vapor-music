@@ -168,6 +168,80 @@ describe("Settings — connecting a server", () => {
   });
 });
 
+describe("Settings — a notice may only say what was checked", () => {
+  /**
+   * TD-50, as a test.
+   *
+   * The keychain was a mock store for the whole life of the project: saving
+   * returned `Ok(())` and kept nothing. The screen said "Saved. The password
+   * is in your keychain, not in a file." directly above a red badge reading
+   * "No password saved yet", because the notice was written unconditionally
+   * from the absence of an exception rather than from a check.
+   *
+   * A success notice is now allowed to say only what was verified afterwards.
+   */
+  it("does not claim a password was stored when it was not", async () => {
+    useBackend({ connected: true, keychainSilentlyFails: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.type(await screen.findByLabelText("Password"), "an-app-password");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    // The failure is stated, not implied by the absence of a success.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/did not reach your keychain/i);
+
+    // And emphatically not the old sentence.
+    expect(screen.queryByText(/password is in your keychain/i)).toBeNull();
+  });
+
+  it("says a password is stored only once the backend confirms it", async () => {
+    useBackend({ connected: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.type(await screen.findByLabelText("Password"), "an-app-password");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(
+      await screen.findByText(/password is in your keychain/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * Typing is not saving. The badge used to be a two-way branch whose `else`
+   * covered "you are typing", so it turned green on the first keystroke and
+   * asserted a credential that did not exist.
+   */
+  it("does not turn the badge green merely because something was typed", async () => {
+    useBackend({ connected: true, keychainSilentlyFails: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    // Nothing stored: the backend says so on load.
+    expect(await screen.findByText(/no password saved yet/i)).toBeInTheDocument();
+
+    await user.type(await screen.findByLabelText("Password"), "typing");
+
+    expect(screen.queryByText(/stored in your operating system/i)).toBeNull();
+    expect(screen.getByText(/not saved yet/i)).toBeInTheDocument();
+  });
+
+  /** A check that failed is not an answer, in either direction. */
+  it("says the keychain could not be checked rather than guessing", async () => {
+    const backend = useBackend({ connected: true });
+    backend.fail("has_webdav_password", "keychain unavailable");
+    render(<Settings />);
+
+    expect(
+      await screen.findByText(/could not check the keychain/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/stored in your operating system/i)).toBeNull();
+    expect(screen.queryByText(/no password saved yet/i)).toBeNull();
+  });
+});
+
 describe("Settings — the password, and knowing whether one is stored", () => {
   /**
    * The screen could not ask whether a password existed, so it always showed
@@ -336,5 +410,46 @@ describe("Settings — the field hints", () => {
     await user.keyboard("{Enter}");
 
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+/**
+ * Analysis starts itself.
+ *
+ * A scan produces rows that know a filename and nothing else — no tempo, no
+ * key, so no Vibe DJ and no blends — and starting the pass that fixes that used
+ * to require finding a button further down this screen. The shell now begins
+ * one at the end of `scan_library`.
+ */
+describe("Settings — analysis after a scan", () => {
+  it("analyses what the scan found without being asked", async () => {
+    // A first run: nothing scanned, so nothing analysed. Starting from a
+    // connected backend would assert nothing, because that one reports its
+    // library as already analysed before the test does anything.
+    const backend = useBackend({ connected: false, withPassword: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    expect(await screen.findByText(/0 of 0 analysed/i)).toBeInTheDocument();
+
+    await user.type(
+      await screen.findByLabelText("Server address"),
+      "https://app.koofr.net",
+    );
+    // Scan stays disabled until there is a username as well as an address.
+    await user.type(screen.getByLabelText("Username"), "someone@example.com");
+    // Cleared first: a fresh backend pre-fills this with "Music", and typing
+    // into it produces "Music/dav/Koofr/Music".
+    const folder = screen.getByLabelText("Folder");
+    await user.clear(folder);
+    await user.type(folder, "/dav/Koofr/Music");
+    await user.click(screen.getByRole("button", { name: /scan library/i }));
+    await screen.findByText(/found 4 tracks/i);
+
+    // Described, and nobody pressed Analyse to make it happen.
+    await waitFor(() =>
+      expect(screen.getByText(/4 of 4 analysed/i)).toBeInTheDocument(),
+    );
+    expect(backend.called("analyse_library")).toBe(false);
   });
 });

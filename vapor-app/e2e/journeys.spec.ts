@@ -9,6 +9,17 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
+/**
+ * Open the flat track table.
+ *
+ * It is a tab inside Library now, not a sidebar destination — the Daylight
+ * design never had a Songs screen (docs/DESIGN_DRIFT.md).
+ */
+async function openSongs(page: Page) {
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await page.getByRole("tab", { name: "Songs" }).click();
+}
+
 /** Start with the backend in a chosen state. Options survive the reload. */
 async function boot(page: Page, options: Record<string, unknown> = {}) {
   await page.goto("/");
@@ -37,10 +48,11 @@ test.describe("A first run", () => {
 
     await page.getByRole("button", { name: /^analyse$/i }).click();
 
-    await page.getByRole("button", { name: /^songs$/i }).click();
+    await openSongs(page);
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
 
-    await page.getByText("Windowlicker", { exact: true }).dblclick();
+    // One click plays, the way tapping a row on a phone does.
+    await page.getByText("Windowlicker", { exact: true }).click();
 
     // The transport is outside the content column and outlives the screen that
     // started playback, which is the point of it being there.
@@ -71,12 +83,12 @@ test.describe("Building a playlist", () => {
     // Creating opens it, and it starts empty with an explanation.
     await expect(page.getByText(/nothing in here yet/i)).toBeVisible();
 
-    await page.getByRole("button", { name: /^songs$/i }).click();
+    await openSongs(page);
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
 
-    // Select two rows and add them through the selection bar.
-    await page.getByText("Windowlicker", { exact: true }).click({ modifiers: ["Meta"] });
-    await page.getByText("Xtal", { exact: true }).click({ modifiers: ["Meta"] });
+    // Select two rows through their checkboxes and add them via the bar.
+    await page.getByRole("checkbox", { name: /select windowlicker/i }).click();
+    await page.getByRole("checkbox", { name: /select xtal/i }).click();
     await page.getByRole("combobox").selectOption({ label: "Late Night" });
 
     // The rail's count is the visible proof it landed.
@@ -105,6 +117,54 @@ test.describe("Building a playlist", () => {
   });
 });
 
+/**
+ * The gestures, through a real mouse.
+ *
+ * Shift-click especially: the table only ever read `metaKey` and `ctrlKey`, so
+ * selecting a run of tracks was impossible and nothing noticed, because no test
+ * had ever held a modifier down across two clicks in a real browser.
+ */
+test.describe("Selecting and opening tracks", () => {
+  test("one click plays, two open the track", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    // Scoped to the table: once it plays, the title is in the transport too.
+    const inTable = page.getByRole("main").getByText("Xtal", { exact: true });
+
+    await inTable.click();
+    await expect(page.locator(".transport__title")).toHaveText("Xtal");
+
+    await inTable.dblclick();
+    // Liner notes: the screen that used to be reachable only from a button
+    // that faded in over the artwork.
+    await expect(page.getByRole("button", { name: /back/i })).toBeVisible();
+  });
+
+  test("shift-click selects a run of tracks", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    await page.getByRole("checkbox", { name: /select roygbiv/i }).click();
+    await page
+      .getByRole("checkbox", { name: /select xtal/i })
+      .click({ modifiers: ["Shift"] });
+
+    // Roygbiv, Windowlicker, Xtal — the rows between the two, inclusive.
+    await expect(page.getByText(/3 selected/i)).toBeVisible();
+  });
+
+  test("ticking a checkbox does not start the track", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    await page.getByRole("checkbox", { name: /select xtal/i }).click();
+
+    await expect(page.getByText(/1 selected/i)).toBeVisible();
+    await expect(page.locator(".transport__title")).toHaveText("Nothing playing");
+  });
+});
+
 test.describe("Correcting a tempo", () => {
   /**
    * The gesture has to survive the first click's side effects.
@@ -121,7 +181,7 @@ test.describe("Correcting a tempo", () => {
   test("a hand-typed BPM is accepted and marked as a correction", async ({ page }) => {
     await boot(page);
 
-    await page.getByRole("button", { name: /^songs$/i }).click();
+    await openSongs(page);
     const row = page.getByRole("option").filter({ hasText: "Not Yet Analysed" });
     await expect(row).toBeVisible();
 
@@ -135,13 +195,15 @@ test.describe("Correcting a tempo", () => {
   /** The selecting click must leave the rows where they were. */
   test("selecting a row does not move the table", async ({ page }) => {
     await boot(page);
-    await page.getByRole("button", { name: "Songs", exact: true }).click();
+    await openSongs(page);
 
     const row = page.getByRole("option").filter({ hasText: "Roygbiv" });
     await expect(row).toBeVisible();
     const before = await row.boundingBox();
 
-    await row.click();
+    // Through the checkbox: a plain click plays now, and this test is about
+    // what selecting does to the layout.
+    await row.getByRole("checkbox").click();
     await expect(page.getByText(/1 selected/i)).toBeVisible();
 
     const after = await row.boundingBox();
@@ -149,17 +211,64 @@ test.describe("Correcting a tempo", () => {
   });
 });
 
+/**
+ * Where a screen begins.
+ *
+ * Settings capped itself at 620px and left-aligned; Your Data capped at 640px
+ * and centred. Moving between them slid the whole page sideways, and each
+ * screen had reached its width by a private decision rather than a shared one.
+ */
+test.describe("Screen layout", () => {
+  const screens = ["Library", "Vibe DJ", "Your Data", "Settings"];
+
+  test("every screen starts at the same left edge", async ({ page }) => {
+    await boot(page);
+    // With nothing playing, Vibe shows a centred empty state instead of
+    // itself, and the measurement would be of the wrong element.
+    await page.getByRole("button", { name: /play windowlicker/i }).click();
+
+    const lefts: { name: string; x: number }[] = [];
+    for (const name of screens) {
+      await page.getByRole("button", { name, exact: true }).click();
+      const root = page.getByRole("main").locator("> *").first();
+      await expect(root).toBeVisible();
+      const box = await root.boundingBox();
+      lefts.push({ name, x: Math.round(box?.x ?? -1) });
+    }
+
+    const first = lefts[0]!.x;
+    // Named in the message: a bare "expected 28 to be 328" says nothing about
+    // which screen wandered off.
+    expect(lefts.filter((l) => l.x !== first)).toEqual([]);
+  });
+
+  /** The point of removing the caps: the column is actually used. */
+  test("a screen fills the width available to it", async ({ page }) => {
+    await boot(page);
+
+    const main = page.getByRole("main");
+    const mainBox = await main.boundingBox();
+    const root = main.locator("> *").first();
+    const rootBox = await root.boundingBox();
+
+    // Within the content column's own padding, not a third of it.
+    expect(rootBox!.width).toBeGreaterThan((mainBox!.width ?? 0) * 0.9);
+  });
+});
+
+/**
+ * A smoke test, and only that.
+ *
+ * This caught nothing about Library's dead album grid, because "something
+ * rendered and nothing threw" is true of a screen whose primary control does
+ * not work. It is kept for what it does cover — a screen that crashes on open
+ * — and `affordances.spec.ts` asserts that the things on these screens can
+ * actually be pressed. Do not add coverage here by adding screens to this list.
+ */
 test.describe("Every screen opens", () => {
-  const screens = [
-    "Library",
-    "Songs",
-    "Search",
-    "Now Playing",
-    "Queue",
-    "Vibe DJ",
-    "Your Data",
-    "Settings",
-  ];
+  // The four destinations. Now Playing opens from the player bar and the queue
+  // lives on Vibe, so neither is reachable from the sidebar to smoke-test.
+  const screens = ["Library", "Vibe DJ", "Your Data", "Settings"];
 
   for (const name of screens) {
     test(`${name} renders without an error`, async ({ page }) => {
@@ -174,4 +283,61 @@ test.describe("Every screen opens", () => {
       expect(failures).toEqual([]);
     });
   }
+});
+
+/**
+ * Where Now Playing and the Queue went.
+ *
+ * Both were sidebar destinations. The Daylight design has neither: its Now
+ * Playing opens with a "⌄" dismiss chevron from the player bar, and its Queue
+ * is labelled "06 Queue — bottom sheet" and reads "Conducted by Vibe"
+ * (docs/DESIGN_DRIFT.md). The rewrite made twelve mockups into twelve tabs.
+ */
+test.describe("Navigation", () => {
+  test("the sidebar no longer offers Now Playing or Queue", async ({ page }) => {
+    await boot(page);
+
+    await expect(page.getByRole("button", { name: "Now Playing", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Queue", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Songs", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Search", exact: true })).toHaveCount(0);
+  });
+
+  test("pressing the title in the player bar opens Now Playing", async ({ page }) => {
+    await boot(page);
+    await page.getByRole("button", { name: /play windowlicker/i }).click();
+
+    await page.locator(".transport__title").click();
+
+    // The full screen, which carries its own transport controls.
+    await expect(
+      page.getByRole("main").getByRole("button", { name: /next track/i }),
+    ).toBeVisible();
+  });
+
+  test("the queue lives on the Vibe screen, and says who ordered it", async ({ page }) => {
+    await boot(page);
+    await page.getByRole("button", { name: /play windowlicker/i }).click();
+    await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
+
+    await expect(page.getByText(/conducted by vibe/i)).toBeVisible();
+    // Scoped to the queue: with the DJ on, the blend panel names the incoming
+    // track too, and both being present is the point rather than a problem.
+    await expect(page.locator(".queue__row-title", { hasText: "Xtal" })).toBeVisible();
+  });
+
+  test("turning the DJ off makes it the Shuffle screen", async ({ page }) => {
+    await boot(page);
+    await page.getByRole("button", { name: /play windowlicker/i }).click();
+    await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
+
+    await page.getByRole("checkbox", { name: /dj/i }).uncheck();
+
+    // The tab renames itself, exactly as the design's nav does.
+    await expect(page.getByRole("button", { name: "Shuffle", exact: true })).toBeVisible();
+    await expect(page.getByText(/standard shuffle/i)).toBeVisible();
+    // The DJ's own controls are gone; the queue is not.
+    await expect(page.getByRole("button", { name: /conduct from here/i })).toHaveCount(0);
+    await expect(page.locator(".queue__row-title", { hasText: "Xtal" })).toBeVisible();
+  });
 });

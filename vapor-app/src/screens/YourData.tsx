@@ -173,9 +173,20 @@ export function YourData() {
               onClick={() => {
                 void core
                   .clearAudioCache()
-                  .then((freed) => {
-                    setNote(`Freed ${bytes(freed)}. Tracks are fetched again as they are played.`);
-                    return refresh();
+                  .then(async (freed) => {
+                    // Read the cache back before saying anything about it.
+                    // "Freed 2.1 GB" is the command's own account of what it
+                    // did; whether the cache is actually empty afterwards is a
+                    // different question, and it is the one being answered on
+                    // screen.
+                    const after = await core.cacheStatus();
+                    await refresh();
+                    setNote(
+                      after.bytes === 0
+                        ? `Freed ${bytes(freed)}. Tracks are fetched again as they are played.`
+                        : `Freed ${bytes(freed)}, but ${bytes(after.bytes)} is still cached — ` +
+                          `something is holding files open. Try again once playback has stopped.`,
+                    );
                   })
                   .catch((err: unknown) => setError(messageOf(err)));
               }}
@@ -217,9 +228,26 @@ export function YourData() {
               ) {
                 return;
               }
-              core
+              // Deleting used to refresh and say nothing at all, which leaves
+              // the most consequential button on the screen with no outcome
+              // to read — and no way to notice a delete that only half
+              // happened. What is *left* is read back and reported.
+              void core
                 .deleteAllData()
-                .then(refresh)
+                .then(async () => {
+                  await refresh();
+                  const [remaining, stillCached] = await Promise.all([
+                    core.dataBreakdown(),
+                    core.cacheStatus(),
+                  ]);
+                  const left = remaining.filter((r) => r.local).length;
+                  setNote(
+                    left === 0 && stillCached.bytes === 0
+                      ? "Deleted. Nothing is stored locally any more; your music on the server is untouched."
+                      : `Deleted, but ${left} ${left === 1 ? "item" : "items"} and ` +
+                        `${bytes(stillCached.bytes)} of cached audio are still here.`,
+                  );
+                })
                 .catch((e: unknown) => setError(messageOf(e)));
             }}
           >

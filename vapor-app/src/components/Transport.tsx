@@ -24,7 +24,12 @@ import * as core from "../lib/core";
  *  second, slow enough to be free. */
 const POLL_MS = 250;
 
-export function Transport() {
+export function Transport({
+  onOpenNowPlaying,
+}: {
+  /** Opens the full Now Playing screen. Omitted, the title is plain text. */
+  onOpenNowPlaying?: (() => void) | undefined;
+} = {}) {
   const [state, setState] = useState<core.PlaybackState | null>(null);
   /** Set while a seek is being dragged, so incoming polls do not yank the
    *  handle back to where playback currently is. */
@@ -75,9 +80,32 @@ export function Transport() {
   return (
     <div className="shell__player glass transport">
       <div className="transport__now">
-        <div className="transport__title" title={state.title}>
-          {state.title || "Nothing playing"}
-        </div>
+        {/*
+          The way to Now Playing.
+
+          It was a sidebar entry, which the Daylight design never had — its Now
+          Playing opens with a "⌄" dismiss chevron, the control of a sheet
+          pushed up from this bar (docs/DESIGN_DRIFT.md). Pressing the title of
+          the thing you are listening to is how every other player opens it.
+
+          Only when there is something to open: with nothing playing this is the
+          words "Nothing playing", and a button that goes to an empty screen is
+          a worse answer than no button.
+        */}
+        {onOpenNowPlaying && state.title ? (
+          <button
+            className="transport__title transport__title--open"
+            title={state.title}
+            onClick={onOpenNowPlaying}
+            aria-label={`Now playing: ${state.title}. Open the full screen.`}
+          >
+            {state.title}
+          </button>
+        ) : (
+          <div className="transport__title" title={state.title}>
+            {state.title || "Nothing playing"}
+          </div>
+        )}
         <div className="transport__artist" title={state.artist}>
           {/* Mixing outranks the artist name here: it is the one moment the
               app is doing what it exists to do, and it lasts a few seconds. */}

@@ -13,11 +13,10 @@
  * Screens with real logic of their own — Settings, Songs, Playlist — have their
  * own files.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
-import { Search } from "./Search";
 import { Queue } from "./Queue";
 import { Vibe } from "./Vibe";
 import { NowPlaying } from "./NowPlaying";
@@ -44,6 +43,124 @@ describe("Library", () => {
     });
   });
 
+  /**
+   * The home screen's whole job.
+   *
+   * Library shipped with cards that were an `<article>` with no handler: the
+   * first screen anyone sees, showing their music, and pressing a track did
+   * nothing. Nothing caught it because every test here asked whether the grid
+   * *rendered* and none asked whether it *worked*.
+   */
+  it("plays the track whose card was pressed", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(await screen.findByRole("button", { name: /play windowlicker/i }));
+
+    await waitFor(() => expect(backend.state.status).toBe("playing"));
+    expect(backend.state.current).toBe(A_TRACK);
+  });
+
+  /** What you can see is what goes in the queue — the Songs table's rule. */
+  it("queues everything on screen behind it, in the order shown", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(await screen.findByRole("button", { name: /play xtal/i }));
+
+    await waitFor(() => expect(backend.state.queue.length).toBe(4));
+    expect(backend.state.queue).toContain(A_TRACK);
+    // Started from the card that was pressed, not from the top of the grid.
+    expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a");
+  });
+
+  /** Filtered down, the queue is the filtered set — not the whole library. */
+  it("queues only what the search left on screen", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker");
+    await user.type(screen.getByRole("searchbox"), "xtal");
+
+    // Wait for the filter to land, not merely for the Xtal card to exist — it
+    // exists in the unfiltered grid too, and clicking it before the debounced
+    // reload arrives queues the whole library and passes for the wrong reason.
+    await waitFor(() =>
+      expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: /play xtal/i }));
+
+    await waitFor(() => expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a"));
+    expect(backend.state.queue).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
+  });
+
+  /** A failure to start belongs on the screen, not in the console. */
+  it("says so when the track will not play", async () => {
+    const backend = useBackend();
+    backend.fail("play_tracks", "That file is no longer on the server.");
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(await screen.findByRole("button", { name: /play windowlicker/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no longer on the server/i);
+  });
+
+  /**
+   * The Songs tab is the table, not an ungrouped grid.
+   *
+   * Songs and Search were separate sidebar destinations, which the Daylight
+   * design never had: its Library carries the search field and the flat list
+   * as a tab (docs/DESIGN_DRIFT.md).
+   */
+  it("shows the track table under the Songs tab", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+
+    // The table, identifiable by its sortable columns — the grid has none.
+    expect(
+      await screen.findByRole("columnheader", { name: /album/i }),
+    ).toBeInTheDocument();
+  });
+
+  /** One search field, at the top, filtering whichever view is open. */
+  it("filters the table with the search field above it", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+    await user.type(screen.getByRole("searchbox"), "xtal");
+
+    await waitFor(() =>
+      expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument(),
+    );
+    // Awaited: the table is briefly empty while the filtered fetch is in
+    // flight, and the row arrives after Windowlicker has gone.
+    expect(await screen.findByText("Xtal")).toBeInTheDocument();
+  });
+
+  /** Two boxes filtering the same list is a screen nobody can use. */
+  it("has exactly one search field", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+
+    expect(screen.getAllByRole("searchbox")).toHaveLength(1);
+  });
+
   it("says the library is empty rather than showing a blank grid", async () => {
     useBackend({ rows: [] });
     render(<Library />);
@@ -59,57 +176,6 @@ describe("Library", () => {
     render(<Library />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/would not open/i);
-  });
-});
-
-describe("Search", () => {
-  it("finds nothing before anything is typed", async () => {
-    useBackend();
-    render(<Search onOpen={() => {}} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("searchbox")).toBeInTheDocument();
-    });
-    expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument();
-  });
-
-  it("shows matches for what was typed", async () => {
-    useBackend();
-    const user = userEvent.setup();
-    render(<Search onOpen={() => {}} />);
-
-    await user.type(screen.getByRole("searchbox"), "window");
-
-    // The title appears twice — once as the top result, once in the list.
-    await waitFor(() => {
-      expect(screen.getAllByText("Windowlicker").length).toBeGreaterThan(0);
-    });
-  });
-
-  /**
-   * A failed search used to present as "nothing matched", which is a different
-   * answer and a wrong one (TD-34).
-   */
-  it("distinguishes a failed search from an empty one", async () => {
-    const backend = useBackend();
-    backend.fail("search", "the index is unavailable");
-    const user = userEvent.setup();
-    render(<Search onOpen={() => {}} />);
-
-    await user.type(screen.getByRole("searchbox"), "window");
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(/unavailable/i);
-  });
-
-  it("says plainly when a real search matched nothing", async () => {
-    useBackend();
-    const user = userEvent.setup();
-    render(<Search onOpen={() => {}} />);
-
-    await user.type(screen.getByRole("searchbox"), "zzzzznothing");
-
-    expect(await screen.findByText(/nothing|no match|no results/i)).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 
@@ -188,6 +254,69 @@ describe("Vibe DJ", () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * The curve names are the original's, not the rewrite's.
+   *
+   * `dj_pathfinder.gd` matches on "build vibe" and "chill down"; the rewrite
+   * displayed "Build" and "Wind down", and named the unnamed `_` fallback
+   * "Steady" (docs/DESIGN_DRIFT.md). Pinned here because a label with no source
+   * is invisible to every other kind of test.
+   */
+  it("offers the curves under the names the original gave them", async () => {
+    await playing();
+    render(<Vibe />);
+
+    expect(await screen.findByRole("button", { name: /build vibe/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /chill down/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /wave/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /wind down/i })).toBeNull();
+  });
+
+  /**
+   * The help sheet renders `docs/ai_dj_workflow.md` itself, as the Godot
+   * original did from `res://`. Asserting on the document's own words proves
+   * the file is really being read rather than a copy of it having been typed
+   * into the component.
+   */
+  it("explains the mixes from the spec document", async () => {
+    await playing();
+    const user = userEvent.setup();
+    render(<Vibe />);
+
+    await user.click(await screen.findByRole("button", { name: /^help$/i }));
+
+    const sheet = await screen.findByRole("dialog");
+    expect(sheet).toHaveTextContent(/perfect match/i);
+    expect(sheet).toHaveTextContent(/bass swap/i);
+    expect(sheet).toHaveTextContent(/vibe limit/i);
+    // §7, added because the curves were never reachable from the Godot UI and
+    // arrived in this app unexplained.
+    expect(sheet).toHaveTextContent(/conduct a set/i);
+    expect(sheet).toHaveTextContent(/build vibe/i);
+  });
+
+  it("closes the help sheet with Escape", async () => {
+    await playing();
+    const user = userEvent.setup();
+    render(<Vibe />);
+
+    await user.click(await screen.findByRole("button", { name: /^help$/i }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  /** Nothing playing is exactly when someone wants to read what it will do. */
+  it("offers help even with nothing to conduct", async () => {
+    useBackend();
+    render(<Vibe />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^help$/i })).toBeInTheDocument(),
+    );
+  });
+
   it("reports a failure to plan", async () => {
     const backend = await playing();
     backend.fail("vibe_path", "no analysed tracks to work with");
@@ -214,6 +343,66 @@ describe("Now Playing", () => {
     const backend = useBackend();
     await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
     render(<NowPlaying />);
+
+    expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
+  });
+
+  /**
+   * This screen has its own transport, separate from the one in the shell, and
+   * nothing here had ever pressed it. A second set of controls is a second
+   * chance to be wired to nothing — which is what Library's grid was.
+   */
+  it("pauses, and shows that it is paused", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    const user = userEvent.setup();
+    render(<NowPlaying />);
+
+    await user.click(await screen.findByRole("button", { name: /^pause$/i }));
+
+    await waitFor(() => expect(backend.state.status).toBe("paused"));
+    // The button becomes the other thing, so the screen agrees with the state.
+    expect(await screen.findByRole("button", { name: /^play$/i })).toBeInTheDocument();
+  });
+
+  it("resumes from paused", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    await backend.invoke("pause_playback");
+    const user = userEvent.setup();
+    render(<NowPlaying />);
+
+    await user.click(await screen.findByRole("button", { name: /^play$/i }));
+
+    await waitFor(() => expect(backend.state.status).toBe("playing"));
+  });
+
+  it("skips to the next track and says which one", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    const user = userEvent.setup();
+    render(<NowPlaying />);
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("button", { name: /next track/i }));
+
+    expect(await screen.findByText("Xtal")).toBeInTheDocument();
+  });
+
+  it("goes back to the previous track", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: "/dav/Koofr/Music/xtal.m4a",
+    });
+    const user = userEvent.setup();
+    render(<NowPlaying />);
+
+    await screen.findByText("Xtal");
+    await user.click(screen.getByRole("button", { name: /previous track/i }));
 
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
   });
@@ -274,6 +463,69 @@ describe("Your Data", () => {
     render(<YourData />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/cannot read/i);
+  });
+
+  it("clears the cache and says so once the cache is actually empty", async () => {
+    useBackend({ cacheBytes: 2_000_000_000 });
+    const user = userEvent.setup();
+    render(<YourData />);
+
+    await user.click(await screen.findByRole("button", { name: /clear cached audio/i }));
+
+    expect(await screen.findByText(/freed/i)).toBeInTheDocument();
+    // Not merely "freed": the screen re-read the cache and it is empty.
+    expect(screen.queryByText(/still cached/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The TD-50 shape again, in a different place: a command that returns a
+   * number without doing the thing. `clear_audio_cache` reports the bytes it
+   * freed, and "freed 2 GB" was printed straight from that return value — so a
+   * clear that deleted nothing read exactly like one that worked.
+   */
+  it("does not claim the cache is empty when the files are still there", async () => {
+    useBackend({ cacheBytes: 2_000_000_000, cacheResistsClearing: true });
+    const user = userEvent.setup();
+    render(<YourData />);
+
+    await user.click(await screen.findByRole("button", { name: /clear cached audio/i }));
+
+    expect(await screen.findByText(/still cached/i)).toBeInTheDocument();
+  });
+
+  it("deletes everything and confirms nothing is left", async () => {
+    const user = userEvent.setup();
+    useBackend();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      render(<YourData />);
+
+      await user.click(
+        await screen.findByRole("button", { name: /delete everything stored here/i }),
+      );
+
+      expect(await screen.findByText(/nothing is stored locally/i)).toBeInTheDocument();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  /** The most consequential button on the screen must not fire on a cancel. */
+  it("deletes nothing when the confirmation is declined", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      render(<YourData />);
+
+      await user.click(
+        await screen.findByRole("button", { name: /delete everything stored here/i }),
+      );
+
+      expect(backend.called("delete_all_data")).toBe(false);
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });
 

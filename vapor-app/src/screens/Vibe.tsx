@@ -23,19 +23,58 @@ import { VaporMark } from "../components/VaporMark";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Empty } from "../components/States";
+import { Queue } from "./Queue";
+import { HelpModal } from "../components/HelpModal";
+// The spec, verbatim — the same document the Godot help modal rendered from
+// res://docs/ai_dj_workflow.md. Imported rather than retyped so it cannot drift.
+import workflow from "../../../docs/ai_dj_workflow.md?raw";
 
+/**
+ * The four curves, named as `dj_pathfinder.gd` names them.
+ *
+ * The rewrite had relabelled these: "Chill Down" became "Wind down", and the
+ * `_` fallback case — which the original never gave a display name, because it
+ * never offered the curves in a UI — became "Steady". Both were inventions
+ * (see docs/DESIGN_DRIFT.md). The ids were always right; only the words drifted.
+ *
+ * "Hold Steady" is the one label with no origin in the original, since there is
+ * nothing to restore it to. Rename it here and nowhere else.
+ *
+ * The second line is the curve's actual arithmetic, taken from
+ * `Curve::target_energy` / `Curve::target_bpm` in `pathfinder.rs`, rather than
+ * the prose the rewrite had here ("Starts easy, ends hard"). What the set does
+ * is a measurement, and this screen is where a person decides based on it.
+ */
 const CURVES: { id: core.Curve; label: string; blurb: string }[] = [
-  { id: "build", label: "Build", blurb: "Starts easy, ends hard" },
-  { id: "chill", label: "Wind down", blurb: "Lets the energy fall away" },
-  { id: "wave", label: "Wave", blurb: "Rises and falls across the set" },
-  { id: "flat", label: "Steady", blurb: "Holds one mood throughout" },
+  { id: "build", label: "Build Vibe", blurb: "Energy +0.4, tempo +15 BPM across the set" },
+  { id: "chill", label: "Chill Down", blurb: "Energy −0.4, tempo −15 BPM across the set" },
+  { id: "wave", label: "Wave", blurb: "Energy ±0.3, tempo ±10 BPM, one full cycle" },
+  { id: "flat", label: "Hold Steady", blurb: "Holds the starting energy and tempo" },
 ];
 
-export function Vibe() {
+export function Vibe({
+  djMode = true,
+  onDjModeChange,
+  onOpen,
+}: {
+  /**
+   * Whether the DJ is conducting.
+   *
+   * Off, the queue plays in its own order and this screen is the shuffle
+   * screen — which is what the Daylight design calls it, relabelling the tab
+   * from "Vibe" to "Shuffle" (docs/DESIGN_DRIFT.md). The queue is shown either
+   * way, because the question "what is coming next, and who decided" has the
+   * same answer in both modes and it should not need two screens.
+   */
+  djMode?: boolean;
+  onDjModeChange?: ((on: boolean) => void) | undefined;
+  onOpen?: ((href: string) => void) | undefined;
+} = {}) {
   const [playback, setPlayback] = useState<core.PlaybackState | null>(null);
   const [blend, setBlend] = useState<core.BlendPreview | null>(null);
   const [curve, setCurve] = useState<core.Curve>("build");
   const [conducting, setConducting] = useState(false);
+  const [helping, setHelping] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,12 +131,43 @@ export function Vibe() {
     }
   }
 
+  /*
+   * The document supplies its own title, so it is lifted out of the body
+   * rather than retyped as a string here — otherwise renaming the spec leaves
+   * a stale heading on the sheet.
+   */
+  const firstHeading = /^#\s+(.+)$/m.exec(workflow);
+  const helpTitle = firstHeading?.[1] ?? "Smart Mixing";
+  const helpBody = firstHeading
+    ? workflow.replace(firstHeading[0], "")
+    : workflow;
+
+  /* Reachable from both states of this screen. Nothing playing is precisely
+   * when someone wants to read what the DJ is going to do. */
+  const help = (
+    <>
+      <button className="vibe__help" onClick={() => setHelping(true)}>
+        Help
+      </button>
+      {helping && (
+        <HelpModal
+          title={helpTitle}
+          markdown={helpBody}
+          onClose={() => setHelping(false)}
+        />
+      )}
+    </>
+  );
+
   if (playback && !playback.href && !playback.loading) {
     return (
-      <Empty
-        title="Nothing to conduct yet"
-        body="Start a track, then the DJ can plan a set around it."
-      />
+      <div className="vibe vibe--empty">
+        <div className="vibe__help-row">{help}</div>
+        <Empty
+          title="Nothing to conduct yet"
+          body="Start a track, then the DJ can plan a set around it."
+        />
+      </div>
     );
   }
 
@@ -117,102 +187,130 @@ export function Vibe() {
           />
         </div>
         <div>
-          <h1 className="vibe__title">Vibe</h1>
-          <p className="label">conducting on this device</p>
+          <h1 className="vibe__title">{djMode ? "Vibe" : "Shuffle"}</h1>
+          <p className="label">
+            {djMode ? "conducting on this device" : "playing in queue order"}
+          </p>
+        </div>
+        <div className="vibe__head-actions">
+          {onDjModeChange && (
+            <label className="vibe__dj">
+              <input
+                type="checkbox"
+                checked={djMode}
+                onChange={(e) => onDjModeChange(e.target.checked)}
+              />
+              <span>DJ</span>
+            </label>
+          )}
+          {help}
         </div>
       </header>
 
-      <section className="vibe__card glass">
-        <h2 className="label">next blend</h2>
-        {blend ? (
-          <>
-            <div className="vibe__blend">
-              <div className="vibe__side">
-                <span className="vibe__side-label label">out</span>
-                <span className="vibe__side-title">{blend.fromTitle || "—"}</span>
-                <span className="vibe__side-facts numeric">
-                  {fmtBpm(blend.fromBpm)} · {blend.fromKey || "—"}
-                </span>
+      {/* Only the DJ's own controls are conditional. The queue below is
+          not: what is coming next is the question this screen answers in
+          either mode, and it is the only thing that says which mode you
+          are actually in. */}
+      {djMode && (
+        <>
+        <section className="vibe__card glass">
+          <h2 className="label">next blend</h2>
+          {blend ? (
+            <>
+              <div className="vibe__blend">
+                <div className="vibe__side">
+                  <span className="vibe__side-label label">out</span>
+                  <span className="vibe__side-title">{blend.fromTitle || "—"}</span>
+                  <span className="vibe__side-facts numeric">
+                    {fmtBpm(blend.fromBpm)} · {blend.fromKey || "—"}
+                  </span>
+                </div>
+                <div
+                  className={
+                    "vibe__arrow" + (blend.matchable ? "" : " vibe__arrow--no")
+                  }
+                >
+                  <span className="vibe__verdict label">
+                    {blend.matchable ? blend.transition : blend.reason}
+                  </span>
+                  <span aria-hidden="true">→</span>
+                </div>
+                <div className="vibe__side vibe__side--in">
+                  <span className="vibe__side-label label">in</span>
+                  <span className="vibe__side-title">{blend.toTitle || "—"}</span>
+                  <span className="vibe__side-facts numeric">
+                    {fmtBpm(blend.toBpm)} · {blend.toKey || "—"}
+                  </span>
+                </div>
               </div>
-              <div
+
+              <dl className="vibe__stats">
+                <Stat
+                  k="shift"
+                  v={
+                    blend.matchable
+                      ? `${blend.shiftPercent >= 0 ? "+" : ""}${blend.shiftPercent.toFixed(1)}%`
+                      : "—"
+                  }
+                />
+                <Stat
+                  k="gain"
+                  v={`${blend.gainDelta >= 0 ? "+" : ""}${blend.gainDelta.toFixed(1)} LU`}
+                />
+                <Stat k="key" v={`${blend.fromKey || "—"} → ${blend.toKey || "—"}`} />
+              </dl>
+
+              {!blend.matchable && (
+                <p className="vibe__note">
+                  These two play one after the other instead. The engine refuses a
+                  stretch past ±6% — past that it stops sounding like the record.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="vibe__note">
+              Nothing queued after this track, so there is no blend to describe.
+            </p>
+          )}
+        </section>
+
+        <section className="vibe__card glass">
+          <h2 className="label">conduct a set</h2>
+          <div className="vibe__curves">
+            {CURVES.map((c) => (
+              <button
+                key={c.id}
                 className={
-                  "vibe__arrow" + (blend.matchable ? "" : " vibe__arrow--no")
+                  "vibe__curve" + (curve === c.id ? " vibe__curve--on" : "")
                 }
+                onClick={() => setCurve(c.id)}
               >
-                <span className="vibe__verdict label">
-                  {blend.matchable ? blend.transition : blend.reason}
-                </span>
-                <span aria-hidden="true">→</span>
-              </div>
-              <div className="vibe__side vibe__side--in">
-                <span className="vibe__side-label label">in</span>
-                <span className="vibe__side-title">{blend.toTitle || "—"}</span>
-                <span className="vibe__side-facts numeric">
-                  {fmtBpm(blend.toBpm)} · {blend.toKey || "—"}
-                </span>
-              </div>
-            </div>
-
-            <dl className="vibe__stats">
-              <Stat
-                k="shift"
-                v={
-                  blend.matchable
-                    ? `${blend.shiftPercent >= 0 ? "+" : ""}${blend.shiftPercent.toFixed(1)}%`
-                    : "—"
-                }
-              />
-              <Stat
-                k="gain"
-                v={`${blend.gainDelta >= 0 ? "+" : ""}${blend.gainDelta.toFixed(1)} LU`}
-              />
-              <Stat k="key" v={`${blend.fromKey || "—"} → ${blend.toKey || "—"}`} />
-            </dl>
-
-            {!blend.matchable && (
-              <p className="vibe__note">
-                These two play one after the other instead. The engine refuses a
-                stretch past ±6% — past that it stops sounding like the record.
-              </p>
-            )}
-          </>
-        ) : (
+                <span className="vibe__curve-label">{c.label}</span>
+                <span className="vibe__curve-blurb">{c.blurb}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            className="vibe__go"
+            onClick={() => void conduct()}
+            disabled={conducting || !playback?.href}
+          >
+            {conducting ? "Choosing…" : "Conduct from here"}
+          </button>
+          {result && <p className="vibe__result">{result}</p>}
+          {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
           <p className="vibe__note">
-            Nothing queued after this track, so there is no blend to describe.
+            Energy is loudness, brightness and tempo in equal parts — enough to
+            tell a loud ballad from a quiet banger, which loudness alone cannot.
           </p>
-        )}
-      </section>
+        </section>
+        </>
+      )}
 
-      <section className="vibe__card glass">
-        <h2 className="label">conduct a set</h2>
-        <div className="vibe__curves">
-          {CURVES.map((c) => (
-            <button
-              key={c.id}
-              className={
-                "vibe__curve" + (curve === c.id ? " vibe__curve--on" : "")
-              }
-              onClick={() => setCurve(c.id)}
-            >
-              <span className="vibe__curve-label">{c.label}</span>
-              <span className="vibe__curve-blurb">{c.blurb}</span>
-            </button>
-          ))}
-        </div>
-        <button
-          className="vibe__go"
-          onClick={() => void conduct()}
-          disabled={conducting || !playback?.href}
-        >
-          {conducting ? "Choosing…" : "Conduct from here"}
-        </button>
-        {result && <p className="vibe__result">{result}</p>}
-        {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
-        <p className="vibe__note">
-          Energy is loudness, brightness and tempo in equal parts — enough to
-          tell a loud ballad from a quiet banger, which loudness alone cannot.
-        </p>
-      </section>
+      {/* The queue, in the screen the design puts it in — its mockup reads
+          "Up next · Conducted by Vibe · 47 min", with a Re-conduct action on
+          it. It was a sidebar destination of its own instead. */}
+      <Queue onOpen={onOpen} conducted={djMode} />
     </div>
   );
 }

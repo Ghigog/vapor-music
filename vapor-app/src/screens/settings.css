@@ -1,16 +1,21 @@
 /*
  * Settings. Layout only — colours and type come from public/tokens.css.
  *
- * A single readable column rather than the design's phone-width stack: this is
- * the desktop shell, and a form that runs the full width of a 1600 px window is
- * harder to read, not easier.
+ * The cards fill the column; the controls inside them do not. A form field
+ * stretched across a 1600px window is unusable, but capping the whole screen
+ * at 620px to avoid that left most of the window empty and put this screen's
+ * left edge in a different place from every other screen's.
+ *
+ * So the cap moved inward, onto the things that actually need it: inputs and
+ * prose. That is also what fixes the mismatch with Your Data, which was
+ * centred while this was left-aligned.
  */
 
 .settings {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  max-width: 620px;
+  width: 100%;
   padding-bottom: 24px;
 }
 
@@ -66,6 +71,10 @@
 
 .settings__input {
   width: 100%;
+  /* The cap that used to sit on the whole screen. A server address is about
+     40 characters and a field five times that long makes it harder to read,
+     not easier — so the field is bounded and the card around it is not. */
+  max-width: 620px;
   box-sizing: border-box;
   padding: 9px 12px;
   border-radius: var(--r-sm);
