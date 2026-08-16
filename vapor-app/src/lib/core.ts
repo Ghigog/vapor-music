@@ -489,6 +489,17 @@ export interface ScanReport {
 export interface AnalysisStatus {
   analysed: number;
   total: number;
+  /**
+   * Whether a pass is running right now, whoever started it.
+   *
+   * Analysis begins by itself after a scan, so "did someone press Analyse" is
+   * no longer the same question as "is it running" — and the screen used to
+   * answer the second by checking the first, which left an automatic pass
+   * invisible.
+   */
+  running: boolean;
+  /** The track it is on. Empty between tracks and when nothing is running. */
+  current: string;
 }
 
 export interface Analysis {

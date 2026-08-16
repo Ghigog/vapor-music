@@ -391,8 +391,12 @@ test.describe("Albums and artists", () => {
     await boot(page);
     await page.getByRole("tab", { name: "Artists" }).click();
 
-    await expect(page.getByText("Aphex Twin", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /open the artist aphex twin/i }).click();
+    // Waited for by its own control rather than by text: the album grid is
+    // still on screen for a beat after the tab is pressed, and two albums there
+    // carry "Aphex Twin" as their subtitle.
+    const tile = page.getByRole("button", { name: /open the artist aphex twin/i });
+    await expect(tile).toBeVisible();
+    await tile.click();
 
     // Both of that artist's tracks, and nobody else's.
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();

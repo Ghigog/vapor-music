@@ -83,6 +83,18 @@ struct AppState {
     failures: std::collections::HashMap<String, String>,
     /// Cancels a running analysis pass.
     cancel: analysis::Cancel,
+    /// Which pass is current. A replaced pass finishes some time after the one
+    /// that replaced it starts, and without this its "I have stopped" would
+    /// clear the flag belonging to the pass still running.
+    analysis_generation: u64,
+    /// Whether a pass is in flight, and what it is working on.
+    ///
+    /// Analysis starts by itself after a scan now, so "did someone press the
+    /// button" is no longer the same question as "is it running" — and the
+    /// screen used to answer the second by checking the first, which meant an
+    /// automatic pass was invisible.
+    analysing: bool,
+    analysing_title: String,
     cache: cache::Cache,
     store: Store,
 
@@ -161,6 +173,9 @@ impl AppState {
             tags,
             failures,
             cancel: analysis::Cancel::new(),
+            analysis_generation: 0,
+            analysing: false,
+            analysing_title: String::new(),
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
             // small to be worth having.
@@ -2461,6 +2476,10 @@ fn build_row(href: &str, base_folder: &str) -> Row {
 struct AnalysisStatus {
     analysed: usize,
     total: usize,
+    /// Whether a pass is running right now, whoever started it.
+    running: bool,
+    /// The track it is on. Empty between tracks and when nothing is running.
+    current: String,
 }
 
 #[tauri::command]
@@ -2471,6 +2490,8 @@ fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
     Ok(AnalysisStatus {
         analysed: hrefs.len().saturating_sub(outstanding),
         total: hrefs.len(),
+        running: app.analysing,
+        current: app.analysing_title.clone(),
     })
 }
 
@@ -2524,6 +2545,8 @@ fn needs_analysis(app: &AppState, href: &str) -> bool {
 fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> {
     use tauri::Emitter;
 
+    let mut generation = 0u64;
+
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
     let (todo, (cache_dir, cache_max), cancel, remote) = {
@@ -2543,6 +2566,8 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
         app.cancel.stop();
         let cancel = analysis::Cancel::new();
         app.cancel = cancel.clone();
+        app.analysis_generation += 1;
+        generation = app.analysis_generation;
 
         (
             analysis::pending_first(&hrefs, &app.analysis, &priority),
@@ -2554,6 +2579,14 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
 
     if todo.is_empty() {
         return Ok(());
+    }
+
+    // Announced before the thread starts, so a screen opened immediately after
+    // a scan already knows a pass is under way rather than waiting for the
+    // first track to finish.
+    if let Ok(mut app) = shared.lock() {
+        app.analysing = true;
+        app.analysing_title = String::new();
     }
 
     let state_arc: Shared = Arc::clone(shared);
@@ -2576,7 +2609,22 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
             &todo,
             // Fetch on demand. Analysis needs local bytes; this is where they
             // come from, and a cached track costs nothing.
-            |href| cache.store(href, || fetcher.fetch(href)).ok(),
+            //
+            // Also where the screen learns what is being worked on: this runs
+            // *before* the track is analysed, whereas the progress callback
+            // below runs after. Naming the finished one would leave the screen
+            // a track behind, and on a cold cache a track can take seconds.
+            |href| {
+                if let Ok(mut app) = state_arc.lock() {
+                    app.analysing_title = app
+                        .rows
+                        .iter()
+                        .find(|r| r.href == href)
+                        .map(|r| r.title.clone())
+                        .unwrap_or_default();
+                }
+                cache.store(href, || fetcher.fetch(href)).ok()
+            },
             &cancel,
             |progress| {
                 // Persist as each track lands rather than at the end: quitting
@@ -2613,6 +2661,16 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                 let _ = handle.emit("analysis-progress", &progress);
             },
         );
+
+        // Only if this is still the current pass: a pass that was replaced
+        // finishes after its replacement started, and clearing the flag here
+        // unconditionally would report "not running" while one still is.
+        if let Ok(mut app) = state_arc.lock() {
+            if app.analysis_generation == generation {
+                app.analysing = false;
+                app.analysing_title = String::new();
+            }
+        }
     });
 
     Ok(())

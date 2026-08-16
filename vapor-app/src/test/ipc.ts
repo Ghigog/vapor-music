@@ -54,6 +54,13 @@ export interface FakeOptions {
   keychainSilentlyFails?: boolean;
   /** Cached bytes on disk. */
   cacheBytes?: number;
+  /**
+   * A pass is running right now, on this track.
+   *
+   * Modelled because the screen has to report a pass it did not start — which
+   * is every pass now that a scan begins one.
+   */
+  analysing?: { title: string } | undefined;
   /** Clearing the cache reports bytes freed but leaves them on disk. */
   cacheResistsClearing?: boolean;
   /**
@@ -154,6 +161,8 @@ export class FakeBackend {
   private cacheBytes: number;
   private cacheResistsClearing: boolean;
   private covers: boolean;
+  private analysing: boolean;
+  private analysingTitle: string;
   private deleted = false;
 
   constructor(options: FakeOptions = {}) {
@@ -197,6 +206,8 @@ export class FakeBackend {
     this.cacheBytes = options.cacheBytes ?? 1_200_000_000;
     this.cacheResistsClearing = options.cacheResistsClearing ?? false;
     this.covers = options.covers ?? false;
+    this.analysing = options.analysing !== undefined;
+    this.analysingTitle = options.analysing?.title ?? "";
   }
 
   /** Make `cmd` reject with `message` until cleared. */
@@ -737,7 +748,12 @@ export class FakeBackend {
         return null;
 
       case "analysis_status":
-        return { analysed: this.analysed, total: this.scanned ? this.rows.length : 0 };
+        return {
+          analysed: this.analysed,
+          total: this.scanned ? this.rows.length : 0,
+          running: this.analysing,
+          current: this.analysingTitle,
+        };
 
       case "cache_status":
         return {

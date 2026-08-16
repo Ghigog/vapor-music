@@ -453,3 +453,46 @@ describe("Settings — analysis after a scan", () => {
     expect(backend.called("analyse_library")).toBe(false);
   });
 });
+
+/**
+ * A pass the app started itself is still a pass.
+ *
+ * The meter and the Stop button keyed off `busy`, which is set by pressing
+ * Analyse — so an automatic pass, which is now every pass after a scan, ran
+ * with nothing on screen to say so. The only evidence was a count that crept
+ * up if you happened to reload the screen.
+ */
+describe("Settings — analysis in progress", () => {
+  it("says a pass is running even though this screen did not start it", async () => {
+    useBackend({ connected: true, analysing: { title: "Space Time" } });
+    render(<Settings />);
+
+    expect(await screen.findByRole("progressbar")).toBeInTheDocument();
+  });
+
+  it("names the track it is working on", async () => {
+    useBackend({ connected: true, analysing: { title: "Space Time" } });
+    render(<Settings />);
+
+    expect(await screen.findByText(/space time/i)).toBeInTheDocument();
+  });
+
+  it("can stop a pass it did not start", async () => {
+    const backend = useBackend({ connected: true, analysing: { title: "Space Time" } });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(await screen.findByRole("button", { name: /^stop$/i }));
+
+    await waitFor(() => expect(backend.called("cancel_analysis")).toBe(true));
+  });
+
+  it("shows no meter when nothing is running", async () => {
+    useBackend({ connected: true });
+    render(<Settings />);
+
+    await screen.findByText(/4 of 4 analysed/i);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^stop$/i })).not.toBeInTheDocument();
+  });
+});

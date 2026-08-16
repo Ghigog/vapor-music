@@ -395,25 +395,38 @@ export function Settings() {
           </p>
         )}
 
-        {busy === "analysing" && progress && (
+        {/* Shown whenever a pass is running, not only when this screen started
+            one. Analysis begins by itself after a scan, and the meter used to
+            key off `busy` — which is set by pressing the button — so the
+            automatic pass ran invisibly and the only sign was a number that
+            crept up if you happened to reload. */}
+        {status?.running && (
           <>
             <div
               className="settings__meter"
               role="progressbar"
-              aria-valuenow={progress.done}
+              aria-valuenow={progress?.done ?? status.analysed}
               aria-valuemin={0}
-              aria-valuemax={progress.total}
+              aria-valuemax={progress?.total ?? status.total}
             >
               <div
                 className="settings__meter-fill"
                 style={{
-                  width: `${(progress.done / Math.max(progress.total, 1)) * 100}%`,
+                  width: `${
+                    ((progress?.done ?? status.analysed) /
+                      Math.max(progress?.total ?? status.total, 1)) *
+                    100
+                  }%`,
                 }}
               />
             </div>
-            <p className="settings__stat numeric">
-              {/* The design's Loading screen words it exactly this way. */}
-              Listening… {progress.done} of {progress.total} · on this device
+            <p className="settings__stat numeric" aria-live="polite">
+              {/* The design's Loading screen words it exactly this way, and
+                  naming the track answers "what is it doing" rather than only
+                  "how far has it got". */}
+              Listening… {progress?.done ?? status.analysed} of{" "}
+              {progress?.total ?? status.total}
+              {status.current ? ` · ${status.current}` : ""} · on this device
             </p>
           </>
         )}
@@ -422,11 +435,13 @@ export function Settings() {
           <button
             className="settings__button"
             onClick={() => void analyse()}
-            disabled={busy !== "idle" || !status?.total}
+            disabled={busy !== "idle" || status?.running === true || !status?.total}
           >
             Analyse
           </button>
-          {busy === "analysing" && (
+          {/* Stoppable whoever started it — a pass the app began by itself
+              is exactly the one a person most wants to be able to stop. */}
+          {status?.running && (
             <button
               className="settings__button"
               onClick={() => {
