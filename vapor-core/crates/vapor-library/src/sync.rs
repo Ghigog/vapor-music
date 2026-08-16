@@ -188,7 +188,9 @@ pub const MAX_PIN_ATTEMPTS: u32 = 3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairOutcome {
     Paired,
-    WrongPin { attempts_left: u32 },
+    WrongPin {
+        attempts_left: u32,
+    },
     /// Too many wrong guesses, or the window closed. Either way this pairing
     /// is over and a fresh PIN is needed.
     Refused,
@@ -292,7 +294,13 @@ impl Trust {
 
     /// Trust a device. Pairing again updates the name rather than listing it
     /// twice.
-    pub fn add(&mut self, id: impl Into<String>, name: impl Into<String>, kind: DeviceKind, now: Millis) {
+    pub fn add(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        kind: DeviceKind,
+        now: Millis,
+    ) {
         let id = id.into();
         let name = name.into();
         match self.devices.iter_mut().find(|d| d.id == id) {
@@ -433,8 +441,11 @@ pub fn reconcile(local: &Manifest, remote: &Manifest) -> Delta {
         }
     }
 
-    let their_lists: HashMap<&str, &PlaylistRecord> =
-        remote.playlists.iter().map(|p| (p.id.as_str(), p)).collect();
+    let their_lists: HashMap<&str, &PlaylistRecord> = remote
+        .playlists
+        .iter()
+        .map(|p| (p.id.as_str(), p))
+        .collect();
     let our_lists: HashMap<&str, &PlaylistRecord> =
         local.playlists.iter().map(|p| (p.id.as_str(), p)).collect();
 
@@ -577,7 +588,11 @@ pub fn merge_shared(
 
     for folder in &remote.folders {
         if folders.get(&folder.id).is_none() {
-            folders.create(folder.id.clone(), folder.name.clone(), folder.parent_id.clone());
+            folders.create(
+                folder.id.clone(),
+                folder.name.clone(),
+                folder.parent_id.clone(),
+            );
             report.folders_added += 1;
         }
     }
@@ -739,7 +754,10 @@ mod tests {
         registry.saw(&advert(), "192.168.1.20:7677", 1_000);
         registry.saw(&advert(), "192.168.1.55:7677", 2_000);
 
-        assert_eq!(registry.get("device-a").unwrap().address, "192.168.1.55:7677");
+        assert_eq!(
+            registry.get("device-a").unwrap().address,
+            "192.168.1.55:7677"
+        );
     }
 
     // --- Pairing -----------------------------------------------------------
@@ -748,7 +766,10 @@ mod tests {
     fn the_right_pin_from_the_right_peer_pairs() {
         let mut pairing = Pairing::begin("482913", "device-b", 0);
 
-        assert_eq!(pairing.offer("device-b", "482913", 500), PairOutcome::Paired);
+        assert_eq!(
+            pairing.offer("device-b", "482913", 500),
+            PairOutcome::Paired
+        );
     }
 
     /// A PIN shown for one device is not an invitation to every device on the
@@ -896,7 +917,10 @@ mod tests {
         let local = manifest("a", vec![track("/t.m4a", "mine", 5)]);
 
         let tie = manifest("b", vec![track("/t.m4a", "theirs", 5)]);
-        assert!(reconcile(&local, &tie).replace.is_empty(), "a tie stays put");
+        assert!(
+            reconcile(&local, &tie).replace.is_empty(),
+            "a tie stays put"
+        );
 
         let older = manifest("b", vec![track("/t.m4a", "theirs", 4)]);
         assert!(reconcile(&local, &older).replace.is_empty());

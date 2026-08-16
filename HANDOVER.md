@@ -1,6 +1,6 @@
 # Handover
 
-**Written:** 2026-08-16 (updated after TD-49 and the first green CI run)
+**Written:** 2026-08-16 (updated after the SYNC family landed)
 **For:** whoever picks this up next
 
 Read `docs/MIGRATION.md` (the plan), `docs/TECH_DEBT.md` (what is knowingly left
@@ -43,9 +43,9 @@ to be absolute — a compound `cd` triggers a permission prompt.
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-cd vapor-core           && cargo test --workspace   # 322: unit, property, fuzz
-cd vapor-app/src-tauri  && cargo test               # 125: unit, integration
-cd vapor-app            && npm test                 # 157: component
+cd vapor-core           && cargo test --workspace   # 357: unit, property, fuzz
+cd vapor-app/src-tauri  && cargo test               # 136: unit, integration
+cd vapor-app            && npm test                 # 174: component
 cd vapor-app            && npm run e2e              #  39: journeys + monkey
 cd vapor-app            && npm run typecheck
 ```
@@ -65,8 +65,16 @@ override; the Mix Tuner sets the Vibe Limit. Lyrics and artwork can be looked up
 from LRCLIB and Deezer, off by default. A test suite was built from a starting
 point of zero frontend tests and now covers five layers.
 
+Local sync landed too: two devices on one Wi-Fi find each other, pair with a
+code, and move tracks and playlists directly, with a shared document on the
+WebDAV server for the times they are never switched on together.
+
 `docs/DESIGN_DRIFT.md` is the record of what the rewrite dropped and what was
-put back; its table of ❌s is now closed.
+put back; its table of ❌s is now closed. **Every ticket that could be resolved
+in code has been.** The end of `docs/MIGRATION.md` lists what is left and what
+each one is actually waiting for — a fixture corpus, real devices, ears, a
+product decision, or a machine someone is sitting at. None of it is waiting on
+someone finding the time.
 
 What follows is what is still wrong.
 

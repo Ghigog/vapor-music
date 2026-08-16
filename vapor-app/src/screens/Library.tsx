@@ -348,7 +348,23 @@ function EmptyLibrary({
  * analysis has read the file, and a freshly scanned library has none at all.
  * So there is no error state here: the gradient placeholder *is* the answer.
  */
-function Cover({ href, label }: { href: string; label: string }) {
+function Cover({
+  href,
+  label,
+  artist,
+}: {
+  href: string;
+  label: string;
+  /**
+   * When this tile is an artist, their name — so a looked-up portrait can
+   * stand in where the lead track has no embedded art (TD-53).
+   *
+   * The file's own artwork still wins. An artist tile falling back to a
+   * picture of the *album* the lead track came from is the case this fixes:
+   * it looked like the app knew who the artist was, and it did not.
+   */
+  artist?: string;
+}) {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
@@ -356,8 +372,14 @@ function Cover({ href, label }: { href: string; label: string }) {
     setSrc(null);
     core
       .trackCover(href)
-      .then((data) => {
-        if (!cancelled) setSrc(data);
+      .then(async (data) => {
+        if (cancelled) return;
+        if (data || !artist) {
+          setSrc(data);
+          return;
+        }
+        const portrait = await core.artistPortrait(artist).catch(() => null);
+        if (!cancelled) setSrc(portrait);
       })
       .catch(() => {
         if (!cancelled) setSrc(null);
@@ -365,7 +387,7 @@ function Cover({ href, label }: { href: string; label: string }) {
     return () => {
       cancelled = true;
     };
-  }, [href]);
+  }, [href, artist]);
 
   return (
     <div className="card__art">
@@ -406,7 +428,11 @@ function EntityCard({
         onClick={onOpen}
         aria-label={`Open the ${noun} ${entity.name}`}
       >
-        <Cover href={entity.lead} label={entity.name} />
+        <Cover
+          href={entity.lead}
+          label={entity.name}
+          {...(kind === "artist" ? { artist: entity.name } : {})}
+        />
       </button>
       <button
         type="button"

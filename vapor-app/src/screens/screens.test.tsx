@@ -108,6 +108,42 @@ describe("Library", () => {
     expect(backend.state.queue).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
   });
 
+  /**
+   * TD-53. A looked-up portrait was fetched, cached and shown on exactly one
+   * screen. An artist tile falling back to the artwork of whichever album its
+   * lead track came from looked like the app knew who the artist was.
+   */
+  it("shows a looked-up portrait on an artist with no artwork of its own", async () => {
+    const backend = useBackend({
+      covers: false,
+      metadataLookup: true,
+      lyrics: {
+        [A_TRACK]: { synced: false, lines: [], plain: "words" },
+      },
+    });
+    await backend.invoke("look_up_track", { href: A_TRACK, force: false });
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker EP");
+    await user.click(screen.getByRole("tab", { name: /artists/i }));
+
+    expect(await screen.findByAltText(/cover of aphex twin/i)).toBeInTheDocument();
+  });
+
+  /** The file's own artwork still wins where it has any. */
+  it("does not replace an artist's own artwork with a looked-up one", async () => {
+    const backend = useBackend({ covers: true, metadataLookup: true });
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker EP");
+    await user.click(screen.getByRole("tab", { name: /artists/i }));
+
+    await screen.findByAltText(/cover of aphex twin/i);
+    expect(backend.called("artist_portrait")).toBe(false);
+  });
+
   it("shows a cover when the file carried one", async () => {
     useBackend({ covers: true });
     render(<Library />);

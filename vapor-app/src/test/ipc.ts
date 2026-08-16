@@ -583,6 +583,16 @@ export class FakeBackend {
       case "track_lookup":
         return this.lookedUp(String(a.href ?? ""));
 
+      case "artist_portrait": {
+        if (!this.settings.metadataLookupEnabled) return null;
+        const name = String(a.name ?? "");
+        // Any track by that artist that has been looked up answers for it.
+        const found = this.rows.some(
+          (r) => r.artist === name && this.attempted.has(r.href) && this.lyricsFor[r.href],
+        );
+        return found ? A_SLEEVE : null;
+      }
+
       case "looked_up_image": {
         const url = String(a.url ?? "");
         // Only a URL a lookup actually stored, as the backend guards.

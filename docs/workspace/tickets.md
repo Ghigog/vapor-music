@@ -487,7 +487,7 @@ So that track transitions do not feel jarring or disjointed.
 
 ---
 
-### AI-004 : Intelligent Cross-Fading Playback Engine (active)
+### AI-004 : Intelligent Cross-Fading Playback Engine (done — in the Tauri shell)
 **User Story:**
 As a listener,
 I'd like the player to align beats and dynamically transition between tracks,
@@ -507,6 +507,16 @@ So that the exit of one track blends seamlessly into the intro of the next.
 - Given the current track is approaching its outro boundary
 - When a transition begins
 - Then the incoming track starts playing on the secondary player, matches the exit beat timing, and crossfades volumes in sync with the beat grid.
+
+**Status (2026-08-16):** Done in `vapor-app`, and the "active" here was stale —
+it was the Godot ticket, never revisited after the port. The supervisor decodes
+the next track ~30 s before the outgoing one's `cue_out` and schedules a
+beat-matched mix (TD-25); all six transition types exist (TD-20/MIG-008); beat
+grids never cross to the audio thread, since alignment is computed on the
+control side and only a ratio and a cue position are sent. Dual
+`AudioStreamPlayer` nodes became two decks in `vapor-engine`, and `pitch_scale`
+became WSOLA time-stretching (TD-22 is the open question about *which*
+stretcher, not whether).
 
 ---
 
@@ -600,7 +610,7 @@ So that the correct corrective EQ profile is applied automatically.
 
 ---
 
-### SYNC-001 : Local Subnet Peer Discovery (mDNS/UDP) (active)
+### SYNC-001 : Local Subnet Peer Discovery (mDNS/UDP) (done)
 **User Story:**
 As a user with multiple devices,
 I'd like the apps to discover each other automatically on my local Wi-Fi subnet,
@@ -622,7 +632,7 @@ So that I don't have to input IP addresses manually to start syncing.
 
 ---
 
-### SYNC-002 : Secure Direct Pairing & Session Handshake (active)
+### SYNC-002 : Secure Direct Pairing & Session Handshake (done)
 **User Story:**
 As a user,
 I'd like to authorize and pair devices using a numeric PIN code,
@@ -644,7 +654,7 @@ So that unauthorized local network devices cannot read or modify my music librar
 
 ---
 
-### SYNC-003 : Database Reconciliation Protocol (active)
+### SYNC-003 : Database Reconciliation Protocol (done)
 **User Story:**
 As a developer,
 I'd like to compare and reconcile track metadata between paired devices,
@@ -666,7 +676,7 @@ So that missing tracks and updated ratings are identified before transfers start
 
 ---
 
-### SYNC-004 : Direct Peer File Transfer Pipeline (active)
+### SYNC-004 : Direct Peer File Transfer Pipeline (done)
 **User Story:**
 As a user,
 I'd like missing files to transfer rapidly over local sockets,
@@ -689,7 +699,7 @@ So that my music library is synchronized without cloud bandwidth limits.
 
 ---
 
-### SYNC-005 : Peer-to-Peer Synchronization Dashboard UI (active)
+### SYNC-005 : Peer-to-Peer Synchronization Dashboard UI (done)
 **User Story:**
 As a user,
 I'd like a sync dashboard in Settings to view paired devices, see transfer progress, and initiate local syncs,
@@ -1565,7 +1575,7 @@ So that network bandwidth is immediately freed up to fetch the new upcoming trac
 
 ---
 
-### SYNC-006 : WebDAV Metadata Sync & Remote Cache Merging (active)
+### SYNC-006 : WebDAV Metadata Sync & Remote Cache Merging (done)
 **User Story:**
 As a listener,
 I'd like my playlists, headphone EQ selections, and analyzed track cues to sync between my devices automatically,
@@ -1909,3 +1919,31 @@ So that a set can hold one intensity or swing between them as I choose.
 **Acceptance Criteria:**
 - Given the slider is moved and released
 - Then the limit is saved, and the next set the DJ conducts uses it.
+
+---
+
+## Where the SYNC family landed (2026-08-16)
+
+All six built in `vapor-app`, not in the Godot tree. Every decision lives in
+`vapor-core/crates/vapor-library/src/sync.rs` and every socket in
+`vapor-app/src-tauri/src/peers.rs`, so pairing and reconciliation — the two
+things impossible to test with one machine — are tested as functions.
+
+Four deliberate departures from the tickets as written, each because the ticket
+named a mechanism where the requirement was an outcome:
+
+| Ticket says | Built | Why |
+|---|---|---|
+| SYNC-003: SHA-256 fingerprints; SYNC-004: **MD5** checksums | SHA-256 throughout | The requirement is integrity. MD5 has been collision-broken since 2004, so a substituted file is exactly what it can no longer catch. One hash rather than two is also one fewer thing to get wrong. |
+| SYNC-002: "Diffie-Hellman or basic token validation" | A PIN bound to **one** device, three attempts, two-minute window | The PIN is the security property, and it is only a property if guessing is bounded. Binding it to the device it was shown for is what stops a code on screen being an invitation to the whole subnet. Transport encryption is not here — see below. |
+| SYNC-001: "mDNS or UDP broadcast" | UDP broadcast | The ticket's own requirements specify a broadcaster and a listener. mDNS would be a dependency for the same result on a subnet. |
+| SYNC-004: "resume logic for interrupted transfers" | A partial file's length *is* the offset | No progress record to write, and therefore none that can disagree with the file on disk. |
+
+**What is not there, and is not pretended to be:**
+
+* **The connection is not encrypted.** Pairing authenticates the *device*; the
+  bytes then move in clear over the LAN. On a home network with the library
+  already sitting in plaintext on a WebDAV server, that is a defensible line —
+  but it is a line, and a café network is the case where it is the wrong one.
+  TLS with the paired key as a pre-shared secret is the fix.
+* **Nothing has been run between two machines.** There is one here. See TD-55.

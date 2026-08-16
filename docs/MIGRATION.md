@@ -1186,10 +1186,43 @@ tell is the same each time — **an argument nobody varies**.
 | ~~MIG-052~~ | ~~Lyrics and artwork.~~ **Done** — `metadata_service.gd`'s network half, which was never ported at all: LRCLIB and Deezer. **Off by default**, unlike the original, which fetched on every track and said nothing; what comes back is drawn apart from what the device measured. Two `parse_lrc` defects fixed on the way (fraction precision, multiple timestamps per line). Untested against the real services — TD-51. | 4 | DESIGN_DRIFT |
 | ~~MIG-053~~ | ~~The Vibe Limit.~~ **Done** — §6's Mix Tuner. `transition_cost` has taken the energy threshold as a parameter since the port and all three callers passed `DEFAULT_ENERGY_THRESHOLD`. | 4 | `ai_dj_workflow.md` §6 |
 
+### Local sync — done
+
+| ID | Item | Phase | Source |
+|---|---|---|---|
+| ~~MIG-060~~ | ~~SYNC-001 to SYNC-006 were never ported.~~ **Done (2026-08-16)** — discovery, pairing, reconciliation, transfer, dashboard, and the shared document on the WebDAV server. Decisions in `vapor_library::sync`, sockets in `peers.rs`. SHA-256 rather than the tickets' MD5, and a PIN bound to one device rather than shown to the subnet. Unexercised between two machines (TD-55), unencrypted on the wire (TD-56), and deletions do not travel through the shared document (TD-57). | 4 | SYNC-001..006 |
+
 ### Process
 
 | ID | Item | Phase | Source |
 |---|---|---|---|
-| MIG-040 | Stand up CI before migration work. Record the 12 currently-failing GUT tests as a known-failing baseline so the suite gates on regressions immediately. | 0 | Phase 0 |
-| MIG-041 | Translate GUT test *assertions* to Rust before porting the code they cover — they are the specification. | 3 | Phase 3 |
+| ~~MIG-040~~ | ~~Stand up CI before migration work.~~ **Done** — `.github/workflows/ci.yml` and `app.yml`, six jobs across two workflows, every layer on every push. The GUT baseline is pinned at `EXPECTED_PASS: 190 / EXPECTED_FAIL: 19` for the stub path, with the discrepancy against the local 211/12 explained in place (TD-45). | 0 | Phase 0 |
+| ~~MIG-041~~ | ~~Translate GUT test *assertions* to Rust before porting the code they cover.~~ **Done** — this is how phase 3 was carried out: `playlist.rs`, `queue.rs`, `camelot.rs`, `pathfinder.rs` and `naming.rs` each cite the GUT test they were ported from, and the port was judged against those assertions rather than against a reading of the GDScript. | 3 | Phase 3 |
 | MIG-042 | Do not couple the AGPL exit to the migration. Revisit licensing only once phases 1–2 fix the dependency set. | 5 | Licensing |
+
+
+---
+
+## What is left, and what each one is actually waiting for
+
+Written 2026-08-16, after the last item that could be resolved in code was.
+Every row below is open, and **none of them is waiting on someone finding the
+time** — each is blocked on something this process does not have. Recorded this
+plainly so the backlog stops reading as a to-do list with fourteen items on it.
+
+| Item | Waiting for |
+|---|---|
+| **MIG-001 / TD-11** — key detection at 60.6% exact | A reproducible fixture corpus. Validation runs against a personal library (TD-43); nobody else can reproduce the numbers, so nobody else can tell whether a change helped. Two levers already measured and settled: segmented analysis shipped, tuning correction was *worse* and was reverted. |
+| **MIG-002b** — the ~10% metrical tempo errors | A product decision first, then bar-level metre detection. Two attempts made and both reverted; the beat-level approach is closed, because the signal is anti-correlated and the errors are triple relations rather than octaves. Starting a third without settling what a corrected BPM should *mean* repeats the first two. |
+| **MIG-011 / TD-24** — cpal on iOS and Android | Real devices. |
+| **MIG-012 / TD-22** — WSOLA vs Rubber Band vs signalsmith | Ears. WSOLA is transparent at the ±2% beat-matching uses, and was written to prove the approach rather than chosen on measured quality against the alternatives. |
+| **MIG-013** — the browser audio path | A Worker producer against `vapor_engine::source::Window`, and a browser harness to verify it. The window is portable; the thread that fills it is the shell's. |
+| **MIG-020 / MIG-021** — mobile background sync | Mobile. Both are about what iOS Background App Refresh and Android Doze do to a long download, which cannot be discovered on a desktop. |
+| **MIG-030–033** — OpenSubsonic | A direction, not a task. MIG-032 says it outright: verify the extension names and field shapes against the actual specification before designing to them, because the secondary sources reviewed contained errors. |
+| **MIG-042** — the AGPL exit | Deliberately deferred until phases 1–2 fix the dependency set. Coupling it to the migration is the thing this item exists to prevent. |
+| **TD-35** — the mark's shape | A design iteration. `design/vapor-mark.js` and the app's copy are byte-identical, so the app is not lagging the design — the design is unfinished. |
+| **TD-41 / TD-42 / TD-45** — the Godot tree | Nothing. The tree is being archived, the 12 failing GUT tests are diagnosed as stale rather than defective, and the CI baseline discrepancy is explained in place. Repairing tests for a tree phase 5 deletes spends effort on the thing being deleted. |
+| **TD-43** — a synthetic fixture corpus | Real work, and the one item here that would unblock another (MIG-001). Not started because generating audio with *known* tempo and key that is representative of real recordings is a research problem, not an afternoon. |
+| **TD-51 / TD-54 / TD-55** — the lookup, the media keys, the sync | A machine someone is sitting at. All three are compiled, tested against canned inputs, and unexercised against a real service, a real keyboard or a real second device. |
+| **TD-56** — the sync moves bytes in clear | A decision about how much a LAN is trusted, then TLS with the pairing as a pre-shared key. |
+| **TD-57** — deletions do not travel | A schema change: a tombstone with a timestamp, and a modification time on every playlist mutation. |

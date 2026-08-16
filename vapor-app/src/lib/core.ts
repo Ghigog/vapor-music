@@ -348,6 +348,17 @@ export function lookedUpImage(url: string): Promise<string | null> {
   return invoke<string | null>("looked_up_image", { url });
 }
 
+/**
+ * A looked-up portrait for an artist, as a data URI.
+ *
+ * Keyed by name: any track by that artist will do, so the first one carrying a
+ * picture answers for all of them. `null` whenever nothing was looked up or
+ * lookups are off, which is the ordinary case.
+ */
+export function artistPortrait(name: string): Promise<string | null> {
+  return invoke<string | null>("artist_portrait", { name });
+}
+
 /** Turn lookups on or off. Off also forgets everything already found. */
 export function setMetadataLookup(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_metadata_lookup", { enabled });

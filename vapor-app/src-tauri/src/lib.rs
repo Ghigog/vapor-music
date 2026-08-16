@@ -771,16 +771,39 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     };
 
     let lookup = metadata::Lookup::new().map_err(Error)?;
-    let lyrics = lookup.lyrics(&artist, &title);
-    let artist_image = lookup.artist_image(&artist);
-    let (album_art, genre) = lookup.album(&artist, &album);
+
+    // Three independent questions to two services, so they are asked at once
+    // rather than one after another (TD-52). Sequentially this was up to five
+    // round trips on one IPC call, and the button said "Looking…" for all of
+    // them; now it is two waits deep, because only the downloads depend on
+    // anything.
+    //
+    // `scope` rather than spawning detached threads: the borrows of `artist`,
+    // `title` and `lookup` are what make this readable, and the alternative is
+    // cloning three strings and an Arc to say the same thing.
+    let (lyrics, artist_image, album_art, genre) = std::thread::scope(|s| {
+        let words = s.spawn(|| lookup.lyrics(&artist, &title));
+        let portrait = s.spawn(|| lookup.artist_image(&artist));
+        let sleeve = s.spawn(|| lookup.album(&artist, &album));
+
+        // A panic in one lookup must not take the whole thing down: this is
+        // decoration on a screen that is already useful without it.
+        let lyrics = words.join().unwrap_or(None);
+        let artist_image = portrait.join().unwrap_or_default();
+        let (album_art, genre) = sleeve.join().unwrap_or_default();
+        (lyrics, artist_image, album_art, genre)
+    });
 
     // Fetched here, once, rather than by the webview: the window's CSP allows
     // `data:` and no remote host, which is the right way round — the page
     // should not be opening connections to Deezer on every render.
-    for url in [&artist_image, &album_art] {
-        lookup.download_image(url, &dir);
-    }
+    //
+    // Also at once, and for the same reason.
+    std::thread::scope(|s| {
+        for url in [&artist_image, &album_art] {
+            s.spawn(|| lookup.download_image(url, &dir));
+        }
+    });
 
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.looked.insert(
@@ -840,6 +863,37 @@ fn looked_up_image(url: String, state: State<'_, Shared>) -> Result<Option<Strin
         app.store.dir(),
         &url,
     )))
+}
+
+/// A looked-up portrait for an artist, as a `data:` URI (TD-53).
+///
+/// Keyed by name rather than by href, because that is what an artist is here —
+/// the Artists tab has a name and a lead track, and the portrait was fetched
+/// against whichever track happened to be looked up first. Any track by that
+/// artist will do, so the first one that carries a picture answers for all of
+/// them.
+///
+/// `None` is the ordinary case: nothing has been looked up, or lookups are off
+/// entirely. The tile draws its placeholder, which is what it does for a track
+/// with no embedded cover too.
+#[tauri::command]
+fn artist_portrait(name: String, state: State<'_, Shared>) -> Result<Option<String>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if name.trim().is_empty() || !app.settings.metadata_lookup_enabled {
+        return Ok(None);
+    }
+
+    let url = app.rows.iter().find_map(|row| {
+        if row.artist != name {
+            return None;
+        }
+        app.looked
+            .get(&row.href)
+            .filter(|l| !l.artist_image.is_empty())
+            .map(|l| l.artist_image.clone())
+    });
+
+    Ok(url.and_then(|url| metadata::image_data_uri(&metadata::image_path(app.store.dir(), &url))))
 }
 
 /// Turn lookups on or off.
@@ -4419,6 +4473,7 @@ pub fn run() {
             track_lookup,
             look_up_track,
             looked_up_image,
+            artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
             sync_view,
