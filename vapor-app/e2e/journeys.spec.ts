@@ -225,7 +225,8 @@ test.describe("Screen layout", () => {
     await boot(page);
     // With nothing playing, Vibe shows a centred empty state instead of
     // itself, and the measurement would be of the wrong element.
-    await page.getByRole("button", { name: /play windowlicker/i }).click();
+    await openSongs(page);
+    await page.getByText("Windowlicker", { exact: true }).click();
 
     const lefts: { name: string; x: number }[] = [];
     for (const name of screens) {
@@ -305,8 +306,13 @@ test.describe("Navigation", () => {
 
   test("pressing the title in the player bar opens Now Playing", async ({ page }) => {
     await boot(page);
-    await page.getByRole("button", { name: /play windowlicker/i }).click();
+    await openSongs(page);
+    await page.getByText("Windowlicker", { exact: true }).click();
 
+    // Wait for the transport to catch up: the title is plain text until there
+    // is something playing, and only becomes the button that opens the screen
+    // once the state arrives. Clicking too early hits the text.
+    await expect(page.locator(".transport__title")).toHaveText("Windowlicker");
     await page.locator(".transport__title").click();
 
     // The full screen, which carries its own transport controls.
@@ -317,7 +323,8 @@ test.describe("Navigation", () => {
 
   test("the queue lives on the Vibe screen, and says who ordered it", async ({ page }) => {
     await boot(page);
-    await page.getByRole("button", { name: /play windowlicker/i }).click();
+    await openSongs(page);
+    await page.getByText("Windowlicker", { exact: true }).click();
     await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
 
     await expect(page.getByText(/conducted by vibe/i)).toBeVisible();
@@ -328,7 +335,8 @@ test.describe("Navigation", () => {
 
   test("turning the DJ off makes it the Shuffle screen", async ({ page }) => {
     await boot(page);
-    await page.getByRole("button", { name: /play windowlicker/i }).click();
+    await openSongs(page);
+    await page.getByText("Windowlicker", { exact: true }).click();
     await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
 
     await page.getByRole("checkbox", { name: /dj/i }).uncheck();
@@ -339,5 +347,56 @@ test.describe("Navigation", () => {
     // The DJ's own controls are gone; the queue is not.
     await expect(page.getByRole("button", { name: /conduct from here/i })).toHaveCount(0);
     await expect(page.locator(".queue__row-title", { hasText: "Xtal" })).toBeVisible();
+  });
+});
+
+/**
+ * Albums and artists, as things rather than as headings.
+ *
+ * The Albums tab used to render a card per *track* grouped under an album
+ * heading, so "All Melody" was a header with nine tiles beneath it and none of
+ * them was the album. A tab called Albums lists albums.
+ */
+test.describe("Albums and artists", () => {
+  test("the Albums tab lists albums, not tracks", async ({ page }) => {
+    await boot(page);
+
+    await expect(page.getByText("Windowlicker EP", { exact: true })).toBeVisible();
+    await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
+    // The track of that name belongs under Songs.
+    await expect(page.getByRole("main").getByText("Windowlicker", { exact: true })).toHaveCount(0);
+  });
+
+  test("opening an album shows only its tracks, and back returns", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
+
+    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
+    await expect(page.getByText("Xtal", { exact: true })).toHaveCount(0);
+
+    await page.getByRole("button", { name: /‹ albums/i }).click();
+    await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
+  });
+
+  test("an album plays from its card without being opened", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: /play selected ambient works/i }).click();
+
+    await expect(page.locator(".transport__title")).toHaveText("Xtal");
+  });
+
+  test("the Artists tab lists artists and opens one", async ({ page }) => {
+    await boot(page);
+    await page.getByRole("tab", { name: "Artists" }).click();
+
+    await expect(page.getByText("Aphex Twin", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /open the artist aphex twin/i }).click();
+
+    // Both of that artist's tracks, and nobody else's.
+    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
+    await expect(page.getByText("Xtal", { exact: true })).toBeVisible();
+    await expect(page.getByText("Roygbiv", { exact: true })).toHaveCount(0);
   });
 });

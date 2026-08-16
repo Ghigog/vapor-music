@@ -59,6 +59,25 @@ export interface LibraryView {
   sortKey?: SortKey;
   ascending?: boolean;
   groupBy?: GroupBy;
+  /** Narrow to exactly this album. Set by opening one, not by typing. */
+  album?: string;
+  /** Narrow to exactly this artist. */
+  artist?: string;
+}
+
+/**
+ * One album or artist, as the Library grid draws it.
+ *
+ * The grid used to render a card per track grouped under an album heading,
+ * which answers "what is on this album" rather than "which albums do I have".
+ */
+export interface LibraryEntity {
+  name: string;
+  /** The album's artist, or how many albums an artist has. */
+  subtitle: string;
+  tracks: number;
+  /** A track from it — what plays when pressed, and whose cover is shown. */
+  lead: string;
 }
 
 export interface Playlist {
@@ -158,6 +177,22 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
  */
 export function libraryView(view: LibraryView = {}): Promise<LibrarySection[]> {
   return invoke<LibrarySection[]>("library_view", { view });
+}
+
+/** The albums or artists in the library, one entry each. */
+export function libraryEntities(view: LibraryView = {}): Promise<LibraryEntity[]> {
+  return invoke<LibraryEntity[]>("library_entities", { view });
+}
+
+/**
+ * The embedded cover for one track.
+ *
+ * Fetched per card rather than carried on every row: artwork is capped at 2 MB
+ * and a library of several hundred tracks would otherwise move hundreds of
+ * megabytes through IPC on every keystroke.
+ */
+export function trackCover(href: string): Promise<string | null> {
+  return invoke<string | null>("track_cover", { href });
 }
 
 export function playlists(): Promise<Playlist[]> {

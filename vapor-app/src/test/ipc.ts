@@ -56,6 +56,13 @@ export interface FakeOptions {
   cacheBytes?: number;
   /** Clearing the cache reports bytes freed but leaves them on disk. */
   cacheResistsClearing?: boolean;
+  /**
+   * Whether tracks have embedded artwork.
+   *
+   * Off by default: a freshly scanned library has none until analysis has read
+   * the files, and the grid has to look right in that state too.
+   */
+  covers?: boolean;
 }
 
 /** A library row with sensible defaults, so a test states only what it cares
@@ -146,6 +153,7 @@ export class FakeBackend {
   private keychainSilentlyFails: boolean;
   private cacheBytes: number;
   private cacheResistsClearing: boolean;
+  private covers: boolean;
   private deleted = false;
 
   constructor(options: FakeOptions = {}) {
@@ -188,6 +196,7 @@ export class FakeBackend {
     this.unreadableFolders = options.unreadableFolders ?? 0;
     this.cacheBytes = options.cacheBytes ?? 1_200_000_000;
     this.cacheResistsClearing = options.cacheResistsClearing ?? false;
+    this.covers = options.covers ?? false;
   }
 
   /** Make `cmd` reject with `message` until cleared. */
@@ -310,6 +319,9 @@ export class FakeBackend {
             `${r.title} ${r.artist} ${r.album}`.toLowerCase().includes(q),
           );
         }
+        // Exact, not substring: opening an album means that album.
+        if (view.album) rows = rows.filter((r) => r.album === view.album);
+        if (view.artist) rows = rows.filter((r) => r.artist === view.artist);
         const key = view.sortKey ?? "title";
         rows.sort((x, y) => {
           const pick = (r: core.Row) =>
@@ -321,6 +333,60 @@ export class FakeBackend {
         });
         if ((view.groupBy ?? "none") === "none") return [{ header: "", rows }];
         return [{ header: "All", rows }];
+      }
+
+      case "library_entities": {
+        if (!this.scanned) return [];
+        const view = (a.view ?? {}) as core.LibraryView;
+        const byArtist = view.groupBy === "artist";
+        const q = (view.query ?? "").trim().toLowerCase();
+        let rows = this.rows.filter((r) =>
+          q ? `${r.title} ${r.artist} ${r.album}`.toLowerCase().includes(q) : true,
+        );
+        if (view.album) rows = rows.filter((r) => r.album === view.album);
+        if (view.artist) rows = rows.filter((r) => r.artist === view.artist);
+
+        const order: string[] = [];
+        const members = new Map<string, core.Row[]>();
+        for (const row of rows) {
+          const name = byArtist ? row.artist : row.album;
+          const known = byArtist
+            ? row.artistSource !== "unknown"
+            : row.albumSource !== "unknown";
+          if (!known || !name) continue;
+          if (!members.has(name)) {
+            order.push(name);
+            members.set(name, []);
+          }
+          members.get(name)!.push(row);
+        }
+        return order.map((name) => {
+          const tracks = members.get(name)!;
+          const others = byArtist
+            ? [...new Set(tracks.map((t) => t.album))]
+            : [...new Set(tracks.map((t) => t.artist))];
+          return {
+            name,
+            subtitle: byArtist
+              ? others.length === 1
+                ? "1 album"
+                : `${others.length} albums`
+              : others.length === 1
+                ? others[0]
+                : "Various artists",
+            tracks: tracks.length,
+            lead: tracks[0]!.href,
+          };
+        });
+      }
+
+      case "track_cover": {
+        // A fake sleeve: a real data URI, so the UI renders an actual <img>
+        // rather than being tested against a string it never receives.
+        const href = String(a.href ?? "");
+        return this.rows.some((r) => r.href === href) && this.covers
+          ? "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+          : null;
       }
 
       case "search": {

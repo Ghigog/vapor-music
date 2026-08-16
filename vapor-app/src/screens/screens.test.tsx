@@ -28,17 +28,111 @@ import { useBackend } from "../test/setup";
 
 const A_TRACK = "/dav/Koofr/Music/windowlicker.m4a";
 
+/** The flat table is a tab now, and the default tab is Albums. */
+async function openSongsTab(user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByRole("tab", { name: /^songs$/i });
+  await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+}
+
 describe("Library", () => {
-  it("shows the library grouped, and can regroup", async () => {
+  /**
+   * A tab called Albums lists albums.
+   *
+   * It used to list *tracks* grouped under an album heading — so "All Melody"
+   * was a header with nine tiles beneath it, none of which was the album. That
+   * answers "what is on this record", which is the question you ask after
+   * opening one, not before.
+   */
+  it("lists albums, not the tracks on them", async () => {
+    useBackend();
+    render(<Library />);
+
+    expect(await screen.findByText("Windowlicker EP")).toBeInTheDocument();
+    expect(screen.getByText("Selected Ambient Works")).toBeInTheDocument();
+    // The track of that name is not a card here.
+    expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument();
+  });
+
+  it("lists artists under the Artists tab", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker EP");
+    await user.click(screen.getByRole("tab", { name: /artists/i }));
+
+    expect(await screen.findByText("Aphex Twin")).toBeInTheDocument();
+    // Two albums in the fixture, and the tile says so.
+    expect(screen.getByText(/2 albums/i)).toBeInTheDocument();
+  });
+
+  /** An album names its artist; a compilation says so rather than picking one. */
+  it("names the artist under each album", async () => {
+    useBackend();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker EP");
+    expect(screen.getAllByText("Aphex Twin").length).toBeGreaterThan(0);
+  });
+
+  it("opens an album to its tracks, and comes back", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the album windowlicker ep/i }),
+    );
+
+    expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
+    // Narrowed to that album, so the other one is not in the table.
+    expect(screen.queryByText("Xtal")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /albums/i }));
+    expect(await screen.findByText("Selected Ambient Works")).toBeInTheDocument();
+  });
+
+  it("plays an album from its card without opening it", async () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
 
-    expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
+    await user.click(
+      await screen.findByRole("button", { name: /play selected ambient works/i }),
+    );
 
+    await waitFor(() => expect(backend.state.status).toBe("playing"));
+    // Only that album is queued — not everything on screen.
+    expect(backend.state.queue).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
+  });
+
+  it("shows a cover when the file carried one", async () => {
+    useBackend({ covers: true });
+    render(<Library />);
+
+    const art = await screen.findByAltText(/cover of windowlicker ep/i);
+    expect(art).toHaveAttribute("src", expect.stringContaining("data:image"));
+  });
+
+  /** No artwork is the normal state of a freshly scanned library. */
+  it("draws a placeholder rather than a broken image when there is no cover", async () => {
+    useBackend({ covers: false });
+    render(<Library />);
+
+    await screen.findByText("Windowlicker EP");
+    expect(screen.queryByAltText(/cover of/i)).not.toBeInTheDocument();
+  });
+
+  it("regroups when a tab is pressed", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await screen.findByText("Windowlicker EP");
     await user.click(screen.getByRole("tab", { name: /artists/i }));
+
     await waitFor(() => {
-      const view = backend.lastArgs("library_view")?.view as { groupBy?: string };
+      const view = backend.lastArgs("library_entities")?.view as { groupBy?: string };
       expect(view?.groupBy).toBe("artist");
     });
   });
@@ -51,28 +145,29 @@ describe("Library", () => {
    * nothing. Nothing caught it because every test here asked whether the grid
    * *rendered* and none asked whether it *worked*.
    */
-  it("plays the track whose card was pressed", async () => {
+  it("plays the track whose row was pressed", async () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("button", { name: /play windowlicker/i }));
+    await openSongsTab(user);
+    await user.click(await screen.findByText("Windowlicker"));
 
     await waitFor(() => expect(backend.state.status).toBe("playing"));
     expect(backend.state.current).toBe(A_TRACK);
   });
 
-  /** What you can see is what goes in the queue — the Songs table's rule. */
+  /** What you can see is what goes in the queue. */
   it("queues everything on screen behind it, in the order shown", async () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("button", { name: /play xtal/i }));
+    await openSongsTab(user);
+    await user.click(await screen.findByText("Xtal"));
 
     await waitFor(() => expect(backend.state.queue.length).toBe(4));
     expect(backend.state.queue).toContain(A_TRACK);
-    // Started from the card that was pressed, not from the top of the grid.
     expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a");
   });
 
@@ -82,30 +177,33 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
+    await openSongsTab(user);
     await screen.findByText("Windowlicker");
     await user.type(screen.getByRole("searchbox"), "xtal");
 
-    // Wait for the filter to land, not merely for the Xtal card to exist — it
-    // exists in the unfiltered grid too, and clicking it before the debounced
-    // reload arrives queues the whole library and passes for the wrong reason.
+    // Wait for the filter to land, not merely for the row to exist — it exists
+    // in the unfiltered table too, and clicking it before the debounced reload
+    // arrives queues the whole library and passes for the wrong reason.
     await waitFor(() =>
       expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument(),
     );
 
-    await user.click(screen.getByRole("button", { name: /play xtal/i }));
+    await user.click(await screen.findByText("Xtal"));
 
     await waitFor(() => expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a"));
     expect(backend.state.queue).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
   });
 
   /** A failure to start belongs on the screen, not in the console. */
-  it("says so when the track will not play", async () => {
+  it("says so when an album will not play", async () => {
     const backend = useBackend();
     backend.fail("play_tracks", "That file is no longer on the server.");
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("button", { name: /play windowlicker/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /play windowlicker ep/i }),
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no longer on the server/i);
   });
@@ -122,8 +220,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker");
-    await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+    await openSongsTab(user);
 
     // The table, identifiable by its sortable columns — the grid has none.
     expect(
@@ -137,8 +234,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker");
-    await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+    await openSongsTab(user);
     await user.type(screen.getByRole("searchbox"), "xtal");
 
     await waitFor(() =>
@@ -155,8 +251,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker");
-    await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+    await openSongsTab(user);
 
     expect(screen.getAllByRole("searchbox")).toHaveLength(1);
   });
@@ -165,16 +260,16 @@ describe("Library", () => {
     useBackend({ rows: [] });
     render(<Library />);
 
-    expect(
-      await screen.findByText(/nothing|no tracks|empty|connect/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/no albums yet/i)).toBeInTheDocument();
   });
 
-  it("reports a failure to load", async () => {
+  it("reports a failure to load the track table", async () => {
     const backend = useBackend();
     backend.fail("library_view", "the index would not open");
+    const user = userEvent.setup();
     render(<Library />);
 
+    await openSongsTab(user);
     expect(await screen.findByRole("alert")).toHaveTextContent(/would not open/i);
   });
 });

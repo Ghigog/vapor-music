@@ -337,6 +337,35 @@ struct LibraryView {
     ascending: bool,
     #[serde(default)]
     group_by: Option<String>,
+    /// Narrow to one album, exactly. Set when a person has opened an album
+    /// rather than typed something — a substring search for "Melody" also
+    /// matches "All Melody (Reprise)" and every track whose title contains it,
+    /// which is not what opening a sleeve means.
+    #[serde(default)]
+    album: Option<String>,
+    /// Narrow to one artist, exactly. Same reasoning.
+    #[serde(default)]
+    artist: Option<String>,
+}
+
+/// One album or artist, as the grid draws it.
+///
+/// The Albums tab used to render a card per *track*, grouped under an album
+/// heading — so "All Melody" was a header with nine tiles under it, none of
+/// which was the album. A tab called Albums shows albums.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryEntity {
+    /// Album title, or artist name.
+    name: String,
+    /// The album's artist, or for an artist the number of albums. Empty when
+    /// there is nothing true to say.
+    subtitle: String,
+    tracks: usize,
+    /// A track from it, for the cover and for what plays when it is pressed.
+    /// Covers are fetched per card rather than embedded in every row: a 2 MB
+    /// sleeve on 563 rows is not a payload, it is an outage.
+    lead: String,
 }
 
 fn default_true() -> bool {
@@ -359,14 +388,7 @@ struct LibrarySection {
 fn library_view(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<LibrarySection>> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
 
-    let mut rows: Vec<Row> = vapor_library::filter(&app.rows, &view.query)
-        .into_iter()
-        .cloned()
-        .collect();
-    for row in rows.iter_mut() {
-        app.apply_tags(row);
-        app.apply_analysis(row);
-    }
+    let mut rows = resolved_rows(&app, &view);
 
     if let Some(key) = view.sort_key.as_deref().and_then(parse_sort_key) {
         vapor_library::sort_rows(&mut rows, key, view.ascending);
@@ -385,6 +407,122 @@ fn library_view(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<Libra
             rows: rows.into_iter().cloned().collect(),
         })
         .collect())
+}
+
+/// The library, filtered and with tags and analysis applied.
+///
+/// Tags are applied *before* the album and artist filters, because until they
+/// are the row's album is whatever the path implied — and narrowing on a value
+/// the row does not carry yet returns nothing.
+fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
+    let mut rows: Vec<Row> = vapor_library::filter(&app.rows, &view.query)
+        .into_iter()
+        .cloned()
+        .collect();
+    for row in rows.iter_mut() {
+        app.apply_tags(row);
+        app.apply_analysis(row);
+    }
+    if let Some(album) = view.album.as_deref() {
+        rows.retain(|r| r.album == album && r.album_source.is_known());
+    }
+    if let Some(artist) = view.artist.as_deref() {
+        rows.retain(|r| r.artist == artist && r.artist_source.is_known());
+    }
+    rows
+}
+
+/// The albums or artists in the library, one entry each.
+///
+/// Grouping rows and drawing a card per row is what the Albums tab did, and it
+/// answers a different question: "which tracks are on this album" rather than
+/// "which albums do I have". Tracks whose album or artist is unknown are left
+/// out entirely — a tab called Albums listing things that are not albums is
+/// the complaint this exists to fix. They remain reachable under Songs.
+#[tauri::command]
+fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<LibraryEntity>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let rows = resolved_rows(&app, &view);
+
+    let by_artist = matches!(view.group_by.as_deref(), Some("artist"));
+
+    // Insertion-ordered: the rows arrive sorted, and a map would scramble them.
+    let mut order: Vec<String> = Vec::new();
+    let mut members: std::collections::HashMap<String, Vec<&Row>> =
+        std::collections::HashMap::new();
+
+    for row in &rows {
+        let (name, known) = if by_artist {
+            (row.artist.clone(), row.artist_source.is_known())
+        } else {
+            (row.album.clone(), row.album_source.is_known())
+        };
+        if !known || name.is_empty() {
+            continue;
+        }
+        if !members.contains_key(&name) {
+            order.push(name.clone());
+        }
+        members.entry(name).or_default().push(row);
+    }
+
+    Ok(order
+        .into_iter()
+        .filter_map(|name| {
+            let tracks = members.get(&name)?;
+            let lead = tracks.first()?.href.clone();
+
+            let subtitle = if by_artist {
+                // How many albums, which is what distinguishes one artist tile
+                // from another at a glance.
+                let mut albums: Vec<&str> = tracks
+                    .iter()
+                    .filter(|r| r.album_source.is_known())
+                    .map(|r| r.album.as_str())
+                    .collect();
+                albums.sort_unstable();
+                albums.dedup();
+                match albums.len() {
+                    0 => format!("{} tracks", tracks.len()),
+                    1 => "1 album".to_string(),
+                    n => format!("{n} albums"),
+                }
+            } else {
+                // The album's artist — or the truth, when a compilation has
+                // several. Naming only the first would be a quiet lie.
+                let mut artists: Vec<&str> = tracks
+                    .iter()
+                    .filter(|r| r.artist_source.is_known())
+                    .map(|r| r.artist.as_str())
+                    .collect();
+                artists.sort_unstable();
+                artists.dedup();
+                match artists.len() {
+                    0 => String::new(),
+                    1 => artists[0].to_string(),
+                    _ => "Various artists".to_string(),
+                }
+            };
+
+            Some(LibraryEntity {
+                name,
+                subtitle,
+                tracks: tracks.len(),
+                lead,
+            })
+        })
+        .collect())
+}
+
+/// The embedded cover for one track, if analysis has read it.
+///
+/// One call per card rather than a field on every row. Artwork is capped at
+/// 2 MB by the tag reader, so a 563-row `library_view` carrying covers would
+/// move hundreds of megabytes through IPC on every keystroke.
+#[tauri::command]
+fn track_cover(href: String, state: State<'_, Shared>) -> Result<Option<String>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.tags.get(&href).and_then(|t| t.cover.clone()))
 }
 
 fn parse_sort_key(s: &str) -> Option<SortKey> {
@@ -2785,6 +2923,8 @@ pub fn run() {
             scan_library,
             analyse_library,
             cancel_analysis,
+            library_entities,
+            track_cover,
             analysis_status,
             cache_status,
             set_cache_max_bytes,

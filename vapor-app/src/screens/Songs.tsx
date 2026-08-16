@@ -86,9 +86,19 @@ type Load =
 export function Songs({
   onOpen,
   query: externalQuery,
+  filter,
 }: {
   onOpen?: ((href: string) => void) | undefined;
   query?: string | undefined;
+  /**
+   * Narrow to one album or artist, exactly.
+   *
+   * Set when a sleeve has been opened, not when something has been typed:
+   * a substring search for "All Melody" also matches "All Melody (Reprise)"
+   * and any track whose title contains it, which is not what opening an album
+   * means.
+   */
+  filter?: { album?: string; artist?: string } | undefined;
 }) {
   const embedded = externalQuery !== undefined;
   const [ownQuery, setOwnQuery] = useState("");
@@ -128,7 +138,14 @@ export function Songs({
     let cancelled = false;
     const t = setTimeout(() => {
       core
-        .libraryView({ query, sortKey, ascending, groupBy: "none" })
+        .libraryView({
+          query,
+          sortKey,
+          ascending,
+          groupBy: "none",
+          ...(filter?.album ? { album: filter.album } : {}),
+          ...(filter?.artist ? { artist: filter.artist } : {}),
+        })
         .then((sections) => {
           if (cancelled) return;
           // groupBy "none" returns exactly one section.
@@ -142,7 +159,7 @@ export function Songs({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query, sortKey, ascending, revision]);
+  }, [query, sortKey, ascending, revision, filter?.album, filter?.artist]);
 
   useEffect(() => {
     core

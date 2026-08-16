@@ -194,27 +194,6 @@ const SCREENS: {
   displayOnly?: string[];
 }[] = [
   {
-    name: "Library",
-    // The home screen. No navigation: this is where the app opens.
-    //
-    // Waits for the *text*, deliberately. Waiting for the button would make
-    // every test here fail in `reach` when the cards stop being buttons, which
-    // is the exact regression this file is for — and a precondition failure
-    // says "could not get to the screen", not "the screen is full of things
-    // that look pressable and are not".
-    reach: async (page) => {
-      await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
-    },
-    activate: async (page) => {
-      await page.getByRole("button", { name: /play roygbiv/i }).click();
-    },
-    byKeyboard: async (page) => {
-      await page.getByRole("button", { name: /play roygbiv/i }).focus();
-      await page.keyboard.press("Enter");
-    },
-    plays: "Roygbiv",
-  },
-  {
     name: "Songs",
     reach: async (page) => {
       await openSongs(page);

@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Songs } from "./Songs";
-import type { GroupBy, LibrarySection, Row } from "../lib/core";
+import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
 
 /**
  * Tabs map onto the index's grouping, so the UI cannot invent a category.
@@ -36,6 +36,11 @@ type Load =
   | { kind: "ready"; sections: LibrarySection[] }
   | { kind: "error"; message: string };
 
+/** Which tabs list entities rather than tracks. */
+function isEntityTab(group: GroupBy): group is "album" | "artist" {
+  return group === "album" || group === "artist";
+}
+
 export function Library({
   onOpen,
 }: {
@@ -43,6 +48,17 @@ export function Library({
   onOpen?: ((href: string) => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
+  /**
+   * The album or artist being looked inside, if any.
+   *
+   * A drill-down rather than a route: there are no URLs, and coming back is
+   * one button. Cleared whenever the tab or the search changes, because both
+   * of those mean "show me something else".
+   */
+  const [opened, setOpened] = useState<
+    { kind: "album" | "artist"; name: string } | null
+  >(null);
+  const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>("album");
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   /** A failure to start playback belongs on screen, not in the console. */
@@ -71,6 +87,36 @@ export function Library({
     };
   }, [query, groupBy]);
 
+  /** The albums or artists for the current tab. */
+  useEffect(() => {
+    if (!isEntityTab(groupBy)) {
+      setEntities(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      core
+        .libraryEntities({ query, groupBy, sortKey: "title", ascending: true })
+        .then((list) => {
+          if (!cancelled) setEntities(list);
+        })
+        .catch(() => {
+          // The grid falls back to the row view's error, which is the same
+          // request against the same index.
+          if (!cancelled) setEntities([]);
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, groupBy]);
+
+  /** Changing tab or search means "show me something else". */
+  useEffect(() => {
+    setOpened(null);
+  }, [groupBy, query]);
+
   /**
    * Play a card, queueing everything currently on screen behind it.
    *
@@ -84,6 +130,27 @@ export function Library({
       load.kind === "ready" ? load.sections.flatMap((s) => s.rows.map((r) => r.href)) : [];
     try {
       await core.playTracks(visible, href);
+    } catch (e: unknown) {
+      setPlayError(messageOf(e));
+    }
+  }
+
+  /**
+   * Play an album or artist from its first track.
+   *
+   * Queues that entity's tracks only. Queueing everything on screen would mean
+   * pressing one album and getting the whole library behind it.
+   */
+  async function playEntity(entity: LibraryEntity) {
+    try {
+      const sections = await core.libraryView({
+        groupBy: "none",
+        sortKey: "title",
+        ascending: true,
+        ...(groupBy === "album" ? { album: entity.name } : { artist: entity.name }),
+      });
+      const hrefs = sections[0]?.rows.map((r) => r.href) ?? [];
+      await core.playTracks(hrefs, entity.lead);
     } catch (e: unknown) {
       setPlayError(messageOf(e));
     }
@@ -137,41 +204,84 @@ export function Library({
         ))}
       </div>
 
-      {/* The flat list is the table, not an ungrouped grid of cards: the whole
-          point of it is the columns — artist, album, tempo, key — and sorting
-          by them. It gets the search field above rather than one of its own. */}
-      {groupBy === "none" ? (
-        <Songs onOpen={onOpen} query={query} />
-      ) : (
-      <div className="library__body">
-        <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
-
-        {load.kind === "loading" && <p className="label">reading library</p>}
-
-        {load.kind === "error" && (
-          <div className="library__empty">
-            <p className="library__empty-title">Could not read the library</p>
-            <ErrorNotice error={load.message} />
+      {/* Inside an album or an artist: the same table, narrowed to it. */}
+      {opened ? (
+        <div className="library__body">
+          <div className="library__crumb">
+            <button className="library__back" onClick={() => setOpened(null)}>
+              ‹ {opened.kind === "album" ? "Albums" : "Artists"}
+            </button>
+            <h2 className="library__opened">{opened.name}</h2>
           </div>
-        )}
+          <Songs
+            onOpen={onOpen}
+            query=""
+            filter={
+              opened.kind === "album"
+                ? { album: opened.name }
+                : { artist: opened.name }
+            }
+          />
+        </div>
+      ) : groupBy === "none" ? (
+        /* The flat list is the table, not an ungrouped grid of cards: the whole
+           point of it is the columns — artist, album, tempo, key — and sorting
+           by them. It gets the search field above rather than one of its own. */
+        <Songs onOpen={onOpen} query={query} />
+      ) : isEntityTab(groupBy) ? (
+        <div className="library__body">
+          <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
 
-        {load.kind === "ready" && trackCount === 0 && <EmptyLibrary query={query} />}
+          {entities === null && <p className="label">reading library</p>}
 
-        {load.kind === "ready" &&
-          trackCount > 0 &&
-          load.sections.map((section) => (
-            <section key={section.header || "all"} className="library__section">
-              {section.header && (
-                <h2 className="library__section-head label">{section.header}</h2>
-              )}
-              <div className="library__grid">
-                {section.rows.map((row) => (
-                  <Card key={row.href} row={row} onPlay={() => void play(row.href)} />
-                ))}
-              </div>
-            </section>
-          ))}
-      </div>
+          {entities !== null && entities.length === 0 && (
+            <EmptyLibrary query={query} kind={groupBy} />
+          )}
+
+          {entities !== null && entities.length > 0 && (
+            <div className="library__grid">
+              {entities.map((entity) => (
+                <EntityCard
+                  key={entity.name}
+                  entity={entity}
+                  kind={groupBy}
+                  onOpen={() => setOpened({ kind: groupBy, name: entity.name })}
+                  onPlay={() => void playEntity(entity)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="library__body">
+          <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
+
+          {load.kind === "loading" && <p className="label">reading library</p>}
+
+          {load.kind === "error" && (
+            <div className="library__empty">
+              <p className="library__empty-title">Could not read the library</p>
+              <ErrorNotice error={load.message} />
+            </div>
+          )}
+
+          {load.kind === "ready" && trackCount === 0 && <EmptyLibrary query={query} />}
+
+          {load.kind === "ready" &&
+            trackCount > 0 &&
+            load.sections.map((section) => (
+              <section key={section.header || "all"} className="library__section">
+                {section.header && (
+                  <h2 className="library__section-head label">{section.header}</h2>
+                )}
+                <div className="library__grid">
+                  {section.rows.map((row) => (
+                    <Card key={row.href} row={row} onPlay={() => void play(row.href)} />
+                  ))}
+                </div>
+              </section>
+            ))}
+        </div>
       )}
     </div>
   );
@@ -184,7 +294,13 @@ export function Library({
  * with different fixes, and collapsing them into one message tells a person
  * with a full library that their music is missing.
  */
-function EmptyLibrary({ query }: { query: string }) {
+function EmptyLibrary({
+  query,
+  kind,
+}: {
+  query: string;
+  kind?: "album" | "artist";
+}) {
   if (query.trim()) {
     return (
       <div className="library__empty">
@@ -193,6 +309,23 @@ function EmptyLibrary({ query }: { query: string }) {
       </div>
     );
   }
+  // An entity tab can be empty while the library is not: nothing has an album
+  // yet because nothing has been analysed, and the files are not filed in
+  // folders either. Saying "no music yet" there would be false.
+  if (kind) {
+    return (
+      <div className="library__empty">
+        <p className="library__empty-title">
+          {kind === "album" ? "No albums yet" : "No artists yet"}
+        </p>
+        <p className="library__empty-body">
+          Tracks are filed under an {kind} once their folder or their tags say
+          which one. Everything you have is under Songs.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="library__empty">
       <p className="library__empty-title">No music yet</p>
@@ -200,6 +333,98 @@ function EmptyLibrary({ query }: { query: string }) {
         Connect your storage in Settings and Vapor will index it here. Nothing
         leaves your device.
       </p>
+    </div>
+  );
+}
+
+/**
+ * The embedded sleeve for a track, fetched on its own.
+ *
+ * One request per card rather than a field on every row: artwork is capped at
+ * 2 MB by the tag reader, and 563 rows carrying covers would move hundreds of
+ * megabytes through IPC on each keystroke.
+ *
+ * Absent is the normal case, not a failure — a track has no cover until
+ * analysis has read the file, and a freshly scanned library has none at all.
+ * So there is no error state here: the gradient placeholder *is* the answer.
+ */
+function Cover({ href, label }: { href: string; label: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+    core
+      .trackCover(href)
+      .then((data) => {
+        if (!cancelled) setSrc(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSrc(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [href]);
+
+  return (
+    <div className="card__art">
+      {src ? (
+        <img className="card__img" src={src} alt={`Cover of ${label}`} />
+      ) : (
+        <div className="card__art-sheen" aria-hidden="true" />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One album or artist.
+ *
+ * Two verbs, so both are reachable: pressing the card opens it, and the play
+ * button on the sleeve starts it. Collapsing those into one gesture would mean
+ * either you cannot see what is on an album without playing it, or you cannot
+ * play it without going in first.
+ */
+function EntityCard({
+  entity,
+  kind,
+  onOpen,
+  onPlay,
+}: {
+  entity: LibraryEntity;
+  kind: "album" | "artist";
+  onOpen: () => void;
+  onPlay: () => void;
+}) {
+  const noun = kind === "album" ? "album" : "artist";
+  return (
+    <div className={"card card--entity" + (kind === "artist" ? " card--round" : "")}>
+      <button
+        type="button"
+        className="card__open"
+        onClick={onOpen}
+        aria-label={`Open the ${noun} ${entity.name}`}
+      >
+        <Cover href={entity.lead} label={entity.name} />
+      </button>
+      <button
+        type="button"
+        className="card__play"
+        onClick={onPlay}
+        aria-label={`Play ${entity.name}`}
+      >
+        ▶
+      </button>
+      <div className="card__meta">
+        <span className="card__title" title={entity.name}>
+          {entity.name}
+        </span>
+        <span className="card__sub" title={entity.subtitle}>
+          {entity.subtitle ||
+            `${entity.tracks} ${entity.tracks === 1 ? "track" : "tracks"}`}
+        </span>
+      </div>
     </div>
   );
 }
