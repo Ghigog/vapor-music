@@ -226,6 +226,7 @@ export class FakeBackend {
       bpmOverrides: {},
       cacheMaxBytes: 8_000_000_000,
       metadataLookupEnabled: options.metadataLookup ?? false,
+      vibeLimit: 0.5,
     };
     this.lyricsFor = options.lyrics ?? {};
     this.keychainSilentlyFails = options.keychainSilentlyFails ?? false;
@@ -567,6 +568,16 @@ export class FakeBackend {
         }
         this.attempted.add(href);
         return this.lookedUp(href);
+      }
+
+      case "set_vibe_limit": {
+        const limit = Number(a.limit);
+        if (!Number.isFinite(limit)) throw new Error("That is not a Vibe Limit.");
+        this.settings = {
+          ...this.settings,
+          vibeLimit: Math.min(Math.max(limit, 0.1), 1),
+        };
+        return this.settings;
       }
 
       case "set_metadata_lookup": {

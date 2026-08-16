@@ -14,7 +14,7 @@
  * own files.
  */
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { Queue } from "./Queue";
@@ -932,6 +932,27 @@ describe("Vibe DJ — Match, Fresh and Switch", () => {
       ),
     );
     expect(backend.called("choose_next")).toBe(true);
+  });
+
+  /**
+   * The Mix Tuner (§6). `transition_cost` has taken this threshold as a
+   * parameter since the port and all three callers passed the same constant,
+   * so the control the engine was built for was the one thing missing.
+   */
+  it("sets the Vibe Limit, and writes it on release rather than per pixel", async () => {
+    const backend = await playing();
+    const user = userEvent.setup();
+    render(<Vibe />);
+
+    const slider = await screen.findByLabelText(/vibe limit/i);
+    // Two moves and one release: one write, not two.
+    fireEvent.change(slider, { target: { value: "0.8" } });
+    fireEvent.change(slider, { target: { value: "0.9" } });
+    expect(backend.called("set_vibe_limit")).toBe(false);
+
+    await user.click(slider);
+
+    await waitFor(() => expect(backend.state.settings.vibeLimit).toBe(0.9));
   });
 
   it("says so rather than showing empty cards when nothing is analysed", async () => {

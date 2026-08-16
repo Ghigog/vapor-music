@@ -135,7 +135,32 @@ pub struct Settings {
     /// change, not the feature.
     #[serde(default)]
     pub metadata_lookup_enabled: bool,
+
+    /// The Vibe Limit: the energy difference between consecutive tracks past
+    /// which the pathfinder starts paying a steep penalty (§6 of
+    /// `ai_dj_workflow.md`).
+    ///
+    /// Strict keeps a set at one intensity; loose permits drops and climbs.
+    /// `transition_cost` has taken this as a parameter since the port and
+    /// every caller passed the constant, so the Mix Tuner was a control the
+    /// engine was already built for and nothing exposed.
+    #[serde(default = "default_vibe_limit")]
+    pub vibe_limit: f32,
 }
+
+fn default_vibe_limit() -> f32 {
+    crate::track::DEFAULT_ENERGY_THRESHOLD
+}
+
+/// Strictest Vibe Limit worth offering.
+///
+/// Below this the penalty applies to almost every pair, so the cost model
+/// stops discriminating and the "limit" becomes a flat tax — a slider whose
+/// bottom end does nothing is worse than one that stops there.
+pub const MIN_VIBE_LIMIT: f32 = 0.1;
+/// Loosest. At 1.0 nothing is ever over the limit, which is the honest way to
+/// spell "no limit" without a separate switch for it.
+pub const MAX_VIBE_LIMIT: f32 = 1.0;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -152,6 +177,7 @@ impl Default for Settings {
             bpm_overrides: std::collections::HashMap::new(),
             cache_max_bytes: default_cache_max_bytes(),
             metadata_lookup_enabled: false,
+            vibe_limit: default_vibe_limit(),
         }
     }
 }
@@ -201,6 +227,14 @@ impl Settings {
         self.base_font_size = self.base_font_size.clamp(8, 48);
         self.ui_scale = self.ui_scale.clamp(0.5, 3.0);
         self.cache_max_bytes = self.cache_max_bytes.max(MIN_CACHE_BYTES);
+        // `clamp` panics on a NaN bound and passes NaN through unchanged, and
+        // this value comes off disk — so the non-finite case is handled before
+        // it, not by it.
+        self.vibe_limit = if self.vibe_limit.is_finite() {
+            self.vibe_limit.clamp(MIN_VIBE_LIMIT, MAX_VIBE_LIMIT)
+        } else {
+            default_vibe_limit()
+        };
         if self.remote.folder.trim().is_empty() {
             self.remote.folder = default_folder();
         }
@@ -214,6 +248,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::track::DEFAULT_ENERGY_THRESHOLD;
 
     #[test]
     fn defaults_match_the_godot_values() {
@@ -342,6 +377,48 @@ mod tests {
         }
         .sanitised();
         assert_eq!(s.cache_max_bytes, MIN_CACHE_BYTES);
+    }
+
+    /// The Vibe Limit comes off disk, so `sanitised` is the only thing
+    /// between a corrupt file and a cost model that stops discriminating.
+    #[test]
+    fn a_vibe_limit_outside_the_band_is_pulled_back_into_it() {
+        let strict = Settings {
+            vibe_limit: 0.0,
+            ..Default::default()
+        }
+        .sanitised();
+        assert_eq!(strict.vibe_limit, MIN_VIBE_LIMIT);
+
+        let loose = Settings {
+            vibe_limit: 9.0,
+            ..Default::default()
+        }
+        .sanitised();
+        assert_eq!(loose.vibe_limit, MAX_VIBE_LIMIT);
+    }
+
+    /// `clamp` panics on a NaN bound and passes a NaN value straight through,
+    /// so a NaN in the file would otherwise reach `transition_cost` and make
+    /// every comparison in the search false.
+    #[test]
+    fn a_vibe_limit_that_is_not_a_number_falls_back_to_the_default() {
+        let s = Settings {
+            vibe_limit: f32::NAN,
+            ..Default::default()
+        }
+        .sanitised();
+
+        assert_eq!(s.vibe_limit, DEFAULT_ENERGY_THRESHOLD);
+    }
+
+    /// A settings file written before the Vibe Limit existed opens with the
+    /// behaviour it had — the constant every call site used to pass.
+    #[test]
+    fn a_settings_file_without_a_vibe_limit_keeps_the_old_behaviour() {
+        let s: Settings = serde_json::from_str(r#"{"base_font_size": 16}"#).expect("parse");
+
+        assert_eq!(s.vibe_limit, DEFAULT_ENERGY_THRESHOLD);
     }
 
     /// A deliberately large cache is the person's call and must survive.

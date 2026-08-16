@@ -79,6 +79,14 @@ export function Vibe({
   const [helping, setHelping] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The Vibe Limit (§6), held locally while the slider is being dragged.
+   *
+   * A slider needs a value on every frame and the backend needs one on
+   * release; sharing one piece of state between the two means either a disk
+   * write per pixel or a thumb that does not follow the pointer.
+   */
+  const [limit, setLimit] = useState(0.5);
 
   const refresh = useCallback(async () => {
     const [p, b, c] = await Promise.allSettled([
@@ -90,6 +98,26 @@ export function Vibe({
     if (b.status === "fulfilled") setBlend(b.value);
     if (c.status === "fulfilled") setCandidates(c.value);
   }, []);
+
+  // Read once. The slider owns it afterwards, so polling it would fight the
+  // thumb of anyone mid-drag.
+  useEffect(() => {
+    core
+      .settings()
+      .then((s) => setLimit(s.vibeLimit))
+      .catch(() => {});
+  }, []);
+
+  const saveLimit = useCallback(async () => {
+    try {
+      const saved = await core.setVibeLimit(limit);
+      // Take the value back: the backend clamps, and a slider showing
+      // something the engine is not using is worse than one that snaps.
+      setLimit(saved.vibeLimit);
+    } catch (e: unknown) {
+      setError(messageOf(e));
+    }
+  }, [limit]);
 
   useEffect(() => {
     void refresh();
@@ -375,6 +403,42 @@ export function Vibe({
           <p className="vibe__note">
             Energy is loudness, brightness and tempo in equal parts — enough to
             tell a loud ballad from a quiet banger, which loudness alone cannot.
+          </p>
+
+          {/*
+            The Mix Tuner (§6). `transition_cost` has taken this threshold as a
+            parameter since the port and every caller passed the same constant,
+            so the control the engine was built for was the one thing missing.
+            It sits under the curves because it governs them: the curve says
+            where the set goes, this says how far it may jump getting there.
+          */}
+          <div className="vibe__tuner">
+            <label className="vibe__tuner-label label" htmlFor="vibe-limit">
+              vibe limit
+            </label>
+            <span className="vibe__tuner-end label">strict</span>
+            <input
+              id="vibe-limit"
+              className="vibe__tuner-slider"
+              type="range"
+              min={core.MIN_VIBE_LIMIT}
+              max={core.MAX_VIBE_LIMIT}
+              step={0.05}
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              // Written on release rather than on every pixel of the drag: it
+              // is a disk write and a re-plan, and a slider fires this fifty
+              // times crossing the track.
+              onPointerUp={() => void saveLimit()}
+              onKeyUp={() => void saveLimit()}
+            />
+            <span className="vibe__tuner-end label">loose</span>
+            <span className="vibe__tuner-value numeric">{limit.toFixed(2)}</span>
+          </div>
+          <p className="vibe__note">
+            The most energy the DJ will step across between two tracks. Strict
+            holds one intensity all the way; loose lets it drop the floor and
+            climb back.
           </p>
         </section>
         </>

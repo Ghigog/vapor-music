@@ -342,7 +342,7 @@ pub fn image_data_uri(path: &std::path::Path) -> Option<String> {
 fn image_mime(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
         "image/png"
-    } else if bytes.starts_with(&[b'G', b'I', b'F']) {
+    } else if bytes.starts_with(b"GIF") {
         "image/gif"
     } else if bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
         "image/webp"

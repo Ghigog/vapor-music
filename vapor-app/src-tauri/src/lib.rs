@@ -704,6 +704,26 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     Ok(LookedUp::of(&app, &href))
 }
 
+/// Set the Vibe Limit — §6's Mix Tuner.
+///
+/// Refused rather than clamped when it is not a number at all: a slider cannot
+/// produce one, so a NaN here means something else is wrong and quietly
+/// substituting a value would hide it. Out-of-range *is* clamped, because the
+/// ends of the slider are exactly the ends of the band.
+#[tauri::command]
+fn set_vibe_limit(limit: f32, state: State<'_, Shared>) -> Result<Settings> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if !limit.is_finite() {
+        return Err(Error("That is not a Vibe Limit.".to_string()));
+    }
+    app.settings.vibe_limit = limit.clamp(
+        vapor_library::settings::MIN_VIBE_LIMIT,
+        vapor_library::settings::MAX_VIBE_LIMIT,
+    );
+    app.save_settings()?;
+    Ok(app.settings.clone())
+}
+
 /// A looked-up image as a `data:` URI, read from the file it was cached in.
 ///
 /// Takes a URL rather than an href because one sleeve serves every track on
@@ -2050,7 +2070,7 @@ fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<Strin
         &tracks,
         &req.start,
         Curve::parse(&req.curve),
-        vapor_library::DEFAULT_ENERGY_THRESHOLD,
+        app.settings.vibe_limit,
         &skip_penalties(&app),
     ))
 }
@@ -2215,7 +2235,7 @@ fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<V
             &pool,
             &start,
             Curve::parse(&curve),
-            vapor_library::DEFAULT_ENERGY_THRESHOLD,
+            app.settings.vibe_limit,
             // What the app has learned from being skipped (TD-14).
             &skip_penalties(&app),
         ),
@@ -2427,7 +2447,7 @@ fn choose_next(href: String, curve: String, state: State<'_, Shared>) -> Result<
         &pool,
         &href,
         Curve::parse(&curve),
-        vapor_library::DEFAULT_ENERGY_THRESHOLD,
+        app.settings.vibe_limit,
         &skip_penalties(&app),
     );
 
@@ -3514,6 +3534,7 @@ pub fn run() {
             look_up_track,
             looked_up_image,
             set_metadata_lookup,
+            set_vibe_limit,
             queue_state,
             queue_view,
             remove_from_queue,

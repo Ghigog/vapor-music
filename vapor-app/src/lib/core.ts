@@ -208,6 +208,22 @@ export interface Settings {
    * a lookup sends the artist and title of what is playing to a third party.
    */
   metadataLookupEnabled: boolean;
+  /**
+   * The Vibe Limit: the energy difference between consecutive tracks past
+   * which the pathfinder starts paying a steep penalty (ai_dj_workflow.md §6).
+   *
+   * Strict keeps a set at one intensity; loose permits drops and climbs.
+   */
+  vibeLimit: number;
+}
+
+/** The band the Vibe Limit is offered over. Matches `settings.rs`. */
+export const MIN_VIBE_LIMIT = 0.1;
+export const MAX_VIBE_LIMIT = 1.0;
+
+/** Set the Vibe Limit. Out-of-range values are clamped to the band. */
+export function setVibeLimit(limit: number): Promise<Settings> {
+  return invoke<Settings>("set_vibe_limit", { limit });
 }
 
 // ---------------------------------------------------------------------------

@@ -449,3 +449,38 @@
   background: rgba(var(--amber-rgb), 0.14);
   border: 1px solid rgba(var(--amber-rgb), 0.36);
 }
+
+/* ---- The Mix Tuner (ai_dj_workflow.md §6) --------------------------------
+   Under the curves because it governs them: the curve says where the set is
+   going, this says how far it may jump getting there.
+------------------------------------------------------------------------- */
+
+.vibe__tuner {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 4px;
+}
+
+.vibe__tuner-label {
+  grid-column: 1 / -1;
+  color: var(--ink-3);
+}
+
+.vibe__tuner-end {
+  color: var(--ink-3);
+}
+
+.vibe__tuner-slider {
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.vibe__tuner-value {
+  min-width: 4ch;
+  text-align: right;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
