@@ -427,6 +427,17 @@ export interface SyncWhat {
   playlists: boolean;
 }
 
+/**
+ * Whether hardware media keys will reach this build.
+ *
+ * False on macOS when the app is running from `tauri dev` rather than a built
+ * `.app` — macOS routes media keys to the Now Playing *application*, and a
+ * bare binary is not one.
+ */
+export function mediaKeysAvailable(): Promise<boolean> {
+  return invoke<boolean>("media_keys_available");
+}
+
 /** Turn local-network sync on or off. Off also forgets who was paired. */
 export function setSyncEnabled(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_sync_enabled", { enabled });

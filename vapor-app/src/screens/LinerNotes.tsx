@@ -169,7 +169,9 @@ export function LinerNotes({
           </p>
           <p className="liner__where">
             <span
-              className={"liner__dot" + (track.cached ? "" : " liner__dot--remote")}
+              className={
+                "liner__dot" + (track.cached ? "" : " liner__dot--remote")
+              }
               aria-hidden="true"
             />
             <span className="label">
@@ -222,8 +224,8 @@ export function LinerNotes({
             </dl>
             <p className="liner__note">
               Worked out on this device from the audio itself — no lookup, no
-              fingerprint sent anywhere. The cue points are what the DJ schedules
-              a mix from.
+              fingerprint sent anywhere. The cue points are what the DJ
+              schedules a mix from.
             </p>
           </section>
         </>
@@ -231,8 +233,7 @@ export function LinerNotes({
         <section className="liner__card glass">
           <h2 className="label">not analysed yet</h2>
           <p className="liner__note">
-            Tempo, key and cue points appear here once this track has been
-            listened to. Run an analysis pass from Settings.
+            Tempo, key and cue points appear once this has been listened to.
           </p>
         </section>
       )}
@@ -305,9 +306,7 @@ export function LinerNotes({
         ) : looked?.allowed ? (
           <>
             <p className="liner__note">
-              Not looked up yet. This is the one thing on this screen that
-              leaves the device: the artist and title go to LRCLIB and Deezer,
-              and nothing else does.
+              Sends this track's artist and title to LRCLIB and Deezer.
             </p>
             <button
               className="liner__lookup"
@@ -319,10 +318,8 @@ export function LinerNotes({
           </>
         ) : (
           <p className="liner__note">
-            Lyrics come from LRCLIB, which means sending this track's artist and
-            title to a server that is not yours. That is switched off, and
-            everything else on this screen was worked out here without it. Turn
-            it on in Settings if you want the words.
+            Off. Lyrics are the one thing here that comes from elsewhere —
+            switch it on in Settings.
           </p>
         )}
       </section>
@@ -341,11 +338,11 @@ export function LinerNotes({
         <h2 className="label">where it lives</h2>
         <p className="liner__path numeric">{track.hrefPath}</p>
         <p className="liner__note">
-          {/* The design's "credits" become this: the honest provenance of every
-              field above. */}
+          {/* The design's "credits" become this: where every field above came
+              from. One line — it is a footnote, not the subject. */}
           {track.tagged
-            ? "Read from the file's own tags where it had them, and from its path where it did not — so a badly named, untagged file is still a badly named track."
-            : "Read from the file's path. Its tags are read when the track is analysed, so this fills in once it has been listened to."}
+            ? "From the file's tags, and its path where it had none."
+            : "From the file's path. Its tags are read when it is analysed."}
         </p>
       </section>
     </div>

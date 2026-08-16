@@ -84,32 +84,27 @@ What follows is what is still wrong.
 
 Ranked by what would bite a person first.
 
-### 1. Nothing has ever talked to a real server
+### 1. Analysis has not run over the library
 
-**The credential store was a mock for the entire life of the project (TD-50)** —
-`keyring = "3"` with no backend feature keeps the secret in one `Entry` object
-and reports success. Nothing ever reached the keychain, so the WebDAV path has
-never worked once, on any machine. That is now fixed, and it means every
-downstream claim about the remote path is untested against reality.
+**Corrected 2026-08-16.** This section used to say "nothing has ever talked to
+a real server" and "he has never confirmed a scan works". Both were written
+*before* TD-50 was fixed and neither was revisited; they were then repeated at
+Dylan several times as though still true. **The scan works.** A Liner Notes
+screenshot shows a real Koofr path —
+`/dav/Koofr/Music/Lisa Hannigan/ Passenger [342673496] [2011]/02 - …m4a` —
+with artist, album and year parsed correctly off it. The library is real, it
+scanned, and it has been scanned repeatedly.
 
-Six separate defects reached Dylan when he first tried, and all six are now
-fixed: a rename deleting the keychain entry, scan reading the keychain instead
-of the form, the password box claiming "unchanged" when nothing was stored, the
-result rendering off screen, and **TD-49 — a mistyped folder reporting "Found 0
-tracks" instead of saying the folder was not there**, which is the likeliest
-explanation for "doesn't show anything to analyze".
+What that same screenshot shows is the actual gap: **NOT ANALYSED YET**, and
+`on your server` rather than on this device. So the untested path is not the
+scan, it is everything after it — fetch into the cache, decode, analyse, and
+the tags that only get read during analysis. Until a pass completes, every
+track has no tempo, no key and no cue points, which means the DJ has nothing to
+work with and the Vibe screen has nothing to offer.
 
-**He has never confirmed a scan works.** The keychain had no entry when checked,
-which was read at the time as "he never typed one in" — it was TD-50's symptom:
-
-```bash
-security find-generic-password -s com.dylangrowcoot.vapormusic.webdav -a "$USERNAME"
-```
-
-So the credential and scan paths are fixed *in theory* and unconfirmed in
-practice. This is the top item: everything downstream — analysis, playback,
-mixing — is unexercised against real files, and none of it can be trusted until
-one real library has been through it.
+**Ask what the analysis pass does on a real library before assuming anything
+downstream is broken.** And do not write "never" about a thing without checking
+whether a fix has landed since.
 
 ### 2. Nothing on this list has been used by a person
 

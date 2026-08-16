@@ -609,12 +609,19 @@ describe("Liner Notes", () => {
      * Off is the shipped default, and the screen has to say what turning it on
      * would cost rather than showing an empty panel.
      */
-    it("says what a lookup would send when lookups are switched off", async () => {
+    /**
+     * Asserts the behaviour, not the sentence: off is named as a state, the
+     * control is absent, and nothing is sent. An earlier version matched the
+     * exact wording and broke when the screen was cut down — which is rule 1
+     * in `docs/TESTING.md`, written after the same mistake.
+     */
+    it("says lookups are off, and offers no way to trip one by accident", async () => {
       const backend = useBackend();
       render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
 
-      expect(await screen.findByText(/artist and title to a server/i))
-        .toBeInTheDocument();
+      const lyrics = (await screen.findByText(/^lyrics$/i)).closest("section");
+      expect(lyrics).toHaveTextContent(/off/i);
+      expect(lyrics).toHaveTextContent(/settings/i);
       expect(
         screen.queryByRole("button", { name: /look up/i }),
       ).not.toBeInTheDocument();

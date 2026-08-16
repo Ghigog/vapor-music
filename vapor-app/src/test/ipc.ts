@@ -665,6 +665,9 @@ export class FakeBackend {
       case "sync_view":
         return this.syncView();
 
+      case "media_keys_available":
+        return true;
+
       case "set_sync_enabled": {
         this.settings = { ...this.settings, syncEnabled: a.enabled === true };
         if (!this.settings.syncEnabled) this.trusted = [];

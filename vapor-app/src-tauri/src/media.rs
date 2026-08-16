@@ -70,18 +70,51 @@ pub fn press_of(event: &souvlaki::MediaControlEvent) -> Option<Press> {
     }
 }
 
+/// How often the position is refreshed while a track plays.
+///
+/// Control Center draws a scrubber that advances on its own between updates,
+/// so this is a correction rather than an animation — but without *any* update
+/// the correction never happens, and a paused-then-resumed track leaves the
+/// scrubber somewhere it is not.
+pub const POSITION_REFRESH: f64 = 5.0;
+
 /// Whether two states differ in a way worth telling the system about.
 ///
-/// The supervisor ticks four times a second and the position moves every
-/// tick, so sending on every change would be four D-Bus round trips a second
-/// for a number nobody is reading. Position alone is not a reason to send;
-/// anything else is.
+/// The supervisor ticks four times a second, so sending on every tick would be
+/// four round trips a second for a number nobody is reading. But sending
+/// *only* on a change leaves the scrubber frozen at wherever the track was
+/// when it started, which is what the first version of this did: position was
+/// excluded entirely, so after the title landed nothing was ever sent again.
+///
+/// So position counts, at a fifth of a Hz.
 pub fn worth_sending(previous: &NowPlaying, next: &NowPlaying) -> bool {
     previous.title != next.title
         || previous.artist != next.artist
         || previous.album != next.album
         || previous.playing != next.playing
         || (previous.duration - next.duration).abs() > 0.5
+        || (next.playing && (next.position - previous.position).abs() >= POSITION_REFRESH)
+}
+
+/// Whether this process is running from inside a `.app` bundle.
+///
+/// macOS routes hardware media keys to the *Now Playing* application, and an
+/// application is something with a bundle identifier — which comes from being
+/// inside `Foo.app/Contents/MacOS/`. A bare binary registers with
+/// `MPRemoteCommandCenter` perfectly happily and then never hears from it.
+///
+/// Always true off macOS, where nothing about this applies.
+pub fn bundled() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            let parent = path.parent()?.to_string_lossy().into_owned();
+            Some(parent.ends_with(".app/Contents/MacOS"))
+        })
+        .unwrap_or(false)
 }
 
 /// The system's media controls, if this platform gave us any.
@@ -129,15 +162,46 @@ impl Controls {
             }
         };
 
+        if !bundled() {
+            // souvlaki's macOS backend returns `Ok` unconditionally — `new`
+            // and `attach` cannot fail — so a successful registration says
+            // nothing about whether the keys will actually arrive. This is the
+            // condition that decides it, and without saying so out loud the
+            // only symptom is a keyboard that does nothing.
+            eprintln!(
+                "media controls: this process is not inside a .app bundle, so macOS will not \
+                 route media keys to it. `npm run app` (tauri dev) runs the bare binary; \
+                 `npm run app:build` produces the bundle. Everything else works either way."
+            );
+        }
+
         Arc::new(Controls {
             inner: Mutex::new(controls),
             last: Mutex::new(None),
         })
     }
 
+    /// Whether the platform will actually deliver media keys to this process.
+    ///
+    /// Reported so the Settings screen can say so, rather than leaving a
+    /// person to conclude the feature is broken when it is the *build* that
+    /// cannot receive keys.
+    pub fn deliverable(&self) -> bool {
+        self.inner.lock().map(|c| c.is_some()).unwrap_or(false) && bundled()
+    }
+
     /// Tell the system what is playing.
     ///
     /// Skipped when nothing meaningful has changed — see [`worth_sending`].
+    ///
+    /// **Called on the main thread**, via [`Controls::publish_from`]. The
+    /// caller is the playback supervisor, which is a thread of its own, and
+    /// `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` are AppKit-adjacent
+    /// APIs — souvlaki does not marshal for you (it dispatches to a *global*
+    /// queue, and only for artwork). Calling them off the main thread is
+    /// undefined rather than merely discouraged, and the observable symptom is
+    /// exactly what it was here: the controls register, report success, and
+    /// then nothing on the keyboard reaches the app.
     pub fn publish(&self, now: &NowPlaying) {
         {
             let last = self.last.lock().ok();
@@ -178,6 +242,25 @@ impl Controls {
         if let Ok(mut last) = self.last.lock() {
             *last = Some(now.clone());
         }
+    }
+
+    /// Publish from any thread, by hopping to the main one.
+    ///
+    /// `run_on_main_thread` queues onto the platform's own event loop, which
+    /// is where the media APIs expect to be called from. It returns
+    /// immediately, so the supervisor's tick is not lengthened by a round trip
+    /// through AppKit.
+    pub fn publish_from(self: &Arc<Self>, handle: &tauri::AppHandle, now: NowPlaying) {
+        // The cheap comparison happens here rather than on the main thread, so
+        // an unchanged state costs a lock and not a dispatch.
+        if let Ok(last) = self.last.lock() {
+            if last.as_ref().is_some_and(|p| !worth_sending(p, &now)) {
+                return;
+            }
+        }
+
+        let controls = Arc::clone(self);
+        let _ = handle.run_on_main_thread(move || controls.publish(&now));
     }
 }
 
@@ -245,6 +328,40 @@ mod tests {
         assert!(worth_sending(
             &now("Windowlicker", true, 10.0),
             &now("Windowlicker", false, 10.0)
+        ));
+    }
+
+    /// The frozen-scrubber bug. Position was excluded from `worth_sending`
+    /// entirely, so once the title had landed nothing was ever sent again and
+    /// Control Center showed a playhead stuck where the track started.
+    #[test]
+    fn a_playing_track_republishes_its_position_periodically() {
+        let start = now("Windowlicker", true, 10.0);
+
+        assert!(!worth_sending(&start, &now("Windowlicker", true, 12.0)));
+        assert!(worth_sending(
+            &start,
+            &now("Windowlicker", true, 10.0 + POSITION_REFRESH)
+        ));
+    }
+
+    /// A seek backwards is a jump the system has to be told about, and it is
+    /// the case a one-directional comparison would miss.
+    #[test]
+    fn seeking_backwards_counts_as_a_move() {
+        assert!(worth_sending(
+            &now("Windowlicker", true, 90.0),
+            &now("Windowlicker", true, 4.0)
+        ));
+    }
+
+    /// Paused, the position is not advancing on its own, so there is nothing
+    /// to correct and nothing to send.
+    #[test]
+    fn a_paused_track_does_not_republish_on_position_alone() {
+        assert!(!worth_sending(
+            &now("Windowlicker", false, 10.0),
+            &now("Windowlicker", false, 40.0)
         ));
     }
 

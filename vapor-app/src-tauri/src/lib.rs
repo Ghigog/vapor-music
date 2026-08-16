@@ -820,6 +820,18 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     Ok(LookedUp::of(&app, &href))
 }
 
+/// Whether hardware media keys will reach this build (MIG-023).
+///
+/// False on macOS when the process is not inside a `.app` bundle: the keys go
+/// to the Now Playing *application*, and a bare binary from `tauri dev` is not
+/// one. Reported rather than left to be discovered, because souvlaki registers
+/// successfully either way and the only other symptom is a keyboard that does
+/// nothing.
+#[tauri::command]
+fn media_keys_available() -> bool {
+    media::bundled()
+}
+
 /// Turn local-network sync on or off.
 ///
 /// Turning it on starts the beacon and the server there and then, because
@@ -2664,11 +2676,13 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
             };
 
             // The one place that already knows, four times a second, what is
-            // playing and whether it still is. `publish` drops anything that
-            // has not meaningfully changed, so this is not four round trips a
-            // second — see `media::worth_sending`.
+            // playing and whether it still is. `publish_from` drops anything
+            // that has not meaningfully changed, so this is not four round
+            // trips a second — see `media::worth_sending` — and it hops to the
+            // main thread, which is where the media APIs have to be called
+            // from and where this was not calling them.
             let showing = now_playing(&app);
-            controls.publish(&showing);
+            controls.publish_from(&app_handle, showing);
 
             // A mix completed, so the decks have changed roles: what was cued
             // is now what is playing. Nothing needs loading — the audio is
@@ -4545,6 +4559,7 @@ pub fn run() {
             set_metadata_lookup,
             set_vibe_limit,
             set_sync_enabled,
+            media_keys_available,
             sync_view,
             open_pairing,
             cancel_pairing,
