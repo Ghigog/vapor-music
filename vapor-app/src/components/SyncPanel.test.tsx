@@ -40,7 +40,7 @@ function trusted(over: Partial<core.TrustedDevice> = {}): core.TrustedDevice {
 
 describe("Sync panel", () => {
   it("names this device, so the other end can be told what to look for", async () => {
-    useBackend();
+    useBackend({ syncEnabled: true });
     render(<SyncPanel />);
 
     expect(await screen.findByText(/this device is/i)).toBeInTheDocument();
@@ -48,7 +48,7 @@ describe("Sync panel", () => {
 
   /** A lone machine is the normal case, and it needs an explanation. */
   it("explains an empty network rather than showing a blank", async () => {
-    useBackend({ peers: [] });
+    useBackend({ syncEnabled: true, peers: [] });
     render(<SyncPanel />);
 
     expect(
@@ -58,7 +58,7 @@ describe("Sync panel", () => {
   });
 
   it("lists a device it can see, and offers both ends of the exchange", async () => {
-    useBackend({ peers: [peer()] });
+    useBackend({ syncEnabled: true, peers: [peer()] });
     render(<SyncPanel />);
 
     expect(await screen.findByText("Dylan's Phone")).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("Sync panel", () => {
   });
 
   it("shows a code for the other device to type", async () => {
-    useBackend({ peers: [peer()] });
+    useBackend({ syncEnabled: true, peers: [peer()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -79,7 +79,7 @@ describe("Sync panel", () => {
   });
 
   it("pairs when the right code is typed", async () => {
-    const backend = useBackend({ peers: [peer()] });
+    const backend = useBackend({ syncEnabled: true, peers: [peer()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -92,7 +92,7 @@ describe("Sync panel", () => {
 
   /** A wrong code has to say so, and say how many tries are left. */
   it("reports a refused code instead of failing quietly", async () => {
-    useBackend({ peers: [peer()] });
+    useBackend({ syncEnabled: true, peers: [peer()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -108,7 +108,7 @@ describe("Sync panel", () => {
    * fail.
    */
   it("says a paired device is away, and does not offer to sync with it", async () => {
-    useBackend({ peers: [], trustedPeers: [trusted()] });
+    useBackend({ syncEnabled: true, peers: [], trustedPeers: [trusted()] });
     render(<SyncPanel />);
 
     expect(await screen.findByText(/not on this network/i)).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe("Sync panel", () => {
   });
 
   it("syncs with a paired device that is here, and reports what moved", async () => {
-    const backend = useBackend({ peers: [peer()], trustedPeers: [trusted()] });
+    const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -129,7 +129,7 @@ describe("Sync panel", () => {
 
   /** The filters are the point of having them: they reach the backend. */
   it("passes what to move through to the sync", async () => {
-    const backend = useBackend({ peers: [peer()], trustedPeers: [trusted()] });
+    const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -146,7 +146,7 @@ describe("Sync panel", () => {
   /** Unpairing is not undoable, and the prompt says what it costs. */
   it("asks before forgetting a device", async () => {
     const confirm = vi.spyOn(window, "confirm").mockImplementation(() => true);
-    const backend = useBackend({ peers: [peer()], trustedPeers: [trusted()] });
+    const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -159,7 +159,7 @@ describe("Sync panel", () => {
 
   it("does not forget a device when the prompt is declined", async () => {
     const confirm = vi.spyOn(window, "confirm").mockImplementation(() => false);
-    const backend = useBackend({ peers: [peer()], trustedPeers: [trusted()] });
+    const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
@@ -176,7 +176,7 @@ describe("Sync panel", () => {
    */
   describe("through the server", () => {
     it("writes the first document when there is none", async () => {
-      const backend = useBackend();
+      const backend = useBackend({ syncEnabled: true });
       const user = userEvent.setup();
       render(<SyncPanel />);
 
@@ -192,7 +192,7 @@ describe("Sync panel", () => {
     });
 
     it("takes a playlist the server has and this device does not", async () => {
-      const backend = useBackend({
+      const backend = useBackend({ syncEnabled: true,
         playlists: [],
         sharedDocument: [
           {
@@ -221,7 +221,7 @@ describe("Sync panel", () => {
      * throw.
      */
     it("says so when both ends already agree", async () => {
-      useBackend({ playlists: [], sharedDocument: [] });
+      useBackend({ syncEnabled: true, playlists: [], sharedDocument: [] });
       const user = userEvent.setup();
       render(<SyncPanel />);
 
@@ -233,7 +233,7 @@ describe("Sync panel", () => {
     });
 
     it("reports having nowhere to keep it when no server is set up", async () => {
-      useBackend({ connected: false });
+      useBackend({ syncEnabled: true, connected: false });
       const user = userEvent.setup();
       render(<SyncPanel />);
 
@@ -244,6 +244,57 @@ describe("Sync panel", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent(
         /nowhere to keep it/i,
       );
+    });
+  });
+
+  /**
+   * Off is the shipped default, and the same decision as lookups: a beacon
+   * every five seconds announces this machine to whatever network it is
+   * joined to.
+   */
+  describe("the switch", () => {
+    it("announces nothing and lists nothing until it is turned on", async () => {
+      useBackend({ peers: [peer()] });
+      render(<SyncPanel />);
+
+      expect(await screen.findByRole("checkbox", { name: /find my other devices/i }))
+        .not.toBeChecked();
+      // Not merely hidden — the backend does not report a peer either.
+      expect(screen.queryByText("Dylan's Phone")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /show a code/i }))
+        .not.toBeInTheDocument();
+    });
+
+    it("starts finding devices when it is turned on", async () => {
+      const backend = useBackend({ peers: [peer()] });
+      const user = userEvent.setup();
+      render(<SyncPanel />);
+
+      await user.click(
+        await screen.findByRole("checkbox", { name: /find my other devices/i }),
+      );
+
+      await waitFor(() => expect(backend.called("set_sync_enabled")).toBe(true));
+      expect(await screen.findByText("Dylan's Phone")).toBeInTheDocument();
+    });
+
+    /** A device that can no longer be discovered should not still be trusted. */
+    it("forgets paired devices when it is turned off", async () => {
+      const backend = useBackend({
+        syncEnabled: true,
+        peers: [peer()],
+        trustedPeers: [trusted()],
+      });
+      const user = userEvent.setup();
+      render(<SyncPanel />);
+
+      await user.click(
+        await screen.findByRole("checkbox", { name: /find my other devices/i }),
+      );
+
+      await waitFor(() => expect(backend.called("set_sync_enabled")).toBe(true));
+      expect(await screen.findByText(/paired devices have been forgotten/i))
+        .toBeInTheDocument();
     });
   });
 });

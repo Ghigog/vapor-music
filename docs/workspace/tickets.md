@@ -1947,3 +1947,11 @@ named a mechanism where the requirement was an outcome:
   but it is a line, and a café network is the case where it is the wrong one.
   TLS with the paired key as a pre-shared secret is the fix.
 * **Nothing has been run between two machines.** There is one here. See TD-55.
+* **It is off by default.** A beacon every five seconds announces this machine
+  to whatever network it happens to be joined to, and this app's position is
+  that it does not do that without being asked — the same decision made for
+  lyric lookups on the same day. Off means no advert, no listening socket, and
+  therefore no firewall prompt. Turning it off also forgets every pairing: a
+  device that can no longer be discovered should not still be trusted. What it
+  does *not* yet do is stop the threads already running, which needs a relaunch
+  — TD-58.

@@ -820,6 +820,55 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     Ok(LookedUp::of(&app, &href))
 }
 
+/// Turn local-network sync on or off.
+///
+/// Turning it on starts the beacon and the server there and then, because
+/// "restart the app" is not an answer to "I pressed the switch". Turning it
+/// off stops new adverts and forgets who was paired — the threads themselves
+/// are only stopped by exit, which is TD-58.
+#[tauri::command]
+fn set_sync_enabled(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
+    let shared: Shared = Arc::clone(&state);
+    let start = {
+        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+        let was = app.settings.sync_enabled;
+        app.settings.sync_enabled = enabled;
+        if !enabled {
+            // Off means off: a device that can no longer be discovered should
+            // not still be trusted by one that can.
+            app.trust = vapor_library::sync::Trust::new();
+            app.pairing = None;
+            app.pin = None;
+            app.save_trust()?;
+        }
+        app.save_settings()?;
+        enabled && !was
+    };
+
+    if start {
+        let (id, name, kind, registry) = {
+            let app = shared.lock().map_err(|e| Error(e.to_string()))?;
+            let kind = if cfg!(any(target_os = "ios", target_os = "android")) {
+                vapor_library::sync::DeviceKind::Phone
+            } else {
+                vapor_library::sync::DeviceKind::Desktop
+            };
+            let _ = app.store.save("device_id", &app.device_id);
+            (
+                app.device_id.clone(),
+                app.device_name(),
+                kind,
+                Arc::clone(&app.peers),
+            )
+        };
+        peers::spawn_beacon(registry, id, name, kind);
+        peers::spawn_server(Arc::new(ServedLibrary(Arc::clone(&shared))));
+    }
+
+    let app = shared.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.settings.clone())
+}
+
 /// Set the Vibe Limit — §6's Mix Tuner.
 ///
 /// Refused rather than clamped when it is not a number at all: a slider cannot
@@ -1096,6 +1145,8 @@ fn build_manifest(app: &mut AppState) -> vapor_library::sync::Manifest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SyncView {
+    /// Whether local sync is switched on at all.
+    enabled: bool,
     /// This device, as others see it.
     device_id: String,
     device_name: String,
@@ -1111,6 +1162,18 @@ struct SyncView {
 #[tauri::command]
 fn sync_view(state: State<'_, Shared>) -> Result<SyncView> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if !app.settings.sync_enabled {
+        return Ok(SyncView {
+            enabled: false,
+            device_id: app.device_id.clone(),
+            device_name: app.device_name(),
+            discovered: Vec::new(),
+            trusted: Vec::new(),
+            pin: None,
+            pairing_with: None,
+            progress: SyncProgress::default(),
+        });
+    }
     let discovered = app
         .peers
         .lock()
@@ -1118,6 +1181,7 @@ fn sync_view(state: State<'_, Shared>) -> Result<SyncView> {
         .unwrap_or_default();
 
     Ok(SyncView {
+        enabled: true,
         device_id: app.device_id.clone(),
         device_name: app.device_name(),
         discovered,
@@ -4430,6 +4494,10 @@ pub fn run() {
             // Both are best-effort. A locked-down network, or a second copy of
             // the app already holding the port, costs a person discovery and
             // nothing else — the app still opens, plays and scans.
+            if shared
+                .lock()
+                .map(|s| s.settings.sync_enabled)
+                .unwrap_or(false)
             {
                 let (id, name, kind, registry) = {
                     let state = shared.lock().expect("fresh state");
@@ -4476,6 +4544,7 @@ pub fn run() {
             artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
+            set_sync_enabled,
             sync_view,
             open_pairing,
             cancel_pairing,

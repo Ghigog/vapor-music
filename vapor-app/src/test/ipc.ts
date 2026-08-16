@@ -44,6 +44,8 @@ export interface FakeOptions {
   metadataLookup?: boolean;
   /** What a lookup would find, by href. Anything absent finds nothing. */
   lyrics?: Record<string, core.Lyrics>;
+  /** Start with local-network sync switched on. Off by default, as ships. */
+  syncEnabled?: boolean;
   /** Devices on the network. Empty by default, as a lone machine is. */
   peers?: core.SyncPeer[];
   /** Devices already paired with. */
@@ -200,7 +202,29 @@ export class FakeBackend {
   private sharedDocument: core.Playlist[] | null;
 
   private syncView(): core.SyncView {
+    if (!this.settings.syncEnabled) {
+      return {
+        enabled: false,
+        deviceId: "this-device",
+        deviceName: "Vapor",
+        discovered: [],
+        trusted: [],
+        pin: null,
+        pairingWith: null,
+        progress: {
+          running: false,
+          peer: "",
+          file: "",
+          done: 0,
+          total: 0,
+          bytes: 0,
+          elapsed: 0,
+          error: "",
+        },
+      };
+    }
     return {
+      enabled: true,
       deviceId: "this-device",
       deviceName: "Vapor",
       discovered: this.peers,
@@ -261,6 +285,7 @@ export class FakeBackend {
       cacheMaxBytes: 8_000_000_000,
       metadataLookupEnabled: options.metadataLookup ?? false,
       vibeLimit: 0.5,
+      syncEnabled: options.syncEnabled ?? false,
     };
     this.lyricsFor = options.lyrics ?? {};
     this.peers = options.peers ?? [];
@@ -639,6 +664,12 @@ export class FakeBackend {
 
       case "sync_view":
         return this.syncView();
+
+      case "set_sync_enabled": {
+        this.settings = { ...this.settings, syncEnabled: a.enabled === true };
+        if (!this.settings.syncEnabled) this.trusted = [];
+        return this.settings;
+      }
 
       case "open_pairing": {
         // Fixed, so a test can type it. The real one is six random digits

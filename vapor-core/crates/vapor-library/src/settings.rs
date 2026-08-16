@@ -146,6 +146,20 @@ pub struct Settings {
     /// engine was already built for and nothing exposed.
     #[serde(default = "default_vibe_limit")]
     pub vibe_limit: f32,
+
+    /// Whether this device announces itself on the local network (SYNC-001).
+    ///
+    /// **Off by default, for the same reason `metadata_lookup_enabled` is.**
+    /// A beacon every five seconds tells everyone on the network that this
+    /// machine is here and what its library folder is called, on whatever
+    /// network it happens to be joined to. An unpaired peer can do nothing
+    /// with that, but it is still a thing announced to a room, and this app's
+    /// whole position is that it does not do that without being asked.
+    ///
+    /// Off also means no listening socket, so there is no firewall prompt and
+    /// nothing accepting connections until sync is something the owner wants.
+    #[serde(default)]
+    pub sync_enabled: bool,
 }
 
 fn default_vibe_limit() -> f32 {
@@ -178,6 +192,7 @@ impl Default for Settings {
             cache_max_bytes: default_cache_max_bytes(),
             metadata_lookup_enabled: false,
             vibe_limit: default_vibe_limit(),
+            sync_enabled: false,
         }
     }
 }

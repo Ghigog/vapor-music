@@ -215,6 +215,14 @@ export interface Settings {
    * Strict keeps a set at one intensity; loose permits drops and climbs.
    */
   vibeLimit: number;
+  /**
+   * Whether this device announces itself on the local network.
+   *
+   * Off by default, for the same reason `metadataLookupEnabled` is: a beacon
+   * every five seconds tells everyone on the network that this machine is
+   * here, on whatever network it happens to be joined to.
+   */
+  syncEnabled: boolean;
 }
 
 /** The band the Vibe Limit is offered over. Matches `settings.rs`. */
@@ -400,6 +408,8 @@ export interface SyncProgress {
 }
 
 export interface SyncView {
+  /** Whether local sync is switched on at all. Off is the shipped default. */
+  enabled: boolean;
   deviceId: string;
   deviceName: string;
   /** On the network, paired or not. */
@@ -415,6 +425,11 @@ export interface SyncView {
 export interface SyncWhat {
   tracks: boolean;
   playlists: boolean;
+}
+
+/** Turn local-network sync on or off. Off also forgets who was paired. */
+export function setSyncEnabled(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_sync_enabled", { enabled });
 }
 
 export function syncView(): Promise<SyncView> {

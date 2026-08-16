@@ -91,10 +91,13 @@ export function SyncPanel() {
     try {
       const r = await core.syncSharedDocument();
       const changes = [
-        r.playlistsAdded && `${r.playlistsAdded} playlist${r.playlistsAdded === 1 ? "" : "s"} arrived`,
+        r.playlistsAdded &&
+          `${r.playlistsAdded} playlist${r.playlistsAdded === 1 ? "" : "s"} arrived`,
         r.playlistsExtended && `${r.playlistsExtended} gained tracks`,
-        r.foldersAdded && `${r.foldersAdded} folder${r.foldersAdded === 1 ? "" : "s"} arrived`,
-        r.temposAdded && `${r.temposAdded} tempo correction${r.temposAdded === 1 ? "" : "s"} arrived`,
+        r.foldersAdded &&
+          `${r.foldersAdded} folder${r.foldersAdded === 1 ? "" : "s"} arrived`,
+        r.temposAdded &&
+          `${r.temposAdded} tempo correction${r.temposAdded === 1 ? "" : "s"} arrived`,
       ].filter(Boolean);
 
       // Four outcomes, and three of them look identical if only the changes
@@ -152,208 +155,256 @@ export function SyncPanel() {
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
-      {/* The code this device is showing, for someone to type on the other. */}
-      {view.pin && (
-        <div className="sync__pin">
-          <span className="label">show this on the other device</span>
-          <strong className="sync__pin-code numeric">{view.pin}</strong>
-          <button
-            className="settings__button"
-            onClick={() => void core.cancelPairing().then(refresh)}
-          >
-            Done
-          </button>
-        </div>
+      {/*
+        Off by default, for the same reason lookups are: a beacon every five
+        seconds announces this machine to whatever network it is joined to.
+        Nothing listens until this is on, so there is no firewall prompt and
+        nothing accepting connections either.
+      */}
+      <label className="settings__switch">
+        <input
+          type="checkbox"
+          checked={view.enabled}
+          onChange={(e) => {
+            const on = e.target.checked;
+            void core
+              .setSyncEnabled(on)
+              .then(refresh)
+              .then(() =>
+                setNote(
+                  on
+                    ? "This device is now visible to other copies of Vapor on this network."
+                    : "Switched off. Nothing is announced, nothing is listening, and paired devices have been forgotten.",
+                ),
+              )
+              .catch((err: unknown) => setError(messageOf(err)));
+          }}
+        />
+        <span>Find my other devices on this network</span>
+      </label>
+
+      {!view.enabled && note && <p className="settings__note">{note}</p>}
+      {!view.enabled && (
+        <p className="settings__hint">
+          Turning this on lets Vapor on your other machines find this one. They
+          still have to be paired with a code before either can see the other's
+          library.
+        </p>
       )}
 
-      <h3 className="label sync__heading">paired</h3>
-      {view.trusted.length === 0 ? (
-        <p className="settings__hint">
-          None yet. Pair one below, and it stays paired until you say otherwise.
-        </p>
-      ) : (
-        <ul className="sync__list">
-          {view.trusted.map((peer) => {
-            const here = view.discovered.some((p) => p.id === peer.id);
-            return (
-              <li key={peer.id} className="sync__row">
-                <span
-                  className={"sync__dot" + (here ? " sync__dot--on" : "")}
-                  aria-hidden="true"
-                />
-                <span className="sync__name">
-                  {peer.name}
-                  {/* A paired device that is switched off is not a failure,
+      {view.enabled && (
+        <>
+          {/* The code this device is showing, for someone to type on the other. */}
+          {view.pin && (
+            <div className="sync__pin">
+              <span className="label">show this on the other device</span>
+              <strong className="sync__pin-code numeric">{view.pin}</strong>
+              <button
+                className="settings__button"
+                onClick={() => void core.cancelPairing().then(refresh)}
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          <h3 className="label sync__heading">paired</h3>
+          {view.trusted.length === 0 ? (
+            <p className="settings__hint">
+              None yet. Pair one below, and it stays paired until you say
+              otherwise.
+            </p>
+          ) : (
+            <ul className="sync__list">
+              {view.trusted.map((peer) => {
+                const here = view.discovered.some((p) => p.id === peer.id);
+                return (
+                  <li key={peer.id} className="sync__row">
+                    <span
+                      className={"sync__dot" + (here ? " sync__dot--on" : "")}
+                      aria-hidden="true"
+                    />
+                    <span className="sync__name">
+                      {peer.name}
+                      {/* A paired device that is switched off is not a failure,
                       and a row that says nothing about it reads as one. */}
-                  <span className="sync__where">
-                    {here ? "on this network" : "not on this network"}
-                  </span>
-                </span>
-                <button
-                  className="settings__button"
-                  disabled={!here || progress.running}
-                  onClick={() => void sync(peer)}
-                >
-                  {progress.running && progress.peer === peer.name
-                    ? "Syncing…"
-                    : "Sync now"}
-                </button>
-                <button
-                  className="settings__button settings__button--danger"
-                  onClick={() => void forget(peer)}
-                >
-                  Forget
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                      <span className="sync__where">
+                        {here ? "on this network" : "not on this network"}
+                      </span>
+                    </span>
+                    <button
+                      className="settings__button"
+                      disabled={!here || progress.running}
+                      onClick={() => void sync(peer)}
+                    >
+                      {progress.running && progress.peer === peer.name
+                        ? "Syncing…"
+                        : "Sync now"}
+                    </button>
+                    <button
+                      className="settings__button settings__button--danger"
+                      onClick={() => void forget(peer)}
+                    >
+                      Forget
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
-      <h3 className="label sync__heading">on this network</h3>
-      {unpaired.length === 0 ? (
-        <p className="settings__hint">
-          Nothing else running Vapor here. Both devices need to be on the same
-          Wi-Fi, and some networks block devices from seeing each other at all.
-        </p>
-      ) : (
-        <ul className="sync__list">
-          {unpaired.map((peer) => (
-            <li key={peer.id} className="sync__row">
-              <span className="sync__dot sync__dot--on" aria-hidden="true" />
-              <span className="sync__name">
-                {peer.name}
-                <span className="sync__where numeric">{peer.address}</span>
-              </span>
-              {entering === peer.id ? (
-                <>
-                  <input
-                    className="settings__input sync__code"
-                    autoFocus
-                    inputMode="numeric"
-                    aria-label={`Code shown on ${peer.name}`}
-                    placeholder="000000"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void enter(peer.id);
-                      if (e.key === "Escape") setEntering(null);
-                    }}
+          <h3 className="label sync__heading">on this network</h3>
+          {unpaired.length === 0 ? (
+            <p className="settings__hint">
+              Nothing else running Vapor here. Both devices need to be on the
+              same Wi-Fi, and some networks block devices from seeing each other
+              at all.
+            </p>
+          ) : (
+            <ul className="sync__list">
+              {unpaired.map((peer) => (
+                <li key={peer.id} className="sync__row">
+                  <span
+                    className="sync__dot sync__dot--on"
+                    aria-hidden="true"
                   />
-                  <button
-                    className="settings__button"
-                    onClick={() => void enter(peer.id)}
-                  >
-                    Pair
-                  </button>
-                </>
+                  <span className="sync__name">
+                    {peer.name}
+                    <span className="sync__where numeric">{peer.address}</span>
+                  </span>
+                  {entering === peer.id ? (
+                    <>
+                      <input
+                        className="settings__input sync__code"
+                        autoFocus
+                        inputMode="numeric"
+                        aria-label={`Code shown on ${peer.name}`}
+                        placeholder="000000"
+                        value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void enter(peer.id);
+                          if (e.key === "Escape") setEntering(null);
+                        }}
+                      />
+                      <button
+                        className="settings__button"
+                        onClick={() => void enter(peer.id)}
+                      >
+                        Pair
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className="settings__button"
+                        onClick={() => void show(peer)}
+                      >
+                        Show a code
+                      </button>
+                      <button
+                        className="settings__button"
+                        onClick={() => {
+                          setCode("");
+                          setEntering(peer.id);
+                        }}
+                      >
+                        Enter a code
+                      </button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <h3 className="label sync__heading">what moves</h3>
+          <label className="settings__switch">
+            <input
+              type="checkbox"
+              checked={what.tracks}
+              onChange={(e) => setWhat({ ...what, tracks: e.target.checked })}
+            />
+            <span>Track files</span>
+          </label>
+          <label className="settings__switch">
+            <input
+              type="checkbox"
+              checked={what.playlists}
+              onChange={(e) =>
+                setWhat({ ...what, playlists: e.target.checked })
+              }
+            />
+            <span>Playlists</span>
+          </label>
+
+          {(progress.running || progress.total > 0 || progress.error) && (
+            <div className="sync__progress">
+              {progress.error ? (
+                <ErrorNotice error={progress.error} />
               ) : (
                 <>
-                  <button
-                    className="settings__button"
-                    onClick={() => void show(peer)}
+                  <div
+                    className="sync__bar"
+                    role="progressbar"
+                    aria-valuenow={progress.done}
+                    aria-valuemin={0}
+                    aria-valuemax={progress.total}
+                    aria-label="Sync progress"
                   >
-                    Show a code
-                  </button>
-                  <button
-                    className="settings__button"
-                    onClick={() => {
-                      setCode("");
-                      setEntering(peer.id);
-                    }}
-                  >
-                    Enter a code
-                  </button>
+                    <span
+                      className="sync__bar-fill"
+                      style={{
+                        width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="settings__hint numeric">
+                    {progress.done} of {progress.total}
+                    {progress.file && ` · ${progress.file}`}
+                    {/* Divided here rather than pushed from the backend, which
+                    would arrive already stale. */}
+                    {progress.elapsed > 0 &&
+                      ` · ${rate(progress.bytes, progress.elapsed)}`}
+                  </p>
+                  {!progress.running && progress.total > 0 && (
+                    <p className="settings__note">
+                      {progress.total === 0
+                        ? "Already in step — nothing to move."
+                        : `Done. ${progress.done} of ${progress.total} moved from ${progress.peer}.`}
+                    </p>
+                  )}
                 </>
               )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <h3 className="label sync__heading">what moves</h3>
-      <label className="settings__switch">
-        <input
-          type="checkbox"
-          checked={what.tracks}
-          onChange={(e) => setWhat({ ...what, tracks: e.target.checked })}
-        />
-        <span>Track files</span>
-      </label>
-      <label className="settings__switch">
-        <input
-          type="checkbox"
-          checked={what.playlists}
-          onChange={(e) => setWhat({ ...what, playlists: e.target.checked })}
-        />
-        <span>Playlists</span>
-      </label>
-
-      {(progress.running || progress.total > 0 || progress.error) && (
-        <div className="sync__progress">
-          {progress.error ? (
-            <ErrorNotice error={progress.error} />
-          ) : (
-            <>
-              <div
-                className="sync__bar"
-                role="progressbar"
-                aria-valuenow={progress.done}
-                aria-valuemin={0}
-                aria-valuemax={progress.total}
-                aria-label="Sync progress"
-              >
-                <span
-                  className="sync__bar-fill"
-                  style={{
-                    width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-              <p className="settings__hint numeric">
-                {progress.done} of {progress.total}
-                {progress.file && ` · ${progress.file}`}
-                {/* Divided here rather than pushed from the backend, which
-                    would arrive already stale. */}
-                {progress.elapsed > 0 &&
-                  ` · ${rate(progress.bytes, progress.elapsed)}`}
-              </p>
-              {!progress.running && progress.total > 0 && (
-                <p className="settings__note">
-                  {progress.total === 0
-                    ? "Already in step — nothing to move."
-                    : `Done. ${progress.done} of ${progress.total} moved from ${progress.peer}.`}
-                </p>
-              )}
-            </>
+            </div>
           )}
-        </div>
-      )}
 
-      {/*
+          {/*
         SYNC-006. The other way to sync, and the one that works when the two
         devices are never switched on at the same time — which for a laptop and
         a phone is most of the time. Playlists and tempo corrections go in a
         file beside the music, in the owner's own storage.
       */}
-      <h3 className="label sync__heading">through your server</h3>
-      <p className="settings__hint">
-        Keeps playlists and tempo corrections in a file next to your music, so
-        devices that are never on at the same time still agree. Track files are
-        already there; this is only the part the app added.
-      </p>
-      <div className="settings__actions">
-        <button
-          className="settings__button"
-          disabled={shared === "running"}
-          onClick={() => void syncShared()}
-        >
-          {shared === "running" ? "Syncing…" : "Sync through the server"}
-        </button>
-      </div>
-      {sharedNote && <p className="settings__note">{sharedNote}</p>}
+          <h3 className="label sync__heading">through your server</h3>
+          <p className="settings__hint">
+            Keeps playlists and tempo corrections in a file next to your music,
+            so devices that are never on at the same time still agree. Track
+            files are already there; this is only the part the app added.
+          </p>
+          <div className="settings__actions">
+            <button
+              className="settings__button"
+              disabled={shared === "running"}
+              onClick={() => void syncShared()}
+            >
+              {shared === "running" ? "Syncing…" : "Sync through the server"}
+            </button>
+          </div>
+          {sharedNote && <p className="settings__note">{sharedNote}</p>}
 
-      {note && <p className="settings__note">{note}</p>}
+          {note && <p className="settings__note">{note}</p>}
+        </>
+      )}
     </section>
   );
 }
