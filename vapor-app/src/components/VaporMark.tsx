@@ -60,8 +60,6 @@ export function VaporMark({
 
 // React 19 moved the JSX namespace out of the global scope and into the react
 // module, so a `declare global` block no longer registers a custom element.
-// React 19 moved the JSX namespace out of the global scope and into the react
-// module, so a `declare global` block no longer registers a custom element.
 // The prop types are referenced unqualified because inside this augmentation
 // they already resolve to react's own declarations.
 declare module "react" {

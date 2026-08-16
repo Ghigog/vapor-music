@@ -951,6 +951,48 @@ Mixes are therefore no longer always 3 to 6 seconds regardless of the music.
 Note the consequence for stored analysis: `ANALYSIS_VERSION` goes to 4, so a
 library re-analyses once.
 
+### Key detection: peaks, and a tuning correction that did not work (TD-11)
+
+Key was the weakest analysis figure — 56.1% exact against Essentia, 80.9%
+harmonically compatible. Two structural changes were tried against the full
+563-track set, one kept and one reverted.
+
+| | Exact | Adjacent | Compatible | Time |
+|---|---|---|---|---|
+| Baseline | 56.1% | 24.8% | 80.9% | 0.57 s/track |
+| **+ spectral peak selection** | **60.6%** | 22.2% | **82.8%** | 0.57 s/track |
+| + tuning correction on top | 58.1% | 23.1% | 81.3% | 0.59 s/track |
+
+**Peaks: kept.** The chroma was folded from *every* bin of the spectrum. A kick
+or a snare is broadband, so each hit deposited energy into all twelve pitch
+classes at once and flattened the profile toward uniform — on a library that is
+mostly electronic music, that is a large share of the signal. Taking only local
+maxima above −40 dB of the frame's peak is what Essentia's `HPCP` does, being
+fed from `SpectralPeaks`, and it is worth 24 tracks. Tempo, beat grids, cue
+points and loudness are all unchanged to the digit, as they should be — nothing
+else reads the chroma.
+
+**Tuning correction: reverted.** Equal temperament at A=440 is an assumption,
+and a record cut slightly fast breaks it: every partial lands between two pitch
+classes and the chroma smears across both. Estimating the offset as the
+magnitude-weighted circular mean of each peak's deviation from its nearest
+semitone works exactly as intended on synthetic signals — it recovers a known
+detuning to within 8 cents, and a triad detuned by ±40 cents still reads as its
+own key. On the real library it **costs 2.5 points of exact agreement**.
+
+The likely reason is that the estimate is taken over every peak in the analysis
+window, and most peaks in a mixed track are not tonal — percussion, noise and
+transients contribute deviations that mean nothing, so the circular mean is
+dominated by material that has no tuning. A spurious global rotation of even ten
+or twenty cents then pushes borderline tracks across a semitone boundary.
+
+Not tuned further, deliberately: constants fitted against these 563 tracks are
+how MIG-002b produced two attempts that both had to be reverted. A third attempt
+would need to select *tonal* peaks before averaging them — a real change of
+method, not a better threshold — and would want the product question answered
+first, since 60.6% exact with 82.8% compatible may already be enough for a
+pathfinder that navigates the wheel rather than matching keys exactly.
+
 ### Phase 5 — Retire
 
 Archive the Godot tree on a branch. Do not delete it until the new app has run
@@ -1090,7 +1132,7 @@ resolved by, not when it must be started.
 
 | ID | Item | Phase | Source |
 |---|---|---|---|
-| MIG-001 | Key detection. **Partly done** — harmonic-weighted chroma and per-frame normalisation took it from 34.3% to 48.1% exact on a 108-track subset. Segmented analysis (`segment_keys` / `intro_key` / `outro_key`) is still outstanding. | 1 | Spike results |
+| MIG-001 | Key detection. **Partly done** — harmonic-weighted chroma, per-frame normalisation and spectral peak selection have taken it to 60.6% exact / 82.8% compatible on the full 563-track set. A tuning correction was tried and measured *worse*; segmented analysis shipped as TD-13. See *Key detection: peaks, and a tuning correction that did not work*. Old note follows: harmonic-weighted chroma and per-frame normalisation took it from 34.3% to 48.1% exact on a 108-track subset. Segmented analysis (`segment_keys` / `intro_key` / `outro_key`) is still outstanding. | 1 | Spike results |
 | ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
 | MIG-002b | Resolve the ~10% tempo **metrical** errors. **Two attempts made and reverted; the beat-level approach is closed** — the signal is anti-correlated, and the errors are triple relations, not octaves. A third attempt means bar-level metre detection. Read *Phase 1 progress* first, and settle the product question before starting. | 1 | Phase 1 |
 | ~~MIG-003~~ | ~~Decide the E-AC-3 / Dolby Atmos path.~~ **Won't fix** — a spatial format with no stable stereo image to mix with. See TD-05. | 4 | Spike results, BUG-001 |
@@ -1119,7 +1161,8 @@ resolved by, not when it must be started.
 |---|---|---|---|
 | MIG-020 | **iOS background sync will stall.** Cloud-first caching means large background downloads, which iOS Background App Refresh throttles and silently kills — the documented failure mode in comparable clients. Design chunked, resumable transfers with honest progress UI; do not assume a large sync completes in the background. | 4 | Ecosystem research |
 | MIG-021 | Android background sync must adapt to Doze rather than fight it. | 4 | Ecosystem research |
-| MIG-022 | Windows SMTC media-control code has never been compiled on any machine. Either build and test it, or drop it from the port. | 4 | `docs/CROSS_PLATFORM_DSP.md` |
+| ~~MIG-022~~ | ~~Windows SMTC media-control code has never been compiled on any machine.~~ **Won't port (2026-08-16).** `src/platform/windows/media_controls_windows.cpp` is 191 lines of C++/WinRT inside the **GDExtension**, which phase 5 archives. The Tauri shell cannot call it at any price, so "build and test it" would mean validating code already scheduled for deletion — on a machine nobody has. Media controls in the new shell are one cross-platform Rust crate covering macOS, Windows and Linux together, not three platform ports; that is MIG-023, not this. | 4 | `docs/CROSS_PLATFORM_DSP.md` |
+| MIG-023 | **The new shell has no media controls on any platform.** A parity gap rather than a port: the Godot build answers hardware keys, Control Center and SMTC (`MediaControlsManager.gd` plus a macOS `.mm` and a Windows `.cpp`); `vapor-app` answers none of them, including on macOS where the old build works. One crate (`souvlaki` or equivalent) covers all three desktop targets from the shell. Uncovered by MIG-022, which was only ever about the Windows half. | 4 | MIG-022 |
 
 ### Interop
 

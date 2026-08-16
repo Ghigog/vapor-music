@@ -103,15 +103,19 @@ jobs:
   # would be slow and would break whenever that tap moves.
   #
   # The cost is real and must not be forgotten: DSP-dependent tests are NOT
-  # covered here. Run the full suite locally with the dylib present
-  # (211 pass / 12 fail) before trusting a change to analysis or transitions.
+  # covered here. Run the full suite locally with the dylib present before
+  # trusting a change to analysis or transitions — that run is a *different*
+  # baseline, 211 pass / 12 fail, not the 190/19 pinned below. Both numbers are
+  # correct; they describe runs with and without the GDExtension (TD-45).
+  # The twelve are diagnosed in docs/TECH_DEBT.md (TD-42): all stale tests.
   godot:
     name: godot (stub path)
     runs-on: macos-latest
 
     env:
       GODOT_VERSION: 4.7.1
-      # Baseline measured at godot-final-v1.78 on the stub path.
+      # Baseline measured at godot-final-v1.78 on the stub path — i.e. WITHOUT
+      # the GDExtension, which is why it is worse than the local 211/12.
       # These are pinned so the suite gates on *regressions* immediately rather
       # than waiting for a green board. Lower them as failures get fixed.
       EXPECTED_PASS: 190

@@ -129,13 +129,13 @@ fn chroma_vector(spec: &Spectrogram) -> Option<[f32; 12]> {
     // modulation or a loud non-tonal drop drags the whole estimate with it.
     for frame in &spec.frames {
         let mut frame_chroma = [0.0f32; 12];
-        for (k, &mag) in frame.iter().enumerate() {
+        for k in peaks(frame) {
             if contributions[k].is_empty() {
                 continue;
             }
             // Energy, not amplitude — matches how the profiles were derived
             // and makes strong tonal content dominate within the frame.
-            let energy = mag * mag;
+            let energy = frame[k] * frame[k];
             for &(pc, w) in &contributions[k] {
                 frame_chroma[pc] += energy * w;
             }
@@ -156,6 +156,30 @@ fn chroma_vector(spec: &Spectrogram) -> Option<[f32; 12]> {
         *c /= total;
     }
     Some(chroma)
+}
+
+/// Magnitude below which a bin is not worth calling a peak, relative to the
+/// loudest bin in the same frame.
+///
+/// −40 dB. A conventional floor rather than a fitted one: the point is to
+/// exclude the noise between partials, and anything 40 dB down is not a
+/// partial anyone is playing.
+const PEAK_FLOOR: f32 = 0.01;
+
+/// Bins in `frame` that are local maxima worth treating as partials.
+///
+/// **Only peaks contribute to the chroma.** Every bin contributing is the
+/// obvious implementation and it is what a drum kit exploits: a kick or a snare
+/// is broadband, so it deposits energy into all twelve pitch classes at once and
+/// flattens the profile toward uniform. On the electronic music this library is
+/// mostly made of, that is a large share of the signal.
+///
+/// Essentia's `HPCP` — the thing these figures are compared against — is fed
+/// from `SpectralPeaks` for exactly this reason.
+fn peaks(frame: &[f32]) -> impl Iterator<Item = usize> + '_ {
+    let floor = frame.iter().copied().fold(0.0f32, f32::max) * PEAK_FLOOR;
+    (1..frame.len().saturating_sub(1))
+        .filter(move |&k| frame[k] >= floor && frame[k] > frame[k - 1] && frame[k] >= frame[k + 1])
 }
 
 /// Pearson correlation of the chroma against all 24 rotated profiles.
@@ -259,20 +283,27 @@ mod tests {
         assert_eq!(camelot_distance("8A", "8B"), Some(1));
     }
 
-    /// A synthesised C major triad must resolve to C major / 8B.
-    #[test]
-    fn detects_synthetic_c_major() {
-        let rate = 44100u32;
-        let n = rate as usize * 5;
+    /// A triad at a given tuning, for the tests below.
+    fn triad(rate: u32, secs: f32, cents: f32) -> Vec<f32> {
+        let n = (rate as f32 * secs) as usize;
         let mut s = vec![0.0f32; n];
+        let shift = 2f32.powf(cents / 1200.0);
         // C4, E4, G4
         for f in [261.63f32, 329.63, 392.0] {
+            let f = f * shift;
             for (i, v) in s.iter_mut().enumerate() {
                 let t = i as f32 / rate as f32;
                 *v += (2.0 * std::f32::consts::PI * f * t).sin() / 3.0;
             }
         }
-        let spec = crate::spectrum::for_key(&s, rate);
+        s
+    }
+
+    /// A synthesised C major triad must resolve to C major / 8B.
+    #[test]
+    fn detects_synthetic_c_major() {
+        let rate = 44100u32;
+        let spec = crate::spectrum::for_key(&triad(rate, 5.0, 0.0), rate);
         let k = estimate(&spec).expect("key");
         assert_eq!(k.camelot, "8B", "got {} ({})", k.camelot, k.name);
     }
