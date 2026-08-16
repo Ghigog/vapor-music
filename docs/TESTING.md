@@ -3,8 +3,8 @@
 **Status:** Living document
 **Last reviewed:** 2026-08-16
 
-**Current counts:** 322 core (unit + property + fuzz), 119 shell (unit +
-integration), 155 component, 39 end-to-end including three monkey seeds.
+**Current counts:** 322 core (unit + property + fuzz), 125 shell (unit +
+integration), 157 component, 39 end-to-end including three monkey seeds.
 
 > What is tested, at which layer, and what is deliberately not. Read alongside
 > `docs/MIGRATION.md` (the plan) and `docs/TECH_DEBT.md` (what is knowingly

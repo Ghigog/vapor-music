@@ -44,8 +44,8 @@ to be absolute — a compound `cd` triggers a permission prompt.
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 cd vapor-core           && cargo test --workspace   # 322: unit, property, fuzz
-cd vapor-app/src-tauri  && cargo test               # 119: unit, integration
-cd vapor-app            && npm test                 # 155: component
+cd vapor-app/src-tauri  && cargo test               # 125: unit, integration
+cd vapor-app            && npm test                 # 157: component
 cd vapor-app            && npm run e2e              #  39: journeys + monkey
 cd vapor-app            && npm run typecheck
 ```
