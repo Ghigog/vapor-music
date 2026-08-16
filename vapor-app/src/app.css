@@ -138,3 +138,130 @@
   margin: 10px 12px;
   background: var(--glass-rim);
 }
+
+/* ---------------------------------------------------------------------------
+   Playlist rail (TD-44, TD-31)
+
+   Sits under the nav in the sidebar. It is here rather than in the Library's
+   tabs — where the design shows playlists — because it is the drop target for
+   tracks dragged out of the Songs table, and a target on another screen cannot
+   be dropped onto. The Godot build put them in the sidebar for the same reason
+   (`sidebar_playlist_item.gd`).
+--------------------------------------------------------------------------- */
+
+.rail {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  /* The rail can outgrow the sidebar; the nav above it must not be pushed off. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 6px;
+}
+
+.rail__title {
+  color: var(--ink-3);
+}
+
+.rail__new {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--ink-3);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+}
+
+.rail__new:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+
+.rail__input {
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 7px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: var(--r-md);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.rail__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.rail__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 12px;
+  margin-bottom: 2px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--ink-2);
+}
+
+.rail__item:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.rail__item--on {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The drop state has to be unmistakable while a drag is in flight: the pointer
+   is somewhere else entirely and this is the only thing saying where it lands. */
+.rail__item--over {
+  background: rgba(255, 255, 255, 0.95);
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+  color: var(--ink);
+}
+
+.rail__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__count {
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+}
+
+.rail__empty {
+  margin: 4px 12px;
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  line-height: 1.45;
+}
+
+.rail__flash {
+  margin: 6px 12px 0;
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+}

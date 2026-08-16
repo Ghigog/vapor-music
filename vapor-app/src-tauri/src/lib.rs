@@ -448,6 +448,101 @@ fn add_tracks_to_playlist(
     Ok(added)
 }
 
+#[tauri::command]
+fn rename_playlist(id: String, name: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    // An empty name would leave a row nobody can identify or click.
+    if name.trim().is_empty() {
+        return Err(Error("A playlist needs a name.".to_string()));
+    }
+    let renamed = app.playlists.rename(&id, name.trim());
+    if renamed {
+        app.save_playlists()?;
+    }
+    Ok(renamed)
+}
+
+#[tauri::command]
+fn delete_playlist(id: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let deleted = app.playlists.delete(&id).is_some();
+    if deleted {
+        app.save_playlists()?;
+    }
+    Ok(deleted)
+}
+
+#[tauri::command]
+fn remove_playlist_track(id: String, index: usize, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let removed = app.playlists.remove_track(&id, index);
+    if removed {
+        app.save_playlists()?;
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+fn reorder_playlist_track(
+    id: String,
+    from: usize,
+    to: usize,
+    state: State<'_, Shared>,
+) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let moved = app.playlists.reorder_tracks(&id, from, to);
+    if moved {
+        app.save_playlists()?;
+    }
+    Ok(moved)
+}
+
+/// A playlist's tracks as table rows, in playlist order.
+///
+/// Rows rather than hrefs: the screen shows title, artist, BPM and key like
+/// every other table, and rebuilding that on the frontend from a list of hrefs
+/// would be a second implementation of what `apply_tags`/`apply_analysis`
+/// already do.
+///
+/// An href with no matching row is skipped rather than rendered blank — it
+/// means the file left the library since it was added, and a row that cannot be
+/// played is worse than an absent one. The count difference is visible because
+/// the playlist's own length is shown beside it.
+#[tauri::command]
+fn playlist_rows(id: String, state: State<'_, Shared>) -> Result<Vec<Row>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let Some(playlist) = app.playlists.get(&id) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(rows_in_order(&app.rows, &playlist.tracks)
+        .into_iter()
+        .cloned()
+        .map(|mut row| {
+            app.apply_tags(&mut row);
+            app.apply_analysis(&mut row);
+            row
+        })
+        .collect())
+}
+
+/// The library rows for `hrefs`, in the order `hrefs` gives them.
+///
+/// Separate from the command so the rule it encodes can be tested: an href with
+/// no row is **skipped**. A playlist stores hrefs and a file can leave the
+/// library after being added, so this is a normal state rather than an error —
+/// and a row that cannot be played is worse than an absent one. The count is
+/// shown beside the title, so a playlist of 12 displaying 11 rows says so
+/// rather than hiding it.
+fn rows_in_order<'a>(rows: &'a [Row], hrefs: &[String]) -> Vec<&'a Row> {
+    let by_href: std::collections::HashMap<&str, &Row> =
+        rows.iter().map(|r| (r.href.as_str(), r)).collect();
+    hrefs
+        .iter()
+        .filter_map(|href| by_href.get(href.as_str()).copied())
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Queue
 // ---------------------------------------------------------------------------
@@ -2513,6 +2608,11 @@ pub fn run() {
             playlists,
             create_playlist,
             add_tracks_to_playlist,
+            rename_playlist,
+            delete_playlist,
+            remove_playlist_track,
+            reorder_playlist_track,
+            playlist_rows,
             queue_state,
             queue_view,
             remove_from_queue,
@@ -2553,4 +2653,70 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vapor Music");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(href: &str, title: &str) -> Row {
+        Row {
+            href: href.to_string(),
+            title: title.to_string(),
+            artist: String::new(),
+            album: String::new(),
+            artist_source: vapor_library::index::Source::Unknown,
+            album_source: vapor_library::index::Source::Unknown,
+            genre: String::new(),
+            bpm: 0.0,
+            key: String::new(),
+            year: 0,
+            manual_pos: 0,
+        }
+    }
+
+    /// A playlist's order is the playlist's, not the library's. Sorting these
+    /// by title would silently discard the one thing a manual playlist is for.
+    #[test]
+    fn playlist_rows_follow_the_playlist_order() {
+        let library = vec![row("/a", "Anna"), row("/b", "Bess"), row("/c", "Cleo")];
+        let wanted = vec!["/c".to_string(), "/a".to_string(), "/b".to_string()];
+
+        let got: Vec<&str> = rows_in_order(&library, &wanted)
+            .iter()
+            .map(|r| r.href.as_str())
+            .collect();
+        assert_eq!(got, vec!["/c", "/a", "/b"]);
+    }
+
+    /// A track whose file has left the library is skipped rather than rendered
+    /// as a blank row nobody can play. The playlist keeps the href — this is
+    /// only about what is shown — and the difference is visible because the
+    /// screen prints the playlist's own length beside the rows.
+    #[test]
+    fn a_track_missing_from_the_library_is_skipped() {
+        let library = vec![row("/a", "Anna"), row("/c", "Cleo")];
+        let wanted = vec!["/a".to_string(), "/gone".to_string(), "/c".to_string()];
+
+        let got = rows_in_order(&library, &wanted);
+        assert_eq!(got.len(), 2, "the missing track was not skipped");
+        assert_eq!(got[0].href, "/a");
+        assert_eq!(got[1].href, "/c");
+    }
+
+    /// A playlist may hold the same track twice, and both should appear —
+    /// deduplicating here would silently disagree with the stored length.
+    #[test]
+    fn a_repeated_track_appears_each_time() {
+        let library = vec![row("/a", "Anna")];
+        let wanted = vec!["/a".to_string(), "/a".to_string()];
+        assert_eq!(rows_in_order(&library, &wanted).len(), 2);
+    }
+
+    #[test]
+    fn an_empty_playlist_yields_nothing() {
+        let library = vec![row("/a", "Anna")];
+        assert!(rows_in_order(&library, &[]).is_empty());
+        assert!(rows_in_order(&[], &["/a".to_string()]).is_empty());
+    }
 }

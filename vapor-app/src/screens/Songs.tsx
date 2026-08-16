@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import * as core from "../lib/core";
+import { startTrackDrag } from "../components/PlaylistRail";
 import type { Row, SortKey } from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
@@ -184,6 +185,9 @@ export function Songs({
     // tracks in the order they appear on screen, not in insertion order.
     const hrefs = rows.filter((r) => selected.has(r.href)).map((r) => r.href);
     await core.addTracksToPlaylist(playlistId, hrefs);
+    // The sidebar rail shows each playlist's length; without this it keeps
+    // showing the count from before the add.
+    window.dispatchEvent(new Event("vapor:playlists-changed"));
     setSelected(new Set());
   }
 
@@ -349,6 +353,18 @@ export function Songs({
                   right: 0,
                   height: ROW_HEIGHT,
                   transform: `translateY(${item.start}px)`,
+                }}
+                draggable
+                onDragStart={(e) => {
+                  // A drag on a selected row takes the whole selection; on an
+                  // unselected one it takes just that row, which keeps the
+                  // single-track case direct. The table has had multi-select
+                  // since TD-33 and dragging six rows one at a time to the
+                  // same playlist is not a feature anyone wants.
+                  const hrefs = selected.has(row.href)
+                    ? rows.filter((r) => selected.has(r.href)).map((r) => r.href)
+                    : [row.href];
+                  startTrackDrag(e, hrefs);
                 }}
                 onDoubleClick={() => void playFrom(row.href)}
                 onClick={(e) => {

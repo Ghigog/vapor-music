@@ -173,6 +173,37 @@ export function addTracksToPlaylist(id: string, hrefs: string[]): Promise<number
   return invoke<number>("add_tracks_to_playlist", { id, hrefs });
 }
 
+export function renamePlaylist(id: string, name: string): Promise<boolean> {
+  return invoke<boolean>("rename_playlist", { id, name });
+}
+
+export function deletePlaylist(id: string): Promise<boolean> {
+  return invoke<boolean>("delete_playlist", { id });
+}
+
+export function removePlaylistTrack(id: string, index: number): Promise<boolean> {
+  return invoke<boolean>("remove_playlist_track", { id, index });
+}
+
+export function reorderPlaylistTrack(
+  id: string,
+  from: number,
+  to: number,
+): Promise<boolean> {
+  return invoke<boolean>("reorder_playlist_track", { id, from, to });
+}
+
+/**
+ * A playlist's tracks as table rows, in playlist order.
+ *
+ * Rows rather than hrefs so the screen can show what every other table shows
+ * without rebuilding tag and analysis lookup on this side. Tracks whose files
+ * have left the library are omitted, so this can be shorter than the playlist.
+ */
+export function playlistRows(id: string): Promise<Row[]> {
+  return invoke<Row[]>("playlist_rows", { id });
+}
+
 export function queueState(): Promise<QueueState> {
   return invoke<QueueState>("queue_state");
 }

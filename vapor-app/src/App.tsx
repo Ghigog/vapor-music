@@ -15,6 +15,8 @@ import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
+import { Playlist } from "./screens/Playlist";
+import { PlaylistRail } from "./components/PlaylistRail";
 import { Songs } from "./screens/Songs";
 import { Search } from "./screens/Search";
 import { Queue } from "./screens/Queue";
@@ -38,6 +40,7 @@ import "./screens/nowplaying.css";
 import "./screens/onboarding.css";
 import "./screens/liner.css";
 import "./screens/yourdata.css";
+import "./screens/playlist.css";
 
 type Screen =
   | "library"
@@ -76,6 +79,10 @@ export function App() {
   const [liner, setLiner] = useState<{ href: string; from: Screen } | null>(
     null,
   );
+  /** The playlist being viewed. Like Liner Notes it is a drill-down rather than
+   *  a nav destination, so it lives beside `screen` rather than in it — but it
+   *  is reachable from the rail on every screen, so it has no "from". */
+  const [playlist, setPlaylist] = useState<string | null>(null);
 
   useEffect(() => {
     // Settings is the round trip worth making at boot: it decides where to
@@ -94,6 +101,11 @@ export function App() {
 
   function openLiner(href: string) {
     setLiner({ href, from: screen });
+  }
+
+  function openPlaylist(id: string) {
+    setLiner(null);
+    setPlaylist(id);
   }
 
   if (status.kind === "onboarding") {
@@ -125,10 +137,13 @@ export function App() {
               <button
                 className={
                   "nav__item" +
-                  (screen === item.id && !liner ? " nav__item--on" : "")
+                  (screen === item.id && !liner && !playlist
+                    ? " nav__item--on"
+                    : "")
                 }
                 onClick={() => {
                   setLiner(null);
+                  setPlaylist(null);
                   setScreen(item.id);
                 }}
               >
@@ -136,6 +151,10 @@ export function App() {
               </button>
             </div>
           ))}
+
+          {/* Always on screen, because it is the drop target for tracks
+              dragged out of the Songs table on another screen (TD-31). */}
+          <PlaylistRail activeId={playlist} onOpen={openPlaylist} />
         </nav>
 
         <main className="shell__content">
@@ -146,6 +165,12 @@ export function App() {
                 setScreen(liner.from);
                 setLiner(null);
               }}
+            />
+          ) : playlist ? (
+            <Playlist
+              id={playlist}
+              onOpen={openLiner}
+              onGone={() => setPlaylist(null)}
             />
           ) : (
             <>

@@ -1,0 +1,170 @@
+/* One playlist (TD-44).
+
+   The row grid matches the Queue's shape rather than the Songs table's: this is
+   an ordered list you rearrange, not a table you sort, and the two read
+   differently for good reason. */
+
+.playlist__head {
+  margin-bottom: 20px;
+}
+
+.playlist__title {
+  font-family: var(--font-display);
+  font-weight: 200;
+  font-size: var(--fs-title);
+  letter-spacing: var(--ls-title);
+  margin: 0;
+  cursor: text;
+}
+
+.playlist__rename {
+  font-family: var(--font-display);
+  font-weight: 200;
+  font-size: var(--fs-title);
+  letter-spacing: var(--ls-title);
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  background: none;
+  padding: 0 0 2px;
+}
+
+.playlist__meta {
+  margin-top: 6px;
+  color: var(--ink-3);
+}
+
+/* Said plainly rather than shown as blank rows: a playlist holds hrefs, and a
+   file can leave the library after it was added. */
+.playlist__missing {
+  color: var(--ink-3);
+}
+
+.playlist__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.playlist__actions button {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: var(--r-md);
+  padding: 8px 18px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  cursor: pointer;
+}
+
+.playlist__actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.playlist__delete {
+  color: var(--ink-2);
+}
+
+.playlist__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.playlist__row {
+  display: grid;
+  grid-template-columns: 20px 32px 1fr 56px 48px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.6);
+  margin-bottom: 4px;
+}
+
+.playlist__row--dragging {
+  opacity: 0.4;
+}
+
+.playlist__row--over {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.playlist__grip {
+  color: var(--ink-3);
+  cursor: grab;
+}
+
+.playlist__index {
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  text-align: right;
+}
+
+.playlist__open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+
+.playlist__song {
+  font-size: var(--fs-body);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.playlist__artist {
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.playlist__bpm,
+.playlist__key {
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+  text-align: right;
+}
+
+.playlist__row-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+/* Revealed on hover or when anything inside has focus — the buttons must stay
+   reachable from the keyboard, which `opacity: 0` alone would not allow. */
+.playlist__row:hover .playlist__row-actions,
+.playlist__row-actions:focus-within {
+  opacity: 1;
+}
+
+.playlist__row-actions button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-3);
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-small);
+}
+
+.playlist__row-actions button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+}
+
+.playlist__row-actions button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
