@@ -365,8 +365,12 @@ pub struct WindowView<'a> {
 }
 
 impl WindowView<'_> {
+    /// The frame at absolute position `i`, if it is readable right now.
+    ///
+    /// Public so the property tests can check the invariant this type exists
+    /// to provide: a frame read at a position is the frame written there.
     #[inline]
-    fn get(&self, i: u64) -> Option<[i16; 2]> {
+    pub fn get(&self, i: u64) -> Option<[i16; 2]> {
         if i < self.start || i >= self.end {
             return None;
         }

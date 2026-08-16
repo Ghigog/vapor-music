@@ -21,3 +21,6 @@ path = "src/bin/render.rs"
 [[bin]]
 name = "play"
 path = "src/bin/play.rs"
+
+[dev-dependencies]
+proptest = "1"

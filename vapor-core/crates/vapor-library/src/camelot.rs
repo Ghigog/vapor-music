@@ -19,13 +19,25 @@ impl CamelotKey {
     /// principle as the DSP stub no longer inventing 120 BPM.
     pub fn parse(s: &str) -> Option<Self> {
         let t = s.trim();
-        if t.len() < 2 {
+
+        // Split off the last *character*, not the last byte.
+        //
+        // `split_at(t.len() - 1)` panics when the final byte is inside a
+        // multi-byte character — `"8®"` is three bytes, and splitting at 2
+        // lands mid-character. Keys reaching here are usually the detector's
+        // own output and always valid, but they also come back out of a
+        // persisted analysis file, so a corrupt or hand-edited entry could
+        // take the whole app down. Found by a property test on arbitrary
+        // strings, which is the only way anyone was going to try "8®".
+        let mut chars = t.chars();
+        let mode = chars.next_back()?;
+        let digits = chars.as_str();
+        if digits.is_empty() {
             return None;
         }
-        let (digits, mode) = t.split_at(t.len() - 1);
         let is_minor = match mode {
-            "A" | "a" => true,
-            "B" | "b" => false,
+            'A' | 'a' => true,
+            'B' | 'b' => false,
             _ => return None,
         };
         let number: u8 = digits.parse().ok()?;
@@ -117,6 +129,21 @@ pub fn harmonic_relation_cost(a: &str, b: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key that is not ASCII must not take the process down.
+    ///
+    /// `parse` split the string at `len() - 1`, a *byte* index, so any value
+    /// whose last character is multi-byte panicked. Keys come back out of a
+    /// persisted analysis file, so a corrupt entry was a crash rather than an
+    /// unreadable key. Found by `prop_library.rs` on arbitrary strings.
+    #[test]
+    fn a_multibyte_key_is_unreadable_rather_than_fatal() {
+        for junk in ["8®", "®", "®®", "1é", "€", "8\u{0301}", "🎵"] {
+            assert!(CamelotKey::parse(junk).is_none(), "{junk} parsed as a key");
+            // And the callers built on it stay usable.
+            assert!(key_distance(junk, "8A") > 0.0);
+        }
+    }
 
     /// Ported from `test_camelot_key_parsing`.
     #[test]
