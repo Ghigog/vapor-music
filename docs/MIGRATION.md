@@ -859,6 +859,98 @@ one `Sink` behind both decode outputs.
   and the wasm build will need its own producer against the same window. Folded
   into MIG-013.
 
+### The drift correction, and what measuring it changed (TD-21, MIG-009)
+
+The last four unported behaviours from `audio_manager.gd`: the beat-sync PLL,
+its cross-correlation term, the vocal-clash mid-cut, and phrase-adaptive
+durations. Grepping the Godot tree first — the standing rule — changed three of
+the four.
+
+#### The grid half of the PLL is inert here, and that is a structural result
+
+This document already claimed that "the PLL becomes a correction for real-world
+tempo wander, not the mechanism that achieves sync". Measuring it says something
+sharper: the beat-grid phase detector has **no information to work with**.
+
+`calculate_pll_adjustment` compares how far each deck is from its next beat.
+In the Godot build both distances came from `get_playback_position()` polled at
+frame rate, so they genuinely wandered. Here both decks advance by exactly the
+number of frames rendered and the grids are static data, so each distance is a
+pure function of position — arithmetic, with no error in it to detect.
+
+Rendering a 12 s mix into a track 0.3% off its declared tempo, and measuring the
+worst distance from any onset to the outgoing grid:
+
+| | Worst beat deviation |
+|---|---|
+| Correction off | 51.65 ms |
+| Beat grids, unscaled — as `calculate_pll_adjustment` writes it | 51.67 ms |
+| Beat grids, ratio-scaled | 51.65 ms |
+| **Beat grids + waveform correlation** | **28.29 ms** |
+
+Three things follow, and all three are in `tests/pll_drift.rs`:
+
+1. **The correlation is the term that works.** It is the only one that looks at
+   the audio rather than at what the analysis claimed about it, and it takes 45%
+   off the error. Given tempo agreement is ~81%, a track whose grid is slightly
+   wrong is a common case rather than an exotic one.
+2. **The original's arithmetic is very slightly harmful.** It compares `dt_in`,
+   measured in the incoming track's timeline, against `dt_out` in the
+   outgoing's; those tick at different rates whenever a deck is stretched, which
+   invents a sawtooth error of `dt_out * (ratio - 1)` — up to 30 ms at full
+   stretch. Dividing `dt_in` by the ratio removes it. Kept anyway, because it
+   costs nothing and becomes real the moment anything else can move a playhead.
+3. **The residual ~28 ms is a proportional controller's steady-state error.**
+   With `kp = 0.15` the loop settles where `phase_error × 0.15` equals the
+   correction it needs, so a 0.3% tempo error parks at about 20 ms by
+   construction. An integral term would close that, and would be a design change
+   the Godot build never had — recorded rather than done.
+
+The loop runs on its own thread at the original's 100 ms correlation cadence,
+because the phase detector needs both beat grids and the correlation needs
+thousands of samples, and neither may reach the audio thread. One scalar
+crosses. The samples come straight out of the two decks' streaming windows
+(TD-09), which is why `HISTORY` grew from 8192 frames to 32,768 — the
+correlation reads 0.35 s behind the playhead, further back than the WSOLA search
+ever does.
+
+#### The mid-cut was present, and wrong in three ways
+
+`apply_mid_cut` ducks the outgoing track's mids so an incoming vocal has room.
+The port had it inside Echo Out's envelope, and:
+
+* **It ran unconditionally.** The original gates it on *both* tracks having
+  vocals — two singers over each other is the clash it exists to prevent, and
+  ducking a track that has none only makes the mix quieter.
+* **It ducked the high band too.** The original writes
+  `_transition_eq_gains[out_bus][2]` and `[3]`; Godot's `AudioEffectEQ6` centres
+  its bands at 32, 100, 320, 1000, 3200 and 10000 Hz, so those two are 320 and
+  1 kHz — the mid band alone. Ducking the highs takes 24 dB out of the outgoing
+  track's entire top end, which reads as the mix going dull.
+* **It was missing from the other five transition types.** In the GDScript it is
+  a separate `if apply_mid_cut` block appended to every one of the six.
+
+**`vocal_presence` is not a vocal detector.** `audio_analyzer.gd:516` is the
+whole definition: `energy_level > 0.35`. Since `energy_level` is already ported
+faithfully (TD-42b), the gate is one comparison. Writing a real vocal detector
+would have been inventing a feature the app has never had — the exact failure
+mode this project keeps hitting, so it is recorded next to the constant.
+
+#### Phrase-adaptive durations needed a missing analysis stage
+
+`get_transition_duration`'s smart branch snaps a mix to the longest standard
+phrase — 16, 8 or 4 bars — that fits inside the shorter of the outgoing outro
+and the incoming intro. That path was unreachable, because nothing produced the
+boundaries: `segments` came from a block of `audio_dsp.cpp` that was never
+carried across. It is now `vapor-dsp/src/segments.rs`, and it takes three
+signals that must agree — level above 15% of peak RMS, mean spectral centroid
+above 800 Hz, and three transients across three seconds — which is what stops a
+quiet passage mid-track reading as an outro.
+
+Mixes are therefore no longer always 3 to 6 seconds regardless of the music.
+Note the consequence for stored analysis: `ANALYSIS_VERSION` goes to 4, so a
+library re-analyses once.
+
 ### Phase 5 — Retire
 
 Archive the Godot tree on a branch. Do not delete it until the new app has run
@@ -1002,14 +1094,14 @@ resolved by, not when it must be started.
 | ~~MIG-002~~ | ~~Add beat-grid output so grids can be diffed against fixtures, not just BPM.~~ **Done** — DP beat tracking, F=0.763 mean / 0.884 median. See *Phase 1 progress*. | 1 | Spike results |
 | MIG-002b | Resolve the ~10% tempo **metrical** errors. **Two attempts made and reverted; the beat-level approach is closed** — the signal is anti-correlated, and the errors are triple relations, not octaves. A third attempt means bar-level metre detection. Read *Phase 1 progress* first, and settle the product question before starting. | 1 | Phase 1 |
 | ~~MIG-003~~ | ~~Decide the E-AC-3 / Dolby Atmos path.~~ **Won't fix** — a spatial format with no stable stereo image to mix with. See TD-05. | 4 | Spike results, BUG-001 |
-| MIG-004 | One malformed AAC file (`channel element 0.0 duplicate`) decodes to zero samples where ffmpeg tolerates it. Decide whether to harden or to surface as unplayable. | 2 | Spike results |
+| ~~MIG-004~~ | ~~One malformed AAC file decodes to zero samples.~~ **Decided: surface as unplayable** (TD-12). Permanent failures are recorded and persisted, so playback refuses immediately with the reason rather than re-downloading to fail the same way. | 2 | Spike results |
 | ~~MIG-005~~ | ~~Port the portable parts of `audio_dsp.cpp`.~~ **Mostly done** — cue in/out, LUFS and waveform peaks ported and validated (LUFS agrees to 0.003 LU). Transients now ported too. **Dynamic range was never computed** — `metadata_service.gd` reads the field and defaults it to 0.0, and nothing in `audio_dsp.cpp` produces it, so there is nothing to port. | 1 | `audio_dsp.cpp` |
 | ~~MIG-006~~ | ~~Bass Swap clips.~~ **Done** — three-band RMS guard ported *and* a master peak limiter added. The RMS port alone did not fix it: the clipping is peak-domain (RMS 0.257 vs a 0.630 threshold, crest factor 3.9x), so the Godot original would not have caught it either. All three transitions now measure 0 clipped samples. | 2 | Mixer spike |
 | ~~MIG-007~~ | ~~Post-transition tempo snaps back to 1.0.~~ **Done** — eased over 6 s with sine easing, matching `_pitch_ramp_tween`. Tested for monotonicity, since a wandering ratio would be heard as wow and flutter. | 2 | Mixer spike |
-| MIG-008 | Implement the remaining transition types — Echo Out, Reverb Freeze, Tempo Morph — which need delay and reverb. | 2 | Mixer spike |
-| MIG-009 | Port the PLL drift correction, vocal-clash mid-cut and phrase-adaptive durations from `audio_manager.gd`. | 2 | Mixer spike |
+| ~~MIG-008~~ | ~~Implement the remaining transition types — Echo Out, Reverb Freeze, Tempo Morph.~~ **Done** (TD-20) — `delay.rs` adds a feedback delay and a Schroeder–Moorer reverb, both allocation-free once built, and the selection rule picks from all six. | 2 | Mixer spike |
+| ~~MIG-009~~ | ~~Port the PLL drift correction, vocal-clash mid-cut and phrase-adaptive durations.~~ **Done** — see *The drift correction, and what measuring it changed*. The grid half of the PLL is inert in this architecture (measured); the waveform correlation takes worst beat deviation from 51.65 ms to 28.29 ms. The mid-cut was present but unconditional, on the wrong bands and on one transition of six. Phrase durations needed intro/outro detection, ported as `segments.rs`. | 2 | Mixer spike |
 | ~~MIG-014~~ | ~~Octave-error detection must also cover metrical errors (3:4, 2:3).~~ **Done** — the class is 10.6%, not 4.4%. | 1 | Mixer spike |
-| MIG-015 | Decide whether Standard Crossfade should become equal-power. The Godot envelope is dB-linear and dips at the midpoint; the behaviour is currently replicated deliberately and pinned by a test. | 2 | Mixer spike |
+| ~~MIG-015~~ | ~~Decide whether Standard Crossfade should become equal-power.~~ **Done** (TD-23) — it is, and the level now holds across the whole transition. The dB-linear original put both decks at −30 dB at the midpoint. | 2 | Mixer spike |
 | ~~MIG-016~~ | ~~No resampler; mismatched sample rates were refused.~~ **Done** — windowed-sinc (32-tap, Blackman, 512 phases), converting at load rather than per block. Tested for level preservation and for anti-aliasing on downsampling, which is the failure that makes a naive resampler unusable. | 2 | Mixer spike |
 
 ### Engineering risk

@@ -76,11 +76,19 @@ pub const WINDOW_SECS: f32 = 5.0;
 
 /// Frames kept behind the playhead.
 ///
-/// Must exceed `stretch::SEARCH`, which is how far back the WSOLA correlation
-/// reaches; everything above that is scheduling slack, so a producer that runs
-/// late cannot retire a frame out from under a consumer that has not published
-/// its position yet. 8192 frames is 170 ms at 48 kHz and costs 32 KB.
-pub const HISTORY: u64 = 8192;
+/// Two things read backwards and both must fit:
+///
+/// * `stretch::SEARCH`, 256 frames, is how far back the WSOLA correlation
+///   reaches for its splice point.
+/// * The drift correction's waveform correlation (TD-21) reads
+///   `window/2 + max_lag` = 0.35 s behind the playhead, which at 48 kHz is
+///   about 16,800 frames and is by far the larger of the two.
+///
+/// 32,768 frames is 0.68 s at 48 kHz — comfortably over both, with the surplus
+/// as scheduling slack so a producer that runs late cannot retire a frame out
+/// from under a consumer that has not published its position yet. It costs
+/// 128 KB of the window's 1 MiB.
+pub const HISTORY: u64 = 32_768;
 
 /// A window onto a track being decoded as it plays.
 ///
@@ -277,6 +285,27 @@ impl Window {
         // pressing play would find silence.
         self.read.store(frame, Ordering::Release);
         self.complete.store(false, Ordering::Release);
+    }
+
+    /// Read `out.len()` frames from `from`, downmixed to mono, zero-padding
+    /// anything outside the window.
+    ///
+    /// For the drift correction (TD-21), which needs the audio itself rather
+    /// than what the analysis said about it. Reading straight from the window
+    /// rather than decoding again is the point: those frames are already here,
+    /// already at the device's rate, and already the ones being played.
+    ///
+    /// Zero-padding rather than refusing, because the correlation normalises
+    /// and a short window at the very start of a track should weaken its
+    /// opinion, not abort it.
+    pub fn read_mono(&self, from: u64, out: &mut [f32]) {
+        let view = self.view();
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = match view.get(from.wrapping_add(i as u64)) {
+                Some(f) => (f[0] as f32 + f[1] as f32) / (2.0 * 32_768.0),
+                None => 0.0,
+            };
+        }
     }
 
     /// The window currently holds `[start, write)`.

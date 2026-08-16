@@ -14,6 +14,7 @@ pub mod decode;
 pub mod key;
 pub mod loudness;
 pub mod resample;
+pub mod segments;
 pub mod spectrum;
 pub mod stream;
 pub mod tempo;
@@ -57,6 +58,13 @@ pub struct Analysis {
     /// Times of the track's strongest hits, in seconds. See
     /// [`loudness::transients`].
     pub transients: Vec<f32>,
+    /// Where the intro ends and the outro begins, in seconds (TD-21).
+    ///
+    /// Not the same thing as `intro_key`/`outro_key`, which read fixed 45 s
+    /// spans from the audible content. These are detected boundaries, and they
+    /// are what decides how long a mix runs — see
+    /// `TransitionType::phrase_duration`.
+    pub segments: segments::Segments,
     /// Envelope peaks across the whole track, for drawing a waveform.
     ///
     /// A fixed number of bins rather than a fixed resolution, so a five-minute
@@ -264,6 +272,7 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
         intro_key,
         outro_key,
         energy: loudness::energy_level(&audio.samples, rate as f32),
+        segments: segments::detect(&audio.samples, rate as f32),
         transients: loudness::transients(&audio.samples, rate as f32),
         // Computed from the same decoded signal every other stage used, so it
         // costs a pass over memory rather than another decode.

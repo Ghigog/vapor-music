@@ -25,6 +25,7 @@ mod cache;
 /// streaming deck rather than a stand-in for one.
 pub mod decoder;
 mod store;
+mod sync;
 mod tags;
 mod webdav;
 
@@ -115,6 +116,9 @@ struct AppState {
     /// They swap roles when a transition completes, exactly as the decks do.
     playing_stream: Option<decoder::Streamer>,
     next_stream: Option<decoder::Streamer>,
+    /// The drift correction running for the current mix (TD-21). Dropped when
+    /// the mix ends, which stops its thread and clears the correction.
+    drift: Option<sync::DriftCorrection>,
 }
 
 impl AppState {
@@ -173,6 +177,7 @@ impl AppState {
             armed_next: None,
             playing_stream: None,
             next_stream: None,
+            drift: None,
         }
     }
 
@@ -586,6 +591,7 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     // window for a mix that will never happen, competing for disk and CPU with
     // the track the person actually asked for.
     app.next_stream = None;
+    app.drift = None;
     player.cancel_transition();
 
     let link = player.link();
@@ -892,6 +898,15 @@ struct ArmedMix {
     ratio: f64,
     outgoing_ratio: f64,
     start_at: f64,
+    /// Carried through for the drift correction (TD-21), which needs both grids
+    /// and the pair of beats the alignment anchored on. They stay on this side
+    /// of the audio boundary throughout — the correction crosses as one scalar.
+    out_grid: vapor_engine::BeatGrid,
+    in_grid: vapor_engine::BeatGrid,
+    cue_in: f32,
+    /// Both tracks have vocals, so the outgoing mids duck through the first
+    /// half of the mix (TD-21).
+    mid_cut: bool,
 }
 
 /// Decide whether the next track can be mixed into rather than merely followed.
@@ -930,7 +945,15 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
         (bpm_of(outgoing, app, current) - bpm_of(incoming, app, &next)).abs(),
         same_genre(app, current, &next),
     );
-    let duration = kind.default_duration();
+    // How much room the two tracks leave, snapped to a musical phrase (TD-21).
+    // Falls back to the per-type default when either track's segments are
+    // missing — an older analysis, or a track with no detectable body.
+    let duration = vapor_engine::TransitionType::phrase_duration(
+        (outgoing.duration as f32 - outgoing.outro_start).max(0.0),
+        incoming.intro_end,
+        bpm_of(outgoing, app, current),
+    )
+    .unwrap_or_else(|| kind.default_duration());
     // Start early enough that the mix finishes as the outgoing track's audible
     // content ends, rather than after it has already fallen silent.
     let start_at = (outgoing.cue_out - duration).max(0.0) as f64;
@@ -969,6 +992,15 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
         ratio,
         outgoing_ratio,
         start_at,
+        cue_in: incoming.cue_in,
+        out_grid,
+        in_grid,
+        // Two singers over each other is the clash the duck exists to prevent;
+        // ducking a track that has no vocal only makes the mix quieter. Note
+        // that `vocal_presence` is an energy threshold rather than a detector —
+        // see `vapor_dsp::loudness::VOCAL_PRESENCE_ENERGY`.
+        mid_cut: vapor_dsp::loudness::has_vocal_presence(outgoing.energy)
+            && vapor_dsp::loudness::has_vocal_presence(incoming.energy),
     })
 }
 
@@ -1024,7 +1056,32 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
                     mix.ratio,
                     mix.outgoing_ratio,
                     mix.start_at,
+                    mix.mid_cut,
                 );
+
+                // Correct the incoming deck's drift for the length of the mix
+                // (TD-21). Needs both decks' windows, so it can only start once
+                // the incoming one exists.
+                app.drift = app.playing_stream.as_ref().and_then(|outgoing| {
+                    sync::DriftCorrection::start(sync::Inputs {
+                        link: Arc::clone(&link),
+                        outgoing_grid: mix.out_grid,
+                        incoming_grid: mix.in_grid,
+                        outgoing_window: outgoing.window(),
+                        incoming_window: streamer.window(),
+                        ratio: mix.ratio,
+                        start_time_out: mix.start_at as f32,
+                        cue_in: mix.cue_in,
+                        // A Tempo Morph is deliberately bending both decks, so
+                        // a loop chasing phase through the first half would be
+                        // fighting the transition rather than helping it.
+                        delay_secs: if mix.kind.morphs_tempo() {
+                            (mix.duration * 0.5).min(vapor_engine::pll::MORPH_DELAY_CAP_SECS)
+                        } else {
+                            0.0
+                        },
+                    })
+                });
                 app.next_stream = Some(streamer);
             }
             // Not surfaced. A mix that cannot be arranged is not a failure a
@@ -1033,6 +1090,7 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
             _ => {
                 app.armed_next = None;
                 app.next_stream = None;
+                app.drift = None;
             }
         }
     });
@@ -1152,6 +1210,10 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared) {
                 // drops the one feeding the track that just ended, which joins
                 // its thread — on this thread, which is allowed to wait for it.
                 app.playing_stream = app.next_stream.take();
+                // The mix is over, so the correction has nothing left to
+                // correct. Dropping it here joins its thread and returns the
+                // deck to its own tempo.
+                app.drift = None;
                 // Remember what was blended into what, so a skip in the next
                 // ten seconds can be attributed to this pair (TD-14).
                 if let (Some(from), Some(to)) = (from, app.playing.clone()) {
@@ -2240,6 +2302,7 @@ fn clear_audio_cache(state: State<'_, Shared>) -> Result<u64> {
     // open, and stopping the music because someone reclaimed disk space would
     // be a worse answer than letting the song finish.
     app.next_stream = None;
+    app.drift = None;
     if let Some(p) = app.player.as_ref() {
         p.cancel_transition();
     }

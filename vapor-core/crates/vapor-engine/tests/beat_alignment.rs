@@ -445,6 +445,7 @@ fn a_scheduled_transition_waits_for_its_delay() {
             20.0,
             8.0,
             delay_frames,
+            false,
         )
         .expect("should schedule");
 
@@ -503,6 +504,7 @@ fn zero_delay_starts_immediately() {
             20.0,
             8.0,
             0,
+            false,
         )
         .unwrap();
 

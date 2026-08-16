@@ -510,3 +510,26 @@ mod transient_tests {
         assert!(found.iter().all(|&t| t >= 0.0 && t < secs));
     }
 }
+
+/// The threshold above which a track counts as having vocals.
+///
+/// `audio_analyzer.gd:516` is the whole definition:
+///
+/// ```gdscript
+/// results["vocal_presence"] = results.get("energy_level", 0.5) > 0.35
+/// ```
+///
+/// So `vocal_presence` is **not a vocal detector** and never was — it is
+/// [`energy_level`] over a threshold, wearing a misleading name. Recorded here
+/// because the name invites exactly the wrong port: adding a real
+/// vocal-detection stage would be inventing a feature the app has never had,
+/// and would change which pairs get the mid-cut (TD-21) for reasons no
+/// measurement supports. If a real detector is ever wanted it should be a new
+/// decision with its own evidence, not smuggled in under this name.
+pub const VOCAL_PRESENCE_ENERGY: f32 = 0.35;
+
+/// Whether a track reads as carrying vocals, in the only sense the Godot build
+/// ever meant. See [`VOCAL_PRESENCE_ENERGY`].
+pub fn has_vocal_presence(energy: f32) -> bool {
+    energy > VOCAL_PRESENCE_ENERGY
+}

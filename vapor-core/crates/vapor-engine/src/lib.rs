@@ -24,6 +24,7 @@ pub mod delay;
 pub mod limiter;
 pub mod mixer;
 pub mod offline;
+pub mod pll;
 pub mod source;
 pub mod stretch;
 pub mod transition;

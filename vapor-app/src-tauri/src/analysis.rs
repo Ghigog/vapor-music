@@ -54,6 +54,16 @@ pub struct Analysis {
     /// Perceived energy, 0–1 — loudness, brightness and tempo (TD-42b).
     #[serde(default)]
     pub energy: f32,
+    /// Where the intro ends and the outro begins, in seconds (TD-21).
+    ///
+    /// These decide how long a mix runs: the transition is snapped to the
+    /// longest musical phrase that fits inside the shorter of the outgoing
+    /// outro and the incoming intro. Zero means "not detected", and the mix
+    /// falls back to the per-type default duration.
+    #[serde(default)]
+    pub intro_end: f32,
+    #[serde(default)]
+    pub outro_start: f32,
     /// Schema version, so a future change to what analysis produces can
     /// invalidate stale entries instead of silently mixing formats.
     #[serde(default)]
@@ -63,12 +73,13 @@ pub struct Analysis {
 /// Bump when the meaning of any field changes. Entries at a lower version are
 /// re-analysed rather than trusted.
 ///
+/// 4 added the intro/outro boundaries that decide a mix's length (TD-21);
 /// 3 added segment keys and a real energy figure; 2 added the waveform. A `#[serde(default)]` empty vector would have avoided
 /// the re-analysis, and would have left a library where some tracks draw a
 /// waveform and others cannot, with no way to tell why or to fix it short of
 /// deleting everything. Invalidating is what this constant is for — the pass is
 /// resumable, cached per track, and now has a progress bar and a stop button.
-pub const ANALYSIS_VERSION: u32 = 3;
+pub const ANALYSIS_VERSION: u32 = 4;
 
 /// Analysis results keyed by href.
 pub type Cache = HashMap<String, Analysis>;
@@ -110,6 +121,8 @@ pub fn analyse_file(path: &Path) -> Result<Analysis, String> {
         intro_key: result.intro_key,
         outro_key: result.outro_key,
         energy: result.energy,
+        intro_end: result.segments.intro_end,
+        outro_start: result.segments.outro_start,
         version: ANALYSIS_VERSION,
     })
 }

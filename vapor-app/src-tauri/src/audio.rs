@@ -113,6 +113,8 @@ enum Command {
     ScheduleTransition {
         kind: TransitionType,
         duration: f32,
+        /// Both tracks have vocals, so the outgoing mids duck (TD-21).
+        mid_cut: bool,
         incoming_pos: f32,
         ratio: f64,
         /// Stretch for the outgoing deck. 1.0 except for a Tempo Morph, where
@@ -150,6 +152,18 @@ pub struct Link {
     channel: Mutex<Channel>,
     /// Playback position in seconds, as `f64` bits.
     position: AtomicU64,
+    /// The *cued* deck's position in seconds, as `f64` bits.
+    ///
+    /// Only meaningful during a transition, and published for the drift
+    /// correction (TD-21), which needs both decks' playheads to measure the
+    /// phase between them.
+    incoming_position: AtomicU64,
+    /// Drift correction for the incoming deck, as `f64` bits.
+    ///
+    /// An atomic rather than a command: it is refreshed several times a second
+    /// while a mix runs, and a stream of commands would crowd out the transport
+    /// actions the queue exists for. The same reasoning as volume.
+    pll_adjustment: AtomicU64,
     /// Loaded track duration in seconds, as `f64` bits.
     duration: AtomicU64,
     status: AtomicU8,
@@ -210,6 +224,8 @@ impl Link {
                 retired: VecDeque::with_capacity(COMMAND_CAPACITY * 2),
             }),
             position: AtomicU64::new(0),
+            incoming_position: AtomicU64::new(0),
+            pll_adjustment: AtomicU64::new(0),
             duration: AtomicU64::new(0),
             status: AtomicU8::new(Status::Idle as u8),
             ended: AtomicBool::new(false),
@@ -278,10 +294,12 @@ impl Link {
         ratio: f64,
         outgoing_ratio: f64,
         start_at: f64,
+        mid_cut: bool,
     ) -> bool {
         self.send(Command::ScheduleTransition {
             kind,
             duration,
+            mid_cut,
             incoming_pos,
             ratio,
             outgoing_ratio,
@@ -296,6 +314,21 @@ impl Link {
     /// True while a mix is scheduled or under way.
     pub fn transition_armed(&self) -> bool {
         self.transition_armed.load(Ordering::Acquire)
+    }
+
+    /// Where the cued deck is, in its own track. Only meaningful mid-mix.
+    pub fn incoming_position(&self) -> f64 {
+        f64::from_bits(self.incoming_position.load(Ordering::Relaxed))
+    }
+
+    /// Hand the mixer a drift correction for the incoming deck (TD-21).
+    ///
+    /// Computed on a control thread, because the phase detector reads both beat
+    /// grids and the waveform correlation reads thousands of samples — neither
+    /// belongs in a render callback. Only this scalar crosses.
+    pub fn set_pll_adjustment(&self, adjustment: f64) {
+        self.pll_adjustment
+            .store(adjustment.to_bits(), Ordering::Relaxed);
     }
 
     /// True once per completed transition, for whoever advances the queue.
@@ -482,6 +515,13 @@ impl Engine {
     {
         self.apply_commands();
 
+        // Read fresh every block. The control side writes it a few times a
+        // second; the mixer re-derives the deck's rate from its base each block
+        // rather than nudging, so a stale value holds rather than compounds.
+        self.mixer.set_pll_adjustment(f64::from_bits(
+            self.link.pll_adjustment.load(Ordering::Relaxed),
+        ));
+
         let frames = (out.len() / self.channels).min(self.scratch.len());
         let was_transitioning = self.mixer.is_transitioning();
         let produced = self.mixer.render(&mut self.scratch[..frames]);
@@ -541,6 +581,10 @@ impl Engine {
 
         self.link.position.store(
             self.mixer.outgoing().position_seconds().to_bits(),
+            Ordering::Relaxed,
+        );
+        self.link.incoming_position.store(
+            self.mixer.incoming().position_seconds().to_bits(),
             Ordering::Relaxed,
         );
 
@@ -636,6 +680,7 @@ impl Engine {
                 Command::ScheduleTransition {
                     kind,
                     duration,
+                    mid_cut,
                     incoming_pos,
                     ratio,
                     outgoing_ratio,
@@ -655,6 +700,7 @@ impl Engine {
                         ratio,
                         outgoing_ratio,
                         delay_frames,
+                        mid_cut,
                     );
                 }
 

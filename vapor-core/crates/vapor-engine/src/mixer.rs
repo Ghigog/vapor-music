@@ -54,6 +54,8 @@ const GLIDE_EPSILON: f64 = 1e-4;
 struct PendingTransition {
     kind: TransitionType,
     duration: f32,
+    /// Both tracks have vocals, so the outgoing mids duck (TD-21).
+    mid_cut: bool,
     incoming_pos: f32,
     ratio: f64,
     /// Stretch applied to the *outgoing* deck.
@@ -82,6 +84,7 @@ impl TempoGlide {
     }
 }
 
+#[derive(Clone)]
 pub struct BeatGrid {
     pub bpm: f32,
     /// Beat onset times in seconds.
@@ -124,6 +127,16 @@ pub struct Mixer {
     sample_rate: f32,
     scratch: Vec<[f32; 2]>,
     limiter: Limiter,
+
+    /// The incoming deck's stretch before drift correction.
+    ///
+    /// Kept apart from `Deck::ratio` because the PLL multiplies it every block
+    /// (TD-21). Folding the correction into the deck's own ratio would
+    /// compound: each block would correct the already-corrected value, and a
+    /// steady 0.2% nudge would run away within seconds.
+    incoming_base_ratio: f64,
+    /// Latest correction from the PLL, which runs on a control thread.
+    pll_adjustment: f64,
 }
 
 impl Mixer {
@@ -138,7 +151,28 @@ impl Mixer {
             sample_rate,
             scratch: vec![[0.0; 2]; max_block],
             limiter: Limiter::new(sample_rate, max_block),
+            incoming_base_ratio: 1.0,
+            pll_adjustment: 0.0,
         }
+    }
+
+    /// Apply a drift correction to the incoming deck (TD-21).
+    ///
+    /// Computed by [`crate::pll`] on a control thread — the phase detector needs
+    /// both beat grids, which must never reach the audio thread — so only this
+    /// scalar crosses, exactly as with `schedule_prepared`.
+    ///
+    /// Clamped here as well as at the source: this is the value that multiplies
+    /// a playback rate, and a caller that passed something wild would be heard
+    /// rather than merely logged.
+    pub fn set_pll_adjustment(&mut self, adjustment: f64) {
+        self.pll_adjustment =
+            adjustment.clamp(-crate::pll::MAX_ADJUSTMENT, crate::pll::MAX_ADJUSTMENT);
+    }
+
+    /// The correction currently applied.
+    pub fn pll_adjustment(&self) -> f64 {
+        self.pll_adjustment
     }
 
     /// Gain reduction currently applied by the master limiter, in dB.
@@ -245,6 +279,7 @@ impl Mixer {
             start_time_out,
             cue_in,
             0,
+            false,
         )
     }
 
@@ -263,6 +298,7 @@ impl Mixer {
         start_time_out: f32,
         cue_in: f32,
         delay_frames: usize,
+        mid_cut: bool,
     ) -> Result<(), MatchError> {
         let ratio = Self::tempo_ratio(outgoing_grid, incoming_grid)?;
         let incoming_pos =
@@ -288,6 +324,7 @@ impl Mixer {
             ratio,
             outgoing_ratio,
             delay_frames,
+            mid_cut,
         );
         Ok(())
     }
@@ -308,6 +345,7 @@ impl Mixer {
     ///
     /// Infallible by construction: every way this could fail was already decided
     /// by the caller that produced `ratio`.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_prepared(
         &mut self,
         kind: TransitionType,
@@ -316,6 +354,7 @@ impl Mixer {
         ratio: f64,
         outgoing_ratio: f64,
         delay_frames: usize,
+        mid_cut: bool,
     ) {
         let pending = PendingTransition {
             kind,
@@ -324,6 +363,7 @@ impl Mixer {
             ratio,
             outgoing_ratio,
             delay_frames,
+            mid_cut,
         };
 
         if delay_frames == 0 {
@@ -349,6 +389,7 @@ impl Mixer {
     pub fn cancel_transition(&mut self) {
         self.pending = None;
         self.glide = None;
+        self.pll_adjustment = 0.0;
 
         if self.transition.take().is_some() {
             let incoming = self.incoming();
@@ -374,6 +415,11 @@ impl Mixer {
 
     /// Cue the incoming deck and start the envelope. Allocation-free.
     fn activate(&mut self, p: PendingTransition) {
+        // A new mix starts uncorrected: the alignment was just computed, so
+        // there is nothing yet to have drifted from.
+        self.incoming_base_ratio = p.ratio;
+        self.pll_adjustment = 0.0;
+
         let inc = self.incoming();
         inc.seek_seconds(p.incoming_pos as f64);
         inc.ratio = p.ratio;
@@ -382,7 +428,7 @@ impl Mixer {
         // Only a Tempo Morph moves the outgoing deck; for everything else this
         // is 1.0 and the assignment is a no-op.
         self.outgoing().ratio = p.outgoing_ratio;
-        self.transition = Some(Transition::new(p.kind, p.duration));
+        self.transition = Some(Transition::new(p.kind, p.duration).with_mid_cut(p.mid_cut));
     }
 
     /// Render one block. Returns frames written.
@@ -403,6 +449,7 @@ impl Mixer {
             let complete = t.is_complete();
 
             let a_out = self.a_is_outgoing;
+            let corrected = self.incoming_base_ratio * (1.0 + self.pll_adjustment);
             {
                 let (o, i) = if a_out {
                     (&mut self.deck_a, &mut self.deck_b)
@@ -411,10 +458,16 @@ impl Mixer {
                 };
                 apply(o, &a.outgoing);
                 apply(i, &a.incoming);
+                // Re-derived from the base every block rather than nudged, so
+                // the correction cannot compound (TD-21).
+                i.ratio = corrected;
             }
 
             if complete {
                 self.transition = None;
+                // The mix is over; there is no incoming deck left to correct,
+                // and the glide below owns the ratio from here.
+                self.pll_adjustment = 0.0;
                 let o = self.outgoing();
                 o.stop();
                 self.a_is_outgoing = !a_out;
@@ -649,7 +702,7 @@ mod tests {
         let ratio = Mixer::tempo_ratio(&out, &inc).expect("ratio");
         let pos = Mixer::aligned_incoming_position(&out, &inc, start, cue).expect("position");
         let mut prepared = Mixer::new(RATE, 512);
-        prepared.schedule_prepared(TransitionType::BassSwap, 6.0, pos, ratio, 1.0, 0);
+        prepared.schedule_prepared(TransitionType::BassSwap, 6.0, pos, ratio, 1.0, 0, false);
 
         assert!((from_grids.incoming().ratio - prepared.incoming().ratio).abs() < 1e-12);
         assert!(

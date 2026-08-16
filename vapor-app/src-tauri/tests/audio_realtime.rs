@@ -482,7 +482,7 @@ fn arranging_a_mix_does_not_allocate_on_the_audio_thread() {
     let ratio = Mixer::tempo_ratio(&a, &b).expect("ratio");
     let pos = Mixer::aligned_incoming_position(&a, &b, 2.0, 1.0).expect("position");
 
-    assert!(link.schedule_transition(TransitionType::BassSwap, 4.0, pos, ratio, 1.0, 2.0));
+    assert!(link.schedule_transition(TransitionType::BassSwap, 4.0, pos, ratio, 1.0, 2.0, false));
 
     measure();
     // Long enough to cover the wait, the whole mix and the deck swap.
@@ -533,7 +533,7 @@ fn cancelling_a_mix_leaves_playback_running() {
     let (a, b) = (grid(128.0), grid(126.0));
     let ratio = Mixer::tempo_ratio(&a, &b).expect("ratio");
     let pos = Mixer::aligned_incoming_position(&a, &b, 10.0, 1.0).expect("position");
-    link.schedule_transition(TransitionType::BassSwap, 4.0, pos, ratio, 1.0, 10.0);
+    link.schedule_transition(TransitionType::BassSwap, 4.0, pos, ratio, 1.0, 10.0, false);
     for _ in 0..4 {
         engine.render(&mut out);
     }

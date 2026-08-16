@@ -242,6 +242,10 @@ pub fn prepare_mix(
             start_at,
             cue_in,
             lead_frames,
+            // The offline tools render one pair at a time to be measured, and
+            // have no analysis to say whether either track has vocals. Leaving
+            // the duck off keeps what they render comparable across runs.
+            false,
         )
         .map_err(|err| OfflineError::NotMatchable {
             err,

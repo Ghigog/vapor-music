@@ -42,6 +42,12 @@ pub enum TransitionType {
     TempoMorph,
 }
 
+/// Bounds a phrase-matched transition is held to, from
+/// `clampf(overlap, 4.0, 16.0)`. Shorter than four seconds is a cut rather than
+/// a mix; longer than sixteen outlasts most intros.
+const MIN_PHRASE_SECS: f32 = 4.0;
+const MAX_PHRASE_SECS: f32 = 16.0;
+
 impl TransitionType {
     /// From `audio_manager.gd::get_transition_duration`.
     pub fn default_duration(&self) -> f32 {
@@ -53,6 +59,47 @@ impl TransitionType {
             TransitionType::ReverbFreeze => 5.0,
             TransitionType::TempoMorph => 6.0,
         }
+    }
+
+    /// How long a mix should run given the room the two tracks leave for it
+    /// (TD-21).
+    ///
+    /// Ported from the `smart_mixing_enabled` branch of
+    /// `get_transition_duration`. The overlap a mix has to work with is the
+    /// shorter of the outgoing track's outro and the incoming track's intro;
+    /// that is snapped **down** to a standard phrase — 16, 8 or 4 bars — so the
+    /// transition ends on a musical boundary rather than wherever the clock ran
+    /// out.
+    ///
+    /// `None` when the tracks give nothing to work with, and the caller falls
+    /// back to [`default_duration`](Self::default_duration). Note the original
+    /// derives the bar length from the **outgoing** tempo, which is the one
+    /// both decks are playing at during the mix.
+    pub fn phrase_duration(outro_len: f32, intro_len: f32, outgoing_bpm: f32) -> Option<f32> {
+        if outro_len <= 0.0 || intro_len <= 0.0 {
+            return None;
+        }
+        let bpm = if outgoing_bpm > 0.0 {
+            outgoing_bpm
+        } else {
+            120.0
+        };
+
+        // Four beats to a bar, so a bar is 240/bpm seconds.
+        let bar = 240.0 / bpm;
+        let overlap = outro_len
+            .min(intro_len)
+            .clamp(MIN_PHRASE_SECS, MAX_PHRASE_SECS);
+
+        let chosen = [16.0, 8.0, 4.0]
+            .iter()
+            .map(|bars| bars * bar)
+            .find(|&candidate| candidate <= overlap)
+            // Every phrase is longer than the room available, so take the
+            // floor rather than overrunning the intro.
+            .unwrap_or(MIN_PHRASE_SECS);
+
+        Some(chosen.clamp(MIN_PHRASE_SECS, MAX_PHRASE_SECS))
     }
 
     /// Whether the incoming deck should meet the outgoing one halfway in tempo
@@ -105,6 +152,13 @@ pub struct Transition {
     pub kind: TransitionType,
     pub duration: f32,
     elapsed: f32,
+    /// Duck the outgoing track's mids so the incoming vocal has room (TD-21).
+    ///
+    /// `audio_manager.gd` applies this to **every** transition type, and only
+    /// when *both* tracks have vocals — two singers over each other is the
+    /// clash it exists to prevent, and ducking a track that has none only makes
+    /// the mix quieter.
+    mid_cut: bool,
 }
 
 /// The floor both implementations fade to.
@@ -123,7 +177,13 @@ fn gain_to_db(gain: f32) -> f32 {
 }
 /// Bass cut depth for a Bass Swap (`_transition_eq_gains` bands 0 and 1).
 const BASS_CUT_DB: f32 = -40.0;
-/// Mid and high duck applied by `apply_mid_cut` during an Echo Out.
+/// Depth the outgoing mids duck to when both tracks have vocals (TD-21).
+///
+/// `apply_mid_cut` writes `_transition_eq_gains[out_bus][2]` and `[3]`. Godot's
+/// `AudioEffectEQ6` centres its six bands at 32, 100, 320, 1000, 3200 and
+/// 10000 Hz, so bands 2 and 3 are 320 and 1000 — the **mid** band here, and
+/// only that one. An earlier port applied this to the high band as well, which
+/// takes 24 dB out of the outgoing track's entire top end.
 const MID_CUT_DB: f32 = -24.0;
 /// Level the outgoing deck is trimmed to as reverb wet ramps up, so the wet
 /// signal adding to the dry one does not swell the mix.
@@ -135,7 +195,30 @@ impl Transition {
             kind,
             duration: duration.max(0.001),
             elapsed: 0.0,
+            mid_cut: false,
         }
+    }
+
+    /// Duck the outgoing mids across the first half of the mix.
+    ///
+    /// Set when both tracks have vocals — see [`Transition::mid_cut`]. The
+    /// caller decides, because whether a track has vocals is a property of the
+    /// analysis and not of the envelope.
+    pub fn with_mid_cut(mut self, apply: bool) -> Self {
+        self.mid_cut = apply;
+        self
+    }
+
+    /// The outgoing mid duck at this instant, in dB. Zero when not applied.
+    ///
+    /// `0 -> -24 dB` over the first half of the transition, from
+    /// `apply_mid_cut`'s `tween_method(..., 0.0, -24.0, duration * 0.5)`.
+    fn mid_cut_db(&self) -> f32 {
+        if !self.mid_cut {
+            return 0.0;
+        }
+        let half = self.duration * 0.5;
+        lerp(0.0, MID_CUT_DB, (self.elapsed / half).clamp(0.0, 1.0))
     }
 
     pub fn advance(&mut self, dt: f32) {
@@ -151,14 +234,22 @@ impl Transition {
     }
 
     pub fn automation(&self) -> Automation {
-        match self.kind {
+        let mut a = match self.kind {
             TransitionType::StandardCrossfade => self.standard_crossfade(),
             TransitionType::BassSwap => self.bass_swap(),
             TransitionType::FilterSweep => self.filter_sweep(),
             TransitionType::EchoOut => self.echo_out(),
             TransitionType::ReverbFreeze => self.reverb_freeze(),
             TransitionType::TempoMorph => self.tempo_morph(),
-        }
+        };
+
+        // Applied here rather than inside each envelope, because in
+        // `audio_manager.gd` it is a separate `if apply_mid_cut` block appended
+        // to every one of the six — the same duck regardless of which
+        // transition it decorates. Added to whatever the envelope already asked
+        // for, so a Bass Swap's own EQ automation still stands.
+        a.outgoing.eq_mid_db += self.mid_cut_db();
+        a
     }
 
     /// The incoming track arrives over the first half; at the midpoint the
@@ -180,14 +271,9 @@ impl Transition {
         // Dry goes 1 -> 0 over `cut` starting at the midpoint, so the mix goes
         // 0 -> 1 across the same span.
         let delay_mix = ((self.elapsed - half) / cut).clamp(0.0, 1.0);
-        // The mid-cut from `apply_mid_cut`: the outgoing mids duck across the
-        // first half so the incoming vocal has room.
-        let mid_cut = lerp(0.0, MID_CUT_DB, (self.elapsed / half).clamp(0.0, 1.0));
 
         Automation {
             outgoing: DeckAutomation {
-                eq_mid_db: mid_cut,
-                eq_high_db: mid_cut,
                 delay_mix,
                 ..DeckAutomation::neutral()
             },
@@ -590,5 +676,214 @@ mod tests {
             );
             t.advance(duration / 120.0);
         }
+    }
+
+    /// The duck is off unless someone asks for it. `apply_mid_cut` is gated on
+    /// *both* tracks having vocals, and an earlier port applied it to every
+    /// Echo Out regardless — which quietens the outgoing track through the
+    /// first half of a mix for no reason at all.
+    #[test]
+    fn the_mid_cut_is_off_by_default() {
+        for kind in [
+            TransitionType::StandardCrossfade,
+            TransitionType::BassSwap,
+            TransitionType::FilterSweep,
+            TransitionType::EchoOut,
+            TransitionType::ReverbFreeze,
+            TransitionType::TempoMorph,
+        ] {
+            let mut t = Transition::new(kind, 4.0);
+            t.advance(2.0);
+            assert_eq!(
+                t.automation().outgoing.eq_mid_db,
+                0.0,
+                "{kind:?} ducked the outgoing mids with no vocal clash to justify it"
+            );
+        }
+    }
+
+    /// And it applies to *every* transition type when it is asked for.
+    /// `audio_manager.gd` appends the same `if apply_mid_cut` block to all six.
+    #[test]
+    fn the_mid_cut_applies_to_every_transition_type() {
+        for kind in [
+            TransitionType::StandardCrossfade,
+            TransitionType::BassSwap,
+            TransitionType::FilterSweep,
+            TransitionType::EchoOut,
+            TransitionType::ReverbFreeze,
+            TransitionType::TempoMorph,
+        ] {
+            let duration = 4.0;
+            let mut t = Transition::new(kind, duration).with_mid_cut(true);
+
+            assert_eq!(
+                t.automation().outgoing.eq_mid_db,
+                0.0,
+                "{kind:?} started the duck before the mix began"
+            );
+
+            // Fully applied at the midpoint, which is where the ramp ends.
+            t.advance(duration * 0.5);
+            let at_half = t.automation().outgoing.eq_mid_db;
+            assert!(
+                (at_half - MID_CUT_DB).abs() < 0.01,
+                "{kind:?} reached {at_half} dB at the midpoint, expected {MID_CUT_DB}"
+            );
+
+            // And stays there rather than recovering.
+            t.advance(duration * 0.5);
+            let at_end = t.automation().outgoing.eq_mid_db;
+            assert!(
+                (at_end - MID_CUT_DB).abs() < 0.01,
+                "{kind:?} let the duck recover to {at_end} dB before the mix ended"
+            );
+        }
+    }
+
+    /// The duck is on the **mid** band alone.
+    ///
+    /// `apply_mid_cut` writes `_transition_eq_gains[out_bus][2]` and `[3]`,
+    /// which in Godot's six-band EQ are 320 Hz and 1 kHz. An earlier port also
+    /// pulled the high band down, taking 24 dB out of the outgoing track's
+    /// entire top end — audible as the mix going dull, not as room being made.
+    #[test]
+    fn the_mid_cut_leaves_the_high_band_alone() {
+        let mut t = Transition::new(TransitionType::EchoOut, 4.0).with_mid_cut(true);
+        t.advance(2.0);
+        let a = t.automation();
+
+        assert!(a.outgoing.eq_mid_db < -20.0, "the mid band was not ducked");
+        assert_eq!(
+            a.outgoing.eq_high_db, 0.0,
+            "the duck reached the high band, which is two bands too far"
+        );
+    }
+
+    /// It must never duck the *incoming* track — the whole point is to make
+    /// room for the vocal that is arriving.
+    #[test]
+    fn the_mid_cut_never_touches_the_incoming_deck() {
+        let mut t = Transition::new(TransitionType::StandardCrossfade, 4.0).with_mid_cut(true);
+        for _ in 0..8 {
+            t.advance(0.5);
+            assert_eq!(
+                t.automation().incoming.eq_mid_db,
+                0.0,
+                "the arriving track was ducked"
+            );
+        }
+    }
+
+    /// A Bass Swap already automates the outgoing low band. The duck has to add
+    /// to that rather than replace it, or applying it would undo the swap.
+    #[test]
+    fn the_mid_cut_leaves_a_transitions_own_eq_intact() {
+        let duration = 4.0;
+        let mut plain = Transition::new(TransitionType::BassSwap, duration);
+        let mut ducked = Transition::new(TransitionType::BassSwap, duration).with_mid_cut(true);
+
+        plain.advance(duration * 0.75);
+        ducked.advance(duration * 0.75);
+
+        let (a, b) = (plain.automation(), ducked.automation());
+        assert_eq!(
+            a.outgoing.eq_low_db, b.outgoing.eq_low_db,
+            "the duck disturbed the Bass Swap's own low-band automation"
+        );
+        assert!(
+            b.outgoing.eq_mid_db < a.outgoing.eq_mid_db,
+            "the duck was not applied on top"
+        );
+    }
+
+    /// A mix lands on a phrase boundary rather than on a round number of
+    /// seconds. At 128 BPM a bar is 1.875 s, so the three candidates are 30,
+    /// 15 and 7.5 s — and which one fits is decided by the room the tracks
+    /// leave.
+    #[test]
+    fn a_phrase_duration_is_a_whole_number_of_bars() {
+        let bpm = 128.0;
+        let bar = 240.0 / bpm;
+
+        // Sixteen bars is 30 s, past the 16 s ceiling; eight is 15 s and fits.
+        let d = TransitionType::phrase_duration(40.0, 40.0, bpm).expect("a duration");
+        assert!(
+            (d / bar - 8.0).abs() < 1e-4,
+            "{d:.3}s is {:.2} bars, expected 8",
+            d / bar
+        );
+
+        // A short intro forces the next phrase down.
+        let d = TransitionType::phrase_duration(40.0, 9.0, bpm).expect("a duration");
+        assert!(
+            (d / bar - 4.0).abs() < 1e-4,
+            "{d:.3}s is {:.2} bars, expected 4",
+            d / bar
+        );
+    }
+
+    /// The *shorter* of the two spans decides, because a mix cannot run past
+    /// the end of the incoming track's intro or the outgoing track's outro.
+    #[test]
+    fn the_tighter_of_the_two_spans_decides() {
+        let bpm = 120.0;
+        let generous = TransitionType::phrase_duration(60.0, 60.0, bpm).expect("a duration");
+        let tight = TransitionType::phrase_duration(60.0, 5.0, bpm).expect("a duration");
+        assert!(
+            tight <= generous,
+            "a five-second intro produced a {tight:.2}s mix against {generous:.2}s for a long one"
+        );
+    }
+
+    /// Never longer than the room available, which is the whole point — a mix
+    /// that outruns the intro plays the incoming track's first verse under the
+    /// outgoing one's.
+    #[test]
+    fn a_phrase_never_outruns_the_room_it_was_given() {
+        for (outro, intro, bpm) in [
+            (30.0f32, 6.0f32, 128.0f32),
+            (8.0, 40.0, 100.0),
+            (20.0, 20.0, 174.0),
+            (5.0, 5.0, 90.0),
+        ] {
+            let d = TransitionType::phrase_duration(outro, intro, bpm).expect("a duration");
+            let room = outro.min(intro).max(MIN_PHRASE_SECS);
+            assert!(
+                d <= room + 1e-4,
+                "a {d:.2}s mix was chosen for {room:.2}s of room at {bpm} BPM"
+            );
+        }
+    }
+
+    /// Always inside the bounds the original clamps to.
+    #[test]
+    fn a_phrase_stays_within_four_and_sixteen_seconds() {
+        for bpm in [60.0f32, 90.0, 128.0, 174.0, 200.0] {
+            for span in [1.0f32, 4.0, 10.0, 30.0, 300.0] {
+                let d = TransitionType::phrase_duration(span, span, bpm).expect("a duration");
+                assert!(
+                    (MIN_PHRASE_SECS..=MAX_PHRASE_SECS).contains(&d),
+                    "{d:.2}s at {bpm} BPM with {span}s of room is outside 4..16"
+                );
+            }
+        }
+    }
+
+    /// Tracks that give nothing to work with fall back rather than inventing a
+    /// number — an unanalysed track has no segments, and a zero-length outro
+    /// means the detector found no body at all.
+    #[test]
+    fn no_room_means_no_opinion() {
+        assert_eq!(TransitionType::phrase_duration(0.0, 10.0, 128.0), None);
+        assert_eq!(TransitionType::phrase_duration(10.0, 0.0, 128.0), None);
+        assert_eq!(TransitionType::phrase_duration(-1.0, 10.0, 128.0), None);
+    }
+
+    /// A missing tempo must not divide by zero or produce a nonsense bar.
+    #[test]
+    fn a_missing_tempo_falls_back_to_a_sane_bar() {
+        let d = TransitionType::phrase_duration(60.0, 60.0, 0.0).expect("a duration");
+        assert!((MIN_PHRASE_SECS..=MAX_PHRASE_SECS).contains(&d));
     }
 }
