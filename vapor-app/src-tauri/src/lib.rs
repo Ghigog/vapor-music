@@ -2124,13 +2124,17 @@ fn set_remote_config(
         )));
     }
 
-    // Renaming the account leaves its password behind otherwise: the keychain
-    // entry is keyed by username, so a new name writes a new entry and the old
-    // one sits there until "delete everything" runs. Best effort — a keychain
-    // that will not give up an entry is not a reason to refuse the change.
+    // The keychain entry is keyed by username, so a rename has to move it.
+    //
+    // This used to *delete* the old entry, which combined with the UI's "an
+    // empty password box means leave it alone" rule to destroy the credential
+    // on any rename — correcting a username to the email address the server
+    // actually wants would silently log you out. Best effort either way: a
+    // keychain that will not give up an entry is not a reason to refuse the
+    // change.
     let previous = app.settings.remote.username.clone();
     if !previous.is_empty() && previous != username.trim() {
-        let _ = webdav::delete_password(&previous);
+        let _ = webdav::move_password(&previous, username.trim());
     }
 
     app.settings.remote.url = url.trim().to_string();

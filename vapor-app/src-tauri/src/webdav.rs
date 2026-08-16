@@ -77,6 +77,29 @@ fn load_password(username: &str) -> Result<String, DavError> {
     entry.get_password().map_err(|_| DavError::NoCredentials)
 }
 
+/// Carry a stored password from one username to another.
+///
+/// Renaming the account used to *delete* the old keychain entry, on the
+/// reasoning that a stale entry should not be left behind. Combined with the
+/// UI's rule that an empty password box means "leave the password alone", that
+/// made a rename destroy the credential: "unchanged" became "gone", and the
+/// next scan reported no password saved for an account that had one a moment
+/// earlier.
+///
+/// Moving it is what a rename means. If the password is wrong for the new
+/// account the server says so, which is a recoverable answer; a silently empty
+/// keychain is not.
+pub fn move_password(from: &str, to: &str) -> Result<(), DavError> {
+    if from == to {
+        return Ok(());
+    }
+    // Nothing stored is not a failure — there was simply nothing to carry.
+    if let Ok(password) = load_password(from) {
+        save_password(to, &password)?;
+    }
+    delete_password(from)
+}
+
 /// Remove a stored password. Part of "delete my data" meaning what it says.
 pub fn delete_password(username: &str) -> Result<(), DavError> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, username)

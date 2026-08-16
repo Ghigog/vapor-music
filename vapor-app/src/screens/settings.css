@@ -177,3 +177,53 @@
   border: 1px solid rgba(var(--sov-rgb), 0.28);
   color: var(--sov-ink);
 }
+
+/* Field help behind an (i).
+ *
+ * A button rather than `title=`: a native tooltip needs a hovering pointer, so
+ * it does not exist on touch and cannot be reached from a keyboard. Collapsed
+ * by default because six open hints turn a four-field form into a wall of
+ * prose — the (i) is the signal that an answer exists for anyone unsure. */
+
+.settings__field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings__hint-toggle {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 50%;
+  background: none;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  /* Optical centring: the glyph sits high in its box at this size. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings__hint-toggle:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.settings__hint-toggle[aria-expanded="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
+.settings__field-hint {
+  margin: 0;
+  max-width: 62ch;
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  color: var(--ink-2);
+}

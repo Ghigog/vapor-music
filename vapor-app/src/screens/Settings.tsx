@@ -110,19 +110,22 @@ export function Settings() {
     }
   }
 
+  /** Write the form to the backend. Shared by Save and Scan — see `scan`. */
+  async function apply() {
+    await core.setRemoteConfig(url, username, folder);
+    // An empty box means "keep the password already stored", so an accidental
+    // save does not wipe a working credential.
+    if (password) {
+      await core.saveWebdavPassword(username, password);
+      setPassword("");
+    }
+  }
+
   async function save() {
     await run(
       "saving",
       "remote",
-      async () => {
-        await core.setRemoteConfig(url, username, folder);
-        // An empty box means "keep the password already stored", so an
-        // accidental save does not wipe a working credential.
-        if (password) {
-          await core.saveWebdavPassword(username, password);
-          setPassword("");
-        }
-      },
+      apply,
       () =>
         setNote({
           card: "remote",
@@ -132,7 +135,21 @@ export function Settings() {
   }
 
   async function scan() {
-    await run("scanning", "remote", core.scanLibrary, (report) => {
+    await run(
+      "scanning",
+      "remote",
+      async () => {
+        // Apply the form first.
+        //
+        // Scanning reads the credential from the keychain, so a password typed
+        // but not saved is a password the scan cannot see — and the failure it
+        // produced said "no password saved" while one was plainly visible in
+        // the box above it. Pressing Scan after filling the form means "use
+        // what I just typed"; making that a two-step ritual serves nothing.
+        await apply();
+        return core.scanLibrary();
+      },
+      (report) => {
       setNote({
         card: "remote",
         text:
@@ -142,9 +159,10 @@ export function Settings() {
               `not just Music.`
             : `Found ${report.tracks.toLocaleString()} tracks in ` +
               `${report.directories.toLocaleString()} folders.`,
-      });
-      void refresh();
-    });
+        });
+        void refresh();
+      },
+    );
   }
 
   async function analyse() {
@@ -165,7 +183,10 @@ export function Settings() {
           Vapor reads it; nothing is uploaded anywhere.
         </p>
 
-        <Field label="Server address">
+        <Field
+          label="Server address"
+          hint="The WebDAV address of your storage, starting with https://. Koofr is https://app.koofr.net · Nextcloud is https://your-server/remote.php/dav · Proton Drive is https://drive.proton.me/urls/dav. Not your account name, and not a password."
+        >
           <input
             className="settings__input"
             type="url"
@@ -177,7 +198,10 @@ export function Settings() {
           />
         </Field>
 
-        <Field label="Username">
+        <Field
+          label="Username"
+          hint="Almost always the email address you sign in with. Koofr and Proton Drive both want the email; Nextcloud wants the login name shown in your profile."
+        >
           <input
             className="settings__input"
             type="text"
@@ -188,7 +212,10 @@ export function Settings() {
           />
         </Field>
 
-        <Field label="Password">
+        <Field
+          label="Password"
+          hint="Usually an app password rather than your account password — a separate one you generate for this app, which you can revoke without changing your real password. Koofr: Preferences → Password → App passwords. Nextcloud: Settings → Security → Create new app password. Leave this blank to keep the one already saved."
+        >
           <input
             className="settings__input"
             type="password"
@@ -202,7 +229,10 @@ export function Settings() {
           </span>
         </Field>
 
-        <Field label="Folder">
+        <Field
+          label="Folder"
+          hint="The path to your music on that server, not just its name. Koofr puts everything under /dav/Koofr, so a Music folder is /dav/Koofr/Music. Leave blank to scan from the root."
+        >
           <input
             className="settings__input"
             type="text"
@@ -349,18 +379,56 @@ export function Settings() {
   );
 }
 
+/**
+ * A labelled input, with optional help behind an (i).
+ *
+ * A button rather than a `title=` tooltip: `title` needs a hovering pointer, so
+ * it does not exist on touch and cannot be reached from a keyboard — help that
+ * only some people can read is not help. This toggles real text, is focusable,
+ * and says which state it is in.
+ *
+ * Collapsed by default because six always-open hints turn a short form into a
+ * wall of prose. The (i) is the signal that an answer exists for anyone unsure,
+ * which is exactly when it is wanted.
+ */
 function Field({
   label,
+  hint,
   children,
 }: {
   label: string;
+  hint?: string;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(false);
+  // Ties the input to its help for a screen reader, and keeps the ids unique
+  // when two fields share a page.
+  const id = `hint-${label.toLowerCase().replace(/\s+/g, "-")}`;
+
   return (
-    <label className="settings__field">
-      <span className="label">{label}</span>
+    <div className="settings__field">
+      <div className="settings__field-label">
+        <span className="label">{label}</span>
+        {hint && (
+          <button
+            type="button"
+            className="settings__hint-toggle"
+            aria-expanded={open}
+            aria-controls={id}
+            aria-label={`What goes in ${label}`}
+            onClick={() => setOpen((o) => !o)}
+          >
+            i
+          </button>
+        )}
+      </div>
       {children}
-    </label>
+      {hint && open && (
+        <p className="settings__field-hint" id={id}>
+          {hint}
+        </p>
+      )}
+    </div>
   );
 }
 
