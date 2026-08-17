@@ -193,14 +193,8 @@ jobs:
       # audio path's proof that it neither allocates nor frees on the audio
       # thread (TD-03). None of it needs a window or a device, so it runs on a
       # bare runner like any other test.
-      # `--test-threads=1` on Windows only, and only until AND-2 is closed.
-      #
-      # The lib test binary dies with STATUS_ACCESS_VIOLATION before any test
-      # reports, so a parallel run says which *binary* crashed and nothing about
-      # which test was in it. One thread at a time means the last line printed
-      # names the culprit. Remove this once it does.
       - name: Test
-        run: cargo test ${{ runner.os == 'Windows' && '-- --test-threads=1 --nocapture' || '' }}
+        run: cargo test
 
       - name: Clippy
         run: cargo clippy --all-targets

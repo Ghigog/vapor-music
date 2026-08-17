@@ -276,16 +276,9 @@ impl AppState {
             // small to be worth having.
             cache: cache::Cache::new(store.dir().join("audio"), cache_max_bytes),
             store,
-            // Opened once at startup rather than per track: acquiring a device
-            // takes long enough to hear as a gap, and holding one open is what
-            // every other player does.
-            player: match audio::Player::start() {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    eprintln!("audio output unavailable: {e}");
-                    None
-                }
-            },
+            // No device yet. `load` reads this app's files; acquiring hardware
+            // is [`AppState::open_audio`], called once from `run`.
+            player: None,
             playing: None,
             generation: 0,
             loading: false,
@@ -294,6 +287,26 @@ impl AppState {
             playing_stream: None,
             next_stream: None,
             drift: None,
+        }
+    }
+
+    /// Acquire the audio device, once.
+    ///
+    /// Separate from [`AppState::load`], which is otherwise "read my files" —
+    /// and which every test calls. Opening a device there meant 165 tests each
+    /// took a real sound card, and on a Windows runner with no audio endpoint
+    /// the first one to try killed the whole test binary with an access
+    /// violation before a single result was reported (AND-2). The failure is
+    /// inside `cpal`'s WASAPI backend, below anything this crate can guard, so
+    /// the fix is to stop asking for a device in a function that has no
+    /// business wanting one.
+    ///
+    /// Opened once rather than per track: acquiring a device takes long enough
+    /// to hear as a gap, and holding one open is what every other player does.
+    fn open_audio(&mut self) {
+        match audio::Player::start() {
+            Ok(p) => self.player = Some(p),
+            Err(e) => eprintln!("audio output unavailable: {e}"),
         }
     }
 
@@ -5349,6 +5362,9 @@ pub fn run() {
                 .app_data_dir()
                 .expect("no app data directory available");
             let shared: Shared = Arc::new(Mutex::new(AppState::load(Store::new(dir))));
+            if let Ok(mut state) = shared.lock() {
+                state.open_audio();
+            }
 
             // Only worth a thread if there is a device for it to watch.
             let has_audio = shared.lock().map(|s| s.player.is_some()).unwrap_or(false);
@@ -5690,6 +5706,27 @@ mod tests {
             "the original playlists file was lost"
         );
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Reading the app's files must not take the sound card.
+    ///
+    /// It used to. `AppState::load` called `Player::start()`, so every one of
+    /// these tests opened a real audio device — and on a Windows runner with no
+    /// audio endpoint the first one to try killed the test binary with an
+    /// access violation, before any test reported a result (AND-2). The crash
+    /// is inside `cpal`'s WASAPI backend and cannot be caught from here; not
+    /// asking is the fix.
+    ///
+    /// Pinned rather than left to the comment, because "does this function
+    /// touch hardware" is invisible at every call site.
+    #[test]
+    fn loading_does_not_open_an_audio_device() {
+        let (app, dir) = app();
+        assert!(
+            app.player.is_none(),
+            "load acquired an audio device; that belongs in open_audio"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

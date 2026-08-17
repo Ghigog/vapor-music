@@ -2115,26 +2115,35 @@ CI, no NDK on the development machine, so nothing has executed on Android.
 **Blocked on:** an NDK on the development machine, for anything beyond a
 compile.
 
-### AND-2 : the Windows shell tests crash the test binary (open)
+### AND-2 : the Windows shell tests crashed the test binary (fixed 2026-08-17)
 
-`vapor_app_lib-*.exe` exits `0xc0000005` — STATUS_ACCESS_VIOLATION — after
-printing "running 165 tests" and before any test reports a result. Every test
-in the shell's lib suite is therefore unrun on Windows.
+`vapor_app_lib-*.exe` exited `0xc0000005` — STATUS_ACCESS_VIOLATION — after
+printing "running 165 tests" and before any test reported. Every test in the
+shell's lib suite was unrun on Windows.
 
-Not a regression from any change on 2026-08-17: the Windows job had never
-actually executed before that day. Every earlier run failed in three or four
-seconds, refused on billing while the repo was private, and the summary line
-said "failure" either way — which is the whole reason this went unseen. See
-`docs/FINDINGS.md` on not reading a red job as a known red job.
+Not a regression from anything that day: the Windows job had never executed
+before it. Every earlier run failed in three or four seconds, refused on billing
+while the repo was private, and the summary line reads "failure" either way —
+which is the whole reason it went unseen.
 
-A parallel run names the binary and not the test. The Windows step runs with
-`--test-threads=1 --nocapture` until this is closed, so the last line printed is
-the test that was running when it died.
+**Cause.** `AppState::load` called `audio::Player::start()`. Every test that
+builds an `AppState` therefore opened a real audio device, and on a runner with
+no audio endpoint the first one to try died inside `cpal`'s WASAPI backend. That
+is below anything this crate can guard: `open_stream` already returns an error
+for a missing device, a bad config and a stream that will not start, and none of
+those paths is reached.
 
-Candidates, none confirmed: `keyring`'s `windows-native` backend, which the
-credential round-trip test exercises against the real Credential Manager; `cpal`
-opening WASAPI on a runner with no audio endpoint; something at load time in the
-`cdylib`/`staticlib` crate types.
+**Fix.** `load` reads this app's files and nothing else; `AppState::open_audio`
+acquires the device and is called once from `run`. Pinned by
+`loading_does_not_open_an_audio_device`, because "does this function touch
+hardware" is invisible at every call site.
+
+Worth keeping in view: the same crash is what a Windows laptop with every audio
+device disabled would have done on launch. It was never only a CI problem.
+
+**Found by** running the Windows step with `--test-threads=1 --nocapture`. A
+parallel run names the binary and not the test; one thread at a time made the
+last line printed the culprit.
 
 ### VDJ-4 : the identify pass has never been run (blocked on Dylan)
 
