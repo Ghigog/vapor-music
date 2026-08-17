@@ -13,6 +13,7 @@ pub mod beats;
 pub mod decode;
 pub mod key;
 pub mod loudness;
+pub mod metre;
 pub mod resample;
 pub mod segments;
 pub mod spectrum;
@@ -228,8 +229,13 @@ pub fn decode_bytes_for_playback(
 
 /// Span of the onset function used to pick the tempo. Beats still come from
 /// the whole track; only the tempo estimate is windowed.
-const TEMPO_WINDOW_SECS: f64 = 120.0;
-const TEMPO_SKIP_SECS: f64 = 15.0;
+///
+/// Public so a diagnostic can probe the estimator on exactly the span the
+/// analysis uses. They were separate copies for one afternoon and the probe
+/// disagreed with the validator about which tracks failed, which is the least
+/// useful thing a diagnostic can do.
+pub const TEMPO_WINDOW_SECS: f64 = 120.0;
+pub const TEMPO_SKIP_SECS: f64 = 15.0;
 
 /// Longest span fed to the *key* transform. Key is a global property, the
 /// 8192-point FFT it needs is the expensive one, and the estimate stops

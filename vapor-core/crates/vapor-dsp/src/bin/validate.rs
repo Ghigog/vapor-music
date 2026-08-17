@@ -24,6 +24,8 @@ struct Fixture {
     #[serde(default)]
     beat_grid: Vec<f32>,
     #[serde(default)]
+    downbeats: Vec<f32>,
+    #[serde(default)]
     cue_in: f32,
     #[serde(default)]
     cue_out: f32,
@@ -50,6 +52,64 @@ const METRICAL_RATIOS: [f64; 8] = [
 
 /// Standard beat-tracking tolerance.
 const BEAT_TOLERANCE: f32 = 0.07;
+
+/// Find a fixture's audio in the cache, under either naming scheme.
+///
+/// The fixtures were written when the Godot build named cache files by an MD5
+/// of the href; the Rust shell names them `{fnv1a(href):016x}.{ext}`. Without
+/// the second lookup this harness finds nothing at all on a current machine and
+/// reports a clean sweep of zero, which is the least useful way for a
+/// validation tool to fail.
+fn locate(cache_dir: &Path, f: &Fixture) -> Option<PathBuf> {
+    let by_fixture = cache_dir.join(&f.file);
+    if by_fixture.exists() {
+        return Some(by_fixture);
+    }
+    let ext = f
+        .href
+        .rsplit('.')
+        .next()
+        .filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("audio");
+    let by_href = cache_dir.join(format!("{:016x}.{ext}", fnv1a(&f.href)));
+    by_href.exists().then_some(by_href)
+}
+
+/// A metrical ratio as musicians would say it.
+fn name_ratio(m: f64) -> String {
+    for (num, den) in [
+        (1, 2),
+        (2, 1),
+        (1, 3),
+        (3, 1),
+        (2, 3),
+        (3, 2),
+        (3, 4),
+        (4, 3),
+    ] {
+        if (m - num as f64 / den as f64).abs() < 1e-6 {
+            return format!("{num}:{den}");
+        }
+    }
+    format!("{m:.3}")
+}
+
+/// The readable tail of an href, for a report a person has to scan.
+fn short(href: &str) -> String {
+    let tail = href.rsplit('/').next().unwrap_or(href);
+    let decoded = tail.replace("%20", " ");
+    decoded.chars().take(58).collect()
+}
+
+/// FNV-1a, matching the shell's `cache::hash`.
+fn fnv1a(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
 
 /// Tempo agreement tolerance. Essentia's own BPM is itself an estimate, and the
 /// app only uses BPM to choose transition types and pitch-adjust by 1-2%, so
@@ -85,16 +145,26 @@ fn main() {
     let mut key_adjacent = 0usize;
     let mut beat_f: Vec<f32> = Vec::new();
     let mut beat_good = 0usize;
+    let mut down_f: Vec<f32> = Vec::new();
+    let mut down_found = 0usize;
+    let mut down_eligible = 0usize;
+    let mut bars: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut contrast_vs_f: Vec<(f32, f32)> = Vec::new();
+    let mut best_shift: BTreeMap<usize, usize> = BTreeMap::new();
     let mut cue_in_err: Vec<f32> = Vec::new();
     let mut cue_out_err: Vec<f32> = Vec::new();
     let mut lufs_err: Vec<f32> = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
+    let mut metrical: Vec<(String, f64, f64, f64)> = Vec::new();
+    let mut outright: Vec<(String, f64, f64)> = Vec::new();
     let mut by_ext: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 
     let start = Instant::now();
 
     for f in fixtures.iter().take(n) {
-        let path = cache_dir.join(&f.file);
+        let Some(path) = locate(&cache_dir, f) else {
+            continue;
+        };
         let entry = by_ext.entry(f.ext.clone()).or_insert((0, 0));
         entry.1 += 1;
 
@@ -112,11 +182,16 @@ fn main() {
         let ratio = a.bpm as f64 / f.bpm;
         if (ratio - 1.0).abs() <= BPM_TOLERANCE {
             bpm_ok += 1;
-        } else if METRICAL_RATIOS
+        } else if let Some(m) = METRICAL_RATIOS
             .iter()
-            .any(|m| (ratio / m - 1.0).abs() <= BPM_TOLERANCE)
+            .find(|m| (ratio / *m - 1.0).abs() <= BPM_TOLERANCE)
         {
             bpm_metrical += 1;
+            // Named individually, because "13.6% metrical" is a number you
+            // cannot act on and "four of them are 3:4" is one you can.
+            metrical.push((f.href.clone(), f.bpm, a.bpm as f64, *m));
+        } else {
+            outright.push((f.href.clone(), f.bpm, a.bpm as f64));
         }
 
         // Beat grid. This is the measure that actually matters for mixing: the
@@ -126,6 +201,62 @@ fn main() {
             beat_f.push(score);
             if score >= 0.8 {
                 beat_good += 1;
+            }
+        }
+
+        // Downbeats, scored only where the beat grids already agree.
+        //
+        // Not a convenience: where the two disagree about the beat they are not
+        // describing the same pulse, so a downbeat comparison measures nothing
+        // — Essentia's bar of four of *its* beats and ours of four of ours are
+        // different lengths. Restricting to agreed grids is what makes the
+        // number mean "did we find beat one" rather than "did we find the same
+        // tempo", which is already reported above.
+        //
+        // Called directly rather than read off `Analysis`, because `metre` is
+        // measured here and deliberately does not reach the app — see its
+        // module docs for the numbers this prints and why.
+        if !f.beat_grid.is_empty()
+            && !a.beats.is_empty()
+            && vapor_dsp::beats::f_measure(&a.beats, &f.beat_grid, BEAT_TOLERANCE) >= 0.8
+            && f.downbeats.len() > 4
+        {
+            down_eligible += 1;
+            // Decoded a second time: this tool measures, it does not need to
+            // be quick, and threading the samples out of `analyze_file` to save
+            // a decode would change the thing being validated.
+            let metre = vapor_dsp::decode::decode_to_mono(&path)
+                .ok()
+                .and_then(|audio| {
+                    let spec = vapor_dsp::spectrum::for_tempo(&audio.samples, audio.sample_rate);
+                    vapor_dsp::metre::detect(&spec, &a.beats)
+                });
+            if let Some(m) = metre {
+                down_found += 1;
+                let score = vapor_dsp::beats::f_measure(&m.downbeats, &f.downbeats, BEAT_TOLERANCE);
+                down_f.push(score);
+                *bars.entry(m.beats_per_bar).or_default() += 1;
+                contrast_vs_f.push((m.contrast, score));
+
+                // Which phase *would* have been right. Spread evenly across the
+                // bar means the detector is guessing; a consistent non-zero
+                // offset would instead be a convention mismatch and a one-line
+                // fix, which is worth telling apart before concluding.
+                let mut best = (0usize, -1.0f32);
+                for shift in 0..m.beats_per_bar.max(1) {
+                    let shifted: Vec<f32> = a
+                        .beats
+                        .iter()
+                        .skip(shift)
+                        .step_by(m.beats_per_bar.max(1))
+                        .copied()
+                        .collect();
+                    let s = vapor_dsp::beats::f_measure(&shifted, &f.downbeats, BEAT_TOLERANCE);
+                    if s > best.1 {
+                        best = (shift, s);
+                    }
+                }
+                *best_shift.entry(best.0).or_default() += 1;
             }
         }
 
@@ -178,6 +309,36 @@ fn main() {
         pct(bpm_ok + bpm_metrical)
     );
 
+    if !metrical.is_empty() {
+        // Grouped by relation: which *kind* of metrical error dominates is the
+        // thing that decides whether bar-level detection could fix it.
+        let mut by_ratio: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, _, _, m) in &metrical {
+            *by_ratio.entry(name_ratio(*m)).or_default() += 1;
+        }
+        let summary: Vec<String> = by_ratio.iter().map(|(k, v)| format!("{v}x {k}")).collect();
+        println!("  by relation:      {}", summary.join(", "));
+        for (href, truth, ours, m) in &metrical {
+            println!(
+                "    {:>7.1} -> {:>7.1}  ({})  {}",
+                truth,
+                ours,
+                name_ratio(*m),
+                short(href)
+            );
+        }
+    }
+    if !outright.is_empty() {
+        println!("  outright wrong    {:>4}:", outright.len());
+        for (href, truth, ours) in &outright {
+            println!(
+                "    {truth:>7.1} -> {ours:>7.1}  (ratio {:.3})  {}",
+                ours / truth,
+                short(href)
+            );
+        }
+    }
+
     println!(
         "\n=== Beat grid (F-measure vs Essentia, +/-{:.0} ms) ===",
         BEAT_TOLERANCE * 1000.0
@@ -197,6 +358,51 @@ fn main() {
             beat_f.len(),
             100.0 * beat_good as f64 / beat_f.len() as f64
         );
+    }
+
+    println!("\n=== Downbeats (only where the beat grids agree, F >= 0.8) ===");
+    if down_eligible == 0 {
+        println!("  no tracks with an agreed beat grid and reference downbeats");
+    } else {
+        println!(
+            "  eligible tracks   {down_eligible:>4}   (of {} compared)",
+            beat_f.len()
+        );
+        println!(
+            "  metre found       {down_found:>4}/{down_eligible}  ({:.1}%)                the rest report no bar rather than guessing",
+            100.0 * down_found as f64 / down_eligible as f64
+        );
+        for (b, n) in &bars {
+            println!("    {b} beats to a bar: {n}");
+        }
+        if !down_f.is_empty() {
+            let mean: f32 = down_f.iter().sum::<f32>() / down_f.len() as f32;
+            let mut sorted = down_f.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let good = down_f.iter().filter(|&&s| s >= 0.8).count();
+            println!("  mean F-measure    {mean:>7.3}");
+            println!("  median F-measure  {:>7.3}", sorted[sorted.len() / 2]);
+            println!(
+                "  F >= 0.8          {good:>4}/{}  ({:.1}%)",
+                down_f.len(),
+                100.0 * good as f64 / down_f.len() as f64
+            );
+        }
+    }
+
+    if !best_shift.is_empty() {
+        println!("  which phase would have been right:");
+        for (shift, n) in &best_shift {
+            println!("    beat {shift} of the bar: {n}");
+        }
+    }
+    if !contrast_vs_f.is_empty() {
+        let mut v = contrast_vs_f.clone();
+        v.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!("  contrast vs correctness, strongest first:");
+        for (c, f) in v.iter() {
+            println!("    contrast {c:>6.3}   F {f:>6.3}");
+        }
     }
 
     println!("\n=== Key (vs Essentia) ===");

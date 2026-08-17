@@ -189,28 +189,58 @@ fn octave_prior(bpm: f32) -> f32 {
     (-0.5 * z * z).exp()
 }
 
-fn pick_tempo(odf: &[f32], odf_rate: f32) -> Option<f32> {
+/// One tempo candidate and why it scored as it did.
+///
+/// Exposed because this module's characteristic failure is picking a
+/// *metrically related* tempo rather than a wrong one, and the two look
+/// identical from the outside. Which candidate lost and by how much is what
+/// separates "the evidence was genuinely ambiguous" from "a rule overrode the
+/// evidence" — and only the second is a bug. Read by `bin/metre-probe.rs`.
+#[derive(Clone, Copy, Debug)]
+pub struct Candidate {
+    pub bpm: f32,
+    /// Periodicity support from the comb filter — the evidence.
+    pub comb: f32,
+    /// The perceptual-centre prior applied on top of it — the opinion.
+    pub prior: f32,
+}
+
+impl Candidate {
+    /// What the search actually ranks on.
+    pub fn weighted(&self) -> f32 {
+        self.comb * self.prior
+    }
+}
+
+/// Every candidate on the search grid, scored.
+///
+/// The same grid `pick_tempo` ranks, so a diagnostic and the estimator cannot
+/// disagree about what was considered.
+pub fn candidates(odf: &[f32], odf_rate: f32) -> Vec<Candidate> {
     // Search on a log-spaced grid: tempo perception is multiplicative, and a
     // linear grid wastes resolution at the top of the range.
-    let steps = 400;
+    const STEPS: usize = 400;
     let ln_lo = MIN_BPM.ln();
     let ln_hi = MAX_BPM.ln();
 
-    let mut best: Option<(f32, f32)> = None;
-    let mut scored: Vec<(f32, f32)> = Vec::with_capacity(steps);
+    (0..STEPS)
+        .map(|i| {
+            let t = i as f32 / (STEPS - 1) as f32;
+            let bpm = (ln_lo + t * (ln_hi - ln_lo)).exp();
+            Candidate {
+                bpm,
+                comb: comb_score(odf, odf_rate, bpm),
+                prior: octave_prior(bpm),
+            }
+        })
+        .collect()
+}
 
-    for i in 0..steps {
-        let t = i as f32 / (steps - 1) as f32;
-        let bpm = (ln_lo + t * (ln_hi - ln_lo)).exp();
-        let raw = comb_score(odf, odf_rate, bpm);
-        scored.push((bpm, raw));
-        let weighted = raw * octave_prior(bpm);
-        if best.is_none_or(|(_, b)| weighted > b) {
-            best = Some((bpm, weighted));
-        }
-    }
-
-    let (coarse_bpm, _) = best?;
+fn pick_tempo(odf: &[f32], odf_rate: f32) -> Option<f32> {
+    let coarse_bpm = candidates(odf, odf_rate)
+        .into_iter()
+        .max_by(|a, b| a.weighted().total_cmp(&b.weighted()))?
+        .bpm;
 
     // Refine locally on a fine linear grid around the winner. The log grid is
     // ~0.3% apart near 120 BPM, which is already close, but the fixtures carry

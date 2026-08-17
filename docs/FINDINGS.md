@@ -78,7 +78,68 @@ classes; feeding the chroma from peaks is what moved it most.
 metrical error — 3:4 and 2:3 relations, not octaves — and is 10.6% of tracks,
 not the 4.4% first assumed. Two attempts at fixing it at the beat level were
 made and both reverted: the signal the second one relied on is anti-correlated.
-A third attempt means bar-level metre detection.
+
+**The third attempt was made on 2026-08-16 and also failed. Here is what it
+cost and what it learned, so a fourth starts further along.**
+
+*The validator could not run at all.* Fixtures name audio by the Godot build's
+MD5-of-href; the Rust shell names it `fnv1a(href)`. `validate` found zero files
+and reported a clean sweep of zero. It now looks under both. **44 of the 563
+fixtures have local audio** — every number below is from those 44, which is
+thin, and that is part of the finding rather than a caveat on it.
+
+*The residual is two different things.* `bin/metre-probe.rs` splits the six
+failures by whether the comb filter — the evidence — or `octave_prior` — the
+opinion — chose the wrong answer:
+
+| | Count |
+|---|---|
+| comb preferred Essentia's answer, prior overrode it | 3 |
+| comb itself preferred ours | 3 |
+
+*The prior is load-bearing and must not simply be weakened.* On tracks that come
+out **right**, the true tempo's margin over its nearest metrical rival runs from
+−1.127 to +0.333 (median +0.121). On at least one, the rival's comb score is
+over twice the truth's and the prior is the only reason the answer is right.
+That is why the two earlier attempts were reverted, and it is measurable now
+rather than folklore.
+
+*The bass band is the one untried signal that points the right way.* The onset
+function spans 30 Hz – 5 kHz and whitens, so the kick is one voice among many.
+Restricted to 30–120 Hz, on the six failures it prefers the true tempo on four
+and is neutral on two, where the broadband comb prefers the wrong one on all
+six. But on the 38 that already work its margin is +0.018 median across a
+−0.357 to +0.342 spread. **Six errors, no held-out set: any blend tuned on this
+is fitting noise, so none was.**
+
+**Downbeat detection does not work on this library, and the reason is
+musical.** `vapor_dsp::metre` is correct on synthetic audio — every phase of
+4/4, a 3/4 bar, and no metre claimed for a track with no percussion. Against
+Essentia's downbeats on the 26 tracks whose beat grids already agree:
+
+| | Result |
+|---|---|
+| bar length | 4/4 on all 24, correct |
+| downbeat F-measure | mean 0.194, median 0.006 |
+| F ≥ 0.8 | 3 of 24 (12.5%) |
+| chance for a 4-phase choice | 25% |
+
+Below chance. The premise — the kick marks the downbeat — is false for
+four-on-the-floor, where the kick is on *every* beat and distinguishes no phase.
+Spectral novelty between beats was tried as the alternative and scored 0.213,
+still half of chance, while claiming a metre for a track with no percussion.
+
+The confidence score does not rescue it: the two highest-contrast tracks score
+F = 0.011 and 0.021. **Confidence is uncorrelated with correctness, so there is
+no threshold at which reporting a downbeat becomes honest** — which is why
+`Analysis` carries no downbeat field. A field that is right 12.5% of the time
+with a confidence that does not know it is wrong is worse than no field, because
+`phrase_duration` would happily align mixes to it.
+
+Next attempt: not another onset feature. The downbeat in this music is carried
+by harmony and arrangement — the bassline changing note, 4- and 8-bar phrase
+structure — which is a self-similarity problem over beat-synchronous features.
+And get more than 44 tracks cached first.
 
 **Beat grids.** DP beat tracking, F=0.763 mean and F=0.884 median against the
 same set. The estimator it replaced measured F=0.470.
