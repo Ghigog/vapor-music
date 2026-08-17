@@ -1977,7 +1977,56 @@ mean RMS over peak RMS — a consistency ratio that put ballads above drum & bas
 on the real library. `intensity_from_lufs` separates the same groups by 0.256
 instead of 0.031 and needs no re-analysis, since LUFS was already stored.
 
-### VDJ-1 : Switch is unreachable (open)
+### VDJ-0 : the three exits are Stay, Follow, Switch (agreed 2026-08-17)
+
+Supersedes the Match/Fresh/Switch cycle. Agreed with Dylan and written down
+before building, because it removes machinery rather than adding it and the
+reasoning is easy to lose.
+
+The old model classified a candidate by *similarity* — Match, Fresh, Switch —
+and picked one per step from a repeating cycle (`cycle_choice`, `mix_step`),
+marking it AI CHOICE. That fights the planner: the cycle's pick and the set's
+own next track are computed separately and can disagree.
+
+The new model is three *intentions*, and the planner owns the set:
+
+* **Stay** — hold at the current energy. Does not advance the curve.
+* **Follow** — the planner's next track along the curve. **Always the default.**
+* **Switch** — branch: genuinely different but still mixable, and it re-plans
+  the tail toward the same energy goal.
+
+Consequences:
+
+* `cycle_choice` and `mix_step` go. There is no rotation to reason about; the
+  default is structural.
+* The AI CHOICE badge goes with them. Nothing is being *recommended* — Follow is
+  simply what happens if you do nothing.
+* Only the curve changes the destination. Stay and Switch change the route.
+* Choosing Stay or Switch re-plans the tail, keeping the same energy goal.
+
+### VDJ-1 : Switch was unreachable (fixed 2026-08-17, thresholds measured)
+
+`match_kind_between` returned Switch **only** when two genres differed, and
+`same_genre` treats an unknown genre as similar — so with 46 genre tags across
+534 tracks the branch was dead. Drum & bass into Sade is 25 BPM and 0.35 of
+intensity apart, the 90th percentile of this library, and was called a Match.
+
+Now decided by distance, with thresholds taken from the library's own
+distribution over 4,000 random pairs rather than invented:
+
+| | median | 75th | 90th |
+|---|---|---|---|
+| Δbpm | 24.8 | 42.9 | 59.4 |
+| Δintensity | 0.14 | 0.25 | 0.35 |
+
+Switch at Δintensity ≥ 0.30 or Δbpm ≥ 45; Match below 0.15 and 8. A known
+genre difference still forces a Switch — good evidence when present, simply
+never present here.
+
+Still to do under VDJ-0: rename these to Stay/Follow/Switch and let the planner
+own Follow.
+
+
 
 `match_kind_between` returns `Switch` **only** when the two genres differ, and
 `same_genre` treats an unknown genre as similar. The library carries 46 genres
