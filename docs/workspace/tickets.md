@@ -2084,11 +2084,11 @@ cargo test --lib live_services -- --ignored --nocapture
 **Where:** MIG-052
 
 
-### TD-54 : (blocked)
+### TD-54 : (done 2026-08-17)
 
-**Media controls: two bugs found and fixed on 2026-08-16, one condition that is not a bug.** (a) `publish` was called from the playback supervisor's thread; `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` want the main thread, and souvlaki does not marshal for you — it dispatches to a *global* queue, and only for artwork. Now hopped via `AppHandle::run_on_main_thread`. (b) `worth_sending` excluded position entirely, so after the title landed nothing was ever sent again and the Control Center scrubber froze where the track started; position now counts at 0.2 Hz. (c) **Not a bug:** macOS routes media keys to the Now Playing *application*, which means a `.app` bundle. `tauri dev` runs the bare binary, so keys will never arrive from `npm run app` however correct the code is — souvlaki's macOS backend returns `Ok` unconditionally, so nothing said so. `media::bundled()` detects it, logs it at startup, and `media_keys_available` reports it to the UI. **Still pressed by nobody in a bundled build.**
+**Media controls: two bugs found and fixed on 2026-08-16, one condition that is not a bug.** (a) `publish` was called from the playback supervisor's thread; `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` want the main thread, and souvlaki does not marshal for you — it dispatches to a *global* queue, and only for artwork. Now hopped via `AppHandle::run_on_main_thread`. (b) `worth_sending` excluded position entirely, so after the title landed nothing was ever sent again and the Control Center scrubber froze where the track started; position now counts at 0.2 Hz. (c) **Not a bug:** macOS routes media keys to the Now Playing *application*, which means a `.app` bundle. `tauri dev` runs the bare binary, so keys will never arrive from `npm run app` however correct the code is — souvlaki's macOS backend returns `Ok` unconditionally, so nothing said so. `media::bundled()` detects it, logs it at startup, and `media_keys_available` reports it to the UI.
 
-**Waiting for:** A bundled build and a keyboard.
+**Confirmed working 2026-08-17** by Dylan, in a bundled build, with a keyboard. All three parts of the ticket are now settled: (a) and (b) were the two real bugs and are fixed; (c) was never a bug, and the startup log explaining why `tauri dev` cannot receive media keys is what stopped it being rediscovered.
 
 **Where:** MIG-023
 
