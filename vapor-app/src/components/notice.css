@@ -117,3 +117,63 @@
 .damaged__dismiss:hover {
   background: var(--glass-fill);
 }
+
+/*
+ * The render-error panel.
+ *
+ * Styled as information rather than alarm. The app is still working — the
+ * sidebar, the transport and every other screen are reachable — and the panel's
+ * job is to name the fault precisely enough to fix, which a red wall of
+ * exclamation marks does not help with.
+ */
+.boundary {
+  max-width: 68ch;
+  padding: var(--s-4);
+  color: var(--ink);
+}
+
+.boundary__title {
+  margin: 0 0 var(--s-2);
+  font-size: 18px;
+  font-weight: var(--fw-medium);
+}
+
+.boundary__body {
+  margin: 0 0 var(--s-3);
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
+/* The message and the stack are the actionable part, so they are readable
+   rather than truncated: a wrapped path is better than an elided one. */
+.boundary__error,
+.boundary__stack {
+  margin: 0;
+  padding: var(--s-3);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-hair);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.boundary__more {
+  margin: var(--s-3) 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+
+.boundary__more summary {
+  cursor: pointer;
+}
+
+.boundary__retry {
+  padding: 6px 14px;
+  color: var(--ink);
+  background: var(--glass-fill);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-hair);
+  cursor: pointer;
+}

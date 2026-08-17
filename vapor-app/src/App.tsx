@@ -13,6 +13,7 @@
  */
 import { useEffect, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
+import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
 import { Library } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
@@ -69,6 +70,28 @@ type Status =
   | { kind: "onboarding" }
   | { kind: "ready" }
   | { kind: "error"; message: string };
+
+/** What to call the thing on screen, for an error message a person can read. */
+function screenName(screen: Screen, liner: boolean, playlist: boolean): string {
+  if (liner) return "Liner Notes";
+  if (playlist) return "That playlist";
+  switch (screen) {
+    case "library":
+      return "The Library";
+    case "playing":
+      return "Now Playing";
+    case "vibe":
+      return "The Vibe DJ screen";
+    case "data":
+      return "Your Data";
+    case "settings":
+      return "Settings";
+    default:
+      // Unreachable while `Screen` is exhaustive, and a name rather than a
+      // crash if it ever stops being.
+      return "This screen";
+  }
+}
 
 export function App() {
   /** Data files that could not be read at startup, as sentences to show.
@@ -199,6 +222,11 @@ export function App() {
         </nav>
 
         <main className="shell__content">
+          {/* One boundary around the screen area, named for whatever is in it.
+              A screen that throws now says so and leaves the sidebar, the
+              transport and every other screen reachable — where before it
+              blanked the window and named nothing. */}
+          <Boundary where={screenName(screen, liner !== null, playlist !== null)}>
           {liner ? (
             <LinerNotes
               href={liner.href}
@@ -228,6 +256,7 @@ export function App() {
               {screen === "settings" && <Settings />}
             </>
           )}
+          </Boundary>
         </main>
 
         {/* Outside the content column: the shell grid spans it across both, and

@@ -742,6 +742,32 @@ fn track_cover(href: String, state: State<'_, Shared>) -> Result<Option<String>>
 // The network half of `metadata_service.gd`. See `metadata.rs` for why this is
 // the one part of the app that talks to a stranger, and why it asks first.
 
+/// Serialise a float so it can never arrive as `null`.
+///
+/// JSON cannot write NaN or infinity, so `serde_json` writes `null` instead.
+/// Every float in a reply is typed `number` on the TypeScript side, so a screen
+/// doing the obvious thing — `blend.shiftPercent.toFixed(1)` — throws
+/// `TypeError` on `null`. A throw during render unmounts the tree and the window
+/// goes blank with nothing on it to say why.
+///
+/// Substituting zero rather than clamping to a huge number: an infinite tempo
+/// shift is not "a very large shift", it is the absence of an answer, and every
+/// screen already renders zero sensibly. A wrong number that reads as a number
+/// is also easier to notice than a hole.
+///
+/// Applied at the boundary rather than at each use site, so the screens can keep
+/// doing the obvious thing. `tests/ipc_numbers.rs` gates that every float in a
+/// reply type has it.
+pub fn finite<S: serde::Serializer>(value: &f32, s: S) -> std::result::Result<S::Ok, S::Error> {
+    s.serialize_f32(if value.is_finite() { *value } else { 0.0 })
+}
+
+/// [`finite`], for the fields that are `f64` — a playhead position and a
+/// duration, which are seconds and want the precision.
+pub fn finite64<S: serde::Serializer>(value: &f64, s: S) -> std::result::Result<S::Ok, S::Error> {
+    s.serialize_f64(if value.is_finite() { *value } else { 0.0 })
+}
+
 /// What is known about a track from outside this device.
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2266,8 +2292,11 @@ struct PlaybackState {
     /// playing so the UI can say "loading" rather than showing a stalled
     /// playhead.
     loading: bool,
+    #[serde(serialize_with = "finite64")]
     position: f64,
+    #[serde(serialize_with = "finite64")]
     duration: f64,
+    #[serde(serialize_with = "finite")]
     volume: f32,
     error: Option<String>,
     /// False when the machine has no output device. The UI disables the
@@ -2278,6 +2307,7 @@ struct PlaybackState {
     /// than inferred from two tracks being audible at once.
     mixing: bool,
     /// Peak output level, 0–1. Drives the mark's `energy`.
+    #[serde(serialize_with = "finite")]
     level: f32,
     /// Envelope peaks for the playing track, empty until it has been analysed
     /// at the current version.
@@ -3538,6 +3568,7 @@ struct MixCandidate {
     href: String,
     title: String,
     artist: String,
+    #[serde(serialize_with = "finite")]
     bpm: f32,
     key: String,
     /// "match" | "fresh" | "switch".
@@ -3713,13 +3744,17 @@ fn choose_next(href: String, curve: String, state: State<'_, Shared>) -> Result<
 struct BlendPreview {
     from_title: String,
     to_title: String,
+    #[serde(serialize_with = "finite")]
     from_bpm: f32,
+    #[serde(serialize_with = "finite")]
     to_bpm: f32,
     from_key: String,
     to_key: String,
     /// Tempo change the incoming deck will be stretched by, as a percentage.
+    #[serde(serialize_with = "finite")]
     shift_percent: f32,
     /// Loudness difference, in LU, which is what a gain trim would correct.
+    #[serde(serialize_with = "finite")]
     gain_delta: f32,
     /// Whether the engine would actually accept this as a beat-matched mix.
     matchable: bool,
