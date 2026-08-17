@@ -109,28 +109,56 @@ either. A master peak limiter did. All transitions measure 0 clipped samples.
 **`vocal_presence` was never a detector.** It is `energy > 0.35`. Half a day
 went into planning a vocal detector before anyone grepped for it.
 
-**Signalsmith Stretch is the right library and the integration is not
-finished.** Chosen over Rubber Band (GPL plus a C++ build system, which is the
-dependency tail the migration existed to remove) and élastique (proprietary).
-MIT, maintained Rust wrapper, allocation-free on the audio thread across 200
-blocks, finite at every ratio, exact pass-through at unity.
+**Signalsmith Stretch is the default, at 0.18 ms.** Chosen over Rubber Band
+(GPL plus a C++ build system, which is the dependency tail the migration
+existed to remove) and élastique (proprietary). MIT, maintained Rust wrapper,
+allocation-free on the audio thread across 200 blocks, finite at every ratio,
+exact pass-through at unity. WSOLA remains what wasm uses, since the C++ does
+not build there.
 
-It fails beat alignment as integrated, and by a lot:
-
-| Stretcher | Worst onset error, 128 BPM grid |
+| Stretcher | Worst onset error, 128 BPM transition |
 |---|---|
-| WSOLA | 28.29 ms |
-| Signalsmith, as integrated 2026-08-16 | 118.4 ms |
+| Signalsmith, as first integrated | 118.4 ms — failed |
+| WSOLA | 5.84 ms |
+| **Signalsmith, corrected** | **0.18 ms** |
 
-The preset reports 2646 frames latency each way at 44.1 kHz — 60 ms in, 60 ms
-out — which matches the error to within a rounding error. Three corrections
-were tried (prime with upcoming audio, `seek` pre-roll, flush the latency
-through `process` and discard) and **the measured figure did not change by a
-single millisecond under any of them**, which says the offset enters somewhere
-other than where it was being corrected. Measure the wrapper's impulse response
-before trying a fourth.
+All three from `beat_alignment`, which renders a whole transition. Not the same
+measurement as the 28.29 ms in the PLL note above — that one is `pll_drift`,
+over a longer run and a different quantity — and the two were briefly conflated
+in the table this replaces.
 
-WSOLA stays the default until that is resolved.
+**A latency you can only fix on one side.** Signalsmith reports 2646 frames of
+input latency and 2646 of output latency at 44.1 kHz. `examples/impulse.rs`
+drives the wrapper directly with a click and measures where it comes out; the
+mapping is `output = (input + Lᵢ)/ratio + Lₒ`. The two latencies live in
+different domains — output latency is already output frames, input latency only
+becomes them after dividing by the ratio — so the correction is a one-sided
+output discard of `Lₒ + Lᵢ/ratio`, with no pre-roll and no reading behind the
+start position.
+
+**Pre-roll cannot fix a latency, and three attempts proving it looked like
+three bugs.** Priming with upcoming audio, `seek` pre-roll, and flushing the
+latency through `process` each moved the 118.4 ms by *zero*, because pre-roll
+shifts input and output together and the difference between them is what the
+error is. `seek` — the library's own documented pre-roll API — produces
+**bit-identical output to no compensation at all**, which is the fact that
+ended the guessing. Measured 1.02/1.05/0.95 ratio: none 119.6/117.7/123.6 ms,
+`seek` 119.6/117.7/123.6, push-input 119.7/117.4/123.6, feed-and-discard
+119.0/117.3/123.4, output-discard **0.2/0.5/0.4**.
+
+**A `cfg` on a module does not gate its dependency.** `src/signalsmith.rs` was
+correctly `#[cfg(not(target_arch = "wasm32"))]` while `signalsmith-stretch` sat
+in plain `[dependencies]`, so cargo built the C++ for wasm regardless of the
+fact that nothing imported it — `<complex>` has no libc++ on
+`wasm32-unknown-unknown`. Red wasm job for two commits. Native-only crates
+belong under `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`.
+
+**One field cannot be both a cursor and a position.** The bug underneath the
+above: `read_pos` was the source frame to read from *and* the source frame
+being heard. Latency is exactly the statement that those are different numbers,
+so the field could not be right for both and the correction had nowhere to
+live. Two fields, `read_pos` and `feed_pos`, and the gap between them is the
+latency made explicit.
 
 **±6% is the stretch refusal.** Past that it stops sounding like the record, so
 the pair plays sequentially instead of mixing.

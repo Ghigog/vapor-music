@@ -68,10 +68,20 @@ pub struct Deck {
 
 impl Deck {
     pub fn new(sample_rate: f32) -> Self {
+        Deck::with_quality(sample_rate, Quality::default())
+    }
+
+    /// A deck using a named stretcher.
+    ///
+    /// Exists so that the beat-alignment measurement can name which stretcher
+    /// it is measuring. Without it the only way to compare the two was to edit
+    /// the default and rebuild, which produces numbers that no longer reproduce
+    /// once the edit is reverted.
+    pub fn with_quality(sample_rate: f32, quality: Quality) -> Self {
         Deck {
             source: TrackSource::Empty,
             sample_rate,
-            stretcher: Stretcher::default(),
+            stretcher: Stretcher::new(quality),
             eq: EqChain::new(sample_rate),
             delay: Delay::new(sample_rate),
             reverb: Reverb::new(sample_rate),

@@ -11,6 +11,7 @@
 //! measurement, not an opinion.
 
 use vapor_engine::mixer::BeatGrid;
+use vapor_engine::stretch::Quality;
 use vapor_engine::{Mixer, TransitionType};
 
 const RATE: f32 = 44100.0;
@@ -70,10 +71,31 @@ fn render_transition(
     start_at: f32,
     total_secs: f32,
 ) -> Vec<[f32; 2]> {
+    render_transition_with(
+        Quality::default(),
+        kind,
+        duration,
+        out_bpm,
+        in_bpm,
+        start_at,
+        total_secs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_transition_with(
+    quality: Quality,
+    kind: TransitionType,
+    duration: f32,
+    out_bpm: f32,
+    in_bpm: f32,
+    start_at: f32,
+    total_secs: f32,
+) -> Vec<[f32; 2]> {
     let (out_samples, out_grid) = click_track(out_bpm, 90.0, 0.0);
     let (in_samples, in_grid) = click_track(in_bpm, 90.0, 0.0);
 
-    let mut mixer = Mixer::new(RATE, BLOCK);
+    let mut mixer = Mixer::with_quality(RATE, BLOCK, quality);
     mixer.deck_a.load(out_samples);
     mixer.deck_b.load(in_samples);
     mixer.deck_a.seek_seconds(start_at as f64);
@@ -101,12 +123,34 @@ fn render_transition(
 /// further apart every beat.
 #[test]
 fn rendered_transition_keeps_all_onsets_on_the_outgoing_grid() {
+    // WSOLA splices at waveform-similar points within its search window
+    // (±256 frames ~= 5.8 ms), so a matched beat can sit a few ms off. 15 ms is
+    // well inside what reads as "tight" for a DJ mix.
+    check_onsets_on_grid(Quality::Wsola, 0.015);
+}
+
+/// The same claim for Signalsmith, which had to earn it.
+///
+/// As first integrated this failed at 118.4 ms — the stretcher's own 120 ms of
+/// latency, uncorrected, which is not a degraded beat but a different one. The
+/// correction is documented in `vapor_engine::signalsmith`; this is the test
+/// that says it is still corrected.
+///
+/// The tolerance is the same 15 ms as WSOLA. A stretcher that cannot hold the
+/// grid as tightly as the one it replaces has no argument for replacing it.
+#[test]
+fn signalsmith_also_keeps_all_onsets_on_the_outgoing_grid() {
+    check_onsets_on_grid(Quality::Signalsmith, 0.015);
+}
+
+fn check_onsets_on_grid(quality: Quality, tolerance: f32) {
     let out_bpm = 128.0;
     let in_bpm = 124.0; // ~3.1% slower — within MAX_STRETCH
     let duration = 6.0;
     let start_at = 20.0;
 
-    let rendered = render_transition(
+    let rendered = render_transition_with(
+        quality,
         TransitionType::StandardCrossfade,
         duration,
         out_bpm,
@@ -130,11 +174,6 @@ fn rendered_transition_keeps_all_onsets_on_the_outgoing_grid() {
     // the difference between testing the mixer and testing an assumption.
     let first_beat_source = (start_at / period).ceil() * period;
     let anchor = first_beat_source - start_at;
-
-    // Tolerance: WSOLA splices at waveform-similar points within its search
-    // window (±256 frames ~= 5.8 ms), so a matched beat can sit a few ms off.
-    // 15 ms is well inside what reads as "tight" for a DJ mix.
-    let tolerance = 0.015;
 
     // Only the transition window is beat-matched. Once the mix completes the
     // incoming deck returns to its own tempo — that is the intended behaviour
@@ -165,7 +204,8 @@ fn rendered_transition_keeps_all_onsets_on_the_outgoing_grid() {
         );
     }
     println!(
-        "{} onsets checked across the transition, worst deviation {:.2} ms",
+        "{:?}: {} onsets checked across the transition, worst deviation {:.2} ms",
+        quality,
         checked.len(),
         worst * 1000.0
     );

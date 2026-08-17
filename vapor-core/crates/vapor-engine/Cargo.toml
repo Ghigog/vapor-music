@@ -5,15 +5,22 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-signalsmith-stretch = "0.1.3"
 vapor-dsp = { path = "../vapor-dsp" }
 
 # Audio output. Not a dependency of the library — the engine itself stays
 # platform-free and wasm-compatible; only the `play` binary needs a device.
 # MIG-011: cpal on Android/iOS is the least battle-tested part of this stack
 # and must be validated on device early.
+#
+# Signalsmith is here for the same reason and a sharper one: it is C++ behind a
+# `cc` build and its headers include <complex>, which wasm32-unknown-unknown has
+# no libc++ for. `src/signalsmith.rs` is already `cfg`-gated off wasm, but a
+# `cfg` on the module does not stop cargo building the crate — the build script
+# runs regardless of whether anything imports it. Gating the module and not the
+# dependency is what turned the wasm job red.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cpal = "0.15"
+signalsmith-stretch = "0.1.3"
 
 [[bin]]
 name = "render"

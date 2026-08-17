@@ -28,6 +28,7 @@ use crate::biquad::Sweep;
 use crate::clipping;
 use crate::deck::Deck;
 use crate::limiter::Limiter;
+use crate::stretch::Quality;
 use crate::transition::{sine_in_out, Transition, TransitionType};
 
 /// Maximum tempo adjustment. The Godot build ramps `_speed_scale_*` by 1–2%
@@ -141,9 +142,14 @@ pub struct Mixer {
 
 impl Mixer {
     pub fn new(sample_rate: f32, max_block: usize) -> Self {
+        Mixer::with_quality(sample_rate, max_block, Quality::default())
+    }
+
+    /// A mixer whose decks use a named stretcher. See [`Deck::with_quality`].
+    pub fn with_quality(sample_rate: f32, max_block: usize, quality: Quality) -> Self {
         Mixer {
-            deck_a: Deck::new(sample_rate),
-            deck_b: Deck::new(sample_rate),
+            deck_a: Deck::with_quality(sample_rate, quality),
+            deck_b: Deck::with_quality(sample_rate, quality),
             a_is_outgoing: true,
             transition: None,
             pending: None,

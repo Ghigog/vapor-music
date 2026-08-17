@@ -515,8 +515,8 @@ beat-matched mix (TD-25); all six transition types exist (TD-20/MIG-008); beat
 grids never cross to the audio thread, since alignment is computed on the
 control side and only a ratio and a cue position are sent. Dual
 `AudioStreamPlayer` nodes became two decks in `vapor-engine`, and `pitch_scale`
-became WSOLA time-stretching (TD-22 is the open question about *which*
-stretcher, not whether).
+became time-stretching in `vapor-engine` — Signalsmith Stretch natively and
+WSOLA on wasm, which is what TD-22 settled.
 
 ---
 
@@ -1955,3 +1955,141 @@ named a mechanism where the requirement was an outcome:
   device that can no longer be discovered should not still be trusted. What it
   does *not* yet do is stop the threads already running, which needs a relaunch
   — TD-58.
+
+---
+
+## Tech debt
+
+Recovered from the tech-debt document deleted on 2026-08-16 (commit cb3a979)
+for stating what currently works. The *findings* in it moved to
+`docs/FINDINGS.md`; these are the open items, and they belong here because
+this is where status lives. Each says what it is waiting for, so the list
+cannot be mistaken for fourteen things nobody has got round to.
+
+
+### TD-11 : (blocked)
+
+**Key detection is 60.6% exact / 82.8% harmonically compatible**, up from 56.1% / 80.9%. Feeding the chroma from **spectral peaks** rather than from every bin is what did it — a drum hit is broadband and was depositing energy into all twelve pitch classes at once. Still not good enough to be proud of. Segmented analysis is *not* the remaining lever, contrary to what this row used to say: TD-13 shipped it. **Tuning correction was tried and reverted** — it measures 58.1%, worse than doing nothing. See MIGRATION.
+
+**Waiting for:** A reproducible fixture corpus (TD-43). Measurable here against the owner's library; not reproducible by anyone else.
+
+**Where:** MIG-001
+
+
+### TD-22 : (done 2026-08-16)
+
+**Time-stretch is a placeholder.** WSOLA works and is transparent at the ±2% beat-matching uses, but was written to prove the approach rather than chosen on measured quality against Rubber Band or signalsmith-stretch.
+
+**Closed by:** Signalsmith Stretch, now the default on every target that compiles C++. Rubber Band was rejected on its build system rather than its sound — it is the better-sounding library and reintroducing a C++ dependency tail is what MIG-012 existed to end.
+
+The integration failed its first measurement at 118.4 ms off a 128 BPM grid, and three pre-roll corrections each moved that by exactly zero. `examples/impulse.rs` measured the wrapper directly and settled it: pre-roll cannot fix this, because pre-roll shifts input and output together. `seek` — the library's own pre-roll API — produces bit-identical output to doing nothing at all. The correction is one-sided, `Lₒ + Lᵢ/ratio` frames of output discarded, and the derivation is in `vapor_engine::signalsmith`.
+
+Worst onset deviation across the transition, from `beat_alignment`:
+
+| | Before | After |
+|---|---|---|
+| Signalsmith | 118.4 ms — failed | **0.18 ms** |
+| WSOLA | 5.84 ms | 5.84 ms — unchanged, still what wasm uses |
+
+**Where:** MIG-012
+
+
+### TD-24 : (blocked)
+
+**cpal is unvalidated on iOS and Android.** The least battle-tested part of the audio stack, and phase 4 is where it would be discovered late. TD-03 exercises it on macOS desktop only; that says nothing about either mobile target.
+
+**Waiting for:** Real iOS and Android devices.
+
+**Where:** MIG-011
+
+
+### TD-55 : (blocked)
+
+**The sync between two devices has never run between two devices.** SYNC-001 to SYNC-006 are built and tested — 35 tests on the decisions in `vapor_library::sync`, 11 on what the server will and will not answer — and every one of them runs in a single process. Nothing has broadcast to a real subnet, completed a real pairing, or moved a byte over a real socket. The decisions are the part that is hard to get right and they are covered; the part that is covered by nothing is whether two machines actually find each other. **The one bug class this shape cannot catch is a mismatch between the two halves of the wire format**, since both sides are compiled from the same enum.
+
+**Waiting for:** A second machine running Vapor.
+
+**Where:** SYNC-001..006
+
+
+### TD-56 : (blocked)
+
+**A sync moves bytes in clear over the LAN.** Pairing authenticates the *device* — a PIN bound to one peer, three attempts, a two-minute window — and after that the transfer is plain TCP. On a home network, with the library already sitting in plaintext on a WebDAV server, that is a defensible line. On a café network it is the wrong one, and nothing in the UI says which network you are on. The fix is TLS with the pairing establishing a pre-shared key; the reason it is not here is that inventing a handshake is how you get a broken one.
+
+**Waiting for:** A decision about how far a LAN is trusted, then TLS with the pairing as a pre-shared key.
+
+**Where:** SYNC-002
+
+
+### TD-58 : (open)
+
+**Switching sync off does not stop the threads that are already running.** The setting gates whether they start, and turning it off stops adverts being *acted on*, forgets every pairing and refuses every command — but the beacon and the listener live until the process exits. So a machine that had sync on and then turned it off keeps broadcasting until it is relaunched, which is exactly the case the switch exists for. The fix is a shutdown flag the two loops check, plus dropping the listener socket; neither is hard, and doing it properly means the server thread has to stop blocking in `accept`.
+
+**Waiting for:** nothing — this is code work.
+
+**Where:** SYNC-001
+
+
+### TD-57 : (open)
+
+**A deletion does not travel through the shared document.** `merge_shared` is additive on purpose: nothing is deleted and nothing overwritten, so it cannot lose work and converges in one pass whichever order two devices sync in. The cost is that removing a playlist on the laptop lets the phone put it back. The fix is a tombstone with a timestamp, which is a schema change to `Playlist` and a modification time on every mutation. Recorded rather than discovered later.
+
+**Waiting for:** nothing — this is code work.
+
+**Where:** SYNC-006
+
+
+### TD-51 : (blocked)
+
+**The lookup is unexercised against a real service.** `metadata.rs` is tested exhaustively against canned response bodies and not once against LRCLIB or Deezer, because CI has no network and because turning the switch on sends a real query somewhere. So the parsing is trusted and the *shapes* are assumed: field names, the `data` array, the `genres.data[0].name` path and the size ladders all come from reading `metadata_service.gd`, which was itself written against the 2026 APIs. If a lookup returns nothing on a real machine, suspect the shape before the parser.
+
+**Waiting for:** A machine someone is sitting at, with a network.
+
+
+### TD-54 : (blocked)
+
+**Media controls: two bugs found and fixed on 2026-08-16, one condition that is not a bug.** (a) `publish` was called from the playback supervisor's thread; `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` want the main thread, and souvlaki does not marshal for you — it dispatches to a *global* queue, and only for artwork. Now hopped via `AppHandle::run_on_main_thread`. (b) `worth_sending` excluded position entirely, so after the title landed nothing was ever sent again and the Control Center scrubber froze where the track started; position now counts at 0.2 Hz. (c) **Not a bug:** macOS routes media keys to the Now Playing *application*, which means a `.app` bundle. `tauri dev` runs the bare binary, so keys will never arrive from `npm run app` however correct the code is — souvlaki's macOS backend returns `Ok` unconditionally, so nothing said so. `media::bundled()` detects it, logs it at startup, and `media_keys_available` reports it to the UI. **Still pressed by nobody in a bundled build.**
+
+**Waiting for:** A bundled build and a keyboard.
+
+**Where:** MIG-023
+
+
+### TD-35 : (blocked)
+
+**The mark's shape is unfinished.** Known and expected; the attribute surface is stable so screens are safe to build against it. A design iteration rather than an engineering one — `design/vapor-mark.js` and the app's copy are byte-identical, so the app is not lagging the design.
+
+**Waiting for:** A design iteration. `design/vapor-mark.js` and the app are byte-identical, so the app is not lagging the design.
+
+
+### TD-41 : (blocked)
+
+**The Godot CI job runs without the GDExtension**, so DSP-dependent tests are not covered. Deliberate — building Essentia from a HEAD-only tap on every run is worse — but the gap is real.
+
+**Waiting for:** Nothing — deliberate. The Godot tree is being archived, not repaired.
+
+**Where:** MIG-040
+
+
+### TD-42 : (blocked)
+
+~~**12 GUT tests fail**, never diagnosed.~~ **Diagnosed (2026-08-16); not fixed.** All twelve are **stale tests**, not product defects — every one chases an interface that moved, and nothing in the app is broken by them. Three causes: (a) **nine** in `test_library_screen_parsing.gd` call `library_screen.call("_parse_track_info", …)`, and that function is not on `library_screen.gd` — path parsing lives in `metadata_service.gd`; (b) **two** — `test_focus_track_emits_signal` and `test_sidebar_preview_square_visibility` — pass five arguments to `track_focused`, which gained a leading `href` and now takes six; (c) **one**, `test_mini_player_responsive_squeeze`, asserts nav labels of `"♪ Library"` and `"▤ Playlists"` that collapse to icons when narrow, and no such label exists in the source any more. A thirteenth, `test_sidebar_hidden_on_mobile`, is *risky* rather than failing: it asserts nothing at all. **Deliberately not fixed** — this is `vapor-library::naming` and the new shell's problem now, and repairing tests for a tree phase 5 archives spends effort on the thing being deleted. Recorded so nobody has to run it again to find out.
+
+**Waiting for:** Nothing — deliberate. All twelve are stale tests chasing interfaces that moved; no product defect behind any.
+
+
+### TD-45 : (blocked)
+
+**The GUT baseline numbers in CI and in this document describe different runs.** CI pins `EXPECTED_PASS: 190 / EXPECTED_FAIL: 19` because it runs the *stub* path with no GDExtension (TD-41); the 211/12 quoted here and in `ci.yml`'s own comment is the local run with the dylib present. Both are correct and they are twelve lines apart in the same file, which is how a person ends up chasing a discrepancy that is not there. **Fixed in `ci.yml`** — both comments now say which run they describe. Kept as a record of why the numbers differ.
+
+**Waiting for:** Nothing — fixed in `ci.yml`; kept as the record of why two numbers differ.
+
+**Where:** TD-41, TD-42
+
+
+### TD-43 : (blocked)
+
+**The fixture set is not reproducible by anyone else.** Validation runs against a personal library via `extract-fixtures.mjs`; there is no synthetic corpus, so no one else can verify the analysis numbers.
+
+**Waiting for:** Real work, and the one item that would unblock another. Generating audio with known tempo and key that is representative of real recordings is a research problem.
+

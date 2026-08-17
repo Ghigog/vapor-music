@@ -516,15 +516,35 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// Which time-stretcher a deck uses.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quality {
-    /// Signalsmith Stretch. The answer to MIG-012 on quality; not the default,
-    /// because as integrated here it does not hold the beat grid.
+    /// Signalsmith Stretch. The answer to MIG-012, and the default everywhere
+    /// it compiles. Measured at 0.18 ms worst onset deviation across a 128 BPM
+    /// transition by `beat_alignment::signalsmith_also_keeps_all_onsets_on_the_outgoing_grid`.
     Signalsmith,
     /// The WSOLA in this module. What wasm uses, since Signalsmith is C++ and
-    /// does not compile there — and what the other half of an A/B is.
-    #[default]
+    /// does not compile there — and what the other half of an A/B is. Measured
+    /// at 5.84 ms on the same transition: inside the 15 ms that reads as tight,
+    /// and 32× looser than the stretcher that replaced it.
     Wsola,
+}
+
+/// Signalsmith natively; WSOLA on wasm, where the C++ will not build.
+///
+/// This is not a preference, it is the only choice each target has. A `cfg` on
+/// a `#[default]` attribute would not express that as clearly as writing it
+/// out.
+impl Default for Quality {
+    fn default() -> Quality {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Quality::Signalsmith
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Quality::Wsola
+        }
+    }
 }
 
 impl Quality {

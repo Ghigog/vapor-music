@@ -4072,11 +4072,9 @@ fn needs_analysis(app: &AppState, href: &str) -> bool {
 fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> {
     use tauri::Emitter;
 
-    let mut generation = 0u64;
-
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
-    let (todo, (cache_dir, cache_max), cancel, remote) = {
+    let (todo, (cache_dir, cache_max), cancel, remote, generation) = {
         let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
         let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
 
@@ -4094,13 +4092,13 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
         let cancel = analysis::Cancel::new();
         app.cancel = cancel.clone();
         app.analysis_generation += 1;
-        generation = app.analysis_generation;
 
         (
             analysis::pending_first(&hrefs, &app.analysis, &priority),
             (app.cache.dir().to_path_buf(), app.cache.max_bytes()),
             app.cancel.clone(),
             app.settings.remote.clone(),
+            app.analysis_generation,
         )
     };
 
