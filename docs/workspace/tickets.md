@@ -2115,6 +2115,27 @@ CI, no NDK on the development machine, so nothing has executed on Android.
 **Blocked on:** an NDK on the development machine, for anything beyond a
 compile.
 
+### AND-2 : the Windows shell tests crash the test binary (open)
+
+`vapor_app_lib-*.exe` exits `0xc0000005` — STATUS_ACCESS_VIOLATION — after
+printing "running 165 tests" and before any test reports a result. Every test
+in the shell's lib suite is therefore unrun on Windows.
+
+Not a regression from any change on 2026-08-17: the Windows job had never
+actually executed before that day. Every earlier run failed in three or four
+seconds, refused on billing while the repo was private, and the summary line
+said "failure" either way — which is the whole reason this went unseen. See
+`docs/FINDINGS.md` on not reading a red job as a known red job.
+
+A parallel run names the binary and not the test. The Windows step runs with
+`--test-threads=1 --nocapture` until this is closed, so the last line printed is
+the test that was running when it died.
+
+Candidates, none confirmed: `keyring`'s `windows-native` backend, which the
+credential round-trip test exercises against the real Credential Manager; `cpal`
+opening WASAPI on a runner with no audio endpoint; something at load time in the
+`cdylib`/`staticlib` crate types.
+
 ### VDJ-4 : the identify pass has never been run (blocked on Dylan)
 
 `identify_library` asks Deezer for each track's tempo and album genre, and uses

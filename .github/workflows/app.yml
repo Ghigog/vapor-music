@@ -9,15 +9,19 @@ name: App
 on:
   push:
     branches: [main]
-    paths:
+    paths: &paths
       - "vapor-app/**"
       - "vapor-core/**"
       - ".github/workflows/app.yml"
+      # `tests/docs_state_claims.rs` reads the docs tree and the README, so an
+      # edit to either can fail this workflow. Without these two lines it fails
+      # on the *next* commit that touches the app, which is a different commit
+      # from the one that broke it — exactly how a broken doc link sat in main
+      # until someone else's push found it.
+      - "docs/**"
+      - "README.md"
   pull_request:
-    paths:
-      - "vapor-app/**"
-      - "vapor-core/**"
-      - ".github/workflows/app.yml"
+    paths: *paths
   workflow_dispatch:
 
 concurrency:
@@ -189,8 +193,14 @@ jobs:
       # audio path's proof that it neither allocates nor frees on the audio
       # thread (TD-03). None of it needs a window or a device, so it runs on a
       # bare runner like any other test.
+      # `--test-threads=1` on Windows only, and only until AND-2 is closed.
+      #
+      # The lib test binary dies with STATUS_ACCESS_VIOLATION before any test
+      # reports, so a parallel run says which *binary* crashed and nothing about
+      # which test was in it. One thread at a time means the last line printed
+      # names the culprit. Remove this once it does.
       - name: Test
-        run: cargo test
+        run: cargo test ${{ runner.os == 'Windows' && '-- --test-threads=1 --nocapture' || '' }}
 
       - name: Clippy
         run: cargo clippy --all-targets
