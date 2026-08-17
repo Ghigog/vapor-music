@@ -5446,8 +5446,10 @@ version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
  "cpal",
+ "jni",
  "keyring",
  "lofty",
+ "ndk-context",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

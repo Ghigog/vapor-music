@@ -175,6 +175,16 @@ jobs:
       - name: Check
         run: cargo check
 
+      # The Android credential store, type-checked on a machine with no NDK.
+      #
+      # `src/secrets/android.rs` is fifty-odd transcribed JNI method signatures,
+      # and a wrong one is a runtime abort on a phone rather than a compile
+      # error anywhere. This compiles the module on all three desktop runners so
+      # the signatures are checked on every push, not only when the Android job
+      # below has an NDK to work with.
+      - name: Check the Android credential store
+        run: cargo check --features android-check
+
       # The shell has real logic worth gating on: the cache, the store, and the
       # audio path's proof that it neither allocates nor frees on the audio
       # thread (TD-03). None of it needs a window or a device, so it runs on a
@@ -195,3 +205,61 @@ jobs:
       # job. This catches the compile.
       - name: Release build
         run: cargo build --release
+
+  # Android, compiled on a runner rather than on a laptop.
+  #
+  # The shell is where every platform assumption lives, and Android breaks more
+  # of them than Windows did: no OS credential store, a different audio backend,
+  # no media-key daemon. None of that is visible from a macOS build, and the one
+  # machine that could have found it has no NDK installed.
+  #
+  # GitHub's Ubuntu runners ship one. `ANDROID_NDK_LATEST_HOME` is set on the
+  # image, so this needs no download and no `sdkmanager`.
+  #
+  # A compile, not a bundle. `tauri android build` needs a generated Gradle
+  # project (`gen/android`), which is not in the tree; `cargo build` for the
+  # target is what proves the Rust half — every `cfg` gate, every dependency
+  # that has no Android backend — and that is the half that was broken.
+  android:
+    name: android (compile)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: vapor-app/src-tauri
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vapor-app/src-tauri
+          key: android
+
+      - name: Stub the frontend dist
+        run: mkdir -p ../dist && touch ../dist/index.html
+
+      # `ring` and the other C dependencies are built by the `cc` crate, which
+      # looks for a target-prefixed compiler. The NDK ships one per API level;
+      # 24 is the floor Tauri's Android template targets.
+      - name: Point the linker and cc at the NDK
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -d "$TOOLCHAIN" || { echo "no NDK toolchain at $TOOLCHAIN"; exit 1; }
+          echo "$TOOLCHAIN" >> "$GITHUB_PATH"
+          {
+            echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android24-clang"
+            echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Check
+        run: cargo check --target aarch64-linux-android
+
+      - name: Clippy
+        run: cargo clippy --target aarch64-linux-android

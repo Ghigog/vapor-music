@@ -75,15 +75,15 @@ impl std::fmt::Display for DavError {
     }
 }
 
-/// Store a password in the OS keychain, keyed by username.
+/// Store a password, keyed by username.
+///
+/// Where it actually goes is [`crate::secrets`]'s business — a keychain on the
+/// desktop, an encrypted record under an Android Keystore key on a phone.
 pub fn save_password(username: &str, password: &str) -> Result<(), DavError> {
     // Invalidate, never populate — see `cache`. The next read must reach the
     // keychain, or "saved" would be confirmed by the thing doing the saving.
     forget_cached(username);
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, username)
-        .map_err(|e| DavError::Network(e.to_string()))?;
-    entry
-        .set_password(password)
+    crate::secrets::set(KEYCHAIN_SERVICE, username, password)
         .map_err(|e| DavError::Network(e.to_string()))
 }
 
@@ -148,9 +148,9 @@ fn load_password(username: &str) -> Result<String, DavError> {
         }
     }
 
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, username)
-        .map_err(|e| DavError::Network(e.to_string()))?;
-    let password = entry.get_password().map_err(|_| DavError::NoCredentials)?;
+    let password = crate::secrets::get(KEYCHAIN_SERVICE, username)
+        .map_err(|e| DavError::Network(e.to_string()))?
+        .ok_or(DavError::NoCredentials)?;
 
     if let Ok(mut map) = cache().lock() {
         map.insert(username.to_string(), password.clone());
@@ -184,14 +184,7 @@ pub fn move_password(from: &str, to: &str) -> Result<(), DavError> {
 /// Remove a stored password. Part of "delete my data" meaning what it says.
 pub fn delete_password(username: &str) -> Result<(), DavError> {
     forget_cached(username);
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, username)
-        .map_err(|e| DavError::Network(e.to_string()))?;
-    // Already absent is success: the caller asked for it gone, and it is.
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(DavError::Network(e.to_string())),
-    }
+    crate::secrets::delete(KEYCHAIN_SERVICE, username).map_err(|e| DavError::Network(e.to_string()))
 }
 
 /// A blocking WebDAV session, held for as long as there is work to do.

@@ -27,6 +27,7 @@ pub mod decoder;
 mod media;
 mod metadata;
 mod peers;
+mod secrets;
 mod store;
 mod sync;
 mod tags;

@@ -49,6 +49,30 @@ lofty = "0.25.1"
 # platform ports maintained separately is what this replaces.
 souvlaki = "0.8.3"
 
+# Android has no OS credential store, so `keyring` has nothing to wrap there.
+# `src/secrets/android.rs` reaches the Android Keystore over JNI instead;
+# `ndk-context` is how it finds the JVM and the app Context that the Android
+# entry point published. Both are already in the tree as `cpal` dependencies
+# for this target — declared here too because this crate uses them directly,
+# and an inherited dependency is one `cargo update` away from disappearing.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+
+# The same two, optional, for every other target.
+#
+# `android-check` is not a runtime feature — nothing on a desktop calls into
+# `secrets::android`. It exists so `cargo check --features android-check`
+# type-checks about fifty JNI method signatures on a machine with no NDK, which
+# is where they were written and where a typo in one is otherwise invisible
+# until it aborts a phone.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+jni = { version = "0.21", optional = true }
+ndk-context = { version = "0.1", optional = true }
+
+[features]
+android-check = ["dep:jni", "dep:ndk-context"]
+
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 
