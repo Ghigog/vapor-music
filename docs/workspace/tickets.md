@@ -2055,11 +2055,33 @@ Deleting a folder rehomes its playlists to the top level on arrival, matching wh
 **Where:** SYNC-006
 
 
-### TD-51 : (blocked)
+### TD-51 : (done 2026-08-16 — and it had found a real bug)
 
 **The lookup is unexercised against a real service.** `metadata.rs` is tested exhaustively against canned response bodies and not once against LRCLIB or Deezer, because CI has no network and because turning the switch on sends a real query somewhere. So the parsing is trusted and the *shapes* are assumed: field names, the `data` array, the `genres.data[0].name` path and the size ladders all come from reading `metadata_service.gd`, which was itself written against the 2026 APIs. If a lookup returns nothing on a real machine, suspect the shape before the parser.
 
-**Waiting for:** A machine someone is sitting at, with a network.
+**Run against the live services 2026-08-16.** Three of four assumptions held; one did not, and it was silently broken.
+
+| What | Assumed | Actual |
+|---|---|---|
+| LRCLIB `syncedLyrics` / `plainLyrics` | camelCase at top level | correct — 104 synced lines |
+| Timestamp precision `[00:30.75]` | centiseconds | correct |
+| Deezer artist `data[].picture_*` ladder | correct | correct — xl present |
+| Deezer album `data[].cover_*` ladder | correct | correct — xl present |
+| **Deezer genre `genres.data[0].name`** | **on the album search response** | **not there at all** |
+
+`/search/album` carries no `genres` object at any level — only a numeric `genre_id`. So `genre_of` looked, found nothing, and returned an empty string **for every track ever looked up**, which is indistinguishable from an album that genuinely has no genre. The parser was right the whole time and was being handed the wrong document; the comment claiming the search response "already names the genre the original was going back for" was simply false, and the original made two requests because two are needed.
+
+Fixed by taking `data[0].id` from the search hit and asking `/album/{id}`, which does carry `genres.data[0].name` — verified: `/album/302127` → `Electro`. The second request only happens once there is art, so a miss costs nothing extra.
+
+**Scope, stated precisely:** the looked-up genre reaches the Liner Notes screen only. Library rows and the pathfinder read the genre from the file's own tags, so nothing about mixing or track selection changes — this restores a field on one screen that has been blank since the port.
+
+The four response bodies are now in the tests, captured from the real services rather than written from reading the GDScript, which is how the mismatch survived a full suite of passing tests. `the_parsers_still_match_the_live_services` re-checks them against the network on demand and is `#[ignore]`d, so CI never runs it and nobody's listening is sent anywhere without asking:
+
+```
+cargo test --lib live_services -- --ignored --nocapture
+```
+
+**Where:** MIG-052
 
 
 ### TD-54 : (blocked)

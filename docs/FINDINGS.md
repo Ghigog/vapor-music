@@ -265,6 +265,20 @@ predates it would read the document, drop the tombstones it did not understand,
 and write back one with every deletion undone. The version check turning that
 into a refusal is the whole reason the check exists.
 
+**A parser can pass every test and never have worked.** `genre_of` reads
+`genres.data[0].name`, which is correct — for the *full album* response. It was
+being handed the *album search* response, which carries no `genres` object at
+any level, only a numeric `genre_id`. So it returned an empty string for every
+track ever looked up, which looks exactly like an album with no genre. Fifteen
+tests covered it, all green, all written from reading the GDScript rather than
+from a real response. Verified against the live service 2026-08-16:
+`/search/album` for *Discovery* → no `genres`; `/album/302127` → `Electro`.
+
+The lesson is about where the canned bodies come from, not about the parser.
+Test fixtures invented from a spec test the spec. `metadata.rs` now holds four
+bodies captured from the real services, and an `#[ignore]`d test that re-checks
+them against the network on demand.
+
 **Windows SMTC was not ported.** 191 lines of C++/WinRT inside a GDExtension
 that is being archived. One cross-platform crate replaced all three platform
 ports.

@@ -239,7 +239,36 @@ pub const ARTIST_KEYS: &[&str] = &[
 ];
 pub const ALBUM_KEYS: &[&str] = &["cover_xl", "cover_big", "cover_medium", "cover_small"];
 
-/// The genre named by a Deezer album response, if it names a real one.
+/// The id of the first album in a Deezer search response.
+///
+/// Needed because the search result does not carry a genre *name* — see
+/// [`genre_of`]. The id is what turns a search hit into a request for the full
+/// album, which does.
+pub fn album_id_of(body: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("data")?
+        .as_array()?
+        .first()?
+        .get("id")?
+        .as_u64()
+}
+
+/// The genre named by a Deezer **album** response, if it names a real one.
+///
+/// `genres.data[0].name`, and the emphasis on *album* is the whole point. This
+/// parser was correct all along and was being handed the wrong document: it was
+/// fed the response from `/search/album`, which has no `genres` object at any
+/// level — only a numeric `genre_id`. So it looked, found nothing, and returned
+/// an empty string for every track ever looked up, which is indistinguishable
+/// from "this album has no genre".
+///
+/// Verified against the live service 2026-08-16 (TD-51). `/search/album` for
+/// Daft Punk's *Discovery* returns `genre_id: 106` and no `genres`;
+/// `/album/302127` returns `genres.data[0].name == "Electro"`. Both shapes are
+/// in the tests below, captured from the real responses rather than written
+/// from reading the GDScript this was ported from — which is how the mismatch
+/// survived a full suite of passing tests in the first place.
 pub fn genre_of(body: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return String::new();
@@ -401,10 +430,17 @@ impl Lookup {
             .unwrap_or_default()
     }
 
-    /// Album art, and the genre the same response carries.
+    /// Album art, and the genre.
     ///
-    /// One request for both: the original made two, and the album search
-    /// response already names the genre it was going back for.
+    /// Two requests, not one. This used to claim the search response "already
+    /// names the genre the original was going back for" — it does not, and the
+    /// genre has therefore been empty for every track since the port. The
+    /// search gives the art and an album id; the genre needs `/album/{id}`.
+    /// See [`genre_of`].
+    ///
+    /// The second request is only made once there is art, so a miss costs
+    /// nothing extra: no art means no album matched, and there is no id worth
+    /// asking about.
     pub fn album(&self, artist: &str, album: &str) -> (String, String) {
         if !is_searchable(album) {
             return (String::new(), String::new());
@@ -422,7 +458,14 @@ impl Lookup {
             let Some(body) = self.get(&url) else { continue };
             let art = image_url_of(&body, ALBUM_KEYS);
             if !art.is_empty() {
-                return (art, genre_of(&body));
+                // The genre is worth a second request but not worth failing
+                // over: art on a screen is the point, and a missing genre is
+                // the state the app has been in all along.
+                let genre = album_id_of(&body)
+                    .and_then(|id| self.get(&format!("https://api.deezer.com/album/{id}")))
+                    .map(|full| genre_of(&full))
+                    .unwrap_or_default();
+                return (art, genre);
             }
         }
         (String::new(), String::new())
@@ -613,6 +656,147 @@ mod tests {
         let body = r#"{"genres":{"data":[{"name":"Electronic"}]}}"#;
 
         assert_eq!(genre_of(body), "Electronic");
+    }
+
+    // -----------------------------------------------------------------------
+    // Against what the services actually return (TD-51)
+    // -----------------------------------------------------------------------
+    //
+    // Every test above this line was written from reading `metadata_service.gd`
+    // rather than from a real response, which is exactly how a parser can pass
+    // a full suite and still never work. These four bodies were captured from
+    // the live services on 2026-08-16 — Daft Punk, *Discovery*, "One More
+    // Time", chosen because it is a well-known public record and not something
+    // out of anyone's library. Trimmed to the fields the parsers read; shapes
+    // and spellings are untouched.
+
+    /// `GET https://api.deezer.com/search/artist?q=Daft%20Punk`
+    const REAL_ARTIST_SEARCH: &str = r#"{"data":[{"id":27,"name":"Daft Punk","picture":"https://api.deezer.com/artist/27/image","picture_small":"https://cdn-images.dzcdn.net/images/artist/638e69b9caaf9f9f3f8826febea7b543/56x56-000000-80-0-0.jpg","picture_medium":"https://cdn-images.dzcdn.net/images/artist/638e69b9caaf9f9f3f8826febea7b543/250x250-000000-80-0-0.jpg","picture_big":"https://cdn-images.dzcdn.net/images/artist/638e69b9caaf9f9f3f8826febea7b543/500x500-000000-80-0-0.jpg","picture_xl":"https://cdn-images.dzcdn.net/images/artist/638e69b9caaf9f9f3f8826febea7b543/1000x1000-000000-80-0-0.jpg","type":"artist"}],"total":58}"#;
+
+    /// `GET https://api.deezer.com/search/album?q=Daft%20Punk%20Discovery`
+    ///
+    /// Note what is *not* here: any `genres` object. Only `genre_id`.
+    const REAL_ALBUM_SEARCH: &str = r#"{"data":[{"id":302127,"title":"Discovery","cover":"https://api.deezer.com/album/302127/image","cover_small":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/56x56-000000-80-0-0.jpg","cover_medium":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/250x250-000000-80-0-0.jpg","cover_big":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/500x500-000000-80-0-0.jpg","cover_xl":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/1000x1000-000000-80-0-0.jpg","genre_id":106,"nb_tracks":14,"record_type":"album","explicit_lyrics":false,"type":"album"}],"total":300}"#;
+
+    /// `GET https://api.deezer.com/album/302127`
+    const REAL_ALBUM_FULL: &str = r#"{"id":302127,"title":"Discovery","genres":{"data":[{"id":106,"name":"Electro","picture":"https://api.deezer.com/genre/106/image","type":"genre"}]},"cover_xl":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/1000x1000-000000-80-0-0.jpg","nb_tracks":14}"#;
+
+    /// `GET https://lrclib.net/api/get?artist_name=Daft%20Punk&track_name=One%20More%20Time`
+    const REAL_LRCLIB: &str = r#"{"id":250327,"trackName":"One More Time","artistName":"Daft Punk","albumName":"Discovery","duration":320.0,"instrumental":false,"plainLyrics":"One more time\n\nOne more time\n","syncedLyrics":"[00:30.75] One more time\n[00:33.18] \n[00:46.35] One more time\n[00:49.25] \n[01:03.76] One more time\n[01:04.92] We're gonna celebrate"}"#;
+
+    /// The bug TD-51 was recorded to catch, kept as the thing that would catch
+    /// it again: the album *search* response names no genre, so asking it for
+    /// one returns nothing — for every track, silently.
+    #[test]
+    fn the_album_search_response_carries_no_genre_at_all() {
+        assert_eq!(
+            genre_of(REAL_ALBUM_SEARCH),
+            "",
+            "if this ever returns a genre, Deezer changed the search response \
+             and `album` can go back to one request"
+        );
+        // It does carry the art, which is why the mistake was invisible.
+        assert!(
+            image_url_of(REAL_ALBUM_SEARCH, ALBUM_KEYS).ends_with("1000x1000-000000-80-0-0.jpg")
+        );
+    }
+
+    /// And the full album response, which is where the genre actually is.
+    #[test]
+    fn the_full_album_response_names_the_genre() {
+        assert_eq!(album_id_of(REAL_ALBUM_SEARCH), Some(302127));
+        assert_eq!(genre_of(REAL_ALBUM_FULL), "Electro");
+    }
+
+    #[test]
+    fn the_artist_ladder_matches_what_deezer_sends() {
+        let url = image_url_of(REAL_ARTIST_SEARCH, ARTIST_KEYS);
+        assert!(
+            url.contains("1000x1000"),
+            "expected the xl rung of the ladder, got {url}"
+        );
+    }
+
+    /// The whole lookup, against the live services.
+    ///
+    /// `#[ignore]` for two reasons and both matter: CI has no network, and
+    /// running this sends a query to two third parties — the precise thing the
+    /// app makes people opt into. It is not run for you.
+    ///
+    /// It exists because TD-51's actual complaint was that nothing had *ever*
+    /// been run against the real thing, so the captured bodies above are only
+    /// as current as the day they were captured. This is the one command that
+    /// re-checks them:
+    ///
+    /// ```text
+    /// cargo test --lib live_services -- --ignored --nocapture
+    /// ```
+    ///
+    /// A failure here means a service changed shape, not that the app is
+    /// broken — read the printed output before changing any parser.
+    #[test]
+    #[ignore = "makes real network requests to LRCLIB and Deezer"]
+    fn the_parsers_still_match_the_live_services() {
+        let lookup = Lookup::new().expect("http client");
+
+        // A well-known public record, deliberately not anything out of the
+        // owner's library: this is a request to a stranger's server, and the
+        // query is the one thing it learns.
+        let (artist, album, title) = ("Daft Punk", "Discovery", "One More Time");
+
+        let lyrics = lookup.lyrics(artist, title);
+        println!(
+            "lyrics: {:?}",
+            lyrics.as_ref().map(|l| (l.synced, l.lines.len()))
+        );
+        let lyrics = lyrics.expect("LRCLIB returned no usable lyrics");
+        assert!(lyrics.synced, "synced lyrics stopped arriving");
+        assert!(lyrics.lines.len() > 10);
+        assert!(
+            lyrics.lines.windows(2).all(|w| w[0].time <= w[1].time),
+            "lines came back out of order"
+        );
+
+        let portrait = lookup.artist_image(artist);
+        println!("artist image: {portrait}");
+        assert!(portrait.starts_with("http"), "no artist portrait");
+
+        let (art, genre) = lookup.album(artist, album);
+        println!("album art: {art}\ngenre: {genre}");
+        assert!(art.starts_with("http"), "no album art");
+        // The regression this ticket found. An empty genre here is the bug
+        // coming back, not a record without a genre — Discovery has one.
+        assert!(
+            !genre.is_empty(),
+            "the genre is empty again: the album search response is being asked \
+             for something it does not carry"
+        );
+    }
+
+    /// LRCLIB's field names and its timestamp precision, from a real body.
+    /// `[00:30.75]` is centiseconds — read as milliseconds it would be 30.0008s
+    /// and every line would land on top of the one before it.
+    #[test]
+    fn lrclib_synced_lyrics_parse_at_the_right_times() {
+        let lyrics = lyrics_of(REAL_LRCLIB).expect("a body with words in it");
+
+        assert!(
+            lyrics.synced,
+            "synced lyrics were present and not preferred"
+        );
+        assert_eq!(lyrics.lines.len(), 6);
+        assert!(
+            (lyrics.lines[0].time - 30.75).abs() < 1e-3,
+            "{}",
+            lyrics.lines[0].time
+        );
+        assert_eq!(lyrics.lines[0].text, "One more time");
+        // A minute rolls over correctly: [01:03.76] is 63.76s, not 1.0376.
+        assert!(
+            (lyrics.lines[4].time - 63.76).abs() < 1e-3,
+            "{}",
+            lyrics.lines[4].time
+        );
     }
 
     /// The placeholders the path parser produces must never become a search
