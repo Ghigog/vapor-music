@@ -229,6 +229,19 @@ export interface Settings {
 export const MIN_VIBE_LIMIT = 0.1;
 export const MAX_VIBE_LIMIT = 1.0;
 
+/**
+ * Data files that could not be read at startup and were moved aside.
+ *
+ * Empty on every normal launch. Each string is a sentence to show a person
+ * verbatim: which file, why, and where the bytes were kept. The app starts on
+ * a default either way — refusing to open because one of fourteen files is
+ * damaged is a worse answer — so this is the only thing that distinguishes
+ * "you have no playlists" from "your playlists could not be read".
+ */
+export function startupProblems(): Promise<string[]> {
+  return invoke<string[]>("startup_problems");
+}
+
 /** Set the Vibe Limit. Out-of-range values are clamped to the band. */
 export function setVibeLimit(limit: number): Promise<Settings> {
   return invoke<Settings>("set_vibe_limit", { limit });

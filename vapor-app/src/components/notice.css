@@ -61,3 +61,59 @@
 .notice__button:hover {
   background: #fff;
 }
+
+/*
+ * The startup damage banner.
+ *
+ * Shown when a data file could not be read and was moved aside rather than
+ * replaced. Deliberately not styled as an error: nothing has gone wrong with
+ * what the person is doing right now, and the app is working. It is a notice
+ * that their data is not all here and where the rest of it went, which is the
+ * one thing they cannot find out any other way.
+ *
+ * Spans the whole shell rather than sitting inside a screen, because it is not
+ * about a screen — and it is dismissible, because a person who has read it and
+ * gone to look at the file should not be nagged for the rest of the session.
+ */
+.damaged {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  background: var(--glass-fill);
+  border-bottom: 1px solid var(--warn, var(--accent));
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.damaged__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.damaged__body ul {
+  margin: var(--s-2) 0 0;
+  padding-left: 1.2em;
+}
+
+.damaged__body li {
+  /* Paths are long and must not be truncated: the path is the actionable
+     half of the sentence. */
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+}
+
+.damaged__dismiss {
+  flex: none;
+  padding: 4px 10px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-hair);
+  cursor: pointer;
+}
+
+.damaged__dismiss:hover {
+  background: var(--glass-fill);
+}

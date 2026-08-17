@@ -128,6 +128,12 @@ struct AppState {
     pin: Option<String>,
     /// Who is on the network, kept by the beacon thread.
     peers: peers::Peers,
+    /// Files that could not be read at startup and were moved aside.
+    ///
+    /// Empty on every normal launch. Non-empty means the app is running on a
+    /// default for something the person had data for, and they need telling —
+    /// silently starting with no playlists is the failure this exists to stop.
+    damaged: Vec<store::Quarantined>,
     /// What this device has deleted, so the deletion travels (TD-57).
     ///
     /// Kept beside the stores rather than inside them: a store holds what
@@ -197,36 +203,49 @@ impl AppState {
         // had it and nothing called it, so a hand-edited settings file's
         // nonsense reached the app unchecked — including, now, a cache bound
         // too small to hold a track.
-        let settings = store
-            .load::<Settings>("settings")
-            .unwrap_or(None)
-            .unwrap_or_default()
+        // Every load goes through `quarantined`, which moves a file that cannot
+        // be read out of the way before the app carries on with a default.
+        // Without that, an unreadable-but-intact file is replaced by an empty
+        // one the first time anything is saved — the data was recoverable right
+        // up until the app tried to help. See `Store::load_or_quarantine`.
+        let mut damaged: Vec<store::Quarantined> = Vec::new();
+        macro_rules! quarantined {
+            ($name:literal) => {{
+                let (value, problem) = store.load_or_quarantine($name);
+                if let Some(p) = problem {
+                    eprintln!("store: {}", p.message());
+                    damaged.push(p);
+                }
+                value
+            }};
+        }
+
+        let settings = quarantined!("settings")
+            .unwrap_or_else(Settings::default)
             .sanitised();
         let cache_max_bytes = settings.cache_max_bytes;
-        let playlists = store.load("playlists").unwrap_or(None).unwrap_or_default();
-        let folders = store.load("folders").unwrap_or(None).unwrap_or_default();
-        let looked = store.load("metadata").unwrap_or(None).unwrap_or_default();
-        let trust = store.load("trust").unwrap_or(None).unwrap_or_default();
-        let tombstones = store.load("tombstones").unwrap_or(None).unwrap_or_default();
-        let digests = store.load("digests").unwrap_or(None).unwrap_or_default();
+        let playlists = quarantined!("playlists").unwrap_or_default();
+        let folders = quarantined!("folders").unwrap_or_default();
+        let looked = quarantined!("metadata").unwrap_or_default();
+        let trust = quarantined!("trust").unwrap_or_default();
+        let tombstones = quarantined!("tombstones").unwrap_or_default();
+        let digests = quarantined!("digests").unwrap_or_default();
         // Generated on first launch and kept. A device that renamed itself
         // every start would appear as a new peer each time, and every pairing
         // would have to be redone.
-        let device_id: String = store
-            .load("device_id")
-            .unwrap_or(None)
-            .unwrap_or_else(|| new_id("device"));
-        let analysis = store.load("analysis").unwrap_or(None).unwrap_or_default();
-        let failures = store.load("failures").unwrap_or(None).unwrap_or_default();
-        let tags = store.load("tags").unwrap_or(None).unwrap_or_default();
-        let skips = store.load("skips").unwrap_or(None).unwrap_or_default();
+        let device_id: String = quarantined!("device_id").unwrap_or_else(|| new_id("device"));
+        let analysis = quarantined!("analysis").unwrap_or_default();
+        let failures = quarantined!("failures").unwrap_or_default();
+        let tags = quarantined!("tags").unwrap_or_default();
+        let skips = quarantined!("skips").unwrap_or_default();
         // The scanned index. Without this the library was rebuilt from the
         // server on every launch: the app opened on "0 tracks" and stayed
         // there until someone found Settings and pressed Scan — a walk of
         // every directory on the server to rediscover a list that had not
         // changed since the last time it was walked.
-        let rows = store.load("index").unwrap_or(None).unwrap_or_default();
+        let rows = quarantined!("index").unwrap_or_default();
         AppState {
+            damaged,
             settings,
             playlists,
             folders,
@@ -848,6 +867,18 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
 #[tauri::command]
 fn media_keys_available() -> bool {
     media::bundled()
+}
+
+/// Files that could not be read at startup and were moved aside.
+///
+/// Empty on every normal launch. Non-empty means the app is running on a
+/// default for something the person had data for — an unreadable playlists
+/// file is indistinguishable from having no playlists, and the difference
+/// matters enormously. The bytes were kept; this is what says so.
+#[tauri::command]
+fn startup_problems(state: State<'_, Shared>) -> Result<Vec<String>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.damaged.iter().map(|d| d.message()).collect())
 }
 
 /// Turn local-network sync on or off.
@@ -4777,6 +4808,7 @@ pub fn run() {
             set_metadata_lookup,
             set_vibe_limit,
             set_sync_enabled,
+            startup_problems,
             media_keys_available,
             sync_view,
             open_pairing,
@@ -4982,6 +5014,93 @@ mod tests {
             stale.contains(&("/done".to_string(), 256.0)),
             "clearing a correction left a grid at the corrected tempo, got {stale:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Starting up on damaged data
+    // -----------------------------------------------------------------------
+
+    /// The data-loss path, end to end.
+    ///
+    /// A playlists file that cannot be parsed used to load as an empty
+    /// collection; the app then carried on, and the first mutation saved that
+    /// empty collection over the original. This asserts the whole sequence —
+    /// start, mutate, save — leaves the original bytes on disk.
+    #[test]
+    fn a_damaged_playlists_file_survives_a_launch_and_a_save() {
+        let (app, dir) = app();
+        drop(app);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let original = br#"{"playlists": [ truncated..."#;
+        std::fs::write(dir.join("playlists.json"), original).expect("write");
+
+        let mut app = AppState::load(Store::new(dir.clone()));
+
+        // The app started, and it knows something is wrong.
+        assert_eq!(app.damaged.len(), 1, "{:?}", app.damaged);
+        assert_eq!(app.damaged[0].name, "playlists");
+
+        // Now do the thing that used to destroy it.
+        app.playlists.create("p1", "A New Playlist");
+        app.save_playlists().expect("save");
+
+        let kept = app.damaged[0].kept_at.clone().expect("kept somewhere");
+        assert_eq!(
+            std::fs::read(&kept).expect("read"),
+            original,
+            "the original playlists file was lost"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A normal launch reports nothing. If this ever fails, the banner is
+    /// about to be shown to everyone for no reason.
+    #[test]
+    fn a_clean_launch_reports_no_damage() {
+        let (app, dir) = app();
+        assert!(app.damaged.is_empty(), "{:?}", app.damaged);
+        drop(app);
+
+        // And a launch over real, valid data is also clean.
+        let mut app = AppState::load(Store::new(dir.clone()));
+        app.playlists.create("p1", "Real");
+        app.save_playlists().expect("save");
+        app.save_settings().expect("save");
+        drop(app);
+
+        let reopened = AppState::load(Store::new(dir.clone()));
+        assert!(reopened.damaged.is_empty(), "{:?}", reopened.damaged);
+        assert_eq!(reopened.playlists.len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Several damaged files are all reported, not just the first — a person
+    /// told about one and then surprised by another has been told nothing.
+    #[test]
+    fn every_damaged_file_is_reported() {
+        let (app, dir) = app();
+        drop(app);
+        std::fs::create_dir_all(&dir).expect("dir");
+        for name in ["playlists", "folders", "tags"] {
+            std::fs::write(dir.join(format!("{name}.json")), b"not json").expect("write");
+        }
+
+        let app = AppState::load(Store::new(dir.clone()));
+        let mut names: Vec<&str> = app.damaged.iter().map(|d| d.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["folders", "playlists", "tags"]);
+
+        // And each message is something a person can act on: it names the file
+        // and where the bytes went.
+        for d in &app.damaged {
+            let m = d.message();
+            assert!(m.contains(&d.name), "{m}");
+            assert!(m.contains("kept at"), "{m}");
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A playlist's order is the playlist's, not the library's. Sorting these

@@ -46,6 +46,11 @@ export interface FakeOptions {
   lyrics?: Record<string, core.Lyrics>;
   /** Start with local-network sync switched on. Off by default, as ships. */
   syncEnabled?: boolean;
+  /**
+   * Data files the backend could not read at startup, already turned into the
+   * sentences it would show. Empty by default, which is every normal launch.
+   */
+  damaged?: string[];
   /** Devices on the network. Empty by default, as a lone machine is. */
   peers?: core.SyncPeer[];
   /** Devices already paired with. */
@@ -174,6 +179,8 @@ export class FakeBackend {
   private scanned: boolean;
   private playlists: core.Playlist[];
   private folders: core.Folder[];
+  /** Startup damage sentences the backend would report. Empty by default. */
+  private damaged: string[] = [];
   private queue: string[] = [];
   private current: string | null = null;
   private status: core.PlaybackStatus = "idle";
@@ -287,6 +294,7 @@ export class FakeBackend {
       vibeLimit: 0.5,
       syncEnabled: options.syncEnabled ?? false,
     };
+    this.damaged = options.damaged ?? [];
     this.lyricsFor = options.lyrics ?? {};
     this.peers = options.peers ?? [];
     this.trusted = options.trustedPeers ?? [];
@@ -667,6 +675,11 @@ export class FakeBackend {
 
       case "media_keys_available":
         return true;
+
+      // Empty on every normal launch. A test that wants the damage banner sets
+      // `damaged` on the options — see `FakeOptions`.
+      case "startup_problems":
+        return this.damaged;
 
       case "set_sync_enabled": {
         this.settings = { ...this.settings, syncEnabled: a.enabled === true };

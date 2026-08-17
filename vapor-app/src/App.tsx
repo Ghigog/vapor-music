@@ -71,6 +71,11 @@ type Status =
   | { kind: "error"; message: string };
 
 export function App() {
+  /** Data files that could not be read at startup, as sentences to show.
+   *  Empty on every normal launch — see `core.startupProblems`. */
+  const [damaged, setDamaged] = useState<string[]>([]);
+  const [damagedSeen, setDamagedSeen] = useState(false);
+
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [screen, setScreen] = useState<Screen>("library");
   /** The track being read about, and the screen to return to. Liner Notes is a
@@ -115,6 +120,17 @@ export function App() {
     setPlaylist(id);
   }
 
+  // Asked once, at startup, because that is when it is decided. A person who
+  // dismisses this has been told; it is not repeated at them every render.
+  useEffect(() => {
+    core
+      .startupProblems()
+      .then(setDamaged)
+      // If even this call fails the app has bigger problems, and a banner
+      // about not being able to check for problems helps nobody.
+      .catch(() => setDamaged([]));
+  }, []);
+
   if (status.kind === "onboarding") {
     return (
       <div className="shell shell--bare">
@@ -133,6 +149,24 @@ export function App() {
   if (status.kind === "ready") {
     return (
       <div className="shell">
+        {damaged.length > 0 && !damagedSeen && (
+          <div className="damaged" role="alert">
+            <div className="damaged__body">
+              <strong>Some of your data could not be read.</strong>
+              <ul>
+                {damaged.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+            <button
+              className="damaged__dismiss"
+              onClick={() => setDamagedSeen(true)}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <nav className="shell__sidebar">
           {NAV.map((item, i) => (
             <div key={item.id}>
