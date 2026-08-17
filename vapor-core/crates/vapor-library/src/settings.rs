@@ -116,6 +116,30 @@ pub struct Settings {
     #[serde(default)]
     pub bpm_overrides: std::collections::HashMap<String, f32>,
 
+    /// Album artwork chosen by hand, keyed by [`album_key`].
+    ///
+    /// The value is the URL the picture was found at; the bytes live in the
+    /// image cache beside it, named by a hash of that URL. Storing the URL
+    /// rather than the bytes keeps this file small — a settings document with a
+    /// few hundred base64 covers in it is one the app has to read whole to
+    /// answer any question about any setting.
+    ///
+    /// Exists because a file's embedded artwork can simply be wrong. It is not
+    /// a guess the app can correct on its own: the only thing that knows the
+    /// picture is wrong is the person looking at it.
+    #[serde(default)]
+    pub album_art: std::collections::HashMap<String, String>,
+
+    /// Whether a looked-up cover outranks the file's own embedded artwork.
+    ///
+    /// Off, and it should stay the default. Embedded artwork is usually right,
+    /// needs no network, and cannot be a wrong match — album search is fuzzy,
+    /// and a library-wide preference for it would let one bad match replace
+    /// good art on an album nobody was looking at. On, for a library whose
+    /// tags are known to be poor.
+    #[serde(default)]
+    pub prefer_looked_up_art: bool,
+
     /// Ceiling on the local audio cache, in bytes.
     ///
     /// The library lives in the user's cloud and local storage is only a cache,
@@ -189,6 +213,8 @@ impl Default for Settings {
             headphone_profile: String::new(),
             headphone_calibration_enabled: false,
             bpm_overrides: std::collections::HashMap::new(),
+            album_art: std::collections::HashMap::new(),
+            prefer_looked_up_art: false,
             cache_max_bytes: default_cache_max_bytes(),
             metadata_lookup_enabled: false,
             vibe_limit: default_vibe_limit(),
@@ -208,6 +234,34 @@ pub const MIN_MANUAL_BPM: f32 = 20.0;
 /// it as `null` and then fails to read it back. That loses the whole settings
 /// file — every playlist preference and server setting — to a mistyped BPM.
 pub const MAX_MANUAL_BPM: f32 = 300.0;
+
+/// Separates the two halves of an [`album_key`].
+///
+/// A unit separator, because it cannot occur in a path or an album title and so
+/// cannot make two different albums collide by being typed into one of them.
+const KEY_SEP: char = '\u{1f}';
+
+/// The identity of an album: its title, and the folder its tracks sit in.
+///
+/// Neither half is sufficient on its own, and both failures are real:
+///
+/// * **Title alone** merges two different records that share a name. Every
+///   library eventually has two *Greatest Hits*, and they would share one tile,
+///   one cover and one artwork override.
+/// * **Folder alone** merges two different albums that share a directory,
+///   which happens whenever a few loose tracks are dropped together. Measured
+///   on the owner's library: 34 folders, and two of them hold two albums each.
+///
+/// Together they also get compilations right, which is the case that rules out
+/// the obvious third option. Keying on artist and title would split a
+/// various-artists album into one tile per artist — worse than what it fixes.
+///
+/// Derived from the href rather than stored, so it survives a rescan: an href
+/// is what the server calls the file and does not change when tags do.
+pub fn album_key(album: &str, href: &str) -> String {
+    let folder = href.rsplit_once('/').map(|(f, _)| f).unwrap_or("");
+    format!("{folder}{KEY_SEP}{}", album.trim())
+}
 
 impl Settings {
     /// Corrected BPM for a track, if the user set one.
@@ -238,6 +292,24 @@ impl Settings {
     }
 
     /// Clamp values that would break the UI if a config file were hand-edited.
+    /// The artwork chosen by hand for an album, if any.
+    pub fn album_art_for(&self, album: &str, href: &str) -> Option<&str> {
+        self.album_art
+            .get(&album_key(album, href))
+            .map(String::as_str)
+            .filter(|u| !u.trim().is_empty())
+    }
+
+    /// Choose artwork for an album by hand, or clear the choice with an empty
+    /// URL. Returns whether anything changed.
+    pub fn set_album_art(&mut self, album: &str, href: &str, url: &str) -> bool {
+        let key = album_key(album, href);
+        if url.trim().is_empty() {
+            return self.album_art.remove(&key).is_some();
+        }
+        self.album_art.insert(key, url.trim().to_string()) != Some(url.trim().to_string())
+    }
+
     pub fn sanitised(mut self) -> Self {
         self.base_font_size = self.base_font_size.clamp(8, 48);
         self.ui_scale = self.ui_scale.clamp(0.5, 3.0);
@@ -456,5 +528,94 @@ mod tests {
         assert!(!r.is_configured());
         r.username = "me".into();
         assert!(r.is_configured());
+    }
+
+    // -----------------------------------------------------------------------
+    // Album identity and artwork overrides
+    // -----------------------------------------------------------------------
+
+    /// The failure keying on title alone would cause, and the reason this is
+    /// not just the album name.
+    #[test]
+    fn two_albums_sharing_a_name_are_not_the_same_album() {
+        let a = album_key("Greatest Hits", "/dav/Music/Queen/Greatest Hits/01.mp3");
+        let b = album_key("Greatest Hits", "/dav/Music/Abba/Greatest Hits/01.mp3");
+        assert_ne!(a, b);
+    }
+
+    /// And the failure keying on folder alone would cause. Both of these were
+    /// measured in a real library, which is why the key is the pair.
+    #[test]
+    fn two_albums_sharing_a_folder_are_not_the_same_album() {
+        let a = album_key("Gorillaz", "/dav/Music/Gorillaz/01.mp3");
+        let b = album_key("Clint Eastwood", "/dav/Music/Gorillaz/02.mp3");
+        assert_ne!(a, b);
+    }
+
+    /// A compilation is one album however many artists are on it — which is
+    /// what rules out keying on artist and title.
+    #[test]
+    fn every_track_in_one_album_folder_shares_a_key() {
+        let one = album_key("Now 42", "/dav/Music/Various/Now 42/01 Someone.mp3");
+        let two = album_key("Now 42", "/dav/Music/Various/Now 42/02 Someone Else.mp3");
+        assert_eq!(one, two);
+    }
+
+    #[test]
+    fn a_key_is_stable_under_whitespace_and_a_missing_folder() {
+        assert_eq!(
+            album_key("Currents", "/dav/Music/Tame Impala/Currents/01.mp3"),
+            album_key("  Currents  ", "/dav/Music/Tame Impala/Currents/01.mp3")
+        );
+        // A bare filename has no folder, and must not panic.
+        assert!(!album_key("Loose", "track.mp3").is_empty());
+    }
+
+    #[test]
+    fn artwork_chosen_by_hand_is_returned_and_can_be_cleared() {
+        let mut s = Settings::default();
+        let href = "/dav/Music/Tame Impala/Currents/01.mp3";
+        assert_eq!(s.album_art_for("Currents", href), None);
+
+        assert!(s.set_album_art("Currents", href, "https://cdn/cover.jpg"));
+        assert_eq!(
+            s.album_art_for("Currents", href),
+            Some("https://cdn/cover.jpg")
+        );
+
+        // Every track on the album resolves to the same choice.
+        let other = "/dav/Music/Tame Impala/Currents/07.mp3";
+        assert_eq!(
+            s.album_art_for("Currents", other),
+            Some("https://cdn/cover.jpg")
+        );
+        // And an album that merely shares the title does not.
+        assert_eq!(
+            s.album_art_for("Currents", "/dav/Music/Eisley/Currents/01.mp3"),
+            None
+        );
+
+        assert!(s.set_album_art("Currents", href, ""));
+        assert_eq!(s.album_art_for("Currents", href), None);
+        // Clearing something that was never set changes nothing.
+        assert!(!s.set_album_art("Currents", href, "   "));
+    }
+
+    /// Survives the round trip through the settings file, and a file written
+    /// before the field existed still opens.
+    #[test]
+    fn the_new_fields_round_trip_and_tolerate_an_older_file() {
+        let mut s = Settings::default();
+        s.set_album_art("Currents", "/m/a/Currents/01.mp3", "https://cdn/c.jpg");
+        s.prefer_looked_up_art = true;
+
+        let text = serde_json::to_string(&s).expect("write");
+        let back: Settings = serde_json::from_str(&text).expect("read");
+        assert_eq!(back.album_art, s.album_art);
+        assert!(back.prefer_looked_up_art);
+
+        let older: Settings = serde_json::from_str(r#"{"baseFontSize":16}"#).expect("read old");
+        assert!(older.album_art.is_empty());
+        assert!(!older.prefer_looked_up_art);
     }
 }

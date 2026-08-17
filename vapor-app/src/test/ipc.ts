@@ -51,6 +51,8 @@ export interface FakeOptions {
    * sentences it would show. Empty by default, which is every normal launch.
    */
   damaged?: string[];
+  /** What an artwork search would find, by album title. */
+  albumArtSearch?: Record<string, string>;
   /** Devices on the network. Empty by default, as a lone machine is. */
   peers?: core.SyncPeer[];
   /** Devices already paired with. */
@@ -181,6 +183,18 @@ export class FakeBackend {
   private folders: core.Folder[];
   /** Startup damage sentences the backend would report. Empty by default. */
   private damaged: string[] = [];
+  /** Covers chosen by hand, keyed as the backend keys them. */
+  private albumArt: Record<string, string> = {};
+  /** What a search would find, by album title. Anything absent finds nothing. */
+  private albumArtSearch: Record<string, string> = {};
+
+  /** The embedded cover for a track, honouring `covers` like every other
+   *  cover-bearing command. */
+  private coverFor(href: string): string | null {
+    return this.rows.some((r) => r.href === href) && this.covers
+      ? A_SLEEVE
+      : null;
+  }
   private queue: string[] = [];
   private current: string | null = null;
   private status: core.PlaybackStatus = "idle";
@@ -289,12 +303,15 @@ export class FakeBackend {
       headphoneProfile: "",
       headphoneCalibrationEnabled: false,
       bpmOverrides: {},
+      albumArt: {},
+      preferLookedUpArt: false,
       cacheMaxBytes: 8_000_000_000,
       metadataLookupEnabled: options.metadataLookup ?? false,
       vibeLimit: 0.5,
       syncEnabled: options.syncEnabled ?? false,
     };
     this.damaged = options.damaged ?? [];
+    this.albumArtSearch = options.albumArtSearch ?? {};
     this.lyricsFor = options.lyrics ?? {};
     this.peers = options.peers ?? [];
     this.trusted = options.trustedPeers ?? [];
@@ -482,14 +499,23 @@ export class FakeBackend {
             ? row.artistSource !== "unknown"
             : row.albumSource !== "unknown";
           if (!known || !name) continue;
-          if (!members.has(name)) {
-            order.push(name);
-            members.set(name, []);
+          // Grouped by identity, displayed by name — mirroring the backend.
+          // An album's identity is its title plus the folder its tracks live
+          // in, so two records sharing a title stay two records. A fake that
+          // grouped differently from the real thing would make a test pass for
+          // a shape the app never produces.
+          const key = byArtist
+            ? name
+            : `${row.href.replace(/\/[^/]*$/, "")}\u001f${name.trim()}`;
+          if (!members.has(key)) {
+            order.push(key);
+            members.set(key, []);
           }
-          members.get(name)!.push(row);
+          members.get(key)!.push(row);
         }
-        return order.map((name) => {
-          const tracks = members.get(name)!;
+        return order.map((key) => {
+          const tracks = members.get(key)!;
+          const name = byArtist ? key : tracks[0]!.album;
           const others = byArtist
             ? [...new Set(tracks.map((t) => t.album))]
             : [...new Set(tracks.map((t) => t.artist))];
@@ -675,6 +701,42 @@ export class FakeBackend {
 
       case "media_keys_available":
         return true;
+
+      // Album artwork. The fake keeps the same three-source order as the
+      // backend so a screen can be driven through all of it: a hand-chosen
+      // cover, then the file's embedded picture, then a looked-up one.
+      case "album_cover": {
+        const key = `${a.album as string}\u001f${a.lead as string}`;
+        const chosen = this.albumArt[key];
+        return {
+          src: chosen ?? this.coverFor(a.lead as string),
+          chosen: chosen !== undefined,
+        };
+      }
+
+      case "find_album_art": {
+        const found = this.albumArtSearch[a.album as string];
+        if (!found) {
+          throw new Error(
+            `Nothing came back for \u201c${a.album as string}\u201d. The album or ` +
+              `artist may be spelled differently on the service than in your tags.`,
+          );
+        }
+        this.albumArt[`${a.album as string}\u001f${a.lead as string}`] = found;
+        return { src: found, chosen: true };
+      }
+
+      case "clear_album_art": {
+        delete this.albumArt[`${a.album as string}\u001f${a.lead as string}`];
+        return { src: this.coverFor(a.lead as string), chosen: false };
+      }
+
+      case "set_prefer_looked_up_art":
+        this.settings = {
+          ...this.settings,
+          preferLookedUpArt: a.enabled === true,
+        };
+        return this.settings;
 
       // Empty on every normal launch. A test that wants the damage banner sets
       // `damaged` on the options — see `FakeOptions`.

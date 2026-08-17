@@ -55,9 +55,15 @@ export function Library({
    * one button. Cleared whenever the tab or the search changes, because both
    * of those mean "show me something else".
    */
-  const [opened, setOpened] = useState<
-    { kind: "album" | "artist"; name: string } | null
-  >(null);
+  const [opened, setOpened] = useState<{
+    kind: "album" | "artist";
+    name: string;
+    /** Any track on it — enough to resolve artwork, since an album's identity
+     *  is its title plus the folder its tracks live in. */
+    lead: string;
+    /** The album's artist, for an artwork search. Empty for an artist tile. */
+    artist: string;
+  } | null>(null);
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>("album");
   const [load, setLoad] = useState<Load>({ kind: "loading" });
@@ -213,6 +219,9 @@ export function Library({
             </button>
             <h2 className="library__opened">{opened.name}</h2>
           </div>
+          {opened.kind === "album" && (
+            <AlbumArtwork album={opened.name} artist={opened.artist} lead={opened.lead} />
+          )}
           <Songs
             onOpen={onOpen}
             query=""
@@ -245,7 +254,14 @@ export function Library({
                   key={entity.name}
                   entity={entity}
                   kind={groupBy}
-                  onOpen={() => setOpened({ kind: groupBy, name: entity.name })}
+                  onOpen={() =>
+                    setOpened({
+                      kind: groupBy,
+                      name: entity.name,
+                      lead: entity.lead,
+                      artist: groupBy === "album" ? entity.subtitle : entity.name,
+                    })
+                  }
                   onPlay={() => void playEntity(entity)}
                 />
               ))}
@@ -348,6 +364,118 @@ function EmptyLibrary({
  * analysis has read the file, and a freshly scanned library has none at all.
  * So there is no error state here: the gradient placeholder *is* the answer.
  */
+/**
+ * An opened album's cover, and the button that goes and finds the right one.
+ *
+ * A file's embedded artwork can simply be wrong — the owner's copy of one album
+ * carries an unrelated picture — and no amount of reading the file better fixes
+ * that. The only thing that knows the picture is wrong is the person looking at
+ * it, so this is the one place where they can say so and have the app go and
+ * ask a service.
+ *
+ * Searching sends the artist and album to Deezer, which the label says plainly.
+ * That is deliberately not behind the automatic-lookup setting: pressing this
+ * *is* the asking that setting exists to require, and answering "turn on a
+ * setting first" to "find the real cover" would be a worse app.
+ */
+function AlbumArtwork({
+  album,
+  artist,
+  lead,
+}: {
+  album: string;
+  artist: string;
+  lead: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [chosen, setChosen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+    setError(null);
+    core
+      .albumCover(album, lead)
+      .then((art) => {
+        if (cancelled) return;
+        setSrc(art.src);
+        setChosen(art.chosen);
+      })
+      .catch(() => {
+        if (!cancelled) setSrc(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [album, lead]);
+
+  async function find() {
+    setBusy(true);
+    setError(null);
+    try {
+      const art = await core.findAlbumArt(album, artist, lead);
+      setSrc(art.src);
+      setChosen(art.chosen);
+    } catch (e: unknown) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revert() {
+    setBusy(true);
+    setError(null);
+    try {
+      const art = await core.clearAlbumArt(album, lead);
+      setSrc(art.src);
+      setChosen(art.chosen);
+    } catch (e: unknown) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="albumart">
+      <div className="albumart__art">
+        {src ? (
+          <img className="albumart__img" src={src} alt={`Cover of ${album}`} />
+        ) : (
+          <div className="card__art-sheen" aria-hidden="true" />
+        )}
+      </div>
+      <div className="albumart__side">
+        <ErrorNotice error={error} onDismiss={() => setError(null)} />
+        <button
+          className="albumart__find"
+          onClick={() => void find()}
+          disabled={busy}
+        >
+          {busy ? "Searching…" : "Find artwork"}
+        </button>
+        <p className="albumart__note">
+          {chosen
+            ? "Using artwork found on Deezer."
+            : "Using the artwork inside the files. Searching sends the artist and album name to Deezer."}
+        </p>
+        {chosen && (
+          <button
+            className="albumart__revert"
+            onClick={() => void revert()}
+            disabled={busy}
+          >
+            Use the file’s own artwork
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Cover({
   href,
   label,

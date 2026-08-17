@@ -199,6 +199,10 @@ export interface Settings {
   headphoneCalibrationEnabled: boolean;
   /** Manual corrections, keyed by href. See the note on setBpmOverride. */
   bpmOverrides: Record<string, number>;
+  /** Album artwork chosen by hand, keyed by album identity (title + folder). */
+  albumArt: Record<string, string>;
+  /** Whether a looked-up cover outranks the file's own embedded artwork. */
+  preferLookedUpArt: boolean;
   /** Ceiling on the local audio cache, in bytes. */
   cacheMaxBytes: number;
   /**
@@ -367,6 +371,54 @@ export function lookUpTrack(href: string, force = false): Promise<LookedUp> {
  */
 export function lookedUpImage(url: string): Promise<string | null> {
   return invoke<string | null>("looked_up_image", { url });
+}
+
+/**
+ * Artwork for an album, resolved.
+ *
+ * Three sources in order: a cover chosen by hand, then the file's own embedded
+ * picture, then a looked-up one for a file that carries none.
+ * `preferLookedUpArt` swaps the last two.
+ *
+ * `lead` is any track on the album — an album's identity is its title plus the
+ * folder its tracks live in, so any of them resolves the same cover.
+ */
+export interface AlbumArt {
+  /** The picture, as a data URI. `null` when there is none to show. */
+  src: string | null;
+  /** Whether this is a cover chosen by hand rather than the file's own.
+   *  Answered by the backend, because the album key's format is its business. */
+  chosen: boolean;
+}
+
+export function albumCover(album: string, lead: string): Promise<AlbumArt> {
+  return invoke<AlbumArt>("album_cover", { album, lead });
+}
+
+/**
+ * Search the services for an album's cover and use what comes back.
+ *
+ * Sends the artist and album to Deezer. Not gated on `metadataLookupEnabled`:
+ * that setting governs whether the app may go looking on its own, and pressing
+ * this is the asking it exists to require. Rejects when nothing matched, which
+ * is a real outcome and worth showing.
+ */
+export function findAlbumArt(
+  album: string,
+  artist: string,
+  lead: string,
+): Promise<AlbumArt> {
+  return invoke<AlbumArt>("find_album_art", { album, artist, lead });
+}
+
+/** Forget a hand-chosen cover and go back to what the file carries. */
+export function clearAlbumArt(album: string, lead: string): Promise<AlbumArt> {
+  return invoke<AlbumArt>("clear_album_art", { album, lead });
+}
+
+/** Whether looked-up artwork outranks the file's own, library-wide. */
+export function setPreferLookedUpArt(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_prefer_looked_up_art", { enabled });
 }
 
 /**

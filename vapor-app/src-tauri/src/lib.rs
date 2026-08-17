@@ -650,17 +650,37 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
         if !known || name.is_empty() {
             continue;
         }
-        if !members.contains_key(&name) {
-            order.push(name.clone());
+        // Grouped by identity, displayed by name — and for an album those are
+        // not the same thing. Keying on the title alone merges two different
+        // records that share one, which every library eventually has: two
+        // *Greatest Hits* became one tile, with one cover and one artwork
+        // override between them. `album_key` adds the folder, which also keeps
+        // two albums that happen to share a directory apart, and still holds a
+        // various-artists compilation together.
+        let key = if by_artist {
+            name.clone()
+        } else {
+            vapor_library::settings::album_key(&name, &row.href)
+        };
+        if !members.contains_key(&key) {
+            order.push(key.clone());
         }
-        members.entry(name).or_default().push(row);
+        members.entry(key).or_default().push(row);
     }
 
     Ok(order
         .into_iter()
-        .filter_map(|name| {
-            let tracks = members.get(&name)?;
+        .filter_map(|key| {
+            let tracks = members.get(&key)?;
             let lead = tracks.first()?.href.clone();
+            // The display name comes off a member rather than out of the key:
+            // the key carries a folder the person never typed and should not
+            // read.
+            let name = if by_artist {
+                key.clone()
+            } else {
+                tracks.first()?.album.clone()
+            };
 
             let subtitle = if by_artist {
                 // How many albums, which is what distinguishes one artist tile
@@ -992,6 +1012,136 @@ fn looked_up_image(url: String, state: State<'_, Shared>) -> Result<Option<Strin
         app.store.dir(),
         &url,
     )))
+}
+
+/// Artwork for an album, as a `data:` URI.
+///
+/// Three sources, in an order that respects both the file and the person:
+///
+/// 1. **A choice made by hand.** It outranks everything, because it exists
+///    precisely for the case where the other two are wrong.
+/// 2. **The file's own embedded artwork** — right most of the time, free, and
+///    available with no network.
+/// 3. **A looked-up cover**, which is the fallback for a file that carries no
+///    picture at all.
+///
+/// `prefer_looked_up_art` swaps 2 and 3 for a library whose tags are known to
+/// be poor. It is off by default and should stay that way: album search is
+/// fuzzy, and a library-wide preference lets one wrong match replace good art
+/// on a record nobody was looking at.
+fn resolve_album_cover(app: &AppState, album: &str, lead: &str) -> Option<String> {
+    let cached = |url: &str| metadata::image_data_uri(&metadata::image_path(app.store.dir(), url));
+    let embedded = || app.tags.get(lead).and_then(|t| t.cover.clone());
+    let looked = || {
+        app.looked
+            .get(lead)
+            .map(|l| l.album_art.clone())
+            .filter(|u| !u.trim().is_empty())
+            .and_then(|u| cached(&u))
+    };
+
+    if let Some(chosen) = app.settings.album_art_for(album, lead) {
+        // A chosen cover whose bytes have been evicted falls through rather
+        // than showing nothing: the choice is still recorded and will resolve
+        // again once the picture is re-fetched.
+        if let Some(data) = cached(chosen) {
+            return Some(data);
+        }
+    }
+
+    if app.settings.prefer_looked_up_art {
+        looked().or_else(embedded)
+    } else {
+        embedded().or_else(looked)
+    }
+}
+
+/// An album's cover, and where it came from.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumArt {
+    /// The picture, as a `data:` URI. `None` when there is none to show.
+    src: Option<String>,
+    /// Whether this is a cover someone chose by hand rather than the file's own.
+    ///
+    /// Answered here rather than by the screen comparing keys. The album key's
+    /// format is this module's business, and a copy of it in TypeScript would
+    /// be a second definition free to drift from the first.
+    chosen: bool,
+}
+
+fn album_art(app: &AppState, album: &str, lead: &str) -> AlbumArt {
+    AlbumArt {
+        src: resolve_album_cover(app, album, lead),
+        chosen: app.settings.album_art_for(album, lead).is_some(),
+    }
+}
+
+/// Artwork for one album, resolved. See [`resolve_album_cover`].
+#[tauri::command]
+fn album_cover(album: String, lead: String, state: State<'_, Shared>) -> Result<AlbumArt> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(album_art(&app, &album, &lead))
+}
+
+/// Search the services for an album's artwork and use what comes back.
+///
+/// **Deliberately not gated on `metadata_lookup_enabled`.** That setting
+/// governs whether the app may go looking *on its own*; this is someone
+/// pressing a button labelled to say what it does, which is the asking that the
+/// setting exists to require. Gating it would mean answering "search for the
+/// real cover" with "turn on a setting first", for a request that is already
+/// the consent.
+///
+/// The choice is recorded so it survives a restart and so the next track on the
+/// album resolves to it too.
+#[tauri::command]
+async fn find_album_art(
+    album: String,
+    artist: String,
+    lead: String,
+    state: State<'_, Shared>,
+) -> Result<AlbumArt> {
+    let dir = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        app.store.dir().to_path_buf()
+    };
+
+    // Outside the lock: this is a network call, and holding the state across it
+    // would freeze playback control and every other command behind it.
+    let lookup = metadata::Lookup::new().map_err(Error)?;
+    let (url, _genre) = lookup.album(&artist, &album);
+    if url.is_empty() {
+        return Err(Error(format!(
+            "Nothing came back for “{album}”. The album or artist may be \
+             spelled differently on the service than in your tags."
+        )));
+    }
+    lookup.download_image(&url, &dir);
+
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.settings.set_album_art(&album, &lead, &url);
+    app.save_settings()?;
+    Ok(album_art(&app, &album, &lead))
+}
+
+/// Forget a hand-chosen cover and go back to what the file carries.
+#[tauri::command]
+fn clear_album_art(album: String, lead: String, state: State<'_, Shared>) -> Result<AlbumArt> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if app.settings.set_album_art(&album, &lead, "") {
+        app.save_settings()?;
+    }
+    Ok(album_art(&app, &album, &lead))
+}
+
+/// Whether looked-up artwork outranks the file's own.
+#[tauri::command]
+fn set_prefer_looked_up_art(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.settings.prefer_looked_up_art = enabled;
+    app.save_settings()?;
+    Ok(app.settings.clone())
 }
 
 /// A looked-up portrait for an artist, as a `data:` URI (TD-53).
@@ -4804,6 +4954,10 @@ pub fn run() {
             track_lookup,
             look_up_track,
             looked_up_image,
+            album_cover,
+            find_album_art,
+            clear_album_art,
+            set_prefer_looked_up_art,
             artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
