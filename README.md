@@ -53,7 +53,7 @@ Traditional players shuffle by picking `Random Song A` and crossfading it into `
 **Key Differentiator:** All analysis and mixing logic runs entirely **on-device**. No cloud AI, no subscriptions, no privacy compromise.
 
 > [!NOTE]
-> A critical analysis of the current transition limitations and a technical roadmap for professional-grade mixing can be found in the [AI DJ Refactor Plan](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/FINDINGS.md).
+> A critical analysis of the current transition limitations and a technical roadmap for professional-grade mixing can be found in the [AI DJ Refactor Plan](docs/FINDINGS.md).
 
 ---
 
@@ -109,7 +109,7 @@ Vapor's UI is built for focused, distraction-free listening.
 - **Apple-inspired glassmorphism** — frosted-glass panels, a minimal 3-colour palette, and seamless adaptation to any wallpaper or desktop. Two built-in themes: **Vapor Dark** (deep charcoal glass, `#0A84FF` accent) and **Vapor Light** (white frosted glass, `#007AFF` accent).
 - **Low-Glare Ambient Mode** — a distraction-free, dimmed UI designed for late-night or ambient listening
 - Dashboard widget mode — a minimal, unobtrusive now-playing overlay for multitaskers
-- Fully themeable with community-shareable colour schemes (see the [Theme System Developer Guide](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/theme_system.md) and [Design Language](file:///Users/dylangrowcoot/Documents/Personal%20Apps/vapor-music/docs/design_language.md) for details on creating custom visual presets)
+- Fully themeable with community-shareable colour schemes (see the [Theme System Developer Guide](docs/theme_system.md) and [Design Language](docs/design_language.md) for details on creating custom visual presets)
 
 ---
 
