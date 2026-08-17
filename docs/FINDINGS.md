@@ -227,9 +227,28 @@ seconds announces this machine to whatever network it has joined.
 **SHA-256, not MD5**, for both fingerprints and transfer verification. The
 requirement is integrity and MD5 has been collision-broken since 2004.
 
-**The shared-document merge is additive**, so it cannot lose work and converges
-in one pass whichever order two devices sync in. The cost is that a deletion
-does not travel.
+**The shared-document merge is additive for everything that exists**, so it
+cannot lose work and converges in one pass whichever order two devices sync in.
+
+**A deletion is the exception, because there is nothing to add for a record
+that is gone.** It travels as a tombstone — an id and the time it happened —
+kept indefinitely, since a device that has been off for a year still has the
+playlist and the document is the only place it will ever hear otherwise.
+
+A tombstone applies unconditionally, so a deletion beats a concurrent edit it
+never saw. That is a real loss and it is the chosen behaviour: the alternative
+needs a modification time on every playlist, the clock lives in the shell rather
+than in `vapor-library`, and `PlaylistStore::get_mut` hands out unguarded
+mutable access — so a modification time some mutations forget to set is a matter
+of when, and it would make the merge confidently wrong rather than predictably
+blunt. Weighed against a deletion that previously failed to travel *every* time,
+blunt won. Closing `get_mut` is the prerequisite for revisiting it.
+
+**Bumping `SHARED_VERSION` was the load-bearing part of that change**, not
+bookkeeping. The tombstone field is `#[serde(default)]`, so a build that
+predates it would read the document, drop the tombstones it did not understand,
+and write back one with every deletion undone. The version check turning that
+into a refusal is the whole reason the check exists.
 
 **Windows SMTC was not ported.** 191 lines of C++/WinRT inside a GDExtension
 that is being archived. One cross-platform crate replaced all three platform

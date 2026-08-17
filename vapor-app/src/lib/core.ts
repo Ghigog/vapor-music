@@ -481,6 +481,11 @@ export interface SharedSyncResult {
   playlistsExtended: number;
   foldersAdded: number;
   temposAdded: number;
+  /** Removed here because another device removed them (TD-57). A deletion is
+   *  the one edit an additive merge cannot carry, so it travels as a record of
+   *  its own and is applied on arrival. */
+  playlistsDeleted: number;
+  foldersDeleted: number;
   /** True when there was none there and this device wrote the first. */
   created: boolean;
 }

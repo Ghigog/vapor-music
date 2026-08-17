@@ -750,6 +750,8 @@ export class FakeBackend {
           playlistsExtended: 0,
           foldersAdded: 0,
           temposAdded: 0,
+          playlistsDeleted: 0,
+          foldersDeleted: 0,
           created,
         };
       }

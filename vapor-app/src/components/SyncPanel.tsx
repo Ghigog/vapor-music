@@ -98,6 +98,14 @@ export function SyncPanel() {
           `${r.foldersAdded} folder${r.foldersAdded === 1 ? "" : "s"} arrived`,
         r.temposAdded &&
           `${r.temposAdded} tempo correction${r.temposAdded === 1 ? "" : "s"} arrived`,
+        // Reported in the same breath as the arrivals, and deliberately not
+        // softened. A playlist disappearing without being told why is the
+        // thing that makes a sync feel unsafe, and it was deleted on purpose
+        // somewhere.
+        r.playlistsDeleted &&
+          `${r.playlistsDeleted} playlist${r.playlistsDeleted === 1 ? " was" : "s were"} deleted elsewhere and removed here`,
+        r.foldersDeleted &&
+          `${r.foldersDeleted} folder${r.foldersDeleted === 1 ? " was" : "s were"} deleted elsewhere and removed here`,
       ].filter(Boolean);
 
       // Four outcomes, and three of them look identical if only the changes

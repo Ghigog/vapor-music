@@ -128,6 +128,11 @@ struct AppState {
     pin: Option<String>,
     /// Who is on the network, kept by the beacon thread.
     peers: peers::Peers,
+    /// What this device has deleted, so the deletion travels (TD-57).
+    ///
+    /// Kept beside the stores rather than inside them: a store holds what
+    /// exists, and this is a record of what does not.
+    tombstones: vapor_library::sync::Tombstones,
     /// The beacon and server threads, while sync is on (TD-58).
     ///
     /// Held so the switch can stop them. `None` means either sync is off or the
@@ -202,6 +207,7 @@ impl AppState {
         let folders = store.load("folders").unwrap_or(None).unwrap_or_default();
         let looked = store.load("metadata").unwrap_or(None).unwrap_or_default();
         let trust = store.load("trust").unwrap_or(None).unwrap_or_default();
+        let tombstones = store.load("tombstones").unwrap_or(None).unwrap_or_default();
         let digests = store.load("digests").unwrap_or(None).unwrap_or_default();
         // Generated on first launch and kept. A device that renamed itself
         // every start would appear as a new peer each time, and every pairing
@@ -230,6 +236,7 @@ impl AppState {
             pairing: None,
             pin: None,
             peers: Arc::new(Mutex::new(vapor_library::sync::PeerRegistry::new())),
+            tombstones,
             sync_session: None,
             digests,
             sync: SyncProgress::default(),
@@ -372,6 +379,11 @@ impl AppState {
 
     fn save_trust(&self) -> Result<()> {
         self.store.save("trust", &self.trust)?;
+        Ok(())
+    }
+
+    fn save_tombstones(&self) -> Result<()> {
+        self.store.save("tombstones", &self.tombstones)?;
         Ok(())
     }
 
@@ -1553,6 +1565,9 @@ struct SharedSyncResult {
     playlists_extended: usize,
     folders_added: usize,
     tempos_added: usize,
+    /// Removed here because another device removed them (TD-57).
+    playlists_deleted: usize,
+    folders_deleted: usize,
     /// True when there was no document there and this device wrote the first.
     created: bool,
 }
@@ -1566,6 +1581,10 @@ fn shared_document(app: &AppState) -> vapor_library::sync::Shared {
         playlists: app.playlists.all().to_vec(),
         folders: app.folders.all().to_vec(),
         bpm_overrides: app.settings.bpm_overrides.clone(),
+        // Published every time, not only when something was just deleted: a
+        // device that has been off for a year still has the playlist, and the
+        // document is the only place it will ever hear otherwise.
+        deleted: app.tombstones.clone(),
     }
 }
 
@@ -1627,23 +1646,31 @@ fn sync_shared_document(
             playlists,
             folders,
             settings,
+            tombstones,
             ..
         } = &mut *app;
         let report = vapor_library::sync::merge_shared(
             playlists,
             folders,
             &mut settings.bpm_overrides,
+            tombstones,
             &incoming,
         );
         result.playlists_added = report.playlists_added;
         result.playlists_extended = report.playlists_extended;
         result.folders_added = report.folders_added;
         result.tempos_added = report.tempos_added;
+        result.playlists_deleted = report.playlists_deleted;
+        result.folders_deleted = report.folders_deleted;
 
         if !report.is_empty() {
             app.save_playlists()?;
             app.save_folders()?;
             app.save_settings()?;
+            // Tombstones learned from the document are kept, so this device
+            // passes the deletion on to the next one it syncs with rather than
+            // being the place a deletion stops travelling.
+            app.save_tombstones()?;
             // A merged playlist changes what the rows mean, and a corrected
             // tempo changes what the table shows.
             let overrides = app.settings.bpm_overrides.clone();
@@ -1797,6 +1824,7 @@ fn delete_folder(id: String, state: State<'_, Shared>) -> Result<bool> {
     }
     app.save_folders()?;
     app.save_playlists()?;
+    app.save_tombstones()?;
     Ok(true)
 }
 
@@ -1808,6 +1836,9 @@ fn remove_folder(app: &mut AppState, id: &str) -> bool {
         return false;
     }
     let orphaned = app.folders.delete(id);
+    // Only this folder: `delete` orphans what was nested inside rather than
+    // cascading, so the children still exist and must not be tombstoned.
+    app.tombstones.record_folder(id, peers::now());
 
     let homeless: Vec<String> = app
         .playlists
@@ -1871,7 +1902,12 @@ fn delete_playlist(id: String, state: State<'_, Shared>) -> Result<bool> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     let deleted = app.playlists.delete(&id).is_some();
     if deleted {
+        // Written down before it is forgotten (TD-57). Without this the next
+        // sync takes the playlist back from a device that had not heard, and
+        // the deletion has to be done again on every device in turn.
+        app.tombstones.record_playlist(&id, peers::now());
         app.save_playlists()?;
+        app.save_tombstones()?;
     }
     Ok(deleted)
 }
@@ -5134,6 +5170,52 @@ mod tests {
         assert!(remove_folder(&mut app, "parent"));
 
         assert_eq!(app.playlists.get("p1").expect("survived").folder_id, "");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// TD-57: a deletion is only carried if it was written down, and only
+    /// travels if it survives a restart. Both halves in one test, because a
+    /// tombstone that is recorded and then lost on quit is the same bug.
+    #[test]
+    fn a_deleted_folder_leaves_a_record_that_survives_a_restart() {
+        let (mut app, dir) = app();
+        app.folders.create("f1", "Sets", "");
+        app.folders.create("child", "Warmups", "f1");
+
+        assert!(remove_folder(&mut app, "f1"));
+        app.save_folders().expect("save folders");
+        app.save_tombstones().expect("save tombstones");
+
+        assert!(app.tombstones.folder_deleted("f1"));
+        // The nested folder was orphaned, not deleted — tombstoning it would
+        // delete a folder that still exists on every other device.
+        assert!(!app.tombstones.folder_deleted("child"));
+        drop(app);
+
+        let reloaded = AppState::load(Store::new(dir.clone()));
+        assert!(
+            reloaded.tombstones.folder_deleted("f1"),
+            "the record of the deletion did not survive a restart"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And the record has to reach the document, or no other device ever hears.
+    #[test]
+    fn the_shared_document_carries_what_was_deleted() {
+        let (mut app, dir) = app();
+        app.tombstones.record_playlist("p1", 100);
+        app.tombstones.record_folder("f1", 100);
+
+        let document = shared_document(&app);
+        assert!(document.deleted.playlist_deleted("p1"));
+        assert!(document.deleted.folder_deleted("f1"));
+
+        // And through JSON, since that is how it actually travels.
+        let text = serde_json::to_string(&document).expect("write");
+        let back: vapor_library::sync::Shared = serde_json::from_str(&text).expect("read");
+        assert_eq!(back.deleted, document.deleted);
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

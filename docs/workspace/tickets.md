@@ -2034,11 +2034,19 @@ Per-connection threads stay detached: they are bounded by `IO_TIMEOUT` and waiti
 **Where:** SYNC-001
 
 
-### TD-57 : (open)
+### TD-57 : (done 2026-08-16)
 
-**A deletion does not travel through the shared document.** `merge_shared` is additive on purpose: nothing is deleted and nothing overwritten, so it cannot lose work and converges in one pass whichever order two devices sync in. The cost is that removing a playlist on the laptop lets the phone put it back. The fix is a tombstone with a timestamp, which is a schema change to `Playlist` and a modification time on every mutation. Recorded rather than discovered later.
+**A deletion does not travel through the shared document.** `merge_shared` is additive on purpose: nothing is deleted and nothing overwritten, so it cannot lose work and converges in one pass whichever order two devices sync in. The cost is that removing a playlist on the laptop lets the phone put it back.
 
-**Waiting for:** nothing — this is code work.
+**Closed by:** `sync::Tombstones` — playlist and folder ids with the time they were deleted, carried in the shared document, persisted locally, and republished every sync rather than only when something was just deleted. A device that has been off for a year still has the playlist and the document is the only place it will ever hear otherwise, so tombstones are kept indefinitely; the cost is an id and a `u64` each.
+
+`SHARED_VERSION` went to 2, and the bump is the point rather than a formality. The field is `#[serde(default)]`, so a version-1 build would read the document, silently drop the tombstones, and write back one in which every deletion had been undone. Refusing to read it is the only safe thing an older build can do.
+
+**The part of this ticket that was not built, and why.** The original note said the fix needed "a modification time on every mutation" so an edit newer than a tombstone could keep a playlist alive. It is not there. A tombstone applies unconditionally, so a deletion beats a concurrent edit it never saw, and those additions are lost — the tracks are untouched in the library, but the playlist is gone. That is asserted in `a_deletion_beats_a_concurrent_edit_and_that_is_deliberate` rather than left as a surprise.
+
+The modification time was weighed and refused: the clock lives in the shell rather than in `vapor-library`, threading it through would touch twenty call sites plus every test, and `PlaylistStore::get_mut` hands out unguarded mutable access, so a mutation that forgets to stamp is a matter of when. A modification time some mutations miss makes the merge *confidently* wrong instead of predictably blunt. Against a deletion that presently fails to travel every single time, blunt is the better of the two — and if the concurrent case ever bites, the answer is to close `get_mut` first.
+
+Deleting a folder rehomes its playlists to the top level on arrival, matching what the shell already does locally. A playlist left pointing at a folder id that no longer resolves vanishes from every view that files by folder, which is indistinguishable from losing it.
 
 **Where:** SYNC-006
 

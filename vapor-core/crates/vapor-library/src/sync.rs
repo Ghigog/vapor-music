@@ -541,10 +541,90 @@ pub struct Shared {
     /// one piece of analysis a human typed rather than a machine measured.
     #[serde(default)]
     pub bpm_overrides: std::collections::HashMap<String, f32>,
+    /// What has been deleted, so a deletion travels (TD-57).
+    #[serde(default)]
+    pub deleted: Tombstones,
 }
 
 /// The current shape of [`Shared`].
-pub const SHARED_VERSION: u32 = 1;
+///
+/// 2 added [`Tombstones`]. The bump is the point rather than a formality: the
+/// field is `#[serde(default)]`, so a version-1 build would read a document,
+/// silently drop the tombstones it did not know about, and write back a
+/// document in which every deletion had been undone. Refusing to read it is the
+/// only safe thing an older build can do, and that refusal is what the version
+/// check is for.
+pub const SHARED_VERSION: u32 = 2;
+
+/// Records of things that were deleted, and when.
+///
+/// A deletion is the one edit that additive merge cannot carry: everything else
+/// is something to add, and there is nothing to add for a record that is gone.
+/// So it is written down.
+///
+/// **Kept forever.** A device that has been off for a year still has the
+/// playlist and still has to be told, and there is no moment at which it is
+/// safe to say every device has heard. The cost is an id and a timestamp per
+/// deletion, which is nothing against the playlists themselves.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tombstones {
+    /// Playlist id → when it was deleted.
+    #[serde(default)]
+    pub playlists: std::collections::HashMap<String, Millis>,
+    /// Folder id → when it was deleted.
+    #[serde(default)]
+    pub folders: std::collections::HashMap<String, Millis>,
+}
+
+impl Tombstones {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.playlists.is_empty() && self.folders.is_empty()
+    }
+
+    pub fn record_playlist(&mut self, id: impl Into<String>, at: Millis) {
+        keep_earliest(&mut self.playlists, id.into(), at);
+    }
+
+    pub fn record_folder(&mut self, id: impl Into<String>, at: Millis) {
+        keep_earliest(&mut self.folders, id.into(), at);
+    }
+
+    pub fn playlist_deleted(&self, id: &str) -> bool {
+        self.playlists.contains_key(id)
+    }
+
+    pub fn folder_deleted(&self, id: &str) -> bool {
+        self.folders.contains_key(id)
+    }
+
+    /// Take in everything `other` knows about. Returns how many records are new
+    /// here, which is how many things this device is about to delete.
+    pub fn absorb(&mut self, other: &Tombstones) -> (usize, usize) {
+        let before = (self.playlists.len(), self.folders.len());
+        for (id, at) in &other.playlists {
+            keep_earliest(&mut self.playlists, id.clone(), *at);
+        }
+        for (id, at) in &other.folders {
+            keep_earliest(&mut self.folders, id.clone(), *at);
+        }
+        (
+            self.playlists.len() - before.0,
+            self.folders.len() - before.1,
+        )
+    }
+}
+
+/// The earliest time wins, so two devices deleting the same thing agree on when
+/// it happened whichever order they sync in.
+fn keep_earliest(map: &mut std::collections::HashMap<String, Millis>, id: String, at: Millis) {
+    map.entry(id)
+        .and_modify(|t| *t = (*t).min(at))
+        .or_insert(at);
+}
 
 /// What a merge changed, for the screen to report.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -553,6 +633,9 @@ pub struct MergeReport {
     pub playlists_extended: usize,
     pub folders_added: usize,
     pub tempos_added: usize,
+    /// Deleted here because another device deleted them (TD-57).
+    pub playlists_deleted: usize,
+    pub folders_deleted: usize,
 }
 
 impl MergeReport {
@@ -563,10 +646,10 @@ impl MergeReport {
 
 /// Fold a document from the server into what this device holds.
 ///
-/// **Additive, deliberately.** Nothing is deleted and nothing is overwritten:
-/// a playlist absent here is taken, a playlist present here gains any tracks
-/// it was missing, and a tempo correction is accepted only where this device
-/// has none of its own.
+/// **Additive for everything that exists.** Nothing is overwritten: a playlist
+/// absent here is taken, a playlist present here gains any tracks it was
+/// missing, and a tempo correction is accepted only where this device has none
+/// of its own.
 ///
 /// The alternative — last writer wins per record — needs a modification time
 /// on every playlist, and without one it degrades into "whichever device
@@ -574,19 +657,77 @@ impl MergeReport {
 /// cannot lose anything, converges in one pass, and is the same answer
 /// whichever order two devices sync in.
 ///
-/// The cost is real and worth stating: **a deletion does not travel.** Remove
-/// a playlist on the laptop and it comes back the next time the phone writes
-/// the document. That is recorded rather than hidden, and the fix is a
-/// tombstone with a timestamp, which is a schema change.
+/// ## Deletions, which are the exception (TD-57)
+///
+/// A deletion is the one edit an additive merge cannot carry, because there is
+/// nothing to add for a record that is gone. Without [`Tombstones`] a playlist
+/// removed on the laptop came back the next time the phone wrote the document —
+/// not occasionally, but every time.
+///
+/// So a tombstone applies, and it applies **unconditionally**: an id that has
+/// been deleted anywhere is deleted here, whatever the other device's copy
+/// still says. That is a real trade and it is worth naming rather than
+/// implying. If one device deletes a playlist while another adds tracks to it
+/// without having heard, the deletion wins and those additions are lost — the
+/// tracks themselves are untouched in the library, but the playlist is gone.
+///
+/// Refining that needs a modification time on every playlist, so an edit newer
+/// than the tombstone could keep the playlist alive. It is not here because the
+/// clock lives in the shell rather than in this crate, `get_mut` hands out
+/// unguarded mutable access, and a modification time that some mutations forget
+/// to set is worse than none — it would make the merge confidently wrong
+/// instead of predictably blunt. Weighed against a deletion that presently
+/// fails to travel *every single time*, blunt is the better of the two.
+///
+/// Both directions converge and neither depends on sync order: the tombstone
+/// sets are unioned first, and both the incoming and the local list are then
+/// filtered against the union.
 pub fn merge_shared(
     playlists: &mut crate::playlist::PlaylistStore,
     folders: &mut crate::group::FolderStore,
     overrides: &mut std::collections::HashMap<String, f32>,
+    deleted: &mut Tombstones,
     remote: &Shared,
 ) -> MergeReport {
     let mut report = MergeReport::default();
 
+    // The union first, so what follows can be a single filter in both
+    // directions rather than two rules that have to agree with each other.
+    deleted.absorb(&remote.deleted);
+
+    // Applied to what is already here before anything is taken in — a playlist
+    // this device deleted is not re-created below by the copy that still has
+    // it, and a playlist another device deleted goes now.
+    for id in deleted.playlists.keys() {
+        if playlists.delete(id).is_some() {
+            report.playlists_deleted += 1;
+        }
+    }
+    for id in deleted.folders.keys() {
+        if folders.get(id).is_some() {
+            folders.delete(id);
+            report.folders_deleted += 1;
+            // A folder is organisation, not ownership, so its playlists are
+            // rehomed rather than deleted with it — the same rule the shell
+            // applies when a folder is deleted here. Without this they keep an
+            // id that no longer resolves and disappear from every view that
+            // files by folder, which looks exactly like losing them.
+            let homeless: Vec<String> = playlists
+                .all()
+                .iter()
+                .filter(|p| p.folder_id == *id)
+                .map(|p| p.id.clone())
+                .collect();
+            for playlist in homeless {
+                playlists.set_folder(&playlist, "");
+            }
+        }
+    }
+
     for folder in &remote.folders {
+        if deleted.folder_deleted(&folder.id) {
+            continue;
+        }
         if folders.get(&folder.id).is_none() {
             folders.create(
                 folder.id.clone(),
@@ -598,6 +739,9 @@ pub fn merge_shared(
     }
 
     for incoming in &remote.playlists {
+        if deleted.playlist_deleted(&incoming.id) {
+            continue;
+        }
         match playlists.get(&incoming.id) {
             None => {
                 playlists.create_in_folder(
@@ -1007,6 +1151,7 @@ mod tests {
             playlists: store.all().to_vec(),
             folders: Vec::new(),
             bpm_overrides: Default::default(),
+            deleted: Tombstones::new(),
         }
     }
 
@@ -1015,9 +1160,16 @@ mod tests {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
         let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
         let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a", "/b.m4a"])]);
 
-        let report = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
 
         assert_eq!(report.playlists_added, 1);
         let landed = playlists.get("p1").expect("arrived");
@@ -1034,9 +1186,16 @@ mod tests {
         playlists.add_tracks("p1", &["/here.m4a".to_string()]);
         let mut folders = FolderStore::new();
         let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
 
         let remote = shared_with(vec![("p1", "Late Night", vec!["/there.m4a"])]);
-        let report = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
 
         assert_eq!(report.playlists_extended, 1);
         let merged = playlists.get("p1").expect("still here");
@@ -1051,10 +1210,23 @@ mod tests {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
         let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
         let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
 
-        merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
-        let again = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+        let again = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
 
         assert!(again.is_empty(), "{again:?}");
         assert_eq!(playlists.all().len(), 1);
@@ -1068,13 +1240,20 @@ mod tests {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
         let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
         overrides.insert("/a.m4a".to_string(), 128.0);
 
         let mut remote = shared_with(vec![]);
         remote.bpm_overrides.insert("/a.m4a".into(), 64.0);
         remote.bpm_overrides.insert("/b.m4a".into(), 140.0);
 
-        let report = merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
 
         assert_eq!(overrides["/a.m4a"], 128.0, "mine stands");
         assert_eq!(overrides["/b.m4a"], 140.0, "theirs fills a gap");
@@ -1089,13 +1268,20 @@ mod tests {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
         let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
 
         let mut remote = shared_with(vec![]);
         remote.bpm_overrides.insert("/a.m4a".into(), f32::INFINITY);
         remote.bpm_overrides.insert("/b.m4a".into(), f32::NAN);
         remote.bpm_overrides.insert("/c.m4a".into(), -5.0);
 
-        merge_shared(&mut playlists, &mut folders, &mut overrides, &remote);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
 
         assert!(overrides.is_empty(), "{overrides:?}");
     }
@@ -1105,6 +1291,7 @@ mod tests {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
         let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
 
         let mut remote = shared_with(vec![]);
         remote.folders.push(crate::group::Folder {
@@ -1114,14 +1301,201 @@ mod tests {
         });
 
         assert_eq!(
-            merge_shared(&mut playlists, &mut folders, &mut overrides, &remote).folders_added,
+            merge_shared(
+                &mut playlists,
+                &mut folders,
+                &mut overrides,
+                &mut deleted,
+                &remote
+            )
+            .folders_added,
             1
         );
         assert_eq!(
-            merge_shared(&mut playlists, &mut folders, &mut overrides, &remote).folders_added,
+            merge_shared(
+                &mut playlists,
+                &mut folders,
+                &mut overrides,
+                &mut deleted,
+                &remote
+            )
+            .folders_added,
             0
         );
         assert_eq!(folders.all().len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // TD-57 — deletions that travel
+    // -----------------------------------------------------------------------
+
+    /// The bug, stated as a test: this device deleted a playlist, the other
+    /// device has not heard and still has it, and the merge must not bring it
+    /// back. Before tombstones it did — every time, not occasionally.
+    #[test]
+    fn a_playlist_deleted_here_is_not_restored_by_a_device_that_still_has_it() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        // Deleted locally, and written down.
+        deleted.record_playlist("p1", 100);
+
+        let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.playlists_added, 0);
+        assert!(
+            playlists.get("p1").is_none(),
+            "a deleted playlist came back from the other device"
+        );
+    }
+
+    /// And the other direction: the deletion happened elsewhere, so it has to
+    /// arrive and take effect here.
+    #[test]
+    fn a_playlist_deleted_elsewhere_is_deleted_here() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("p1", "Late Night");
+        playlists.create("p2", "Kept");
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.deleted.record_playlist("p1", 100);
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.playlists_deleted, 1);
+        assert!(playlists.get("p1").is_none());
+        assert!(playlists.get("p2").is_some(), "took the wrong one");
+        // Kept, so the next device to sync also hears about it. A tombstone
+        // that is applied and then forgotten resurrects the playlist on the
+        // third device.
+        assert!(deleted.playlist_deleted("p1"));
+    }
+
+    #[test]
+    fn a_folder_deleted_elsewhere_is_deleted_here() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        folders.create("f1", "Sets", String::new());
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.deleted.record_folder("f1", 100);
+        // The other device still lists it, since it has not heard.
+        remote.folders.push(crate::group::Folder {
+            id: "f1".into(),
+            name: "Sets".into(),
+            parent_id: String::new(),
+        });
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.folders_deleted, 1);
+        assert!(folders.get("f1").is_none(), "the folder came back");
+    }
+
+    /// Deletion is not a special case for convergence: merging twice must
+    /// change nothing the second time, and the second merge must not report a
+    /// deletion it already performed.
+    #[test]
+    fn a_deletion_converges_and_is_reported_once() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("p1", "Late Night");
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.deleted.record_playlist("p1", 100);
+
+        let first = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+        let second = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(first.playlists_deleted, 1);
+        assert!(
+            second.is_empty(),
+            "the second merge did something: {second:?}"
+        );
+    }
+
+    /// The trade named in `merge_shared`'s documentation, asserted rather than
+    /// only described: a deletion beats a concurrent edit it never saw. This is
+    /// a real loss, and a test is the honest place to record that it is the
+    /// chosen behaviour rather than an accident.
+    #[test]
+    fn a_deletion_beats_a_concurrent_edit_and_that_is_deliberate() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+        deleted.record_playlist("p1", 100);
+
+        // The other device added tracks at 200 — after the deletion, without
+        // having heard about it.
+        let mut remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a", "/b.m4a"])]);
+        remote.updated = 200;
+
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert!(playlists.get("p1").is_none());
+    }
+
+    /// Two devices deleting the same thing agree on when it happened, whichever
+    /// order they sync in.
+    #[test]
+    fn the_earliest_deletion_time_wins_either_way_round() {
+        let mut a = Tombstones::new();
+        a.record_playlist("p1", 500);
+        a.record_playlist("p1", 100);
+
+        let mut b = Tombstones::new();
+        b.record_playlist("p1", 100);
+        b.record_playlist("p1", 500);
+
+        assert_eq!(a, b);
+        assert_eq!(a.playlists.get("p1"), Some(&100));
     }
 
     #[test]
