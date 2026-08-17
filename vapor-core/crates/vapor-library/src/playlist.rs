@@ -63,7 +63,21 @@ impl PlaylistStore {
         self.playlists.iter().find(|p| p.id == id)
     }
 
-    pub fn get_mut(&mut self, id: &str) -> Option<&mut Playlist> {
+    /// Private, and it has to stay that way.
+    ///
+    /// Every change to a playlist goes through a method on this store, which is
+    /// what makes it possible to say what those changes are. The moment a
+    /// caller outside can hold a `&mut Playlist`, the store can no longer
+    /// promise anything about how a playlist came to be the shape it is — and
+    /// the specific thing that becomes impossible is a modification time, since
+    /// a mutation that bypasses the store cannot stamp one.
+    ///
+    /// That is not hypothetical. It is the reason sync tombstones apply
+    /// unconditionally rather than losing to a newer edit (TD-57): the better
+    /// rule needs a per-playlist modification time, and a modification time
+    /// that some mutations forget to set makes the merge confidently wrong
+    /// instead of predictably blunt. This being private is the prerequisite.
+    fn get_mut(&mut self, id: &str) -> Option<&mut Playlist> {
         self.playlists.iter_mut().find(|p| p.id == id)
     }
 

@@ -236,13 +236,28 @@ kept indefinitely, since a device that has been off for a year still has the
 playlist and the document is the only place it will ever hear otherwise.
 
 A tombstone applies unconditionally, so a deletion beats a concurrent edit it
-never saw. That is a real loss and it is the chosen behaviour: the alternative
-needs a modification time on every playlist, the clock lives in the shell rather
-than in `vapor-library`, and `PlaylistStore::get_mut` hands out unguarded
-mutable access — so a modification time some mutations forget to set is a matter
-of when, and it would make the merge confidently wrong rather than predictably
-blunt. Weighed against a deletion that previously failed to travel *every* time,
-blunt won. Closing `get_mut` is the prerequisite for revisiting it.
+never saw. That is a real loss and it is the chosen behaviour. Weighed against a
+deletion that previously failed to travel *every* time, blunt won.
+
+**`PlaylistStore::get_mut` is now private, which removes the first objection to
+refining it.** Every change to a playlist goes through a method on the store, so
+a modification time could be stamped in one place and the compiler would find
+any mutation that failed to supply it. Both stores were checked: no public
+field, and no method on either hands out a `&mut` to a record.
+
+**The second objection is clock skew, and it is the one that should decide it.**
+"An edit newer than the tombstone keeps the playlist" compares a timestamp taken
+on one device against a timestamp taken on another. Two machines whose clocks
+differ by minutes — which is ordinary, and which nothing in the sync path
+detects or corrects — make that comparison meaningless in whichever direction
+the skew runs, and the failure is silent. The current rule reads no clock to
+decide anything: a tombstone's timestamp is recorded and carried, never
+compared. That is why it cannot be fooled by a wrong one.
+
+So the remaining choice is not "blunt versus correct", it is "a deletion that is
+always obeyed" against "an edit that survives only if two clocks agree". A
+version vector or a Lamport clock would settle it without reading wall time, and
+that is the shape to reach for if this is ever revisited — not a timestamp.
 
 **Bumping `SHARED_VERSION` was the load-bearing part of that change**, not
 bookkeeping. The tombstone field is `#[serde(default)]`, so a build that
