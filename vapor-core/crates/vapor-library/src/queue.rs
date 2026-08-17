@@ -102,16 +102,65 @@ impl Queue {
 
     /// Queue a specific track to play next, overriding normal ordering.
     ///
-    /// Ignored when the track is not in the queue, since playing something
-    /// outside the current context would silently change what the user is
-    /// listening to.
+    /// Adds it to the queue when it is not already there. It used to be
+    /// *ignored* in that case, on the grounds that playing something outside
+    /// the current context would silently change what the person is listening
+    /// to — which is right for a queue someone built by hand and wrong for the
+    /// one thing that actually calls this. The DJ picks its candidates from the
+    /// whole library, so none of them is ever in the queue, so every choice was
+    /// refused with "that track is no longer in the queue" and the set never
+    /// moved.
+    ///
+    /// Inserted immediately after the current track rather than appended to the
+    /// end: "play this next" is a statement about position, and a queue that
+    /// answers it by putting the track twelve tracks away has not done what was
+    /// asked.
     pub fn set_next(&mut self, href: &str) -> bool {
-        if self.tracks.iter().any(|t| t == href) {
-            self.override_next = Some(href.to_string());
-            true
-        } else {
-            false
+        if href.trim().is_empty() {
+            return false;
         }
+        if !self.tracks.iter().any(|t| t == href) {
+            let at = self
+                .current_index()
+                .map(|i| (i + 1).min(self.tracks.len()))
+                .unwrap_or(self.tracks.len());
+            self.tracks.insert(at, href.to_string());
+        }
+        self.override_next = Some(href.to_string());
+        true
+    }
+
+    /// Whether a track genuinely follows the current one.
+    ///
+    /// Distinct from `peek_next().is_some()`, and the distinction is the whole
+    /// of a DJ set. Under repeat-all `peek_next` wraps to the beginning, so at
+    /// the end of a queue it answers with a track that has already played — a
+    /// perfectly good answer for "what plays next" and the wrong one for "does
+    /// this set have anywhere left to go". A DJ reading the first was told the
+    /// set was fine and stopped extending it after two tracks.
+    ///
+    /// An explicit override counts: something was deliberately put next.
+    pub fn has_more(&self) -> bool {
+        if self.override_next.is_some() {
+            return true;
+        }
+        match self.current {
+            Some(i) => i + 1 < self.tracks.len(),
+            None => !self.tracks.is_empty(),
+        }
+    }
+
+    /// Add a track to the end of the queue.
+    ///
+    /// What the DJ uses to keep a set going: when the queue runs out it appends
+    /// its choice rather than letting playback stop. Returns false for a track
+    /// already queued, so a set cannot loop on one pick.
+    pub fn append(&mut self, href: &str) -> bool {
+        if href.trim().is_empty() || self.tracks.iter().any(|t| t == href) {
+            return false;
+        }
+        self.tracks.push(href.to_string());
+        true
     }
 
     pub fn pending_next(&self) -> Option<&str> {
@@ -435,12 +484,113 @@ mod tests {
         assert!(q.pending_next().is_none(), "override is one-shot");
     }
 
-    /// Playing something outside the queue would silently change context.
+    /// A track that is not in the queue is *added* to it, next.
+    ///
+    /// This used to be refused, to stop a queue silently changing context. That
+    /// rule was written for a queue someone assembled by hand, and it broke the
+    /// only caller there is: the DJ picks from the whole library, so none of
+    /// its candidates is ever already queued and every choice was rejected with
+    /// "that track is no longer in the queue". The set could not move.
     #[test]
-    fn an_override_outside_the_queue_is_refused() {
+    fn a_track_outside_the_queue_is_added_next_rather_than_refused() {
         let mut q = queue();
-        assert!(!q.set_next("zzz"));
+        assert_eq!(q.current(), Some("a"));
+
+        assert!(q.set_next("zzz"));
+        assert_eq!(q.peek_next(None), Some("zzz"));
+        // Next, not last: "play this next" is a statement about position.
+        assert_eq!(q.tracks()[1], "zzz");
+        assert_eq!(q.next(None), Some("zzz"));
+    }
+
+    #[test]
+    fn an_empty_override_is_still_refused() {
+        let mut q = queue();
+        assert!(!q.set_next(""));
+        assert!(!q.set_next("   "));
         assert!(q.pending_next().is_none());
+    }
+
+    /// The distinction that makes a set a set.
+    #[test]
+    fn having_more_is_not_the_same_as_having_a_next_track() {
+        let mut q = queue();
+        assert!(q.has_more(), "mid-queue there is genuinely more");
+
+        // Walk to the last track.
+        while q.current_index().map(|i| i + 1) < Some(q.tracks().len()) {
+            q.next(None);
+        }
+        assert!(
+            q.peek_next(None).is_some(),
+            "repeat-all still answers, by wrapping"
+        );
+        assert!(!q.has_more(), "but the set has nowhere left to go");
+
+        // An override is somewhere to go.
+        q.set_next("a");
+        assert!(q.has_more());
+    }
+
+    #[test]
+    fn a_queue_of_one_has_no_more() {
+        let mut q = Queue::new();
+        q.set_tracks(vec!["only".to_string()], None);
+        assert!(!q.has_more());
+        q.append("second");
+        assert!(q.has_more());
+    }
+
+    /// What the DJ uses to keep a set going when the queue runs out.
+    #[test]
+    fn appending_extends_the_set_and_refuses_a_duplicate() {
+        let mut q = queue();
+        let before = q.tracks().len();
+
+        assert!(q.append("new"));
+        assert_eq!(q.tracks().len(), before + 1);
+        assert_eq!(q.tracks().last().map(String::as_str), Some("new"));
+
+        // A set that could append the same track twice would loop on one pick.
+        assert!(!q.append("new"));
+        assert!(!q.append("a"));
+        assert!(!q.append(""));
+        assert_eq!(q.tracks().len(), before + 1);
+    }
+
+    /// The case that made the app play one track forever.
+    ///
+    /// Repeat-all is the default, so a queue of one wraps to itself: `peek_next`
+    /// answers with the track already playing, and it does so indefinitely.
+    /// That is correct for a queue of one and useless as a DJ set, which is why
+    /// the fix is upstream — something has to *put a second track in the queue*.
+    /// Nothing did.
+    #[test]
+    fn a_one_track_queue_repeats_until_something_extends_it() {
+        let mut q = Queue::new();
+        q.set_tracks(vec!["only".to_string()], None);
+        assert_eq!(q.current(), Some("only"));
+        assert_eq!(
+            q.peek_next(None),
+            Some("only"),
+            "repeat-all wraps a queue of one onto itself — this is the loop"
+        );
+
+        assert!(q.append("second"));
+        assert_eq!(q.peek_next(None), Some("second"), "the set can now move on");
+        assert_eq!(q.next(None), Some("second"));
+    }
+
+    /// With repeat off, a queue of one simply ends — also not a set.
+    #[test]
+    fn a_one_track_queue_with_repeat_off_just_stops() {
+        let mut q = Queue::new();
+        q.set_tracks(vec!["only".to_string()], None);
+        q.set_repeat(Repeat::Off);
+        assert_eq!(q.peek_next(None), None);
+
+        assert!(q.append("second"));
+        assert_eq!(q.peek_next(None), Some("second"));
     }
 
     #[test]

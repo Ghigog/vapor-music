@@ -46,6 +46,8 @@ export interface FakeOptions {
   lyrics?: Record<string, core.Lyrics>;
   /** Start with local-network sync switched on. Off by default, as ships. */
   syncEnabled?: boolean;
+  /** Whether the DJ conducts. On by default, as ships. */
+  djMode?: boolean;
   /**
    * Data files the backend could not read at startup, already turned into the
    * sentences it would show. Empty by default, which is every normal launch.
@@ -309,6 +311,7 @@ export class FakeBackend {
       metadataLookupEnabled: options.metadataLookup ?? false,
       vibeLimit: 0.5,
       syncEnabled: options.syncEnabled ?? false,
+      djMode: options.djMode ?? true,
     };
     this.damaged = options.damaged ?? [];
     this.albumArtSearch = options.albumArtSearch ?? {};
@@ -742,6 +745,10 @@ export class FakeBackend {
       // `damaged` on the options — see `FakeOptions`.
       case "startup_problems":
         return this.damaged;
+
+      case "set_dj_mode":
+        this.settings = { ...this.settings, djMode: a.enabled === true };
+        return this.settings;
 
       case "set_sync_enabled": {
         this.settings = { ...this.settings, syncEnabled: a.enabled === true };

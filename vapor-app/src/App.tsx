@@ -117,6 +117,8 @@ export function App() {
    * called, and the design relabels that tab "Shuffle" when the DJ is off.
    * Not persisted yet — it resets to conducting on launch.
    */
+  /** Read from settings, not invented here. The backend is the half that
+   *  decides what plays next, so it has to be the one that knows. */
   const [djMode, setDjMode] = useState(true);
 
   useEffect(() => {
@@ -127,6 +129,7 @@ export function App() {
       .then((s) => {
         const connected =
           s.remote.url.trim() !== "" && s.remote.username.trim() !== "";
+        setDjMode(s.djMode ?? true);
         setStatus({ kind: connected ? "ready" : "onboarding" });
       })
       .catch((e: unknown) => {
@@ -248,7 +251,12 @@ export function App() {
               {screen === "vibe" && (
                 <Vibe
                   djMode={djMode}
-                  onDjModeChange={setDjMode}
+                  onDjModeChange={(on) => {
+                    // Optimistic, then persisted: the switch should feel
+                    // immediate, and the backend is what acts on it.
+                    setDjMode(on);
+                    void core.setDjMode(on).catch(() => setDjMode(!on));
+                  }}
                   onOpen={openLiner}
                 />
               )}

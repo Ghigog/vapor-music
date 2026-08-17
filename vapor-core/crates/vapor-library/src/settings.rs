@@ -213,6 +213,22 @@ pub struct Settings {
     #[serde(default)]
     #[serde(alias = "sync_enabled")]
     pub sync_enabled: bool,
+
+    /// Whether the DJ conducts the set, or the queue simply plays in order.
+    ///
+    /// Lived in the frontend as `useState(true)` until 2026-08-17, which meant
+    /// the backend — the half that actually decides what plays next — had never
+    /// heard of it. The screen showed candidates and nothing drove playback, so
+    /// the "DJ" could only re-order a queue someone else had built. A set of one
+    /// track repeated forever.
+    #[serde(default = "default_dj_mode", alias = "dj_mode")]
+    pub dj_mode: bool,
+}
+
+/// On. It is the app's whole premise, and a person who does not want it has a
+/// switch on the Vibe screen.
+fn default_dj_mode() -> bool {
+    true
 }
 
 fn default_vibe_limit() -> f32 {
@@ -247,6 +263,7 @@ impl Default for Settings {
             cache_max_bytes: default_cache_max_bytes(),
             metadata_lookup_enabled: false,
             vibe_limit: default_vibe_limit(),
+            dj_mode: default_dj_mode(),
             sync_enabled: false,
         }
     }

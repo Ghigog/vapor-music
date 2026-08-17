@@ -927,6 +927,19 @@ fn startup_problems(state: State<'_, Shared>) -> Result<Vec<String>> {
     Ok(app.damaged.iter().map(|d| d.message()).collect())
 }
 
+/// Turn the DJ on or off.
+///
+/// Persisted, because it decides what the *supervisor* does — it lived in the
+/// frontend as component state until 2026-08-17, which meant the half of the
+/// app that chooses what plays next had never heard of it.
+#[tauri::command]
+fn set_dj_mode(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.settings.dj_mode = enabled;
+    app.save_settings()?;
+    Ok(app.settings.clone())
+}
+
 /// Turn local-network sync on or off.
 ///
 /// Turning it on starts the beacon and the server there and then, because
@@ -2684,6 +2697,83 @@ struct ArmedMix {
 /// and the caller falls back to playing the next track when this one ends.
 /// That fallback is the common case, not an error: a queue in title order will
 /// mostly hold neighbours whose tempi are nowhere near each other.
+/// The track the DJ would pick to follow the one playing.
+///
+/// The same choice `mix_candidates` marks with `aiChoice`, so the screen and the
+/// set never disagree about what is coming: it prefers whichever match kind the
+/// cycle is on, and falls back to the best of any kind rather than giving up —
+/// a Switch is not always available, and a set that stops because no track was
+/// different enough is worse than one that carries on with a near match.
+fn dj_pick(app: &AppState) -> Option<String> {
+    let current = app.playing.clone()?;
+    let pool = track_meta_pool(app);
+    let from = pool.get(&current)?;
+
+    // Never repeat something already in the set. Without this the DJ can pick
+    // the track it just played and loop two tracks forever.
+    let queued: std::collections::HashSet<&str> =
+        app.queue.tracks().iter().map(String::as_str).collect();
+
+    let wanted = cycle_choice(app.mix_step);
+    let mut best_wanted: Option<(f32, &str)> = None;
+    let mut best_any: Option<(f32, &str)> = None;
+
+    for (href, to) in &pool {
+        if href == &current || queued.contains(href.as_str()) {
+            continue;
+        }
+        let similar = same_genre(app, &current, href);
+        let kind = match_kind_between(from, to, similar);
+        let bpm_diff = (from.bpm - to.bpm).abs();
+        let energy_diff = (from.energy_level - to.energy_level).abs();
+        let key_cost = vapor_library::key_distance(&from.musical_key, &to.musical_key) as f32;
+        // The same scoring `mix_candidates` uses for each kind, so the pick the
+        // screen shows is the pick the set takes.
+        let score = match kind {
+            MatchKind::Match => key_cost * 4.0 + bpm_diff,
+            MatchKind::Fresh => key_cost * 2.0 + (bpm_diff - 8.0).abs() + energy_diff * 10.0,
+            MatchKind::Switch => bpm_diff + energy_diff * 40.0,
+        };
+
+        if best_any.is_none_or(|(s, _)| score < s) {
+            best_any = Some((score, href));
+        }
+        if kind == wanted && best_wanted.is_none_or(|(s, _)| score < s) {
+            best_wanted = Some((score, href));
+        }
+    }
+
+    best_wanted.or(best_any).map(|(_, href)| href.to_string())
+}
+
+/// Keep the set going: append the DJ's pick when nothing follows the current
+/// track.
+///
+/// This is what makes the Vibe DJ a DJ rather than a screen of suggestions.
+/// Until now nothing ever added to the queue — `mix_candidates` displayed
+/// choices and `plan_mix` read `peek_next`, so a queue of one had nothing to
+/// mix into, repeat-all wrapped it onto itself, and the same track played
+/// forever while the screen said "0 to come".
+///
+/// Returns whether the queue grew, so the caller can tell the UI.
+fn extend_set(app: &mut AppState) -> bool {
+    if !app.settings.dj_mode {
+        return false;
+    }
+    // `has_more` rather than `peek_next().is_some()`, and the difference is the
+    // whole of a set: under repeat-all `peek_next` wraps to the beginning, so at
+    // the end of a queue it answers with a track that has already played. Read
+    // that way the DJ is told the set is fine and stops extending it.
+    if app.queue.has_more() {
+        return false;
+    }
+
+    let Some(pick) = dj_pick(app) else {
+        return false;
+    };
+    app.queue.append(&pick)
+}
+
 fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
     let current = app.playing.as_ref()?;
     let next = app.queue.peek_next(None)?.to_string();
@@ -3013,6 +3103,14 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
                         p.transition_armed() || p.snapshot().status != audio::Status::Playing
                     });
                 if !idle {
+                    // Feed the set before looking for a mix: `plan_mix` reads
+                    // `peek_next`, so with nothing queued there is nothing to
+                    // plan and the track simply ends.
+                    if extend_set(&mut app) {
+                        drop(app);
+                        let _ = app_handle.emit("playback-changed", ());
+                        continue;
+                    }
                     if let Some(mix) = plan_mix(&app, position) {
                         arm_mix(&shared, &mut app, mix);
                     }
@@ -4996,6 +5094,7 @@ pub fn run() {
             artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
+            set_dj_mode,
             set_sync_enabled,
             startup_problems,
             media_keys_available,
@@ -5288,6 +5387,145 @@ mod tests {
             assert!(m.contains(&d.name), "{m}");
             assert!(m.contains("kept at"), "{m}");
         }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // The DJ conducting a set
+    // -----------------------------------------------------------------------
+
+    /// An analysed track, so the cost model can place it.
+    fn analysed_track(bpm: f32, key: &str, energy: f32) -> analysis::Analysis {
+        analysis::Analysis {
+            bpm,
+            beats_bpm: bpm,
+            key: key.to_string(),
+            energy,
+            duration: 240.0,
+            lufs: -9.0,
+            version: analysis::ANALYSIS_VERSION,
+            ..Default::default()
+        }
+    }
+
+    /// A library of analysed tracks with one of them playing and nothing queued
+    /// after it — exactly the state a person is in after pressing play on a
+    /// single track.
+    fn conducting() -> (AppState, std::path::PathBuf) {
+        let (mut app, dir) = app();
+        let tracks = [
+            ("/a.mp3", 174.0, "4A", 0.8),
+            ("/b.mp3", 172.0, "4A", 0.8),
+            ("/c.mp3", 128.0, "8B", 0.5),
+            ("/d.mp3", 90.0, "11B", 0.2),
+        ];
+        for (href, bpm, key, energy) in tracks {
+            app.rows.push(row(href, href));
+            app.analysis
+                .insert(href.to_string(), analysed_track(bpm, key, energy));
+        }
+        app.queue.set_tracks(vec!["/a.mp3".to_string()], None);
+        app.playing = Some("/a.mp3".to_string());
+        (app, dir)
+    }
+
+    /// The bug, stated plainly: a set of one track never grew, so the track
+    /// repeated forever and the screen said "0 to come".
+    #[test]
+    fn the_dj_extends_a_set_that_has_nothing_queued_after_it() {
+        let (mut app, dir) = conducting();
+        assert_eq!(app.queue.tracks().len(), 1);
+
+        assert!(extend_set(&mut app), "the DJ added nothing");
+
+        assert_eq!(app.queue.tracks().len(), 2);
+        let next = app.queue.peek_next(None).expect("something to come");
+        assert_ne!(next, "/a.mp3", "the DJ queued the track already playing");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And it keeps going, without ever repeating itself — a DJ that loops two
+    /// tracks is not conducting a set.
+    #[test]
+    fn the_dj_keeps_the_set_going_without_repeating() {
+        let (mut app, dir) = conducting();
+
+        for _ in 0..3 {
+            // Advance as the supervisor does when a track ends.
+            if let Some(next) = app.queue.next(None).map(str::to_string) {
+                app.playing = Some(next);
+            }
+            extend_set(&mut app);
+            app.mix_step = app.mix_step.wrapping_add(1);
+        }
+
+        let queued = app.queue.tracks();
+        let unique: std::collections::HashSet<&String> = queued.iter().collect();
+        assert_eq!(
+            unique.len(),
+            queued.len(),
+            "the DJ repeated a track: {queued:?}"
+        );
+        assert!(queued.len() >= 3, "the set stopped growing: {queued:?}");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// With the DJ off it is a plain queue and must stay one. The switch was
+    /// frontend state, so the backend used to ignore it entirely.
+    #[test]
+    fn the_dj_adds_nothing_when_it_is_switched_off() {
+        let (mut app, dir) = conducting();
+        app.settings.dj_mode = false;
+
+        assert!(!extend_set(&mut app));
+        assert_eq!(app.queue.tracks().len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A queue someone built themselves is not interfered with while it still
+    /// has somewhere to go.
+    #[test]
+    fn the_dj_leaves_a_queue_that_already_has_a_next_track_alone() {
+        let (mut app, dir) = conducting();
+        app.queue
+            .set_tracks(vec!["/a.mp3".to_string(), "/d.mp3".to_string()], None);
+        app.playing = Some("/a.mp3".to_string());
+
+        assert!(!extend_set(&mut app));
+        assert_eq!(app.queue.tracks().len(), 2);
+        assert_eq!(app.queue.peek_next(None), Some("/d.mp3"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Nothing analysed means nothing to choose from, and the DJ must say so by
+    /// doing nothing rather than by panicking.
+    #[test]
+    fn the_dj_does_nothing_with_an_unanalysed_library() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/x.mp3", "x"));
+        app.queue.set_tracks(vec!["/x.mp3".to_string()], None);
+        app.playing = Some("/x.mp3".to_string());
+
+        assert!(!extend_set(&mut app));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Choosing a blend from the screen has to work, and the candidates come
+    /// from the whole library rather than from the queue — so every one of them
+    /// used to be refused with "that track is no longer in the queue".
+    #[test]
+    fn choosing_a_candidate_queues_it_even_though_it_was_not_in_the_queue() {
+        let (mut app, dir) = conducting();
+        assert!(!app.queue.tracks().iter().any(|t| t == "/c.mp3"));
+
+        assert!(app.queue.set_next("/c.mp3"), "the choice was refused");
+        assert_eq!(app.queue.peek_next(None), Some("/c.mp3"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

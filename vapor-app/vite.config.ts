@@ -34,6 +34,16 @@ export default defineConfig({
     // e2e/ is Playwright's; running it here would start a browser inside jsdom.
     exclude: ["e2e/**", "node_modules/**"],
     css: false,
+    // Five seconds is Vitest's default and it was tuned for a smaller suite.
+    // These are Testing Library tests driving a real user-event sequence
+    // against jsdom, and the files run in parallel — under that load a single
+    // `userEvent.type` of a URL into a form can take seconds on its own.
+    //
+    // Raised rather than left to fail intermittently: a suite that goes red
+    // when the machine is busy teaches everyone to re-run it, and a re-run is
+    // how a real failure gets waved through. Nothing here is *waiting* on
+    // anything, so a generous ceiling costs nothing when tests pass.
+    testTimeout: 20_000,
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],

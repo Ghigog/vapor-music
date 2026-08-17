@@ -227,6 +227,15 @@ export interface Settings {
    * here, on whatever network it happens to be joined to.
    */
   syncEnabled: boolean;
+  /**
+   * Whether the DJ conducts the set, or the queue plays in order.
+   *
+   * Persisted and read by the backend, which is the half that decides what
+   * plays next. It was component state until 2026-08-17, so the supervisor had
+   * never heard of it and the "DJ" could only re-order a queue someone else had
+   * already built — a set of one track repeated forever.
+   */
+  djMode: boolean;
 }
 
 /** The band the Vibe Limit is offered over. Matches `settings.rs`. */
@@ -414,6 +423,11 @@ export function findAlbumArt(
 /** Forget a hand-chosen cover and go back to what the file carries. */
 export function clearAlbumArt(album: string, lead: string): Promise<AlbumArt> {
   return invoke<AlbumArt>("clear_album_art", { album, lead });
+}
+
+/** Turn the DJ on or off. Persisted; the backend acts on it. */
+export function setDjMode(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_dj_mode", { enabled });
 }
 
 /** Whether looked-up artwork outranks the file's own, library-wide. */
