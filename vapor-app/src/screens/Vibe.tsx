@@ -263,72 +263,10 @@ export function Vibe({
       {djMode && (
         <>
         <section className="vibe__card glass">
-          <h2 className="label">next blend</h2>
-          {blend ? (
-            <>
-              <div className="vibe__blend">
-                <div className="vibe__side">
-                  <span className="vibe__side-label label">out</span>
-                  <span className="vibe__side-title">{blend.fromTitle || "—"}</span>
-                  <span className="vibe__side-facts numeric">
-                    {fmtBpm(blend.fromBpm)} · {blend.fromKey || "—"}
-                  </span>
-                </div>
-                <div
-                  className={
-                    "vibe__arrow" + (blend.matchable ? "" : " vibe__arrow--no")
-                  }
-                >
-                  <span className="vibe__verdict label">
-                    {blend.matchable ? blend.transition : blend.reason}
-                  </span>
-                  <span aria-hidden="true">→</span>
-                </div>
-                <div className="vibe__side vibe__side--in">
-                  <span className="vibe__side-label label">in</span>
-                  <span className="vibe__side-title">{blend.toTitle || "—"}</span>
-                  <span className="vibe__side-facts numeric">
-                    {fmtBpm(blend.toBpm)} · {blend.toKey || "—"}
-                  </span>
-                </div>
-              </div>
-
-              <dl className="vibe__stats">
-                <Stat
-                  k="shift"
-                  v={
-                    blend.matchable
-                      ? `${blend.shiftPercent >= 0 ? "+" : ""}${blend.shiftPercent.toFixed(1)}%`
-                      : "—"
-                  }
-                />
-                <Stat
-                  k="gain"
-                  v={`${blend.gainDelta >= 0 ? "+" : ""}${blend.gainDelta.toFixed(1)} LU`}
-                />
-                <Stat k="key" v={`${blend.fromKey || "—"} → ${blend.toKey || "—"}`} />
-              </dl>
-
-              {!blend.matchable && (
-                <p className="vibe__note">
-                  These two play one after the other instead. The engine refuses a
-                  stretch past ±6% — past that it stops sounding like the record.
-                </p>
-              )}
-            </>
-          ) : (
-            <p className="vibe__note">
-              Nothing queued after this track, so there is no blend to describe.
-            </p>
-          )}
-        </section>
-
-        <section className="vibe__card glass">
-          <h2 className="label">or blend into</h2>
+          <h2 className="label">next</h2>
           {candidates.length === 0 ? (
             <p className="vibe__note">
-              Nothing analysed to choose from yet. The DJ needs a tempo and a
-              key before it can offer a way out of this track.
+              Nothing analysed to choose from yet.
             </p>
           ) : (
             <ul className="vibe__picks">
@@ -353,12 +291,31 @@ export function Vibe({
                       </span>
                       {/* The design's one mono line: tempo, key, and the mix
                           that gets you there. */}
+                      {/* One mono line: tempo, key, the mix that gets you
+                          there — and, on the one actually queued, what the
+                          blend costs. Those two numbers had a card to
+                          themselves and did not need one. */}
                       <span className="vibe__pick-facts numeric">
                         <span>{fmtBpm(c.bpm)}</span>
                         <span className="vibe__dot">·</span>
                         <span>{c.key || "—"}</span>
                         <span className="vibe__dot">·</span>
                         <span>{c.transition}</span>
+                        {c.selected && blend && blend.matchable && (
+                          <>
+                            <span className="vibe__dot">·</span>
+                            <span>
+                              {blend.shiftPercent >= 0 ? "+" : ""}
+                              {blend.shiftPercent.toFixed(1)}%
+                            </span>
+                          </>
+                        )}
+                        {c.selected && blend && !blend.matchable && (
+                          <>
+                            <span className="vibe__dot">·</span>
+                            <span className="vibe__pick-warn">no beat match</span>
+                          </>
+                        )}
                       </span>
                     </span>
                     <span className={"vibe__tag vibe__tag--" + c.kind}>
@@ -369,10 +326,6 @@ export function Vibe({
               ))}
             </ul>
           )}
-          <p className="vibe__note">
-            The curve decides where the set is going; this decides the next step.
-            Picking one re-plans the rest along the same curve.
-          </p>
         </section>
 
         <section className="vibe__card glass">
@@ -448,15 +401,6 @@ export function Vibe({
           "Up next · Conducted by Vibe · 47 min", with a Re-conduct action on
           it. It was a sidebar destination of its own instead. */}
       <Queue onOpen={onOpen} conducted={djMode} />
-    </div>
-  );
-}
-
-function Stat({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="vibe__stat">
-      <dt className="label">{k}</dt>
-      <dd className="numeric">{v}</dd>
     </div>
   );
 }

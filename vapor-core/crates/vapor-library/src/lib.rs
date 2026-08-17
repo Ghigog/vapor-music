@@ -44,5 +44,5 @@ pub use sync::{
     reconcile, Advert, Delta, DeviceKind, Manifest, PairOutcome, Pairing, Peer, PeerRegistry,
     PlaylistRecord, TrackRecord, Trust, TrustedDevice,
 };
-pub use track::{transition_cost, TrackMeta, DEFAULT_ENERGY_THRESHOLD};
+pub use track::{intensity_from_lufs, transition_cost, TrackMeta, DEFAULT_ENERGY_THRESHOLD};
 pub use webdav::{is_audio_path, parse_propfind, AUDIO_EXTENSIONS};

@@ -77,6 +77,39 @@ impl TrackMeta {
     }
 }
 
+/// Perceived intensity, 0–1, from integrated loudness.
+///
+/// The measure this replaces for every purpose that wanted "how hard does this
+/// go": [`vapor_dsp::loudness::energy_level`] is mean RMS over peak RMS, which
+/// is a *consistency* ratio. A track that sits at one level the whole way
+/// through scores high and one with a breakdown scores low, so on the owner's
+/// library drum & bass averaged 0.661 against 0.629 for Sade, De André and
+/// Knxwledge — ranges fully overlapping, with ballads at the top.
+///
+/// That is a defensible measure of something. It is not intensity, and it was
+/// driving three things that needed intensity: the Build and Chill curves, the
+/// energy term in [`transition_cost`], and whether two tracks count as a match.
+///
+/// Loudness separates the same two groups cleanly — −10.6 LUFS against −16.9 —
+/// and is already measured for every track, so this costs no re-analysis.
+///
+/// The band is −30 to −5 LUFS. Below −30 is quiet enough to be ambient
+/// whatever it is; above −5 is as loud as mastering goes. The owner's library
+/// runs −23.5 to −8.4, which sits inside it with room at both ends rather than
+/// saturating.
+pub fn intensity_from_lufs(lufs: f32) -> f32 {
+    const QUIET: f32 = -30.0;
+    const LOUD: f32 = -5.0;
+
+    // Silence and unmeasurable both arrive as 0.0 from the loudness stage, and
+    // an unknown belongs in the middle rather than at an end where it would
+    // drag a curve toward it — the same fallback `energy_level` uses.
+    if !lufs.is_finite() || lufs >= 0.0 {
+        return 0.5;
+    }
+    ((lufs - QUIET) / (LOUD - QUIET)).clamp(0.0, 1.0)
+}
+
 /// Cost of mixing `from` into `to`. Lower is better.
 ///
 /// `skip_penalty` carries the learned dislike of a specific pair, which the
@@ -201,5 +234,56 @@ mod tests {
         let base = transition_cost(&a, &b, DEFAULT_ENERGY_THRESHOLD, 0.0);
         let penalised = transition_cost(&a, &b, DEFAULT_ENERGY_THRESHOLD, 7.5);
         assert!((penalised - base - 7.5).abs() < 1e-4);
+    }
+
+    // -----------------------------------------------------------------------
+    // Intensity, which is not what `energy_level` measures
+    // -----------------------------------------------------------------------
+
+    /// The two groups that motivated this, at their measured loudnesses.
+    #[test]
+    fn loud_music_reads_as_more_intense_than_quiet_music() {
+        let dnb = intensity_from_lufs(-10.6);
+        let mellow = intensity_from_lufs(-16.9);
+        assert!(
+            dnb > mellow,
+            "drum & bass {dnb:.3} did not outrank mellow {mellow:.3}"
+        );
+        // And by a margin worth acting on, rather than a rounding difference.
+        assert!(
+            dnb - mellow > 0.2,
+            "separation {:.3} is too small",
+            dnb - mellow
+        );
+    }
+
+    /// The owner's library runs -23.5 to -8.4 LUFS and should spread across
+    /// the range rather than bunching at one end.
+    #[test]
+    fn a_real_library_spreads_across_the_range() {
+        let quietest = intensity_from_lufs(-23.5);
+        let loudest = intensity_from_lufs(-8.4);
+        assert!(quietest > 0.05 && quietest < 0.35, "{quietest}");
+        assert!(loudest > 0.75 && loudest < 1.0, "{loudest}");
+    }
+
+    #[test]
+    fn it_is_monotonic_and_bounded() {
+        let mut previous = -1.0;
+        for lufs in [-40.0f32, -30.0, -25.0, -20.0, -15.0, -10.0, -5.0, -1.0] {
+            let v = intensity_from_lufs(lufs);
+            assert!((0.0..=1.0).contains(&v), "{lufs} gave {v}");
+            assert!(v >= previous, "not monotonic at {lufs}");
+            previous = v;
+        }
+    }
+
+    /// An unmeasurable loudness sits in the middle rather than at an end,
+    /// where it would drag a curve toward it.
+    #[test]
+    fn an_unknown_loudness_sits_in_the_middle() {
+        assert_eq!(intensity_from_lufs(0.0), 0.5);
+        assert_eq!(intensity_from_lufs(f32::NAN), 0.5);
+        assert_eq!(intensity_from_lufs(f32::INFINITY), 0.5);
     }
 }

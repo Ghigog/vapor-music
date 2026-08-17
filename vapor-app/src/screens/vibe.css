@@ -484,3 +484,10 @@
   font-size: var(--fs-sm);
   color: var(--ink-2);
 }
+
+/* The blend cost, shown on the row it describes rather than in a card of its
+   own. Dimmer than the tempo and key beside it: it is a consequence of the
+   choice, not part of identifying the track. */
+.vibe__pick-warn {
+  color: var(--warn, var(--accent));
+}

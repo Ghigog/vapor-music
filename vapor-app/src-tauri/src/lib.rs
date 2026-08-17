@@ -3773,7 +3773,15 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
                     } else {
                         analysis.outro_key.clone()
                     },
-                    energy_level: analysis.energy,
+                    // Loudness, not `analysis.energy`. That field is mean RMS
+                    // over peak RMS — a *consistency* ratio, which reads a
+                    // relentless track as high and one with a breakdown as
+                    // low. Measured on this library it puts ballads above drum
+                    // & bass, and it was deciding the Build and Chill curves,
+                    // the energy term in the transition cost, and whether two
+                    // tracks count as a match. See
+                    // `vapor_library::intensity_from_lufs`.
+                    energy_level: vapor_library::intensity_from_lufs(analysis.lufs),
                     // Not `row.genre`: that is only what the *scan* found, and
                     // in a folder-organised library it is empty for everything.
                     genre,
@@ -5901,6 +5909,43 @@ mod tests {
             kind,
             MatchKind::Match,
             "a drum & bass track is still being offered as a match for hip hop"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The other half of the DnB-versus-chill complaint, without genre.
+    ///
+    /// Two tracks at the same tempo and key, one loud and one quiet, must not
+    /// be offered as a match. They were, because `energy` measured consistency
+    /// rather than intensity and put them 0.03 apart — under every threshold.
+    /// Loudness puts them 0.26 apart.
+    #[test]
+    fn a_loud_track_is_not_a_match_for_a_quiet_one() {
+        let (mut app, dir) = app();
+
+        for (href, lufs) in [("/loud.mp3", -9.0f32), ("/quiet.mp3", -19.0)] {
+            app.rows.push(row(href, href));
+            let mut a = analysed_track(87.0, "4A", 0.7);
+            a.lufs = lufs;
+            app.analysis.insert(href.to_string(), a);
+        }
+        app.playing = Some("/loud.mp3".to_string());
+
+        let pool = track_meta_pool(&app);
+        let loud = pool.get("/loud.mp3").expect("loud");
+        let quiet = pool.get("/quiet.mp3").expect("quiet");
+
+        assert!(
+            loud.energy_level - quiet.energy_level > 0.2,
+            "intensity did not separate them: {} vs {}",
+            loud.energy_level,
+            quiet.energy_level
+        );
+        assert_ne!(
+            match_kind_between(loud, quiet, true),
+            MatchKind::Match,
+            "a loud track is still a match for a quiet one at the same tempo"
         );
 
         let _ = std::fs::remove_dir_all(dir);
