@@ -76,7 +76,7 @@
  * gone to look at the file should not be nagged for the rest of the session.
  */
 .damaged {
-  grid-column: 1 / -1;
+  grid-area: notice;
   display: flex;
   align-items: flex-start;
   gap: var(--s-3);

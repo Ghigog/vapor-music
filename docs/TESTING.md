@@ -1,7 +1,7 @@
 # Vapor Music — Testing
 
 **Status:** Living document
-**Last reviewed:** 2026-08-16
+**Last reviewed:** 2026-08-17
 
 
 > What is tested, at which layer, and what is deliberately not. Read alongside
@@ -34,7 +34,7 @@ the shell**. Those were exactly the two layers with no coverage.
 
 ## The pyramid, and who owns what
 
-Five layers. Each one exists because the layer below it cannot answer the
+Six layers. Each one exists because the layer below it cannot answer the
 question, which is the only good reason to add a layer.
 
 ### 1. Unit — pure logic
@@ -115,7 +115,35 @@ Queried by role and text, as a person perceives the screen, not by CSS class.
 A test that clicks `.settings__button--primary` passes when the button has been
 relabelled to something meaningless.
 
-### 5. End-to-end — journeys, and a monkey
+### 5. Contract — the seams between the halves
+
+**Where:** `vapor-app/src-tauri/tests/ipc_contract.rs`, `vapor-app/scripts/verify-dist.mjs`.
+**Runs:** with the shell's `cargo test`, and as part of `npm run build`.
+
+Added 2026-08-17, after an app that passed every layer above and below opened
+to an empty window.
+
+The layers on either side of a seam can both be right while the seam is wrong,
+and neither can see it. The component tests answer from a fake backend and the
+e2e suite serves a browser build against that same fake — so a command renamed
+in Rust, or an argument renamed in TypeScript, is invisible to both until
+someone opens the screen that makes the call. `ipc_contract.rs` reads
+`core.ts` and `lib.rs` and gates the whole surface: every invoked command is
+registered, every registered command exists, argument names agree, and nothing
+is registered that nothing calls.
+
+`verify-dist.mjs` covers the other seam. Vite names chunks by content hash, so
+two overlapping builds can leave `index.html` pointing at a file that is no
+longer there. The app then starts, serves the page, loads no JavaScript, and
+shows an empty window — with no React, not even the error boundary reports it.
+The check runs inside `npm run build`, which is Tauri's `beforeBuildCommand`,
+so packaging fails rather than shipping a blank app.
+
+Both were confirmed to fail against a deliberately broken input before being
+kept. A source-reading test that quietly matches nothing reports success for
+the wrong reason.
+
+### 6. End-to-end — journeys, and a monkey
 
 **Where:** `vapor-app/e2e/`.
 **Runs:** `npm run e2e` (Playwright).
@@ -160,11 +188,19 @@ Recorded so nobody "fixes" the gap without reading why.
 * **The real WebDAV server.** Nothing in CI talks to Koofr. The transport is
   thin and the parsing is tested from captured responses; a live server in CI
   buys flakiness and a credential in a secret store.
-* **LRCLIB and Deezer.** Same reasoning, one degree worse: `metadata.rs` splits
-  its parsing from its transport so every response shape is driven from a
-  canned string, but those shapes were read out of `metadata_service.gd` rather
-  than off the wire, and nothing has ever confirmed them (TD-51). If a lookup
-  comes back empty on a real machine, suspect the shape before the parser.
+* **LRCLIB and Deezer, in CI.** `metadata.rs` splits parsing from transport so
+  every response shape is driven from a canned string. Those strings used to be
+  read out of `metadata_service.gd` rather than off the wire, and one of them
+  was wrong in a way fifteen passing tests could not see — the genre was being
+  read from a response that does not carry one, so it was empty for every track
+  ever looked up (TD-51, closed 2026-08-16). The bodies are now captured from
+  the live services, and `the_parsers_still_match_the_live_services` re-checks
+  them on demand. It stays `#[ignore]`d: CI has no network, and running it
+  sends a query to two third parties, which is the thing the app asks
+  permission for. Run it by hand when a lookup misbehaves.
+
+  The lesson generalises and is the reason layer 5 exists: **a fixture invented
+  from a specification tests the specification.**
 * **Analysis accuracy in CI.** The 563-track figures need a personal library
   (TD-43). CI runs the DSP against synthetic signals; the fixture numbers are
   produced by hand and recorded in `docs/FINDINGS.md`.
@@ -239,9 +275,36 @@ cd vapor-app/src-tauri && cargo test               # unit + integration
 cd vapor-app         && npm test                   # component
 cd vapor-app         && npm run e2e                # journeys + monkey
 cd vapor-app         && npm run typecheck
+cd vapor-app         && npm run build              # includes verify-dist
+
+# Against the live services, by hand, never in CI:
+cd vapor-app/src-tauri && cargo test --lib live_services -- --ignored --nocapture
+
+# Analysis accuracy, needs a personal library cached locally (TD-43):
+cd vapor-core && cargo run --release --bin validate -- \
+  ~/Library/Application\ Support/com.dylangrowcoot.vapormusic/audio
 ```
 
 ## In CI
+
+Two workflows, and between them every layer above runs on every platform the
+app targets.
+
+| Job | Where | What |
+|---|---|---|
+| `rust` | macOS, Linux, Windows | `vapor-core`: fmt, clippy, `cargo test --release` |
+| `wasm` | Linux | all three core crates build for `wasm32-unknown-unknown` |
+| `frontend` | Linux | typecheck, component tests, build + `verify-dist` |
+| `end-to-end` | Linux | Playwright journeys, affordance sweep, monkey |
+| `shell` | macOS, Linux, Windows | `vapor-app`: fmt, check, test, clippy, **release build** |
+| `godot` | Linux | the archived tree, pinned at a known baseline (TD-41/42/45) |
+
+Two of those are recent and both come from the same incident. The shell ran on
+macOS and Linux only — the half of the app with the platform code in it, while
+`vapor-core` already ran all three — and nothing anywhere built the shell in
+**release**, which is the only profile `tauri build` uses. Debug and release
+are different compilations, so the artefact anyone actually opens was the one
+thing no job compiled.
 
 `.github/workflows/` runs every layer on every push.
 
