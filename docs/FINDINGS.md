@@ -83,6 +83,23 @@ A third attempt means bar-level metre detection.
 **Beat grids.** DP beat tracking, F=0.763 mean and F=0.884 median against the
 same set. The estimator it replaced measured F=0.470.
 
+**A corrected tempo re-runs the tracker; it does not re-label or subdivide.**
+The 10.6% metrical residual above is what the hand correction exists for, and
+those are 3:4 and 2:3 relations, which do not subdivide into the tracked beats
+at all. Even a clean 2:1 leaves a question arithmetic cannot answer: halving a
+grid means dropping every other beat, and *which* every-other decides whether
+the result is on the beat or exactly off it — the worst available answer rather
+than a near miss. `beats::track` picks it from onset strength, so the
+correction re-tracks at the new tempo against the same whole-track onset
+function (`vapor_dsp::retrack_beats`). Key, loudness, cue points, waveform and
+segments are all independent of tempo and are not recomputed.
+
+Storing it needed `Analysis::beats_bpm` — the tempo a grid was tracked at, kept
+separate from the track's tempo, so a grid can never be read at a tempo it was
+not built for. Absent means "tracked at `bpm`", which is true of every entry
+written before the field existed and is why it did not cost a library-wide
+re-analysis.
+
 **Loudness.** The ported LUFS agrees with the C++ original to 0.003 LU.
 
 ---

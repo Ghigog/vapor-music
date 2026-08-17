@@ -122,6 +122,52 @@ pub fn analyze_bytes(bytes: Vec<u8>, ext_hint: Option<&str>) -> Result<Analysis,
     analyze_decoded(&audio)
 }
 
+/// Track a file's beats again against a tempo supplied from outside.
+///
+/// For a hand-corrected BPM. Detection is wrong about tempo mostly by whole
+/// factors — a track at 128 read as 64 or 256 — and when it is, the beat grid
+/// it produced is wrong in the same way, so accepting the correction and
+/// keeping the grid would beat-match to a tempo the person has already said is
+/// wrong.
+///
+/// Re-tracking rather than arithmetic on the existing grid, for two reasons.
+/// A 3:4 correction does not subdivide into the old beats at all. And even a
+/// clean 2:1 leaves a question arithmetic cannot answer — halving a grid means
+/// dropping every other beat, and *which* every-other* decides whether the
+/// result lands on the beat or exactly off it. The tracker answers that from
+/// onset strength, which is the only thing that knows.
+///
+/// Everything else analysis produces — key, loudness, cue points, waveform,
+/// segments — is independent of tempo, so none of it is recomputed and none of
+/// it is disturbed.
+pub fn retrack_beats_file(path: &Path, bpm: f32) -> Result<Vec<f32>, AnalysisError> {
+    let audio = decode::decode_to_mono(path).map_err(AnalysisError::Decode)?;
+    retrack_beats(&audio, bpm)
+}
+
+/// [`retrack_beats_file`] against already-decoded audio.
+pub fn retrack_beats(audio: &decode::DecodedAudio, bpm: f32) -> Result<Vec<f32>, AnalysisError> {
+    let rate = audio.sample_rate;
+    if rate == 0 || audio.samples.len() < rate as usize || !bpm.is_finite() || bpm <= 0.0 {
+        return Err(AnalysisError::Insufficient);
+    }
+
+    // The same whole-track onset function `analyze_decoded` tracks against, so
+    // a re-tracked grid is comparable with a freshly analysed one. The tempo
+    // estimate it also carries is discarded: the caller's number is the point.
+    let tempo_spec = spectrum::for_tempo(&audio.samples, rate);
+    let tempo = tempo::estimate_windowed(
+        &tempo_spec,
+        TEMPO_SKIP_SECS as f32,
+        TEMPO_WINDOW_SECS as f32,
+    )
+    .ok_or(AnalysisError::Insufficient)?;
+
+    beats::track(&tempo.odf, tempo.odf_rate, bpm)
+        .map(|g| g.beats)
+        .ok_or(AnalysisError::Insufficient)
+}
+
 /// Decode a file into deck-ready stereo frames at `target_rate`.
 ///
 /// The two steps a player needs before audio can reach a device, in the order

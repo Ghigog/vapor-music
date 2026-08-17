@@ -231,6 +231,59 @@ mod tests {
         assert!(f > 0.95, "F-measure {f:.3} on a clean pulse");
     }
 
+    /// Re-tracking at a corrected tempo lands on the right half of the beats.
+    ///
+    /// The case a hand correction is usually for: a track whose real pulse is
+    /// 128 but which has audible eighths, so detection reported 256 and built
+    /// its grid on every eighth. Correcting to 128 means keeping every other
+    /// beat — and *which* other one is not something arithmetic can decide.
+    /// Take the wrong set and every beat lands exactly off, which is the worst
+    /// possible answer rather than a near miss.
+    ///
+    /// The tracker decides it from onset strength, so this asserts both halves
+    /// of the claim: the grid matches the strong pulse, and does not match the
+    /// weak one it could just as easily have chosen.
+    #[test]
+    fn re_tracking_at_half_tempo_picks_the_strong_pulse() {
+        let rate = 86.13f32;
+        let real_bpm = 128.0;
+        let period = (60.0 / real_bpm * rate).round() as usize;
+        let n = period * 60;
+
+        // Strong beats at 128, weaker eighths between them — enough to make a
+        // tempo estimator say 256, not enough to be the beat.
+        let mut odf = vec![0.0f32; n];
+        let offset = 9;
+        let mut t = offset;
+        while t < n {
+            odf[t] = 1.0;
+            let eighth = t + period / 2;
+            if eighth < n {
+                odf[eighth] = 0.55;
+            }
+            t += period;
+        }
+
+        let grid = track(&odf, rate, real_bpm).expect("grid");
+
+        let strong: Vec<f32> = (0..)
+            .map(|i| (offset + i * period) as f32 / rate)
+            .take_while(|&s| s < n as f32 / rate)
+            .collect();
+        let weak: Vec<f32> = (0..)
+            .map(|i| (offset + period / 2 + i * period) as f32 / rate)
+            .take_while(|&s| s < n as f32 / rate)
+            .collect();
+
+        let on = f_measure(&grid.beats, &strong, 0.07);
+        let off = f_measure(&grid.beats, &weak, 0.07);
+        assert!(on > 0.95, "F-measure {on:.3} against the real pulse");
+        assert!(
+            off < 0.1,
+            "grid landed on the offbeats instead ({off:.3} against them)"
+        );
+    }
+
     /// The reason for dynamic programming rather than peak-picking.
     #[test]
     fn prefers_a_steady_pulse_over_louder_offbeats() {

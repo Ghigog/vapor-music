@@ -19,13 +19,43 @@ vi.mock("@tauri-apps/api/core", () => ({
     backend.invoke(cmd, args),
 }));
 
-// Events are a backend push. Nothing in the fake pushes, so listeners are
-// registered and never fire — which is the correct quiescent behaviour and
-// keeps a test from waiting on an event that will not come.
+/**
+ * Listeners registered through the mocked `listen`, by event name.
+ *
+ * Events are a backend push, and nothing in the fake pushes on its own — a
+ * listener that never fires is the correct quiescent behaviour and keeps a test
+ * from waiting on an event that will not come. A test that wants one calls
+ * `emitEvent`.
+ */
+const listeners = new Map<string, Set<(e: { payload: unknown }) => void>>();
+
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: async () => () => {},
+  listen: async (name: string, handler: (e: { payload: unknown }) => void) => {
+    let set = listeners.get(name);
+    if (!set) {
+      set = new Set();
+      listeners.set(name, set);
+    }
+    set.add(handler);
+    return () => {
+      set.delete(handler);
+    };
+  },
   emit: async () => {},
 }));
+
+/**
+ * Push a backend event to whatever is listening for it.
+ *
+ * Synchronous on purpose: the caller wraps it in `act` and asserts straight
+ * after, rather than waiting on a timer that has nothing to do with the
+ * behaviour under test.
+ */
+export function emitEvent(name: string, payload: unknown): void {
+  for (const handler of listeners.get(name) ?? []) {
+    handler({ payload });
+  }
+}
 
 /**
  * Install a fresh backend for this test and return it.
@@ -45,6 +75,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // `cleanup` unmounts, which runs each effect's teardown and so unregisters
+  // the listeners it registered. Clearing anyway: a listener surviving into the
+  // next test would fire on its events and be very hard to explain.
+  listeners.clear();
   vi.clearAllMocks();
 });
 

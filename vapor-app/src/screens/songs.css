@@ -240,6 +240,31 @@
   font-weight: var(--fw-medium);
 }
 
+/*
+ * The window where the number is saved but the beat grid is not yet rebuilt.
+ * Deliberately quiet — the correction has worked and the row is not in an error
+ * state, so this dims rather than shouts, and the cell's title says what is
+ * happening. A pulse rather than a spinner: nothing here should move enough to
+ * catch the eye while somebody is reading the table.
+ */
+.songrow__bpm--regridding {
+  opacity: 0.55;
+  animation: songrow-bpm-regrid 1.6s ease-in-out infinite;
+}
+
+@keyframes songrow-bpm-regrid {
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* Motion is decoration here; the tint and the tooltip carry the meaning. */
+@media (prefers-reduced-motion: reduce) {
+  .songrow__bpm--regridding {
+    animation: none;
+  }
+}
+
 .songrow__bpm-input {
   width: 100%;
   min-width: 0;

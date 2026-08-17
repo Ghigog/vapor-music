@@ -848,6 +848,28 @@ export interface AnalysisProgress {
   error: string | null;
 }
 
+/**
+ * Emitted on the `bpm-retrack` event when a corrected tempo has its beat grid
+ * rebuilt.
+ *
+ * A correction changes where the beats are, not just the number on the row, so
+ * the backend re-runs beat tracking against it. That needs the audio, so it can
+ * take seconds on a track that is not downloaded yet — and until it lands the
+ * track mixes on a grid assuming a beat at zero and a tempo that never wavers.
+ * One of these arrives when the job starts (`beats` and `error` both null) and
+ * one when it finishes.
+ */
+export interface BpmRetrack {
+  href: string;
+  /** The tempo being tracked against — the correction, or the detected tempo
+   *  again when a correction has just been cleared. */
+  bpm: number;
+  /** Beats found, once it is done. */
+  beats: number | null;
+  /** Why it could not be done. The correction itself is saved either way. */
+  error: string | null;
+}
+
 export interface CacheStatus {
   bytes: number;
   maxBytes: number;

@@ -21,6 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
 import { startTrackDrag } from "../components/PlaylistRail";
 import type { Row, SortKey } from "../lib/core";
@@ -126,6 +127,10 @@ export function Songs({
   const [bpmError, setBpmError] = useState<string | null>(null);
   /** Bumped after a correction lands, to re-read rows with it applied. */
   const [revision, setRevision] = useState(0);
+  /** Hrefs whose beat grid is being re-tracked against a corrected tempo.
+   *  The number is stored the moment it is typed; the grid takes longer, and
+   *  saying so is better than a cell that looks finished before it is. */
+  const [regridding, setRegridding] = useState<Set<string>>(new Set());
 
   /** The row the keyboard is on. Separate from `selected`, which is what a
    *  bulk action applies to — moving focus should not silently change what a
@@ -169,6 +174,25 @@ export function Songs({
       // just are not marked as corrections.
       .catch(() => setOverrides({}));
   }, [revision]);
+
+  // A correction re-tracks the beat grid in the background, which needs the
+  // audio and so can take seconds. Two events per track — one at the start, one
+  // at the end — rather than polling.
+  useEffect(() => {
+    const unlisten = listen<core.BpmRetrack>("bpm-retrack", (e) => {
+      const { href, beats, error } = e.payload;
+      const running = beats === null && error === null;
+      setRegridding((current) => {
+        const next = new Set(current);
+        if (running) next.add(href);
+        else next.delete(href);
+        return next;
+      });
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
 
   /**
    * Commit a hand-typed tempo. An empty box clears the correction.
@@ -524,6 +548,7 @@ export function Songs({
                   row={row}
                   onOpen={onOpen}
                   overridden={row.href in overrides}
+                  regridding={regridding.has(row.href)}
                   editing={editing === row.href}
                   onEdit={() => setEditing(row.href)}
                   onCommit={(raw) => void commitBpm(row.href, raw)}
@@ -584,6 +609,7 @@ function SongRow({
   row,
   onOpen,
   overridden,
+  regridding,
   editing,
   onEdit,
   onCommit,
@@ -592,6 +618,7 @@ function SongRow({
   row: Row;
   onOpen?: ((href: string) => void) | undefined;
   overridden: boolean;
+  regridding: boolean;
   editing: boolean;
   onEdit: () => void;
   onCommit: (raw: string) => void;
@@ -634,6 +661,7 @@ function SongRow({
       <BpmCell
         bpm={row.bpm}
         overridden={overridden}
+        regridding={regridding}
         editing={editing}
         onEdit={onEdit}
         onCommit={onCommit}
@@ -661,6 +689,7 @@ function SongRow({
 function BpmCell({
   bpm,
   overridden,
+  regridding,
   editing,
   onEdit,
   onCommit,
@@ -668,6 +697,7 @@ function BpmCell({
 }: {
   bpm: number;
   overridden: boolean;
+  regridding: boolean;
   editing: boolean;
   onEdit: () => void;
   onCommit: (raw: string) => void;
@@ -680,12 +710,20 @@ function BpmCell({
   return (
     <span
       className={
-        "songrow__bpm numeric" + (overridden ? " songrow__bpm--manual" : "")
+        "songrow__bpm numeric" +
+        (overridden ? " songrow__bpm--manual" : "") +
+        (regridding ? " songrow__bpm--regridding" : "")
       }
+      // The correction is saved the instant it is typed; the beat grid it
+      // implies has to be tracked against the audio, which takes seconds. A
+      // cell that looked finished during that window would be claiming the mix
+      // is aligned before it is.
       title={
-        overridden
-          ? "Corrected by hand. Double-click to change, or clear the box to go back to the detected tempo."
-          : "Double-click to correct the tempo"
+        regridding
+          ? "Saved. Finding the beats at this tempo — mixing uses an approximate grid until it is done."
+          : overridden
+            ? "Corrected by hand. Double-click to change, or clear the box to go back to the detected tempo."
+            : "Double-click to correct the tempo"
       }
       onDoubleClick={(e) => {
         // Without this the row's own double-click starts playing the track.

@@ -38,6 +38,20 @@ pub struct Analysis {
     /// Beat positions in seconds, covering the whole track.
     #[serde(default)]
     pub beats: Vec<f32>,
+    /// The tempo `beats` was tracked against.
+    ///
+    /// Normally `bpm`. It differs after a hand-corrected tempo has been
+    /// re-tracked, and the two are kept apart so a grid can never be silently
+    /// read at a tempo it was not built for — a grid tracked at 256 is wrong in
+    /// exactly the way a 128 correction was made to fix.
+    ///
+    /// Zero means "not recorded", which is every entry written before this
+    /// field existed, and for those `bpm` is the answer. That is why adding it
+    /// does not bump [`ANALYSIS_VERSION`]: the old value is recoverable, so
+    /// re-analysing an entire library to learn something already known would be
+    /// cost for nothing.
+    #[serde(default)]
+    pub beats_bpm: f32,
     pub cue_in: f32,
     pub cue_out: f32,
     pub lufs: f32,
@@ -81,6 +95,28 @@ pub struct Analysis {
 /// resumable, cached per track, and now has a progress bar and a stop button.
 pub const ANALYSIS_VERSION: u32 = 4;
 
+impl Analysis {
+    /// The tempo this entry's beat grid was actually tracked against.
+    ///
+    /// See [`Analysis::beats_bpm`] for why an unrecorded value means `bpm`.
+    pub fn beats_tracked_at(&self) -> f32 {
+        if self.beats_bpm > 0.0 {
+            self.beats_bpm
+        } else {
+            self.bpm
+        }
+    }
+
+    /// Whether the stored grid can be trusted for a track playing at `bpm`.
+    ///
+    /// The tolerance is a tenth of a BPM — wide enough to survive a round trip
+    /// through the JSON cache, narrow enough that a real correction never
+    /// passes.
+    pub fn beats_are_for(&self, bpm: f32) -> bool {
+        !self.beats.is_empty() && (self.beats_tracked_at() - bpm).abs() < 0.1
+    }
+}
+
 /// Analysis results keyed by href.
 pub type Cache = HashMap<String, Analysis>;
 
@@ -113,6 +149,7 @@ pub fn analyse_file(path: &Path) -> Result<Analysis, String> {
         bpm: result.bpm,
         key: result.camelot,
         beats: result.beats,
+        beats_bpm: result.bpm,
         cue_in: result.cue_in,
         cue_out: result.cue_out,
         lufs: result.lufs,

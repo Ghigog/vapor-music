@@ -1551,7 +1551,10 @@ fn shared_document(app: &AppState) -> vapor_library::sync::Shared {
 /// pulling overwrites theirs. Doing them separately means a person has to know
 /// to do both, in the right order.
 #[tauri::command]
-fn sync_shared_document(state: State<'_, Shared>) -> Result<SharedSyncResult> {
+fn sync_shared_document(
+    app_handle: tauri::AppHandle,
+    state: State<'_, Shared>,
+) -> Result<SharedSyncResult> {
     let (remote_config, href) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
         if !app.settings.remote.is_configured() {
@@ -1628,7 +1631,21 @@ fn sync_shared_document(state: State<'_, Shared>) -> Result<SharedSyncResult> {
     }
 
     let outgoing = shared_document(&app);
+    // A tempo that arrived from another device is a correction like any other,
+    // and leaves this device's beat grid tracked at the number it replaced. The
+    // whole library is offered rather than only the merged hrefs — `stale_grids`
+    // is the predicate for what actually needs work, and the report only carries
+    // a count.
+    let corrected: Vec<String> = if result.tempos_added > 0 {
+        app.settings.bpm_overrides.keys().cloned().collect()
+    } else {
+        Vec::new()
+    };
     drop(app);
+
+    if !corrected.is_empty() {
+        retrack_grids(&app_handle, state.inner(), corrected);
+    }
 
     let bytes = serde_json::to_vec_pretty(&outgoing).map_err(|e| Error(e.to_string()))?;
     fetcher.put(&href, bytes).map_err(Error)?;
@@ -2350,12 +2367,15 @@ fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
 /// said is wrong.
 fn beat_grid(analysis: &analysis::Analysis, override_bpm: Option<f32>) -> vapor_engine::BeatGrid {
     let bpm = override_bpm.unwrap_or(analysis.bpm);
-    // The tracked grid follows real tempo drift and real downbeat phase. It is
-    // only consistent with the detected tempo, though — a corrected BPM means
-    // synthesising a grid from it instead, which assumes a beat at zero and a
-    // tempo that never wavers. Both are false for real music, and it is still
-    // better than aligning to a grid the person has told us is wrong.
-    let beats = if override_bpm.is_none() && !analysis.beats.is_empty() {
+    // A tracked grid follows real tempo drift and real downbeat phase, and is
+    // what mixing wants — but only if it was tracked at the tempo now in force.
+    // Correcting a track from 256 to 128 leaves a grid built on every eighth,
+    // and aligning to that is aligning to the error the correction was made to
+    // fix. `retrack_after_correction` re-runs the tracker against the corrected
+    // number, and until it lands this falls back to a synthetic grid: a beat at
+    // zero, a tempo that never wavers, both false for real music and both still
+    // better than a grid at a tempo the person has said is wrong.
+    let beats = if analysis.beats_are_for(bpm) {
         analysis.beats.clone()
     } else {
         let period = 60.0 / bpm.max(1.0);
@@ -3786,8 +3806,18 @@ fn settings(state: State<'_, Shared>) -> Result<Settings> {
 /// A refused value is an error rather than a silent no-op: the person is
 /// looking at the number they just typed, and a correction that appeared to be
 /// accepted but was not is worse than no correction at all.
+///
+/// The number is stored here and returns immediately; the beat grid it implies
+/// is re-tracked in the background by [`retrack_after_correction`], because a
+/// correction that only changed the label would leave mixing aligned to the
+/// tempo it was made to reject.
 #[tauri::command]
-fn set_bpm_override(href: String, bpm: f32, state: State<'_, Shared>) -> Result<()> {
+fn set_bpm_override(
+    href: String,
+    bpm: f32,
+    app_handle: tauri::AppHandle,
+    state: State<'_, Shared>,
+) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     if !app.settings.set_bpm_override(&href, bpm) {
         return Err(Error(format!(
@@ -3797,7 +3827,128 @@ fn set_bpm_override(href: String, bpm: f32, state: State<'_, Shared>) -> Result<
         )));
     }
     app.save_settings()?;
+    drop(app);
+
+    retrack_grids(&app_handle, state.inner(), vec![href]);
     Ok(())
+}
+
+/// What the UI is told about a re-tracking job.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetrackProgress {
+    href: String,
+    /// The tempo being tracked against.
+    bpm: f32,
+    /// Absent while the job runs, then the count of beats found.
+    beats: Option<usize>,
+    /// Why it could not be done. A track that is not downloaded yet is the
+    /// common one, and it is not a failure of the correction — the number is
+    /// stored either way.
+    error: Option<String>,
+}
+
+/// Which of `hrefs` hold a beat grid tracked at a tempo no longer in force.
+///
+/// The predicate covers every way the two can drift apart, rather than only the
+/// correction that was just typed: a tempo arriving over sync, a correction made
+/// before grids were re-tracked at all, and a correction *cleared* — clearing
+/// puts the detected tempo back in force, which leaves the corrected grid as
+/// wrong as the one it replaced.
+fn stale_grids(app: &AppState, hrefs: &[String]) -> Vec<(String, f32)> {
+    hrefs
+        .iter()
+        .filter_map(|href| {
+            // Never analysed is not stale. Whenever the pass reaches it, it
+            // reads the correction and tracks against that from the start.
+            let analysis = app.analysis.get(href)?;
+            let target = app.settings.bpm_override(href).unwrap_or(analysis.bpm);
+            (!analysis.beats_are_for(target)).then(|| (href.clone(), target))
+        })
+        .collect()
+}
+
+/// Re-track beat grids against the tempos now in force.
+///
+/// Runs on one blocking thread, sequentially, for the reason `analysis::run`
+/// gives: this is decode-bound, and saturating every core to fix a beat grid
+/// would make the app stutter while music is playing. The corrections
+/// themselves are already saved, so nothing waits on this — a failure costs the
+/// grid quality and not the number.
+fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, hrefs: Vec<String>) {
+    use tauri::Emitter;
+
+    let Ok(app) = shared.lock() else { return };
+    let todo = stale_grids(&app, &hrefs);
+    if todo.is_empty() {
+        return;
+    }
+    let (cache_dir, cache_max) = (app.cache.dir().to_path_buf(), app.cache.max_bytes());
+    let remote = app.settings.remote.clone();
+    drop(app);
+
+    for (href, bpm) in &todo {
+        let _ = app_handle.emit(
+            "bpm-retrack",
+            &RetrackProgress {
+                href: href.clone(),
+                bpm: *bpm,
+                beats: None,
+                error: None,
+            },
+        );
+    }
+
+    let state_arc: Shared = Arc::clone(shared);
+    let handle = app_handle.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = cache::Cache::new(cache_dir, cache_max);
+        // One session for the batch, as the analysis pass does: one keychain
+        // read and one connection rather than one of each per track.
+        let fetcher = webdav::Fetcher::new(&remote).ok();
+
+        for (href, bpm) in todo {
+            let path = fetcher
+                .as_ref()
+                .and_then(|f| cache.store(&href, || f.fetch(&href)).ok());
+
+            let outcome = match path {
+                Some(path) => vapor_dsp::retrack_beats_file(&path, bpm).map_err(|e| e.to_string()),
+                None => Err("not available locally".to_string()),
+            };
+
+            let progress = match outcome {
+                Ok(beats) => {
+                    let count = beats.len();
+                    if let Ok(mut app) = state_arc.lock() {
+                        // Re-read rather than reusing the entry from before the
+                        // decode: an analysis pass may have rewritten it while
+                        // this ran, and only the grid belongs to this job.
+                        if let Some(entry) = app.analysis.get_mut(&href) {
+                            entry.beats = beats;
+                            entry.beats_bpm = bpm;
+                        }
+                        let _ = app.save_analysis();
+                    }
+                    RetrackProgress {
+                        href: href.clone(),
+                        bpm,
+                        beats: Some(count),
+                        error: None,
+                    }
+                }
+                Err(e) => RetrackProgress {
+                    href: href.clone(),
+                    bpm,
+                    beats: None,
+                    error: Some(e),
+                },
+            };
+
+            let _ = handle.emit("bpm-retrack", &progress);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -4647,6 +4798,121 @@ mod tests {
             year: 0,
             manual_pos: 0,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Corrected tempos and the grids they imply
+    // -----------------------------------------------------------------------
+
+    /// An analysed track at `bpm`, with a tracked grid to match.
+    fn analysed_at(bpm: f32, duration: f64) -> analysis::Analysis {
+        let period = 60.0 / bpm;
+        let count = (duration as f32 / period) as usize;
+        analysis::Analysis {
+            bpm,
+            beats_bpm: bpm,
+            // Offset, so a synthesised grid starting at zero is distinguishable
+            // from this one rather than accidentally equal to it.
+            beats: (0..count).map(|i| 0.31 + i as f32 * period).collect(),
+            duration,
+            version: analysis::ANALYSIS_VERSION,
+            ..Default::default()
+        }
+    }
+
+    /// The tracked grid is what mixing wants, and it is used when it applies.
+    #[test]
+    fn an_uncorrected_track_mixes_on_its_tracked_grid() {
+        let a = analysed_at(128.0, 300.0);
+        let grid = beat_grid(&a, None);
+        assert_eq!(grid.bpm, 128.0);
+        assert_eq!(grid.beats, a.beats, "the tracked grid was discarded");
+    }
+
+    /// The core of the correction: a grid tracked at the rejected tempo is not
+    /// used at that tempo's corrected value. Detection said 256, the person
+    /// said 128, and the beats on file are still every eighth — aligning to
+    /// them would beat-match to the error.
+    #[test]
+    fn a_correction_refuses_the_grid_tracked_at_the_old_tempo() {
+        let a = analysed_at(256.0, 300.0);
+        let grid = beat_grid(&a, Some(128.0));
+        assert_eq!(grid.bpm, 128.0);
+        assert_ne!(grid.beats, a.beats, "mixed on the grid that was rejected");
+        // The interim synthetic grid, until the re-track lands.
+        assert!((grid.beats[1] - grid.beats[0] - 60.0 / 128.0).abs() < 1e-4);
+    }
+
+    /// And once it has landed, the corrected tempo uses the re-tracked grid —
+    /// which is the whole point, since the synthetic one has no drift and no
+    /// real downbeat phase.
+    #[test]
+    fn a_retracked_grid_is_used_at_the_corrected_tempo() {
+        let mut a = analysed_at(256.0, 300.0);
+        let retracked = analysed_at(128.0, 300.0).beats;
+        a.beats = retracked.clone();
+        a.beats_bpm = 128.0;
+
+        let grid = beat_grid(&a, Some(128.0));
+        assert_eq!(grid.beats, retracked);
+
+        // ...and is refused for the detected tempo, which is the same rule in
+        // the other direction. Clearing a correction has to re-track too.
+        let cleared = beat_grid(&a, None);
+        assert_eq!(cleared.bpm, 256.0);
+        assert_ne!(cleared.beats, retracked);
+    }
+
+    /// A cache entry written before `beatsBpm` existed has a zero there, and
+    /// zero must mean "tracked at the detected tempo" rather than "tracked at
+    /// nothing". Reading it the other way would throw away every grid in an
+    /// existing library and mix the lot on synthetic ones.
+    #[test]
+    fn a_grid_from_before_the_field_existed_is_still_trusted() {
+        let mut a = analysed_at(128.0, 300.0);
+        a.beats_bpm = 0.0;
+
+        assert_eq!(a.beats_tracked_at(), 128.0);
+        assert_eq!(beat_grid(&a, None).beats, a.beats);
+    }
+
+    /// What the background job picks up, in each direction.
+    #[test]
+    fn stale_grids_finds_corrections_made_cleared_and_synced() {
+        let (mut app, _dir) = app();
+
+        app.analysis
+            .insert("/fresh".into(), analysed_at(128.0, 300.0));
+        app.analysis
+            .insert("/corrected".into(), analysed_at(256.0, 300.0));
+        let mut done = analysed_at(256.0, 300.0);
+        done.beats_bpm = 128.0;
+        app.analysis.insert("/done".into(), done);
+
+        app.settings.set_bpm_override("/corrected", 128.0);
+        app.settings.set_bpm_override("/done", 128.0);
+
+        let all = vec![
+            "/fresh".to_string(),
+            "/corrected".to_string(),
+            "/done".to_string(),
+            "/never-analysed".to_string(),
+        ];
+        let stale = stale_grids(&app, &all);
+        assert_eq!(
+            stale,
+            vec![("/corrected".to_string(), 128.0)],
+            "expected only the correction that has not been re-tracked"
+        );
+
+        // Clearing the correction on the one already re-tracked makes *it*
+        // stale: the detected tempo is back in force and its grid is at 128.
+        app.settings.set_bpm_override("/done", 0.0);
+        let stale = stale_grids(&app, &all);
+        assert!(
+            stale.contains(&("/done".to_string(), 256.0)),
+            "clearing a correction left a grid at the corrected tempo, got {stale:?}"
+        );
     }
 
     /// A playlist's order is the playlist's, not the library's. Sorting these

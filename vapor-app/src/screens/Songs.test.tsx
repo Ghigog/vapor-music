@@ -12,11 +12,11 @@
  * rule exists to prevent.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Songs } from "./Songs";
 import { makeRow } from "../test/ipc";
-import { useBackend } from "../test/setup";
+import { emitEvent, useBackend } from "../test/setup";
 
 /** The rows currently in the DOM. Virtualised, so this is what is *visible*. */
 function rows() {
@@ -232,6 +232,69 @@ describe("Songs — correcting a tempo", () => {
     await user.keyboard("{Enter}");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/not plausible/i);
+  });
+
+  /**
+   * A correction changes where the beats are, not just the number in the cell,
+   * so the backend re-tracks the grid against it — which needs the audio and
+   * takes seconds. During that window the track still mixes, on an approximate
+   * grid, and the cell has to say so. A cell that looked finished would be
+   * claiming an alignment that is not there yet.
+   */
+  it("says so while the beat grid is being rebuilt", async () => {
+    useBackend();
+    render(<Songs />);
+
+    const row = (await screen.findByText("Not Yet Analysed")).closest(
+      "[role=option]",
+    ) as HTMLElement;
+    const href = "/dav/Koofr/Music/unanalysed.mp3";
+
+    act(() => {
+      emitEvent("bpm-retrack", { href, bpm: 128, beats: null, error: null });
+    });
+    expect(
+      within(row).getByTitle(/finding the beats at this tempo/i),
+    ).toBeInTheDocument();
+
+    // Finished: back to the ordinary cell, still correctable.
+    act(() => {
+      emitEvent("bpm-retrack", { href, bpm: 128, beats: 642, error: null });
+    });
+    expect(
+      within(row).queryByTitle(/finding the beats at this tempo/i),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * A failed re-track clears the marker too. The correction itself is saved
+   * either way, so leaving the cell pulsing forever would report a job that is
+   * not running.
+   */
+  it("stops saying so when the rebuild fails", async () => {
+    useBackend();
+    render(<Songs />);
+
+    const row = (await screen.findByText("Not Yet Analysed")).closest(
+      "[role=option]",
+    ) as HTMLElement;
+    const href = "/dav/Koofr/Music/unanalysed.mp3";
+
+    act(() => {
+      emitEvent("bpm-retrack", { href, bpm: 128, beats: null, error: null });
+    });
+    act(() => {
+      emitEvent("bpm-retrack", {
+        href,
+        bpm: 128,
+        beats: null,
+        error: "not available locally",
+      });
+    });
+
+    expect(
+      within(row).queryByTitle(/finding the beats at this tempo/i),
+    ).not.toBeInTheDocument();
   });
 
   it("rejects text that is not a number without calling the backend", async () => {
