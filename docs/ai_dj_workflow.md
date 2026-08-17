@@ -86,8 +86,19 @@ Build and Chill are linear ramps across the set. Wave completes one full cycle �
 up, back through the middle, down, and home. Hold Steady sets a flat target, so
 only transition cost decides the order.
 
-Energy is loudness, brightness and tempo in equal parts, which is what separates
-a loud ballad from a quiet banger; loudness alone cannot.
+Energy is integrated loudness, mapped to 0–1 over −30 to −5 LUFS.
+
+It was a dynamics ratio — mean RMS over peak RMS — until 2026-08-17. That
+measures how *consistent* a track is rather than how hard it goes: one that sits
+at a single level scores high and one with a breakdown scores low. Measured on a
+real 534-track library it put drum & bass at 0.661 against 0.629 for ballads,
+ranges overlapping completely, with the quietest records at the top. It was
+deciding the curves, the energy term in the transition cost, and whether two
+tracks count as a match.
+
+Loudness separates the same two groups by 0.256 instead of 0.031. The spec used
+to claim energy was "loudness, brightness and tempo in equal parts"; it never
+was, and the sentence outlived the code it described.
 
 Tracks with no analysis are not placed, because the cost model has no tempo or
 key to place them by. They are appended at the end and the screen says how many.

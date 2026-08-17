@@ -13,7 +13,10 @@
  * two numbers and then playing a hard cut. `matchable` comes from
  * `Mixer::tempo_ratio`, not from a comparison invented here.
  *
- * Energy is loudness, brightness and tempo in equal parts — enough to keep a
+ * Energy is integrated loudness, mapped to 0–1. It was a dynamics ratio until
+ * 2026-08-17, which measured how *consistent* a track is rather than how hard
+ * it goes, and put ballads above drum & bass. See
+ * `vapor_library::intensity_from_lufs` — enough to keep a
  * loud ballad and a quiet banger apart, which loudness alone could not.
  */
 
@@ -354,8 +357,8 @@ export function Vibe({
           {result && <p className="vibe__result">{result}</p>}
           {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
           <p className="vibe__note">
-            Energy is loudness, brightness and tempo in equal parts — enough to
-            tell a loud ballad from a quiet banger, which loudness alone cannot.
+            Energy is how loud a track is mastered — the difference between a
+            record that hits and one that sits back.
           </p>
 
           {/*

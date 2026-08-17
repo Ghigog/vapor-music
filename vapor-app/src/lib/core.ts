@@ -944,7 +944,9 @@ export interface Analysis {
   key: string;
   introKey: string;
   outroKey: string;
-  /** Perceived energy, 0–1 — loudness, brightness and tempo. */
+  /** Perceived energy, 0–1, from integrated loudness. Not the stored
+   *  `energy` field, which is a consistency ratio — see
+   *  `vapor_library::intensity_from_lufs`. */
   energy: number;
   beats: number[];
   cueIn: number;
