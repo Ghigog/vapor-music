@@ -14,6 +14,19 @@
  * clean build — which makes it exactly the kind of thing that gets described as
  * "it just didn't open" and never reproduced.
  *
+ * ## What this can and cannot catch
+ *
+ * It runs immediately after `vite build`, so it verifies the bundle that build
+ * just produced. `tauri build` regenerates `dist` through this same script
+ * before packaging, which means a `dist` that was *already* torn is simply
+ * replaced rather than caught — that path is safe for a different reason.
+ *
+ * What it catches is a build that produced an inconsistent or empty `dist` of
+ * its own accord, and a hand-run `npm run build` whose output is broken before
+ * anyone packages it. What it cannot catch is another process rewriting `dist`
+ * in the window between this check and the point Tauri embeds the files; that
+ * window is small and the answer to it is not to run two builds at once.
+ *
  * Run after any build that will be shipped or bundled.
  */
 

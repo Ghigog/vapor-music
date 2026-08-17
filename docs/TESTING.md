@@ -133,11 +133,19 @@ registered, every registered command exists, argument names agree, and nothing
 is registered that nothing calls.
 
 `verify-dist.mjs` covers the other seam. Vite names chunks by content hash, so
-two overlapping builds can leave `index.html` pointing at a file that is no
-longer there. The app then starts, serves the page, loads no JavaScript, and
-shows an empty window — with no React, not even the error boundary reports it.
-The check runs inside `npm run build`, which is Tauri's `beforeBuildCommand`,
-so packaging fails rather than shipping a blank app.
+a build can leave `index.html` pointing at a file that is not there. The app
+then starts, serves the page, loads no JavaScript, and shows an empty window —
+with no React, not even the error boundary reports it. The check runs inside
+`npm run build` and fails it.
+
+**Its reach was checked rather than assumed, and it is narrower than it first
+looks.** `tauri build` runs `npm run build` before packaging, so a `dist` that
+was already torn is regenerated rather than caught — that path is safe for a
+different reason. What the check actually gates is a build that produced a
+broken `dist` of its own accord, and a hand-run build whose output is broken
+before anyone packages it. It does not close the window between the check and
+the moment Tauri embeds the files; nothing short of not running two builds at
+once does.
 
 Both were confirmed to fail against a deliberately broken input before being
 kept. A source-reading test that quietly matches nothing reports success for
