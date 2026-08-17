@@ -35,6 +35,33 @@ const ECHO_FEEDBACK: f32 = 0.316;
 const FREEZE_ROOM: f32 = 0.95;
 const FREEZE_DAMPING: f32 = 0.1;
 
+/// The most a deck may be turned up.
+///
+/// Transitions only ever fade *down* from 0 dB, so this is not a musical
+/// limit — it is the ceiling that stops an arithmetic accident becoming an
+/// infinite gain. `10f32.powf(1e9 / 20.0)` is `inf`, and `inf` reaches the
+/// output device just as readily as a number does.
+const MAX_GAIN_DB: f32 = 24.0;
+
+/// A decibel value fit to be used, clamped into `[lo, hi]`.
+///
+/// The finite check has to come first. `f32::clamp` returns NaN for a NaN
+/// input rather than a bound, so clamping alone lets a NaN straight through to
+/// a gain coefficient or a filter — and a NaN in a feedback path does not pass:
+/// it poisons every sample after it.
+///
+/// A non-finite input is treated as the floor rather than ignored, because the
+/// two things it can mean — automation divided by a zero-length transition, or
+/// a value that overflowed — are both better answered with silence than with
+/// whatever the deck happened to be doing before.
+fn db(value: f32, lo: f32, hi: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(lo, hi)
+    } else {
+        lo
+    }
+}
+
 pub struct Deck {
     source: TrackSource,
     sample_rate: f32,
@@ -153,10 +180,16 @@ impl Deck {
     fn refresh_eq(&mut self) {
         // Ducking stacks on top of the transition's own EQ automation, matching
         // `_apply_final_eq_gains` in audio_manager.gd.
+        //
+        // `clamp` is not a guard against a non-finite input: `f32::clamp`
+        // returns NaN for NaN, so a NaN reaching here becomes a NaN filter
+        // coefficient, and a biquad with a NaN coefficient is poisoned for the
+        // life of the deck — its state never recovers, because every output
+        // feeds the next input. `db` handles that before the clamp can.
         self.eq.set_gains(
-            (self.eq_db.low + self.clip_atten.low).clamp(-40.0, 0.0),
-            (self.eq_db.mid + self.clip_atten.mid).clamp(-40.0, 0.0),
-            (self.eq_db.high + self.clip_atten.high).clamp(-40.0, 0.0),
+            db(self.eq_db.low + self.clip_atten.low, -40.0, 0.0),
+            db(self.eq_db.mid + self.clip_atten.mid, -40.0, 0.0),
+            db(self.eq_db.high + self.clip_atten.high, -40.0, 0.0),
         );
     }
 
@@ -201,13 +234,20 @@ impl Deck {
         self.starved
     }
 
-    pub fn set_gain_db(&mut self, db: f32) {
+    pub fn set_gain_db(&mut self, decibels: f32) {
         // -60 dB is the floor the Godot transitions fade to; treat it as
         // silence so a "faded out" deck contributes exactly nothing.
-        self.gain = if db <= -60.0 {
+        //
+        // The clamp above the floor is what stops a runaway automation value
+        // reaching the output device. `NaN <= -60.0` is false, so without a
+        // finite check a NaN decibel became `10^(NaN/20)` — a NaN gain, and
+        // then every sample of both channels is NaN for as long as it is set.
+        // That is not a quiet failure on real hardware.
+        let decibels = db(decibels, -60.0, MAX_GAIN_DB);
+        self.gain = if decibels <= -60.0 {
             0.0
         } else {
-            10f32.powf(db / 20.0)
+            10f32.powf(decibels / 20.0)
         };
     }
 
