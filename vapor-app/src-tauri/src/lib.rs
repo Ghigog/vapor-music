@@ -2628,15 +2628,41 @@ fn bpm_of(analysis: &analysis::Analysis, app: &AppState, href: &str) -> f32 {
 /// `_get_match_type_between` calls a genre jump "creative" and steers it toward
 /// an effect-led transition. `is_similar_genre` is already ported, so this asks
 /// the original's question with the original's answer.
+/// Everything this device knows about a track's genre.
+///
+/// Three sources, and the DJ used to see none of them. `app.rows` carries the
+/// genre the *scan* found, which is empty for every track in a folder-organised
+/// library — the tag is read later, and `apply_tags` merges it in only on the
+/// way out to a screen. So the pool the DJ reasons over had an empty genre for
+/// all 563 tracks, `same_genre` answered "yes, similar" to every pair, and a
+/// genre was never once part of a decision.
+///
+/// The looked-up genre counts too: it is the only source for a library whose
+/// files carry no tags, which is most of them here — 46 of 534.
+fn genre_of(app: &AppState, href: &str) -> String {
+    let scanned = app
+        .rows
+        .iter()
+        .find(|r| r.href == href)
+        .map(|r| r.genre.clone())
+        .unwrap_or_default();
+    if !scanned.trim().is_empty() {
+        return scanned;
+    }
+    if let Some(tagged) = app.tags.get(href).and_then(|t| t.genre.clone()) {
+        if !tagged.trim().is_empty() {
+            return tagged;
+        }
+    }
+    app.looked
+        .get(href)
+        .map(|l| l.genre.clone())
+        .filter(|g| !g.trim().is_empty())
+        .unwrap_or_default()
+}
+
 fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
-    let genre_of = |href: &str| {
-        app.rows
-            .iter()
-            .find(|r| r.href == href)
-            .map(|r| r.genre.clone())
-            .unwrap_or_default()
-    };
-    let (ga, gb) = (genre_of(a), genre_of(b));
+    let (ga, gb) = (genre_of(app, a), genre_of(app, b));
     // Unknown on either side is not evidence of a jump.
     if ga.is_empty() || gb.is_empty() {
         return true;
@@ -2697,6 +2723,38 @@ struct ArmedMix {
 /// and the caller falls back to playing the next track when this one ends.
 /// That fallback is the common case, not an error: a queue in title order will
 /// mostly hold neighbours whose tempi are nowhere near each other.
+/// What a candidate of a given kind costs, lower being better.
+///
+/// One definition, used by both the three suggestions on screen and the pick
+/// the set actually takes, so the two cannot drift apart.
+///
+/// Built on [`vapor_library::transition_cost`] — the model ported from the
+/// Godot build, which weighs key, tempo, energy *and genre relatedness*. The
+/// scoring here used to be a separate ad-hoc formula per kind that mentioned
+/// genre nowhere at all, so two tracks from unrelated genres scored exactly as
+/// well as two from the same one. That is what made the suggestions feel
+/// arbitrary and repetitive: with genre absent, the only things left were key
+/// and tempo, and the same handful of tracks win those against everything.
+///
+/// Each kind then adds what it is *for* on top, because a Switch that scored
+/// like a Match would simply be a Match:
+///
+/// * **Match** — the smoothest harmonic step, so the shared cost is enough.
+/// * **Fresh** — §2's target of about 15 BPM and 0.25 of energy of movement,
+///   so distance *from that target* is the penalty rather than distance itself.
+/// * **Switch** — the effect masks the key, so rhythm and energy carry it.
+fn candidate_cost(app: &AppState, from: &TrackMeta, to: &TrackMeta, kind: MatchKind) -> f32 {
+    let base = vapor_library::transition_cost(from, to, app.settings.vibe_limit, 0.0);
+    let bpm_diff = (from.bpm - to.bpm).abs();
+    let energy_diff = (from.energy_level - to.energy_level).abs();
+
+    match kind {
+        MatchKind::Match => base,
+        MatchKind::Fresh => base + (bpm_diff - 15.0).abs() + (energy_diff - 0.25).abs() * 40.0,
+        MatchKind::Switch => base + energy_diff * 20.0,
+    }
+}
+
 /// The track the DJ would pick to follow the one playing.
 ///
 /// The same choice `mix_candidates` marks with `aiChoice`, so the screen and the
@@ -2724,16 +2782,7 @@ fn dj_pick(app: &AppState) -> Option<String> {
         }
         let similar = same_genre(app, &current, href);
         let kind = match_kind_between(from, to, similar);
-        let bpm_diff = (from.bpm - to.bpm).abs();
-        let energy_diff = (from.energy_level - to.energy_level).abs();
-        let key_cost = vapor_library::key_distance(&from.musical_key, &to.musical_key) as f32;
-        // The same scoring `mix_candidates` uses for each kind, so the pick the
-        // screen shows is the pick the set takes.
-        let score = match kind {
-            MatchKind::Match => key_cost * 4.0 + bpm_diff,
-            MatchKind::Fresh => key_cost * 2.0 + (bpm_diff - 8.0).abs() + energy_diff * 10.0,
-            MatchKind::Switch => bpm_diff + energy_diff * 40.0,
-        };
+        let score = candidate_cost(app, from, to, kind);
 
         if best_any.is_none_or(|(s, _)| score < s) {
             best_any = Some((score, href));
@@ -3534,6 +3583,7 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
         .iter()
         .filter_map(|row| {
             let analysis = app.analysis.get(&row.href)?;
+            let genre = genre_of(app, &row.href);
             // An unanalysed track has no tempo and no key, so the cost model
             // cannot place it. Including it with zeros would not make the path
             // longer, it would make it wrong.
@@ -3544,7 +3594,15 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
                 row.href.clone(),
                 TrackMeta {
                     href: row.href.clone(),
-                    bpm: app.settings.bpm_override(&row.href).unwrap_or(analysis.bpm),
+                    // A hand correction wins outright. Otherwise the genre gets
+                    // to resolve which octave the detected tempo is in: a beat
+                    // tracker is reliable about the pulse and unreliable about
+                    // whether a listener counts it at 87 or 174, and nothing
+                    // else the app measures can tell those apart. See
+                    // `vapor_library::octave_correct`.
+                    bpm: app.settings.bpm_override(&row.href).unwrap_or_else(|| {
+                        vapor_library::octave_correct(analysis.bpm, &genre).unwrap_or(analysis.bpm)
+                    }),
                     musical_key: analysis.key.clone(),
                     // Real segment keys where analysis produced them (TD-13);
                     // the whole-track key only where the track was too short
@@ -3560,7 +3618,9 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
                         analysis.outro_key.clone()
                     },
                     energy_level: analysis.energy,
-                    genre: row.genre.clone(),
+                    // Not `row.genre`: that is only what the *scan* found, and
+                    // in a folder-organised library it is empty for everything.
+                    genre,
                 },
             ))
         })
@@ -3726,23 +3786,12 @@ fn mix_candidates(state: State<'_, Shared>) -> Result<Vec<MixCandidate>> {
         }
         let similar = same_genre(&app, &current, href);
         let kind = match_kind_between(from, to, similar);
-        let bpm_diff = (from.bpm - to.bpm).abs();
-        let energy_diff = (from.energy_level - to.energy_level).abs();
-        let key_cost = vapor_library::harmonic_relation_cost(&from.musical_key, &to.musical_key);
-
-        // Each kind is scored on what it is *for*, not on one shared notion of
-        // "closest" — a Switch that scored like a Match would just be a Match.
-        let (slot, score) = match kind {
-            // Smoothest harmonic step available.
-            MatchKind::Match => (0, key_cost * 4.0 + bpm_diff),
-            // §2's target: about 15 BPM and 0.25 of energy of movement.
-            MatchKind::Fresh => (
-                1,
-                (bpm_diff - 15.0).abs() + (energy_diff - 0.25).abs() * 40.0,
-            ),
-            // Key is ignored — the effect masks it — so rhythm carries it.
-            MatchKind::Switch => (2, bpm_diff + energy_diff * 40.0),
+        let slot = match kind {
+            MatchKind::Match => 0,
+            MatchKind::Fresh => 1,
+            MatchKind::Switch => 2,
         };
+        let score = candidate_cost(&app, from, to, kind);
 
         if best[slot].is_none_or(|(s, _, _)| score < s) {
             best[slot] = Some((score, to, kind));
@@ -5526,6 +5575,209 @@ mod tests {
 
         assert!(app.queue.set_next("/c.mp3"), "the choice was refused");
         assert_eq!(app.queue.peek_next(None), Some("/c.mp3"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Genre reaching the DJ at all
+    // -----------------------------------------------------------------------
+
+    /// The scan leaves `row.genre` empty in a folder-organised library, so the
+    /// genre lives in the file's tags — and the DJ read the row.
+    #[test]
+    fn the_dj_sees_a_genre_that_only_the_file_tags_carry() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/a.mp3", "A"));
+        assert_eq!(genre_of(&app, "/a.mp3"), "", "nothing to find yet");
+
+        app.tags.insert(
+            "/a.mp3".to_string(),
+            tags::Tags {
+                genre: Some("Drum & Bass".to_string()),
+                ..Default::default()
+            }
+            .into(),
+        );
+        assert_eq!(genre_of(&app, "/a.mp3"), "Drum & Bass");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And the looked-up genre, which for this library is the only source for
+    /// the 488 tracks whose files carry no tag at all.
+    #[test]
+    fn a_looked_up_genre_counts_when_the_file_has_none() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/a.mp3", "A"));
+        app.looked.insert(
+            "/a.mp3".to_string(),
+            metadata::Looked {
+                genre: "House".to_string(),
+                attempted: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(genre_of(&app, "/a.mp3"), "House");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The scan's own genre wins when it has one — it came from the library
+    /// index rather than from a stranger.
+    #[test]
+    fn the_scanned_genre_outranks_a_looked_up_one() {
+        let (mut app, dir) = app();
+        let mut r = row("/a.mp3", "A");
+        r.genre = "Techno".to_string();
+        app.rows.push(r);
+        app.looked.insert(
+            "/a.mp3".to_string(),
+            metadata::Looked {
+                genre: "Pop".to_string(),
+                attempted: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(genre_of(&app, "/a.mp3"), "Techno");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The behaviour you would expect and did not get: of two tracks that are
+    /// otherwise equally good, the DJ takes the one in the same genre.
+    ///
+    /// It could not, because the scoring never mentioned genre — so with key
+    /// and tempo identical, the winner was whichever the map happened to yield
+    /// first. That is what made the suggestions feel arbitrary.
+    #[test]
+    fn genre_decides_between_two_otherwise_identical_candidates() {
+        let (mut app, dir) = app();
+
+        let tracks = [
+            ("/playing.mp3", "Drum & Bass"),
+            ("/same-genre.mp3", "Drum & Bass"),
+            ("/other-genre.mp3", "Classical"),
+        ];
+        for (href, genre) in tracks {
+            let mut r = row(href, href);
+            r.genre = genre.to_string();
+            app.rows.push(r);
+            // Identical in every way the cost model can see except genre.
+            app.analysis
+                .insert(href.to_string(), analysed_track(174.0, "4A", 0.8));
+        }
+        app.queue.set_tracks(vec!["/playing.mp3".to_string()], None);
+        app.playing = Some("/playing.mp3".to_string());
+
+        let pick = dj_pick(&app).expect("a pick");
+        assert_eq!(
+            pick, "/same-genre.mp3",
+            "the DJ ignored genre and took {pick}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And the suggestions on screen agree with it, because both go through
+    /// one cost function.
+    #[test]
+    fn the_screen_and_the_set_score_candidates_the_same_way() {
+        let (mut app, dir) = app();
+        for (href, genre, bpm) in [
+            ("/playing.mp3", "House", 128.0),
+            ("/near.mp3", "House", 129.0),
+            ("/far.mp3", "Folk", 129.0),
+        ] {
+            let mut r = row(href, href);
+            r.genre = genre.to_string();
+            app.rows.push(r);
+            app.analysis
+                .insert(href.to_string(), analysed_track(bpm, "8A", 0.6));
+        }
+        app.playing = Some("/playing.mp3".to_string());
+        let pool = track_meta_pool(&app);
+        let from = pool.get("/playing.mp3").expect("playing");
+
+        let near = candidate_cost(&app, from, pool.get("/near.mp3").unwrap(), MatchKind::Match);
+        let far = candidate_cost(&app, from, pool.get("/far.mp3").unwrap(), MatchKind::Match);
+        assert!(
+            near < far,
+            "a same-genre candidate did not score better: {near} vs {far}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The symptom, end to end: a drum & bass track must not be called a
+    /// match for chill hip hop.
+    ///
+    /// Both read at 87 BPM in the same key with near-identical energy, and both
+    /// readings are correct — Essentia agrees on 87 for the drum & bass. Nothing
+    /// the app measures separates them, so the DJ called it a MATCH and it was
+    /// right to, on the numbers it had. The genre is what says one of those 87s
+    /// is really 174.
+    #[test]
+    fn drum_and_bass_is_not_a_match_for_hip_hop_at_the_same_reading() {
+        let (mut app, dir) = app();
+
+        for (href, genre) in [("/dnb.mp3", "Drum & Bass"), ("/hiphop.mp3", "Hip Hop")] {
+            let mut r = row(href, href);
+            r.genre = genre.to_string();
+            app.rows.push(r);
+            // What analysis actually produced for both.
+            app.analysis
+                .insert(href.to_string(), analysed_track(87.0, "4A", 0.7));
+        }
+        app.playing = Some("/dnb.mp3".to_string());
+
+        let pool = track_meta_pool(&app);
+        let dnb = pool.get("/dnb.mp3").expect("dnb");
+        let hip = pool.get("/hiphop.mp3").expect("hip hop");
+
+        // The genre resolved the octave the beat tracker could not.
+        assert_eq!(dnb.bpm, 174.0, "the drum & bass tempo was not corrected");
+        assert_eq!(hip.bpm, 87.0, "the hip hop tempo was wrongly moved");
+
+        let kind = match_kind_between(dnb, hip, same_genre(&app, "/dnb.mp3", "/hiphop.mp3"));
+        assert_ne!(
+            kind,
+            MatchKind::Match,
+            "a drum & bass track is still being offered as a match for hip hop"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A hand correction still outranks the genre. The person looking at the
+    /// track is the only one who actually knows.
+    #[test]
+    fn a_hand_corrected_tempo_beats_the_genre_guess() {
+        let (mut app, dir) = app();
+        let mut r = row("/dnb.mp3", "d");
+        r.genre = "Drum & Bass".to_string();
+        app.rows.push(r);
+        app.analysis
+            .insert("/dnb.mp3".to_string(), analysed_track(87.0, "4A", 0.7));
+        app.settings.set_bpm_override("/dnb.mp3", 88.0);
+
+        let pool = track_meta_pool(&app);
+        assert_eq!(pool.get("/dnb.mp3").expect("track").bpm, 88.0);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A track with no genre is left exactly as measured — which is most of
+    /// this library, and the reason this is an improvement rather than a fix.
+    #[test]
+    fn a_track_without_a_genre_keeps_its_measured_tempo() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/x.mp3", "x"));
+        app.analysis
+            .insert("/x.mp3".to_string(), analysed_track(87.0, "4A", 0.7));
+
+        let pool = track_meta_pool(&app);
+        assert_eq!(pool.get("/x.mp3").expect("track").bpm, 87.0);
 
         let _ = std::fs::remove_dir_all(dir);
     }
