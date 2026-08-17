@@ -128,6 +128,11 @@ struct AppState {
     pin: Option<String>,
     /// Who is on the network, kept by the beacon thread.
     peers: peers::Peers,
+    /// The beacon and server threads, while sync is on (TD-58).
+    ///
+    /// Held so the switch can stop them. `None` means either sync is off or the
+    /// ports could not be bound, and both mean there is nothing to stop.
+    sync_session: Option<peers::Session>,
     /// Content digests, keyed by href, with the size they were computed at.
     ///
     /// Hashing a library is not free and the answer does not change unless the
@@ -225,6 +230,7 @@ impl AppState {
             pairing: None,
             pin: None,
             peers: Arc::new(Mutex::new(vapor_library::sync::PeerRegistry::new())),
+            sync_session: None,
             digests,
             sync: SyncProgress::default(),
             queue: Queue::default(),
@@ -835,27 +841,38 @@ fn media_keys_available() -> bool {
 /// Turn local-network sync on or off.
 ///
 /// Turning it on starts the beacon and the server there and then, because
-/// "restart the app" is not an answer to "I pressed the switch". Turning it
-/// off stops new adverts and forgets who was paired — the threads themselves
-/// are only stopped by exit, which is TD-58.
+/// "restart the app" is not an answer to "I pressed the switch". Turning it off
+/// stops them the same way (TD-58): the trust is cleared and the two threads
+/// are stopped and joined, so the machine is neither announcing itself nor
+/// holding a port by the time this returns.
 #[tauri::command]
 fn set_sync_enabled(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
     let shared: Shared = Arc::clone(&state);
-    let start = {
+    let (start, session) = {
         let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
         let was = app.settings.sync_enabled;
         app.settings.sync_enabled = enabled;
-        if !enabled {
+        let session = if enabled {
+            None
+        } else {
             // Off means off: a device that can no longer be discovered should
             // not still be trusted by one that can.
             app.trust = vapor_library::sync::Trust::new();
             app.pairing = None;
             app.pin = None;
             app.save_trust()?;
-        }
+            app.sync_session.take()
+        };
         app.save_settings()?;
-        enabled && !was
+        (enabled && !was, session)
     };
+
+    // Outside the lock. Stopping joins two threads, and one of them takes the
+    // peer registry's lock on the way round — holding the app lock across that
+    // is a deadlock waiting for the right moment.
+    if let Some(session) = session {
+        session.stop();
+    }
 
     if start {
         let (id, name, kind, registry) = {
@@ -873,8 +890,16 @@ fn set_sync_enabled(enabled: bool, state: State<'_, Shared>) -> Result<Settings>
                 Arc::clone(&app.peers),
             )
         };
-        peers::spawn_beacon(registry, id, name, kind);
-        peers::spawn_server(Arc::new(ServedLibrary(Arc::clone(&shared))));
+        let started = peers::start(
+            registry,
+            id,
+            name,
+            kind,
+            Arc::new(ServedLibrary(Arc::clone(&shared))),
+        );
+        if let Ok(mut app) = shared.lock() {
+            app.sync_session = started;
+        }
     }
 
     let app = shared.lock().map_err(|e| Error(e.to_string()))?;
@@ -4679,8 +4704,16 @@ pub fn run() {
                         Arc::clone(&state.peers),
                     )
                 };
-                peers::spawn_beacon(registry, id, name, kind);
-                peers::spawn_server(Arc::new(ServedLibrary(Arc::clone(&shared))));
+                let started = peers::start(
+                    registry,
+                    id,
+                    name,
+                    kind,
+                    Arc::new(ServedLibrary(Arc::clone(&shared))),
+                );
+                if let Ok(mut state) = shared.lock() {
+                    state.sync_session = started;
+                }
             }
 
             app.manage(shared);

@@ -2021,11 +2021,15 @@ Worst onset deviation across the transition, from `beat_alignment`:
 **Where:** SYNC-002
 
 
-### TD-58 : (open)
+### TD-58 : (done 2026-08-16)
 
-**Switching sync off does not stop the threads that are already running.** The setting gates whether they start, and turning it off stops adverts being *acted on*, forgets every pairing and refuses every command — but the beacon and the listener live until the process exits. So a machine that had sync on and then turned it off keeps broadcasting until it is relaunched, which is exactly the case the switch exists for. The fix is a shutdown flag the two loops check, plus dropping the listener socket; neither is hard, and doing it properly means the server thread has to stop blocking in `accept`.
+**Switching sync off does not stop the threads that are already running.** The setting gates whether they start, and turning it off stops adverts being *acted on*, forgets every pairing and refuses every command — but the beacon and the listener live until the process exits. So a machine that had sync on and then turned it off keeps broadcasting until it is relaunched, which is exactly the case the switch exists for.
 
-**Waiting for:** nothing — this is code work.
+**Closed by:** `peers::Session` — a stop flag both loops check, and the sockets made interruptible so they can reach the check. The UDP listener takes a 250 ms read timeout; the TCP listener goes non-blocking and polls, since a thread blocked in `accept` cannot notice a switch. `stop()` joins rather than detaching, so the ports are free by the time it returns: toggling off and straight back on is ordinary, and a detached stop would race the new session to the same two ports and lose, reported as "discovery is unavailable" on a machine where nothing is wrong.
+
+The test is `peers::stopping_releases_the_ports_so_sync_can_start_again`, and it asserts the thread count rather than a flag — `start` succeeds if either half binds, so counting is what catches one port leaking while the other is fine. Verified to fail against the old detached behaviour before being kept.
+
+Per-connection threads stay detached: they are bounded by `IO_TIMEOUT` and waiting for them would hold the switch for up to twenty seconds. An in-flight request is refused rather than served, because turning sync off clears the trust and `authorise` answers from that.
 
 **Where:** SYNC-001
 

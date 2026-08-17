@@ -30,7 +30,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -44,6 +44,14 @@ pub const SYNC_PORT: u16 = 7677;
 
 /// How often a device says it is here.
 const BEACON_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long a sync thread may take to notice it has been asked to stop.
+///
+/// Both loops block on a socket, so this is the socket timeout *and* the slice
+/// a sleep is broken into — it bounds how long turning the switch off blocks
+/// the caller. Short enough not to be felt, long enough that an idle machine is
+/// not waking four threads a second to learn nothing has changed.
+const STOP_GRANULARITY: Duration = Duration::from_millis(250);
 
 /// Refusal to wait forever on a peer that opened a connection and went quiet.
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
@@ -283,12 +291,79 @@ pub type Peers = Arc<Mutex<PeerRegistry>>;
 /// Bytes moved since the process started, for the dashboard's rate.
 pub static BYTES_MOVED: AtomicU64 = AtomicU64::new(0);
 
+/// A running sync session — the sockets that are bound and the threads on them.
+///
+/// Held so that turning sync off actually stops it (TD-58). The switch used to
+/// gate only what the threads *did*: adverts stopped being acted on, pairings
+/// were forgotten and every command was refused, but the beacon carried on
+/// broadcasting this machine's name to the network and the listener kept a port
+/// bound until the process exited. A machine that had sync on and then turned
+/// it off is exactly the case the switch exists for.
+pub struct Session {
+    stop: Arc<AtomicBool>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Session {
+    /// Stop the session and wait for its threads to end.
+    ///
+    /// Joining rather than detaching, so that the sockets are unbound by the
+    /// time this returns. Toggling sync off and straight back on is a normal
+    /// thing to do, and a detached stop would race the new session to the same
+    /// two ports and lose — reported as "discovery is unavailable" on a machine
+    /// where nothing is wrong. Bounded by [`STOP_GRANULARITY`].
+    pub fn stop(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for thread in self.threads {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Start the beacon and the server, returning a handle that can stop them.
+///
+/// Returns `None` when neither could start — a locked-down network, or another
+/// copy of the app already holding the ports. There is nothing to stop in that
+/// case, and pretending otherwise would make the switch report a session that
+/// does not exist.
+pub fn start(
+    peers: Peers,
+    id: String,
+    name: String,
+    kind: DeviceKind,
+    library: Arc<dyn Library>,
+) -> Option<Session> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut threads = spawn_beacon(&stop, peers, id, name, kind);
+    threads.extend(spawn_server(&stop, library));
+    if threads.is_empty() {
+        return None;
+    }
+    Some(Session { stop, threads })
+}
+
+/// Sleep in slices, giving up early once `stop` is set.
+fn nap(stop: &AtomicBool, total: Duration) {
+    let mut left = total;
+    while !left.is_zero() && !stop.load(Ordering::Relaxed) {
+        let slice = left.min(STOP_GRANULARITY);
+        std::thread::sleep(slice);
+        left -= slice;
+    }
+}
+
 /// Shout every few seconds, and listen for everyone else.
 ///
 /// Two threads on one socket, because a broadcaster that cannot hear replies
 /// is only half a discovery protocol and binding twice to the same port is not
 /// portable.
-pub fn spawn_beacon(peers: Peers, id: String, name: String, kind: DeviceKind) {
+fn spawn_beacon(
+    stop: &Arc<AtomicBool>,
+    peers: Peers,
+    id: String,
+    name: String,
+    kind: DeviceKind,
+) -> Vec<std::thread::JoinHandle<()>> {
     let socket = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)) {
         Ok(s) => s,
         Err(e) => {
@@ -296,12 +371,20 @@ pub fn spawn_beacon(peers: Peers, id: String, name: String, kind: DeviceKind) {
             // a convenience: without it a person can still sync, they just
             // have to be told about it.
             eprintln!("sync: discovery is unavailable ({e})");
-            return;
+            return Vec::new();
         }
     };
     if let Err(e) = socket.set_broadcast(true) {
         eprintln!("sync: cannot broadcast on this network ({e})");
-        return;
+        return Vec::new();
+    }
+    // Without this the listener blocks in `recv_from` forever and never reaches
+    // the stop check. The timeout is what makes the loop interruptible; the
+    // packets it wakes up for are usually nothing, which is why a timeout is
+    // not an error below.
+    if let Err(e) = socket.set_read_timeout(Some(STOP_GRANULARITY)) {
+        eprintln!("sync: cannot set a discovery timeout ({e})");
+        return Vec::new();
     }
 
     let advert = Advert {
@@ -316,22 +399,35 @@ pub fn spawn_beacon(peers: Peers, id: String, name: String, kind: DeviceKind) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("sync: cannot share the discovery socket ({e})");
-            return;
+            return Vec::new();
         }
     };
     let datagram = advert.encode();
-    let _ = std::thread::Builder::new()
-        .name("vapor-sync-beacon".into())
-        .spawn(move || loop {
-            let _ = shouting.send_to(datagram.as_bytes(), (Ipv4Addr::BROADCAST, DISCOVERY_PORT));
-            std::thread::sleep(BEACON_INTERVAL);
-        });
+    let mut threads = Vec::new();
 
-    let _ = std::thread::Builder::new()
+    let shout_stop = Arc::clone(stop);
+    if let Ok(handle) = std::thread::Builder::new()
+        .name("vapor-sync-beacon".into())
+        .spawn(move || {
+            while !shout_stop.load(Ordering::Relaxed) {
+                let _ =
+                    shouting.send_to(datagram.as_bytes(), (Ipv4Addr::BROADCAST, DISCOVERY_PORT));
+                nap(&shout_stop, BEACON_INTERVAL);
+            }
+        })
+    {
+        threads.push(handle);
+    }
+
+    let listen_stop = Arc::clone(stop);
+    if let Ok(handle) = std::thread::Builder::new()
         .name("vapor-sync-listener".into())
         .spawn(move || {
             let mut buffer = [0u8; 2048];
-            loop {
+            while !listen_stop.load(Ordering::Relaxed) {
+                // A timeout lands here as an error, and so does a real failure.
+                // Both mean "nothing to do", and the loop condition is what
+                // decides whether to carry on.
                 let Ok((read, from)) = socket.recv_from(&mut buffer) else {
                     continue;
                 };
@@ -350,27 +446,65 @@ pub fn spawn_beacon(peers: Peers, id: String, name: String, kind: DeviceKind) {
                     registry.saw(&heard, &address, now());
                 }
             }
-        });
+        })
+    {
+        threads.push(handle);
+    }
+
+    threads
 }
 
 /// Serve requests from other devices.
-pub fn spawn_server(library: Arc<dyn Library>) {
+fn spawn_server(
+    stop: &Arc<AtomicBool>,
+    library: Arc<dyn Library>,
+) -> Vec<std::thread::JoinHandle<()>> {
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, SYNC_PORT)) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("sync: cannot accept connections ({e})");
-            return;
+            return Vec::new();
         }
     };
+    // `accept` blocks, and a blocked accept cannot notice the switch. Polling
+    // rather than blocking is what makes the server stoppable; the cost is one
+    // wake-up per `STOP_GRANULARITY` on a thread that is otherwise idle.
+    if let Err(e) = listener.set_nonblocking(true) {
+        eprintln!("sync: cannot poll for connections ({e})");
+        return Vec::new();
+    }
 
-    let _ = std::thread::Builder::new()
+    let accept_stop = Arc::clone(stop);
+    let Ok(handle) = std::thread::Builder::new()
         .name("vapor-sync-server".into())
         .spawn(move || {
-            for stream in listener.incoming().flatten() {
+            while !accept_stop.load(Ordering::Relaxed) {
+                let stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        nap(&accept_stop, STOP_GRANULARITY);
+                        continue;
+                    }
+                    Err(_) => continue,
+                };
+                // The listener is non-blocking and the accepted socket inherits
+                // that on some platforms, which would turn every read in
+                // `serve` into an immediate WouldBlock. `serve` sets its own
+                // timeouts and expects to block within them.
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
+
                 let library = Arc::clone(&library);
                 // A connection per thread. The expected concurrency is "the
                 // other device", and a thread pool for that would be more
                 // machinery than the problem.
+                //
+                // Detached rather than joined on stop: these are bounded by
+                // `IO_TIMEOUT` already, and a stop that waited for them would
+                // hold the switch for up to twenty seconds. An in-flight
+                // request is refused rather than served — turning sync off
+                // clears the trust, and `authorise` answers from that.
                 let _ = std::thread::Builder::new()
                     .name("vapor-sync-conn".into())
                     .spawn(move || {
@@ -379,7 +513,12 @@ pub fn spawn_server(library: Arc<dyn Library>) {
                         }
                     });
             }
-        });
+        })
+    else {
+        return Vec::new();
+    };
+
+    vec![handle]
 }
 
 fn serve(library: &dyn Library, stream: TcpStream) -> std::io::Result<()> {
@@ -745,6 +884,59 @@ mod tests {
             let pin = new_pin();
             assert_eq!(pin.len(), 6, "{pin}");
             assert!(pin.chars().all(|c| c.is_ascii_digit()), "{pin}");
+        }
+    }
+
+    /// TD-58: stopping actually stops, and the proof is that it can start again.
+    ///
+    /// Asserting on the flag would only test that a boolean was set. The thing
+    /// that was wrong is that the sockets stayed bound for the life of the
+    /// process, and the observable consequence of fixing it is that the same
+    /// two ports can be taken a second time — which is also the real sequence,
+    /// since a person who turns sync off and back on is not restarting the app
+    /// in between.
+    ///
+    /// If the first start fails there is no network to test on — a locked-down
+    /// CI container, or another copy of the app holding the ports — and the
+    /// test says so rather than failing for a reason that is not this one.
+    #[test]
+    fn stopping_releases_the_ports_so_sync_can_start_again() {
+        let registry: Peers = Arc::new(Mutex::new(PeerRegistry::new()));
+        let begin = || {
+            start(
+                Arc::clone(&registry),
+                "device-a".to_string(),
+                "Test".to_string(),
+                DeviceKind::Desktop,
+                Arc::new(Fixture::new()),
+            )
+        };
+
+        // Beacon, listener, server. Counting them rather than only asking
+        // whether *something* started: `start` succeeds if either half binds,
+        // so a leak of one port would otherwise pass this test while leaving
+        // the machine announcing itself with the switch off.
+        const THREADS: usize = 3;
+
+        let Some(session) = begin() else {
+            eprintln!("skipped: the discovery and sync ports could not be bound here");
+            return;
+        };
+        if session.threads.len() != THREADS {
+            eprintln!("skipped: only part of the network is available here");
+            session.stop();
+            return;
+        }
+        session.stop();
+
+        let again = begin();
+        let count = again.as_ref().map(|s| s.threads.len()).unwrap_or(0);
+        assert_eq!(
+            count, THREADS,
+            "a port was still held after stop — a thread outlived it"
+        );
+        if let Some(session) = again {
+            session.stop();
         }
     }
 }
