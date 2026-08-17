@@ -120,63 +120,90 @@
 
 .vibe__curves {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 8px;
 }
 
+/* Colour and shape instead of a sentence.
+   Each swatch is the curve's own colour — warm for the ones that climb, cool
+   for the one that falls — with the actual `Curve::target_energy` drawn across
+   it. The prose said "Energy +0.4, tempo +15 BPM across the set", which is
+   accurate and is not what anyone is choosing between. */
 .vibe__curve {
+  --curve: var(--accent-rgb);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 11px 13px;
-  border: 1px solid var(--glass-rim);
+  align-items: stretch;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(var(--curve), 0.3);
   border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.6);
+  background: rgba(var(--curve), 0.09);
   cursor: pointer;
-  text-align: left;
   font-family: inherit;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 
-.vibe__curve:hover {
-  background: #fff;
+.vibe__curve:hover:not(:disabled) {
+  background: rgba(var(--curve), 0.16);
+}
+
+.vibe__curve:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .vibe__curve--on {
-  border-color: var(--accent);
-  background: rgba(var(--accent-rgb), 0.08);
+  border-color: rgb(var(--curve));
+  background: rgba(var(--curve), 0.22);
+  box-shadow: inset 0 0 0 1px rgb(var(--curve));
+}
+
+.vibe__curve-shape {
+  width: 100%;
+  height: 28px;
+  display: block;
+  overflow: visible;
+}
+
+.vibe__curve-shape path {
+  fill: none;
+  stroke: rgb(var(--curve));
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* Drawn in a 100x32 box stretched to the swatch, so the stroke has to be
+     told not to stretch with it. */
+  vector-effect: non-scaling-stroke;
 }
 
 .vibe__curve-label {
-  font-size: var(--fs-body);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   color: var(--ink);
+  text-align: center;
 }
 
-.vibe__curve-blurb {
-  font-size: var(--fs-sm);
-  color: var(--ink-2);
+/* The four colours. Build climbs and is warm; Chill falls and is cool; Wave
+   is the accent because it is the one that does both; Steady is deliberately
+   the quietest thing on the screen. */
+.vibe__curve--build {
+  --curve: var(--amber-rgb);
 }
 
-.vibe__go {
-  padding: 13px 20px;
-  border: 0;
-  border-radius: var(--r-lg);
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: var(--fs-body);
-  font-weight: var(--fw-medium);
-  box-shadow: var(--shadow-sm);
+.vibe__curve--chill {
+  --curve: var(--sov-rgb);
 }
 
-.vibe__go:hover:not(:disabled) {
-  background: var(--accent-bright);
+.vibe__curve--wave {
+  --curve: var(--accent-rgb);
 }
 
-.vibe__go:disabled {
-  opacity: 0.45;
-  cursor: default;
+.vibe__curve--flat {
+  --curve: var(--ink-3-rgb, 120, 124, 134);
 }
 
 .vibe__note {
@@ -187,15 +214,6 @@
   text-wrap: pretty;
 }
 
-.vibe__result {
-  margin: 0;
-  padding: 9px 12px;
-  border-radius: var(--r-md);
-  background: rgba(var(--sov-rgb), 0.1);
-  border: 1px solid rgba(var(--sov-rgb), 0.28);
-  color: var(--sov-ink);
-  font-size: var(--fs-sm);
-}
 
 .vibe__error {
   margin: 0;
@@ -295,93 +313,121 @@
   outline-offset: 2px;
 }
 
-/* ---- The three exits (Match / Fresh / Switch) -------------------------
+/* ---- The three exits (Stay / Follow / Switch) -------------------------
  *
- * Transcribed from the `alternates` rows in the Daylight file: a 70px row of
- * sleeve, title, one mono line of "tempo · key · mix", and a tag pill on the
- * right. The three tag colours are the design's own and they carry the
- * meaning, so a glance says which kind of exit this is without reading it.
+ * Three cards, each led by its sleeve, with the exit word on the art and one
+ * mono line of "tempo · key · mix" beneath. It was three rows inside a glass
+ * panel, transcribed from the `alternates` list in the Daylight file — but
+ * that list was an alternates *list*, and this is a choice between three
+ * records, so the records are what it shows.
+ *
+ * The colour carries the meaning; nothing here needs reading to be understood
+ * at a glance.
  */
 
-.vibe__picks {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
+/* Capped rather than fluid. A 1fr column on a wide window made each sleeve
+   430px tall — the art led the screen so hard there was nothing else on it.
+   The cap is on the card rather than on the track, because `auto-fit` counts
+   tracks at the *maximum* of a `minmax()` when that maximum is a fixed length —
+   `minmax(120px, 190px)` in a 364px column therefore made one track, not two,
+   and a phone stacked all three into a strip you had to scroll past. */
+.vibe__exits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
   list-style: none;
-  margin: 0 0 12px;
+  margin: 0;
   padding: 0;
 }
 
-.vibe__pick {
-  width: 100%;
-  min-height: 70px;
+.vibe__exits > li {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px 10px 10px;
+}
+
+/* The sleeve is the card, not an icon on one.
+   This was a 70px row with a 50px sleeve at the left inside a glass panel —
+   a panel behind album art is a box, not a design, and the sleeve is the one
+   thing anyone recognises a record by. */
+.vibe__exit {
+  --exit: var(--accent-rgb);
+  width: 100%;
+  max-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 12px;
+  border: 1px solid transparent;
   border-radius: var(--r-lg);
+  overflow: hidden;
   text-align: left;
   cursor: pointer;
   font: inherit;
   color: inherit;
-  background: var(--glass-fill);
-  border: 1px solid var(--glass-rim);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: rgba(var(--exit), 0.07);
   transition:
+    transform var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease),
     box-shadow var(--dur-fast) var(--ease);
 }
 
-.vibe__pick:hover {
-  border-color: rgba(var(--accent-rgb), 0.4);
+.vibe__exit:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
 }
 
-.vibe__pick:focus-visible {
-  outline: 2px solid var(--accent);
+.vibe__exit:focus-visible {
+  outline: 2px solid rgb(var(--exit));
   outline-offset: 2px;
 }
 
-/* What is actually queued next. Separate from the AI badge: picking another
-   card moves this ring and leaves the badge where it was, so an override
-   reads as an override (ai_dj_workflow.md §4). */
-.vibe__pick--on {
-  border-color: var(--accent);
-  box-shadow:
-    var(--shadow-sm),
-    inset 0 0 0 1px var(--accent);
+/* What is actually queued next. One ring, in the card's own colour — there is
+   no second state to distinguish it from now that Follow *is* the set. */
+.vibe__exit--on {
+  border-color: rgb(var(--exit));
+  box-shadow: inset 0 0 0 1px rgb(var(--exit));
+  background: rgba(var(--exit), 0.16);
 }
 
-.vibe__pick-art {
-  width: 50px;
-  height: 50px;
-  flex: none;
-  border-radius: var(--r-md);
-  overflow: hidden;
-  /* A sleeveless track still holds the row's shape rather than collapsing it. */
+/* The art and the word it carries. Positioned together so the word sits on
+   the sleeve without anyone having to know how tall the text below it is. */
+.vibe__exit-top {
+  position: relative;
+  display: block;
+}
+
+.vibe__exit-art {
+  display: block;
+  aspect-ratio: 1;
+  width: 100%;
+  /* A sleeveless track still holds the card's shape rather than collapsing it. */
   background: linear-gradient(150deg, #7d9de8, #3a58a8 55%, #1b2a58);
 }
 
-.vibe__pick-art img {
+.vibe__exit-art img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.vibe__pick-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+/* Over the sleeve, bottom-left, so the word reads at a glance and the art is
+   still the biggest thing on the card. */
+.vibe__exit-word {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: rgba(var(--exit), 0.92);
 }
 
-.vibe__pick-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.vibe__exit-title {
+  margin-top: 10px;
+  padding: 0 10px;
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
   color: var(--ink);
@@ -390,10 +436,22 @@
   white-space: nowrap;
 }
 
-.vibe__pick-facts {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+.vibe__exit-artist {
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `display: block`, not flex. `text-overflow: ellipsis` has no effect on the
+   children of a flex container, so this line ran straight out through the
+   rounded corner of the card instead of truncating. */
+.vibe__exit-facts {
+  display: block;
+  margin-top: 3px;
+  padding: 0 10px;
   font-family: var(--font-mono);
   font-size: var(--fs-label);
   color: var(--ink-3);
@@ -403,51 +461,22 @@
 }
 
 .vibe__dot {
+  margin: 0 5px;
   opacity: 0.5;
 }
 
-/* What the DJ *would* have chosen. It stays put when another card is picked. */
-.vibe__ai {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: var(--r-pill);
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  font-weight: var(--fw-regular);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--accent-dim);
-  background: rgba(var(--accent-rgb), 0.12);
+/* The three exit colours. Stay holds the energy, Switch leaves it, and Follow
+   is the set carrying on — so Follow is the accent, the app's own colour. */
+.vibe__exit--stay {
+  --exit: var(--sov-rgb);
 }
 
-.vibe__tag {
-  height: 24px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  border-radius: 12px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  letter-spacing: 0.06em;
+.vibe__exit--follow {
+  --exit: var(--accent-rgb);
 }
 
-.vibe__tag--match {
-  color: var(--sov-ink);
-  background: rgba(var(--sov-rgb), 0.12);
-  border: 1px solid rgba(var(--sov-rgb), 0.3);
-}
-
-.vibe__tag--fresh {
-  color: var(--accent-dim);
-  background: rgba(var(--accent-rgb), 0.1);
-  border: 1px solid rgba(var(--accent-rgb), 0.26);
-}
-
-.vibe__tag--switch {
-  color: var(--amber-ink);
-  background: rgba(var(--amber-rgb), 0.14);
-  border: 1px solid rgba(var(--amber-rgb), 0.36);
+.vibe__exit--switch {
+  --exit: var(--amber-rgb);
 }
 
 /* ---- The Mix Tuner (ai_dj_workflow.md §6) --------------------------------
@@ -485,9 +514,21 @@
   color: var(--ink-2);
 }
 
-/* The blend cost, shown on the row it describes rather than in a card of its
-   own. Dimmer than the tempo and key beside it: it is a consequence of the
+/* The blend cost, shown on the card it describes rather than in a card of its
+   own. Dimmer than the tempo and key above it: it is a consequence of the
    choice, not part of identifying the track. */
-.vibe__pick-warn {
+.vibe__exit-blend {
+  display: block;
+  margin-top: 2px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vibe__exit-warn {
   color: var(--warn, var(--accent));
 }

@@ -152,8 +152,15 @@ export interface TrackMeta {
 
 export type Curve = "build" | "chill" | "wave" | "flat";
 
-/** How a candidate relates to the track playing (docs/ai_dj_workflow.md §2). */
-export type MatchKind = "match" | "fresh" | "switch";
+/**
+ * The three ways out of the track that is playing.
+ *
+ * `follow` is the set: whatever the planner already has queued next. The other
+ * two are departures from it — `stay` holds this energy, `switch` leaves it.
+ * There is no fourth state and no rotation between them; the set follows itself
+ * until someone says otherwise.
+ */
+export type Exit = "stay" | "follow" | "switch";
 
 /** One option for what plays next. */
 export interface MixCandidate {
@@ -162,20 +169,12 @@ export interface MixCandidate {
   artist: string;
   bpm: number;
   key: string;
-  kind: MatchKind;
-  /** The badge text, as the design writes it. */
+  exit: Exit;
+  /** The word on the card: STAY, FOLLOW, SWITCH. */
   label: string;
   /** The mix the engine would actually perform to get there. */
   transition: string;
-  /** Whether the four-step cycle would pick this one unprompted. */
-  aiChoice: boolean;
-  /**
-   * Whether this is what is actually queued next.
-   *
-   * Separate from `aiChoice` on purpose: an override moves the selection and
-   * leaves the badge where it was, so it reads as an override rather than as
-   * the DJ having chosen it all along (ai_dj_workflow.md §4).
-   */
+  /** Whether this is what is actually queued next. */
   selected: boolean;
   /** The sleeve, as the design's alternates carry one. */
   cover: string | null;
@@ -236,6 +235,14 @@ export interface Settings {
    * already built — a set of one track repeated forever.
    */
   djMode: boolean;
+  /**
+   * Where the set is going, as `pathfinder.rs` names the curves.
+   *
+   * Persisted for the same reason `djMode` is: the playback thread extends the
+   * set when the queue runs short, and it does that whether or not the Vibe
+   * screen is open.
+   */
+  curve: Curve;
 }
 
 /** The band the Vibe Limit is offered over. Matches `settings.rs`. */
@@ -253,6 +260,19 @@ export const MAX_VIBE_LIMIT = 1.0;
  */
 export function startupProblems(): Promise<string[]> {
   return invoke<string[]>("startup_problems");
+}
+
+/**
+ * Choose the curve, and re-plan the set along it.
+ *
+ * Saved rather than passed per-call, because the playback thread extends the
+ * set on its own when the queue runs short and has to know where the set is
+ * going without a screen being open. Setting it truncates everything after the
+ * track playing — that tail was a route to the old destination — and plans a
+ * new one.
+ */
+export function setCurve(curve: Curve): Promise<Settings> {
+  return invoke<Settings>("set_curve", { curve });
 }
 
 /** Set the Vibe Limit. Out-of-range values are clamped to the band. */

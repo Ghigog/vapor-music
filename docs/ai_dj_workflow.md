@@ -10,27 +10,70 @@ This guide details the matching algorithms, sequence logic, and interface contro
 
 ---
 
-## 2. Match Classifications
-Instead of arbitrary songs, recommendations are categorized into three distinct profiles based on real-world DJing principles:
-- **Match (`perfect`)**: Perfect Match / Continue Vibe. Selects a harmonically compatible track (Exact key match, Mode Shift, adjacent key Harmonic Step, or Diagonal Step; Camelot distance cost <= 2.0) with the lowest overall transition cost.
-- **Fresh (`interesting`)**: Interesting Match / Innovate Vibe. Restricts candidates to similar/matching genres and specific harmonic key modulations (Energy Boost +2, Energy Drop -2, Power Fifth Mix +7, Subdominant Mix +5, or Diagonal Step; Camelot distance cost 2.0–3.0) to shift the energy of the room. It targets a change of ~15 BPM and ~0.25 energy levels.
-- **Switch (`creative`)**: Creative Match / Switch Genre. Restricts candidates to a different genre, matching the BPM and energy level as closely as possible to keep the rhythm consistent. Key compatibility is ignored since the transition will be masked by high-energy effects (Echo Out / Reverb Freeze).
+## 2. The three exits
+
+Every transition is one of three, judged from the track playing to a candidate.
+The thresholds are in `exit_between` in `vapor-app/src-tauri/src/lib.rs` and were
+measured against a real 534-track library rather than chosen:
+
+- **Stay** — hold this level. Intensity within 0.15 and tempo within 8 BPM, in a
+  similar genre. The engine has an easy time here: the transition is a Bass Swap
+  or a Filter Sweep.
+- **Follow** — carry on. This is not a classification at all: it is whatever the
+  planner (§7) has queued next, which is the whole point of the shape.
+- **Switch** — leave this level. A different genre, or intensity 0.30 apart, or
+  45 BPM apart. Key compatibility matters less because the transition is masked
+  by an effect (Echo Out / Reverb Freeze).
+
+The original's classes were Match / Fresh / Switch, where Fresh meant "similar
+genre, deliberately about 15 BPM and 0.25 energy away". Fresh has become Follow
+because the two were doing the same job badly: Fresh proposed a track the set
+had not planned, so the suggestion and the queue could disagree about what was
+coming next, and the screen showed a badge for one and a highlight for the
+other.
+
+### Filling the three
+
+Stay and Switch are searched in that order, over everything analysed except the
+track playing, what has already played, and the Follow track.
+
+Stay is asked of *every* candidate — "how little does the level move", with
+transition cost breaking ties — not only of the ones inside the band above. A
+library holding nothing within 8 BPM still has a closest track, and offering two
+cards because the third missed a threshold is the screen withholding an answer
+it has. Switch is then taken from what Stay left: among the genuine departures
+if there are any, and otherwise the furthest remaining track.
+
+So the screen shows three cards whenever there are three tracks to fill them.
 
 ---
 
-## 3. The AI Choice Sequence
-When Smart Mixing is active, the AI DJ automatically cycles through a repeating 4-step sequence (the "mood path"):
-- **Step 0**: `perfect` (Match) — Selects the Perfect Match track.
-- **Step 1**: `interesting` (Fresh) — Selects the Fresh Match track.
-- **Step 2**: `perfect` (Match) — Selects the Perfect Match track.
-- **Step 3**: `creative` (Switch) or `interesting` (Fresh) — 50% chance of Switch, 50% chance of Fresh.
+## 3. What happens if nobody presses anything
+
+Follow. The set carries on.
+
+The original cycled Match → Fresh → Match → Switch and called whichever step it
+was on the "AI Choice". That cycle is gone. It made the default answer depend on
+a hidden counter, so the same pair of tracks got a different verdict depending on
+when you arrived, and the counter advanced on manual overrides too — which meant
+overruling one transition silently changed the next one.
 
 ---
 
-## 4. UI Denotations
-- **AI Choice**: The default selection is highlighted and labeled with a `🤖 AI Choice` badge.
-- **User Override**: If you click any other option, the selection highlight moves to represent the manual override, while the `🤖 AI Choice` badge remains on the original card.
-- **Sequence Steps**: The active step count in the mood path advances with each transition.
+## 4. UI denotations
+
+- **One mark, on the queued track.** The card that is queued next carries a ring
+  in its own colour. There is no second mark.
+- **Taking an exit folds it into the set.** Pressing Stay or Switch queues that
+  track and re-plans the tail from it, so on the next render it *is* the Follow
+  card.
+- **Colour carries the exit.** Stay is the sovereignty green, Follow the app
+  accent, Switch amber. The word is on the sleeve as well, because colour alone
+  is not an accessible signal.
+
+There used to be a `🤖 AI Choice` badge that stayed on the DJ's own pick while
+the highlight moved to a manual override. Two marks answering one question is a
+screen disagreeing with itself, and it is gone with the cycle that fed it.
 
 ---
 
@@ -103,16 +146,24 @@ was, and the sentence outlived the code it described.
 Tracks with no analysis are not placed, because the cost model has no tempo or
 key to place them by. They are appended at the end and the screen says how many.
 
-### How it works with Match / Fresh / Switch
+### How it works with the three exits
 
 The two are layers, not alternatives:
 
 - The **curve** owns the destination — where the set should be at step `i`.
-- **Match / Fresh / Switch** owns the next step — which specific track, and how
-  it is mixed in.
+- The **exit** owns the next step — which specific track, and how it is mixed
+  in.
 
-The four-step cycle in §3 is the *default* answer for each transition. Choosing
-one by hand overrides that single step; the remaining plan is then re-searched
-from the new track, against the same curve and the same step positions, so the
-set still arrives where it was going. Being 60% through a Build stays 60%
-through a Build — the arc is preserved, the route to it changes.
+The planner queues ten tracks ahead, and the Follow card is the head of that
+queue, so the default answer for every transition is simply "carry on". Choosing
+Stay or Switch by hand overrides that one step; the remaining plan is then
+re-searched from the new track against the same curve, so the set still arrives
+where it was going. Being 60% through a Build stays 60% through a Build — the
+arc is preserved, the route to it changes.
+
+Choosing a curve does the same thing to the whole tail: everything after the
+track playing was a route to the old destination, so it is discarded and
+re-planned. There is no "Conduct" button, because there is nothing left for it
+to do — the playback thread extends the set along the saved curve whether or not
+the screen is open. It used to be the only thing that ever ran the planner,
+which is why a set was something you had to know to ask for.

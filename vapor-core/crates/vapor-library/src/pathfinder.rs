@@ -54,6 +54,17 @@ impl Curve {
         }
     }
 
+    /// The canonical spelling, so a curve round-trips through settings and the
+    /// wire without drifting into one of the variants `parse` tolerates.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Curve::Build => "build",
+            Curve::Chill => "chill",
+            Curve::Wave => "wave",
+            Curve::Flat => "flat",
+        }
+    }
+
     /// Energy the set should be at, `index` steps into a path of `total`.
     pub fn target_energy(self, start: f32, index: usize, total: usize) -> f32 {
         if total <= 1 {

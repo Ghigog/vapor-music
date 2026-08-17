@@ -41,6 +41,8 @@
   --ink: #14161a;
   --ink-2: #676c75;
   --ink-3: #9ba1aa;
+  /* The same grey as a triple, for rules that need it at partial alpha. */
+  --ink-3-rgb: 155, 161, 170;
   --ink-4: #8b9099;
 
   /* ---- Surfaces ----------------------------------------------------- */
@@ -126,6 +128,7 @@
   --ink: #f2f4f7;
   --ink-2: #a8aeb8;
   --ink-3: #767c86;
+  --ink-3-rgb: 118, 124, 134;
   --ink-4: #6a707a;
 
   --page: #0f1115;
@@ -148,6 +151,7 @@
     --ink: #f2f4f7;
     --ink-2: #a8aeb8;
     --ink-3: #767c86;
+    --ink-3-rgb: 118, 124, 134;
     --ink-4: #6a707a;
 
     --page: #0f1115;

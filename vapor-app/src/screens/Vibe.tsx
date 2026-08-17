@@ -43,16 +43,20 @@ import workflow from "../../../docs/ai_dj_workflow.md?raw";
  * "Hold Steady" is the one label with no origin in the original, since there is
  * nothing to restore it to. Rename it here and nowhere else.
  *
- * The second line is the curve's actual arithmetic, taken from
- * `Curve::target_energy` / `Curve::target_bpm` in `pathfinder.rs`, rather than
- * the prose the rewrite had here ("Starts easy, ends hard"). What the set does
- * is a measurement, and this screen is where a person decides based on it.
+ * Each carried a second line of arithmetic — "Energy +0.4, tempo +15 BPM
+ * across the set" — which is true and is not what anyone is choosing between.
+ * The curve is a shape, so it is drawn: the line in each swatch is the actual
+ * `Curve::target_energy` sampled across the set, and the colour is warm for
+ * the ones that climb and cool for the ones that fall.
  */
-const CURVES: { id: core.Curve; label: string; blurb: string }[] = [
-  { id: "build", label: "Build Vibe", blurb: "Energy +0.4, tempo +15 BPM across the set" },
-  { id: "chill", label: "Chill Down", blurb: "Energy −0.4, tempo −15 BPM across the set" },
-  { id: "wave", label: "Wave", blurb: "Energy ±0.3, tempo ±10 BPM, one full cycle" },
-  { id: "flat", label: "Hold Steady", blurb: "Holds the starting energy and tempo" },
+const CURVES: { id: core.Curve; label: string; line: string }[] = [
+  // Sampled from `Curve::target_energy` in pathfinder.rs at t = 0, ¼, ½, ¾, 1,
+  // as a path across a 100×32 box. Not decoration: a Wave that drew as a
+  // straight line would be a lie about what the planner does.
+  { id: "build", label: "Build Vibe", line: "M0,28 L25,22 L50,16 L75,10 L100,4" },
+  { id: "chill", label: "Chill Down", line: "M0,4 L25,10 L50,16 L75,22 L100,28" },
+  { id: "wave", label: "Wave", line: "M0,16 L25,5 L50,16 L75,27 L100,16" },
+  { id: "flat", label: "Hold Steady", line: "M0,16 L25,16 L50,16 L75,16 L100,16" },
 ];
 
 export function Vibe({
@@ -76,11 +80,11 @@ export function Vibe({
   const [playback, setPlayback] = useState<core.PlaybackState | null>(null);
   const [blend, setBlend] = useState<core.BlendPreview | null>(null);
   const [curve, setCurve] = useState<core.Curve>("build");
-  const [conducting, setConducting] = useState(false);
+  /** True while the planner is re-running, which is a visible pause. */
+  const [planning, setPlanning] = useState(false);
   /** The three ways out of the playing track (docs/ai_dj_workflow.md §2–§4). */
   const [candidates, setCandidates] = useState<core.MixCandidate[]>([]);
   const [helping, setHelping] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /**
    * The Vibe Limit (§6), held locally while the slider is being dragged.
@@ -107,7 +111,13 @@ export function Vibe({
   useEffect(() => {
     core
       .settings()
-      .then((s) => setLimit(s.vibeLimit))
+      .then((s) => {
+        setLimit(s.vibeLimit);
+        // The curve is the backend's, not this component's: the playback
+        // thread extends the set along it whether or not this screen is open,
+        // so showing a local default would show the wrong one.
+        setCurve(s.curve);
+      })
       .catch(() => {});
   }, []);
 
@@ -132,46 +142,36 @@ export function Vibe({
     };
   }, [refresh]);
 
-  async function conduct() {
-    if (!playback?.href) return;
-    setConducting(true);
+  /**
+   * Choose where the set is going.
+   *
+   * There is no "Conduct" button any more. There was one, and it was the only
+   * thing that ever ran the planner — so a set was something you had to know to
+   * ask for, and the DJ otherwise appended one track at a time with no idea
+   * where it was heading. Now the backend plans on its own and this only says
+   * where to; pressing a curve re-plans everything after the track playing.
+   */
+  async function choose(next: core.Curve) {
+    setCurve(next);
+    setPlanning(true);
     setError(null);
-    setResult(null);
     try {
-      const path = await core.vibePath(playback.href, curve);
-      if (path.hrefs.length <= 1) {
-        setError(
-          "Not enough analysed tracks to plan a set. Analyse more of the library in Settings.",
-        );
-        return;
-      }
-      // The path starts at what is already playing, so setting it as the queue
-      // reorders what comes next without interrupting the current track.
-      await core.playTracks(path.hrefs, playback.href);
-      setResult(
-        `${path.hrefs.length} tracks, chosen from ${path.considered.toLocaleString()} the DJ has listened to.` +
-          // Silence about the rest would make a set built from a tenth of the
-          // library look identical to one built from all of it.
-          (path.skipped > 0
-            ? ` ${path.skipped.toLocaleString()} ${
-                path.skipped === 1 ? "was" : "were"
-              } passed over — not analysed yet.`
-            : ""),
-      );
+      const saved = await core.setCurve(next);
+      setCurve(saved.curve);
       await refresh();
     } catch (e: unknown) {
       setError(messageOf(e));
     } finally {
-      setConducting(false);
+      setPlanning(false);
     }
   }
 
   /**
    * Take one of the three exits by hand.
    *
-   * The badge stays on whatever the DJ would have chosen, so the override is
-   * visible as an override rather than rewriting history — the original's
-   * "AI Choice" badge behaviour.
+   * Follow is already what is queued, so pressing it is a no-op by
+   * construction; Stay and Switch move the set onto a different next track and
+   * re-plan the tail from there along the same curve.
    */
   async function pick(candidate: core.MixCandidate) {
     setError(null);
@@ -234,7 +234,7 @@ export function Vibe({
             theme="light"
             // The mark *is* the DJ on this screen: it tightens while planning
             // and swirls through a blend, both of which are real states.
-            state={conducting ? "thinking" : mixing ? "blending" : "playing"}
+            state={planning ? "thinking" : mixing ? "blending" : "playing"}
             energy={playback?.level ?? 0}
           />
         </div>
@@ -265,96 +265,93 @@ export function Vibe({
           are actually in. */}
       {djMode && (
         <>
-        <section className="vibe__card glass">
-          <h2 className="label">next</h2>
-          {candidates.length === 0 ? (
-            <p className="vibe__note">
-              Nothing analysed to choose from yet.
-            </p>
-          ) : (
-            <ul className="vibe__picks">
-              {candidates.map((c) => (
-                <li key={c.href}>
-                  <button
-                    className={
-                      "vibe__pick" + (c.selected ? " vibe__pick--on" : "")
-                    }
-                    aria-pressed={c.selected}
-                    onClick={() => void pick(c)}
-                  >
-                    <span className="vibe__pick-art" aria-hidden="true">
+        {/* Three cards, not three rows in a panel. The sleeve is the biggest
+            thing anyone recognises about a track, and it was a 40px square at
+            the left of a list; the choice is between three records, so the
+            records are what the screen shows. No container around them —
+            a white box behind album art is a box, not a design. */}
+        {candidates.length === 0 ? (
+          <p className="vibe__note">Nothing analysed to choose from yet.</p>
+        ) : (
+          <ul className="vibe__exits">
+            {candidates.map((c) => (
+              <li key={c.href}>
+                <button
+                  className={
+                    "vibe__exit vibe__exit--" +
+                    c.exit +
+                    (c.selected ? " vibe__exit--on" : "")
+                  }
+                  aria-pressed={c.selected}
+                  onClick={() => void pick(c)}
+                >
+                  <span className="vibe__exit-top">
+                    <span className="vibe__exit-art" aria-hidden="true">
                       {c.cover && <img src={c.cover} alt="" />}
                     </span>
-                    <span className="vibe__pick-text">
-                      <span className="vibe__pick-title">
-                        {c.title}
-                        {c.aiChoice && (
-                          <span className="vibe__ai">AI choice</span>
-                        )}
-                      </span>
-                      {/* The design's one mono line: tempo, key, and the mix
-                          that gets you there. */}
-                      {/* One mono line: tempo, key, the mix that gets you
-                          there — and, on the one actually queued, what the
-                          blend costs. Those two numbers had a card to
-                          themselves and did not need one. */}
-                      <span className="vibe__pick-facts numeric">
-                        <span>{fmtBpm(c.bpm)}</span>
-                        <span className="vibe__dot">·</span>
-                        <span>{c.key || "—"}</span>
-                        <span className="vibe__dot">·</span>
-                        <span>{c.transition}</span>
-                        {c.selected && blend && blend.matchable && (
-                          <>
-                            <span className="vibe__dot">·</span>
-                            <span>
-                              {blend.shiftPercent >= 0 ? "+" : ""}
-                              {blend.shiftPercent.toFixed(1)}%
-                            </span>
-                          </>
-                        )}
-                        {c.selected && blend && !blend.matchable && (
-                          <>
-                            <span className="vibe__dot">·</span>
-                            <span className="vibe__pick-warn">no beat match</span>
-                          </>
-                        )}
-                      </span>
+                    <span className="vibe__exit-word">{c.label}</span>
+                  </span>
+                  <span className="vibe__exit-title">{c.title}</span>
+                  <span className="vibe__exit-artist">{c.artist || "—"}</span>
+                  {/* One mono line: tempo, key, and the mix that gets you
+                      there. */}
+                  <span className="vibe__exit-facts numeric">
+                    <span>{fmtBpm(c.bpm)}</span>
+                    <span className="vibe__dot">·</span>
+                    <span>{c.key || "—"}</span>
+                    <span className="vibe__dot">·</span>
+                    <span>{c.transition}</span>
+                  </span>
+                  {/* What the blend actually costs, on its own line rather than
+                      appended to the one above — appended, it was the first
+                      thing the ellipsis ate, and "no beat match" is the one
+                      fact on the card worth reading. Only on the queued card,
+                      because it is the only blend the engine has planned. */}
+                  {c.selected && blend && (
+                    <span
+                      className={
+                        "vibe__exit-blend numeric" +
+                        (blend.matchable ? "" : " vibe__exit-warn")
+                      }
+                    >
+                      {blend.matchable
+                        ? `${blend.shiftPercent >= 0 ? "+" : ""}${blend.shiftPercent.toFixed(1)}% to beat match`
+                        : "no beat match"}
                     </span>
-                    <span className={"vibe__tag vibe__tag--" + c.kind}>
-                      {c.label}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
 
         <section className="vibe__card glass">
-          <h2 className="label">conduct a set</h2>
+          <h2 className="label">where the set is going</h2>
           <div className="vibe__curves">
             {CURVES.map((c) => (
               <button
                 key={c.id}
                 className={
-                  "vibe__curve" + (curve === c.id ? " vibe__curve--on" : "")
+                  "vibe__curve vibe__curve--" +
+                  c.id +
+                  (curve === c.id ? " vibe__curve--on" : "")
                 }
-                onClick={() => setCurve(c.id)}
+                aria-pressed={curve === c.id}
+                disabled={planning}
+                onClick={() => void choose(c.id)}
               >
+                <svg
+                  className="vibe__curve-shape"
+                  viewBox="0 0 100 32"
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                >
+                  <path d={c.line} />
+                </svg>
                 <span className="vibe__curve-label">{c.label}</span>
-                <span className="vibe__curve-blurb">{c.blurb}</span>
               </button>
             ))}
           </div>
-          <button
-            className="vibe__go"
-            onClick={() => void conduct()}
-            disabled={conducting || !playback?.href}
-          >
-            {conducting ? "Choosing…" : "Conduct from here"}
-          </button>
-          {result && <p className="vibe__result">{result}</p>}
           {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
           <p className="vibe__note">
             Energy is how loud a track is mastered — the difference between a

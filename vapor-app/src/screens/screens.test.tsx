@@ -364,27 +364,44 @@ describe("Vibe DJ", () => {
     // The controls are not merely disabled — the screen replaces them with an
     // explanation, which is the better answer when there is nothing to act on.
     expect(await screen.findByText(/nothing to conduct yet/i)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /conduct from here/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /build vibe/i })).not.toBeInTheDocument();
   });
 
-  it("plans a path and says how many tracks it could not use", async () => {
-    await playing();
+  /**
+   * Pressing a curve *is* conducting.
+   *
+   * There was a "Conduct from here" button, and it was the only thing that ever
+   * ran the planner — so a set was something you had to know to ask for, and
+   * the DJ otherwise appended one track at a time with no idea where it was
+   * going. The curve is now saved to the backend, which plans along it on its
+   * own whether or not this screen is open.
+   */
+  it("re-plans the set when a curve is chosen, with no button to press", async () => {
+    const backend = await playing();
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(
-      await screen.findByRole("button", { name: /conduct from here/i }),
-    );
+    expect(screen.queryByRole("button", { name: /conduct from here/i })).toBeNull();
 
-    // One fixture track is unanalysed, and the screen must say it was passed
-    // over rather than quietly planning without it (TD-43b). Silence here would
-    // make a set built from a tenth of the library look like one built from all
-    // of it.
-    expect(
-      await screen.findByText(/1 was passed over — not analysed yet/i),
-    ).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /chill down/i }));
+
+    await waitFor(() => expect(backend.called("set_curve")).toBe(true));
+    expect(backend.lastArgs("set_curve")?.curve).toBe("chill");
+    expect(backend.state.settings.curve).toBe("chill");
+  });
+
+  /** The curve shown is the backend's, not a default this component invented. */
+  it("shows the curve the backend is actually planning along", async () => {
+    const backend = await playing();
+    await backend.invoke("set_curve", { curve: "wave" });
+    render(<Vibe />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /wave/i })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
   });
 
   /**
@@ -402,7 +419,13 @@ describe("Vibe DJ", () => {
     expect(await screen.findByRole("button", { name: /build vibe/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /chill down/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /wave/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hold steady/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /wind down/i })).toBeNull();
+
+    // The arithmetic that used to sit under each label is gone — "Energy +0.4,
+    // tempo +15 BPM across the set" is true and is not what anyone is choosing
+    // between. The shape and the colour say it instead.
+    expect(screen.queryByText(/tempo \+15 BPM/i)).toBeNull();
   });
 
   /**
@@ -419,13 +442,20 @@ describe("Vibe DJ", () => {
     await user.click(await screen.findByRole("button", { name: /^help$/i }));
 
     const sheet = await screen.findByRole("dialog");
-    expect(sheet).toHaveTextContent(/perfect match/i);
     expect(sheet).toHaveTextContent(/bass swap/i);
     expect(sheet).toHaveTextContent(/vibe limit/i);
     // §7, added because the curves were never reachable from the Godot UI and
     // arrived in this app unexplained.
     expect(sheet).toHaveTextContent(/conduct a set/i);
     expect(sheet).toHaveTextContent(/build vibe/i);
+    // The document describes the exits the app actually has. The help sheet
+    // renders it verbatim, so a stale document is a screen explaining a feature
+    // that is not there — which is what it was, describing a "Perfect Match"
+    // class and a four-step cycle that had both been deleted.
+    expect(sheet).toHaveTextContent(/\bStay\b/);
+    expect(sheet).toHaveTextContent(/\bFollow\b/);
+    expect(sheet).toHaveTextContent(/\bSwitch\b/);
+    expect(sheet.textContent).not.toMatch(/Perfect Match/i);
   });
 
   it("closes the help sheet with Escape", async () => {
@@ -452,13 +482,11 @@ describe("Vibe DJ", () => {
 
   it("reports a failure to plan", async () => {
     const backend = await playing();
-    backend.fail("vibe_path", "no analysed tracks to work with");
+    backend.fail("set_curve", "no analysed tracks to work with");
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(
-      await screen.findByRole("button", { name: /conduct from here/i }),
-    );
+    await user.click(await screen.findByRole("button", { name: /chill down/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no analysed/i);
   });
@@ -880,12 +908,19 @@ describe("Transport", () => {
 /**
  * The three exits.
  *
- * `_get_match_type_between` and the four-step choice cycle were the half of the
- * original DJ the rewrite dropped: it kept the planner and lost the chooser, so
- * the screen could plan a set but never show the choice it was making or let
- * anyone overrule it (docs/FINDINGS.md).
+ * `_get_match_type_between` and the choice cycle were the half of the original
+ * DJ the rewrite dropped: it kept the planner and lost the chooser, so the
+ * screen could plan a set but never show the choice it was making or let anyone
+ * overrule it (docs/FINDINGS.md).
+ *
+ * The cycle itself is gone. It rotated Match → Fresh → Match → Switch and named
+ * whichever step it was on the "AI choice", which meant the badge and the queue
+ * could disagree about what was coming next — and that the set and the exit
+ * were two features arguing. Follow *is* the set now: the planner queues ten
+ * ahead and the middle card shows the head of that queue, so the default is
+ * always "carry on" and the other two are departures from it.
  */
-describe("Vibe DJ — Match, Fresh and Switch", () => {
+describe("Vibe DJ — Stay, Follow and Switch", () => {
   /**
    * A library with one of each kind in it, relative to the track playing:
    * a near-identical tempo in the same genre, one 20 BPM away in the same
@@ -912,9 +947,28 @@ describe("Vibe DJ — Match, Fresh and Switch", () => {
     await playing();
     render(<Vibe />);
 
-    expect(await screen.findByText("MATCH")).toBeInTheDocument();
-    expect(screen.getByText("FRESH")).toBeInTheDocument();
+    expect(await screen.findByText("STAY")).toBeInTheDocument();
+    expect(screen.getByText("FOLLOW")).toBeInTheDocument();
     expect(screen.getByText("SWITCH")).toBeInTheDocument();
+  });
+
+  /**
+   * The middle card is the set, not a fourth opinion about it.
+   *
+   * This is the whole shape of the feature: Follow shows whatever the planner
+   * has queued next, so the screen and the queue cannot disagree. Falsifiable —
+   * change the queue and the card has to follow it.
+   */
+  it("shows the set's own next track as Follow", async () => {
+    const backend = await playing();
+    render(<Vibe />);
+
+    const follow = (await screen.findByText("FOLLOW")).closest("button");
+    const queued = backend.state.queue[backend.state.queue.indexOf(HERE) + 1];
+    const row = MIXABLE.find((r) => r.href === queued);
+    expect(follow).toHaveTextContent(row!.title);
+    // And it is the one marked as queued, because it is the one queued.
+    expect(follow).toHaveAttribute("aria-pressed", "true");
   });
 
   /**
@@ -930,12 +984,23 @@ describe("Vibe DJ — Match, Fresh and Switch", () => {
     expect(screen.getByText(/echo out/i)).toBeInTheDocument();
   });
 
-  /** Exactly one, or the badge says nothing. */
-  it("marks the one the DJ would pick, and only that one", async () => {
+  /**
+   * Exactly one card is marked, and it is the one actually queued.
+   *
+   * There used to be two marks — an "AI choice" badge and a selection ring —
+   * and they could point at different tracks, which is a screen telling you two
+   * things about one question. There is one now.
+   */
+  it("marks the queued track, and only that one", async () => {
     await playing();
     render(<Vibe />);
 
-    expect(await screen.findAllByText(/ai choice/i)).toHaveLength(1);
+    await screen.findByText("FOLLOW");
+    const pressed = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true" && /STAY|FOLLOW|SWITCH/.test(b.textContent ?? ""));
+    expect(pressed).toHaveLength(1);
+    expect(screen.queryByText(/ai choice/i)).toBeNull();
   });
 
   it("puts the chosen track next when one is pressed", async () => {
@@ -953,27 +1018,30 @@ describe("Vibe DJ — Match, Fresh and Switch", () => {
   });
 
   /**
-   * §4: the override moves the selection, not the badge. Taking a step by
-   * hand still advances the cycle, so the next transition is the next step of
-   * it either way.
+   * Taking an exit folds it into the set.
+   *
+   * This is the consolidation, stated as a test: Follow is whatever is queued,
+   * so overruling the DJ does not leave the screen showing one track marked and
+   * a different one queued. The old behaviour left an "AI choice" badge behind
+   * on whatever step the cycle was on, which is exactly that disagreement.
    */
-  it("advances the cycle when a step is taken by hand", async () => {
+  it("makes the exit that was taken the set's own next track", async () => {
     const backend = await playing();
     const user = userEvent.setup();
     render(<Vibe />);
 
-    // Step 0 is Match.
-    const first = await screen.findByText("MATCH");
-    expect(first.closest("button")).toHaveTextContent(/ai choice/i);
+    const chosen = (await screen.findByText("SWITCH")).closest("button");
+    const title = chosen?.querySelector(".vibe__exit-title")?.textContent ?? "";
+    expect(title).not.toBe("");
 
     await user.click(screen.getByText("SWITCH"));
 
-    // Step 1 is Fresh, whatever was pressed.
-    await waitFor(() =>
-      expect(screen.getByText("FRESH").closest("button")).toHaveTextContent(
-        /ai choice/i,
-      ),
-    );
+    // It is now the middle card — the set carries on through it.
+    await waitFor(() => {
+      const follow = screen.getByText("FOLLOW").closest("button");
+      expect(follow).toHaveTextContent(title);
+      expect(follow).toHaveAttribute("aria-pressed", "true");
+    });
     expect(backend.called("choose_next")).toBe(true);
   });
 

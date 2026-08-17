@@ -1977,7 +1977,7 @@ mean RMS over peak RMS — a consistency ratio that put ballads above drum & bas
 on the real library. `intensity_from_lufs` separates the same groups by 0.256
 instead of 0.031 and needs no re-analysis, since LUFS was already stored.
 
-### VDJ-0 : the three exits are Stay, Follow, Switch (agreed 2026-08-17)
+### VDJ-0 : the three exits are Stay, Follow, Switch (built 2026-08-17)
 
 Supersedes the Match/Fresh/Switch cycle. Agreed with Dylan and written down
 before building, because it removes machinery rather than adding it and the
@@ -2004,6 +2004,11 @@ Consequences:
 * Only the curve changes the destination. Stay and Switch change the route.
 * Choosing Stay or Switch re-plans the tail, keeping the same energy goal.
 
+Built. `Exit` replaced `MatchKind`; `cycle_choice`, `mix_step` and `ai_choice`
+are gone; `mix_candidates_for` fills Follow from `queue.peek_next` and searches
+only Stay and Switch. Taking an exit folds it into the set, so on the next
+render the track pressed *is* the Follow card — `screens.test.tsx` pins that.
+
 ### VDJ-1 : Switch was unreachable (fixed 2026-08-17, thresholds measured)
 
 `match_kind_between` returned Switch **only** when two genres differed, and
@@ -2023,22 +2028,16 @@ Switch at Δintensity ≥ 0.30 or Δbpm ≥ 45; Match below 0.15 and 8. A known
 genre difference still forces a Switch — good evidence when present, simply
 never present here.
 
-Still to do under VDJ-0: rename these to Stay/Follow/Switch and let the planner
-own Follow.
+Renamed under VDJ-0, and one more cause found: even with the thresholds fixed,
+Stay and Switch were each drawn *only* from the band `exit_between` put a
+candidate in, so a library with nothing inside 8 BPM had no Stay card and said
+nothing about why. Stay is now asked of every candidate — "how little does the
+level move" — and Switch is taken from what Stay left, falling back to the
+furthest remaining track when nothing clears the thresholds. Three cards
+whenever there are three tracks to fill them, pinned by
+`all_three_exits_are_offered_even_when_nothing_sits_in_the_band`.
 
-
-
-`match_kind_between` returns `Switch` **only** when the two genres differ, and
-`same_genre` treats an unknown genre as similar. The library carries 46 genres
-across 534 tracks and they are only `Indie`, `Jazz`, `R&B` and `Unknown genre`,
-so the branch is dead and the screen can never show three candidates.
-
-Two ways out, and they are not exclusive: run the identify pass so albums have
-Deezer genres, or change what a Switch keys on — with intensity now meaning
-loudness, a large intensity jump is arguably a better definition of "switch it
-up" than a genre label ever was.
-
-### VDJ-2 : the planner has never run (open)
+### VDJ-2 : the planner has never run (fixed 2026-08-17)
 
 Two mechanisms, and only the weaker one is reachable without a button press.
 `extend_set` appends **one** track when the queue empties, which is why the
@@ -2046,16 +2045,40 @@ queue reads "2 to come". `pathfinder::plan` does A* with a beam width of 6 over
 `transition_cost + curve_cost` and plans `MAX_PLANNED = 10` tracks along the
 chosen curve — but only from "Conduct from here".
 
-The fix Dylan asked for: selecting a curve *is* the action, so choosing a mood
-plans the set immediately and the button goes. Curves become colour with the
-explanation moved to Help, and the curve auto-advances each match/fresh/match/
-switch cycle — build, hold, chill, wave, hold, chill — for a rolling arc.
+Fixed. `extend_set` now calls `generate_mood_path` and queues `PLAN_AHEAD = 10`,
+falling back to `dj_pick` only when there is nothing to plan from. The playback
+thread already called `extend_set` when the queue ran short, so the planner runs
+without anyone pressing anything.
 
-### VDJ-3 : the suggestion cards (open)
+The curve is a saved setting (`Settings::curve`) rather than an argument, since
+the playback thread has to know where the set is going with no screen open.
+`set_curve` saves it, truncates everything after the track playing — that tail
+was a route to the old destination — and re-plans. Selecting a curve is
+therefore the whole action, and "Conduct from here" is gone.
+
+The auto-advancing curve is *not* built, and should not be: it was specified as
+advancing with the match/fresh/match/switch cycle, and that cycle no longer
+exists. A curve that changes itself also contradicts VDJ-0, where the curve is
+the one thing only the listener changes.
+
+### VDJ-3 : the suggestion cards (fixed 2026-08-17)
 
 Reduced to list rows while removing verbosity. The design is three cards
-horizontally, artwork as the main element, the short info line beneath. Restore
-that; the text removal was right, the layout change was not.
+horizontally, artwork as the main element, the short info line beneath. Restored:
+`.vibe__exits` is a grid of art-led cards with the exit word on the sleeve, and
+the glass panel that used to sit behind them is gone.
+
+Two layout bugs found by screenshotting it rather than by reading the assertions:
+a `1fr` track made each sleeve 430px tall on a wide window, and `text-overflow:
+ellipsis` does nothing to the children of a flex container, so the facts line ran
+out through the rounded corner. The card cap is on the card, not the grid track —
+`auto-fit` counts tracks at the *maximum* of a `minmax()`, so `minmax(120px,
+190px)` in a 364px column makes one column, not two.
+
+The curves are colour and shape now, not prose: each swatch draws its own
+`Curve::target_energy` and is warm if it climbs, cool if it falls. The arithmetic
+that used to sit under each label was accurate and was not what anyone is
+choosing between.
 
 ### VDJ-4 : the identify pass has never been run (blocked on Dylan)
 

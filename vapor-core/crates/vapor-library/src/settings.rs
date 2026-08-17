@@ -223,6 +223,21 @@ pub struct Settings {
     /// track repeated forever.
     #[serde(default = "default_dj_mode", alias = "dj_mode")]
     pub dj_mode: bool,
+
+    /// The energy curve the set is being conducted along.
+    ///
+    /// Persisted and owned by the backend for the same reason `dj_mode` is: the
+    /// supervisor plans the set, so it has to know where the set is going.
+    /// Choosing one *is* the action — there is no separate button — so this is
+    /// the only thing that changes a set's destination.
+    #[serde(default = "default_curve", alias = "curve")]
+    pub curve: String,
+}
+
+/// Build, because a set that goes nowhere is the least interesting default and
+/// the app exists to take you somewhere.
+fn default_curve() -> String {
+    "build".to_string()
 }
 
 /// On. It is the app's whole premise, and a person who does not want it has a
@@ -264,6 +279,7 @@ impl Default for Settings {
             metadata_lookup_enabled: false,
             vibe_limit: default_vibe_limit(),
             dj_mode: default_dj_mode(),
+            curve: default_curve(),
             sync_enabled: false,
         }
     }

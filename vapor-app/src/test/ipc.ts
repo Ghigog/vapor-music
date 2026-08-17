@@ -121,9 +121,6 @@ export function makeRow(over: Partial<core.Row> = {}): core.Row {
 const A_SLEEVE =
   "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
 
-/** The four-step cycle of ai_dj_workflow.md §3, as the backend runs it. */
-const MIX_CYCLE: core.MatchKind[] = ["match", "fresh", "match", "switch"];
-
 const DEFAULT_ROWS: core.Row[] = [
   makeRow({
     href: "/dav/Koofr/Music/windowlicker.m4a",
@@ -212,8 +209,6 @@ export class FakeBackend {
   private analysing: boolean;
   private analysingTitle: string;
   private deleted = false;
-  /** Where the four-step choice cycle has got to (ai_dj_workflow.md §3). */
-  private mixStep = 0;
   /** Tracks a lookup has been made for. */
   private attempted = new Set<string>();
   /** Devices on the fake network. */
@@ -312,6 +307,7 @@ export class FakeBackend {
       vibeLimit: 0.5,
       syncEnabled: options.syncEnabled ?? false,
       djMode: options.djMode ?? true,
+      curve: "build",
     };
     this.damaged = options.damaged ?? [];
     this.albumArtSearch = options.albumArtSearch ?? {};
@@ -540,32 +536,47 @@ export class FakeBackend {
       case "mix_candidates": {
         const from = this.rows.find((r) => r.href === this.current);
         if (!from) return [];
-        // The same rule the engine applies, minus energy, which rows do not
-        // carry: a genre jump is a Switch whatever else is true, then 8 BPM
-        // separates Fresh from Match. Classifying rather than slicing is what
-        // makes "one card per kind" a claim a test can actually falsify.
-        const best = new Map<core.MatchKind, core.Row>();
-        for (const r of this.rows) {
-          if (r.href === this.current || r.bpm <= 0) continue;
-          const diff = Math.abs(from.bpm - r.bpm);
-          const kind: core.MatchKind =
-            r.genre !== from.genre ? "switch" : diff >= 8 ? "fresh" : "match";
-          const held = best.get(kind);
-          // Match wants the closest tempo, Fresh a change of about 15 BPM,
-          // Switch the closest tempo again since its key is masked.
-          const target = kind === "fresh" ? 15 : 0;
-          if (
-            !held ||
-            Math.abs(diff - target) < Math.abs(Math.abs(from.bpm - held.bpm) - target)
-          ) {
-            best.set(kind, r);
-          }
-        }
-        const wanted = MIX_CYCLE[this.mixStep % MIX_CYCLE.length]!;
+
+        // Follow is not chosen here — it is whatever the set already has
+        // queued. Only Stay and Switch are searched for, which is the shape of
+        // the whole feature: the set follows itself, and the other two cards
+        // are departures from it.
         const queuedNext = this.queue[this.queue.indexOf(from.href) + 1];
-        const order: core.MatchKind[] = ["match", "fresh", "switch"];
-        return order.flatMap((kind) => {
-          const r = best.get(kind);
+        const pool = this.rows.filter(
+          (r) => r.href !== from.href && r.href !== queuedNext && r.bpm > 0,
+        );
+
+        // The real backend scores Stay on how little the *intensity* moves,
+        // with transition cost breaking ties — and rows carry no intensity, so
+        // this stands in for it with the classification the same thresholds
+        // produce: a genre jump or 45 BPM is a departure, and Stay prefers what
+        // is left.
+        const byTempo = (a: core.Row, b: core.Row) =>
+          Math.abs(from.bpm - a.bpm) - Math.abs(from.bpm - b.bpm);
+        const departing = pool.filter(
+          (r) => r.genre !== from.genre || Math.abs(from.bpm - r.bpm) >= 45,
+        );
+        const holding = pool.filter((r) => !departing.includes(r));
+
+        // Asked of every candidate, not only of the ones inside the band: a
+        // library with nothing within 8 BPM still has a closest track, and two
+        // cards with no explanation is what this replaced.
+        const stay = (holding.length ? holding : pool).slice().sort(byTempo)[0];
+
+        // Switch is chosen after Stay and from what Stay left, or both land on
+        // the same track on a small library and the screen is back to two cards.
+        const rest = pool.filter((r) => r.href !== stay?.href);
+        const switchTo =
+          rest.filter((r) => departing.includes(r)).sort(byTempo)[0] ??
+          rest.slice().sort((a, b) => byTempo(b, a))[0];
+
+        const follow = this.rows.find((r) => r.href === queuedNext);
+        const cards: [core.Row | undefined, core.Exit, string][] = [
+          [stay, "stay", "Bass Swap"],
+          [follow, "follow", "Filter Sweep"],
+          [switchTo, "switch", "Echo Out"],
+        ];
+        return cards.flatMap(([r, exit, transition]) => {
           if (!r) return [];
           return [
             {
@@ -574,15 +585,9 @@ export class FakeBackend {
               artist: r.artist,
               bpm: r.bpm,
               key: r.key,
-              kind,
-              label: kind.toUpperCase(),
-              transition:
-                kind === "match"
-                  ? "Bass Swap"
-                  : kind === "fresh"
-                    ? "Filter Sweep"
-                    : "Echo Out",
-              aiChoice: kind === wanted,
+              exit,
+              label: exit.toUpperCase(),
+              transition,
               selected: r.href === queuedNext,
               cover: this.covers ? A_SLEEVE : null,
             },
@@ -595,9 +600,6 @@ export class FakeBackend {
         const at = this.current ? this.queue.indexOf(this.current) : -1;
         this.queue = this.queue.filter((h) => h !== href);
         this.queue.splice(at + 1, 0, href);
-        // The cycle advances whether the step was taken by hand or left to
-        // the DJ, so the badge moves on either way.
-        this.mixStep += 1;
         return null;
       }
 
@@ -677,6 +679,17 @@ export class FakeBackend {
         }
         this.attempted.add(href);
         return this.lookedUp(href);
+      }
+
+      case "set_curve": {
+        const curve = String(a.curve ?? "");
+        this.settings = { ...this.settings, curve: curve as core.Curve };
+        // Everything after the track playing was a route to the old
+        // destination, so it goes; the backend re-plans, and here the queue
+        // simply shortens, which is what the screen has to survive.
+        const at = this.current ? this.queue.indexOf(this.current) : -1;
+        if (at >= 0) this.queue = this.queue.slice(0, at + 1);
+        return this.settings;
       }
 
       case "set_vibe_limit": {
