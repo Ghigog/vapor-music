@@ -82,29 +82,51 @@ pub enum ThemeMode {
     Custom,
 }
 
+/// Every other struct that crosses the IPC boundary renames to camelCase, and
+/// this one did not. It therefore travelled as snake_case while `core.ts`
+/// declared camelCase, so **every multi-word field read as `undefined` in the
+/// frontend** — fourteen of them. Most survived on `??` fallbacks and were
+/// silently ignored rather than visibly broken: the font size and UI scale did
+/// nothing, the theme mode never applied, and `bpmOverrides` arrived empty so a
+/// hand-corrected tempo was never marked in the table. The Vibe screen was the
+/// one place that called a method on the value instead of defaulting it, and it
+/// threw.
+///
+/// The aliases are what let a settings file written before this change still
+/// load. Without them the rename would silently reset every one of those
+/// fourteen fields to its default on first launch, which is the same data loss
+/// by the opposite route.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default)]
     pub remote: RemoteConfig,
 
     #[serde(default = "default_font_size")]
+    #[serde(alias = "base_font_size")]
     pub base_font_size: u32,
     #[serde(default = "default_ui_scale")]
+    #[serde(alias = "ui_scale")]
     pub ui_scale: f32,
 
     #[serde(default)]
+    #[serde(alias = "theme_mode")]
     pub theme_mode: ThemeMode,
     #[serde(default = "default_theme")]
     pub theme: String,
     /// Custom theme colours as `#rrggbb`, used when `theme_mode` is `Custom`.
     #[serde(default)]
+    #[serde(alias = "custom_base_color")]
     pub custom_base_color: String,
     #[serde(default)]
+    #[serde(alias = "custom_accent_color")]
     pub custom_accent_color: String,
 
     #[serde(default)]
+    #[serde(alias = "headphone_profile")]
     pub headphone_profile: String,
     #[serde(default)]
+    #[serde(alias = "headphone_calibration_enabled")]
     pub headphone_calibration_enabled: bool,
 
     /// Manual BPM overrides, keyed by href.
@@ -114,6 +136,7 @@ pub struct Settings {
     /// than solved — so the app needs a way for a person to correct it. DJ
     /// software conventionally has one.
     #[serde(default)]
+    #[serde(alias = "bpm_overrides")]
     pub bpm_overrides: std::collections::HashMap<String, f32>,
 
     /// Album artwork chosen by hand, keyed by [`album_key`].
@@ -128,6 +151,7 @@ pub struct Settings {
     /// a guess the app can correct on its own: the only thing that knows the
     /// picture is wrong is the person looking at it.
     #[serde(default)]
+    #[serde(alias = "album_art")]
     pub album_art: std::collections::HashMap<String, String>,
 
     /// Whether a looked-up cover outranks the file's own embedded artwork.
@@ -138,6 +162,7 @@ pub struct Settings {
     /// good art on an album nobody was looking at. On, for a library whose
     /// tags are known to be poor.
     #[serde(default)]
+    #[serde(alias = "prefer_looked_up_art")]
     pub prefer_looked_up_art: bool,
 
     /// Ceiling on the local audio cache, in bytes.
@@ -146,6 +171,7 @@ pub struct Settings {
     /// so this is the one number that decides how much of a device the app is
     /// entitled to. It belongs to the person, not to a constant.
     #[serde(default = "default_cache_max_bytes")]
+    #[serde(alias = "cache_max_bytes")]
     pub cache_max_bytes: u64,
 
     /// Whether the app may look up lyrics and artwork from public services.
@@ -158,6 +184,7 @@ pub struct Settings {
     /// to do. The Godot build fetched unconditionally. Asking first is the
     /// change, not the feature.
     #[serde(default)]
+    #[serde(alias = "metadata_lookup_enabled")]
     pub metadata_lookup_enabled: bool,
 
     /// The Vibe Limit: the energy difference between consecutive tracks past
@@ -169,6 +196,7 @@ pub struct Settings {
     /// every caller passed the constant, so the Mix Tuner was a control the
     /// engine was already built for and nothing exposed.
     #[serde(default = "default_vibe_limit")]
+    #[serde(alias = "vibe_limit")]
     pub vibe_limit: f32,
 
     /// Whether this device announces itself on the local network (SYNC-001).
@@ -183,6 +211,7 @@ pub struct Settings {
     /// Off also means no listening socket, so there is no firewall prompt and
     /// nothing accepting connections until sync is something the owner wants.
     #[serde(default)]
+    #[serde(alias = "sync_enabled")]
     pub sync_enabled: bool,
 }
 
@@ -617,5 +646,89 @@ mod tests {
         let older: Settings = serde_json::from_str(r#"{"baseFontSize":16}"#).expect("read old");
         assert!(older.album_art.is_empty());
         assert!(!older.prefer_looked_up_art);
+    }
+
+    // -----------------------------------------------------------------------
+    // The wire format, which was wrong for as long as this struct existed
+    // -----------------------------------------------------------------------
+
+    /// Every field crosses to the frontend in camelCase.
+    ///
+    /// This struct was the only one on the IPC boundary without the rename, so
+    /// it travelled as snake_case while TypeScript read camelCase and got
+    /// `undefined` for all fourteen multi-word fields.
+    #[test]
+    fn the_wire_format_is_camel_case() {
+        let json = serde_json::to_value(Settings::default()).expect("serialise");
+        let keys: Vec<&String> = json.as_object().expect("an object").keys().collect();
+
+        let snake: Vec<&&String> = keys.iter().filter(|k| k.contains('_')).collect();
+        assert!(
+            snake.is_empty(),
+            "these fields still cross as snake_case and will read as undefined \
+             in the frontend: {snake:?}"
+        );
+        // And the specific one that threw.
+        assert!(json.get("vibeLimit").is_some(), "{keys:?}");
+        assert!(json.get("bpmOverrides").is_some(), "{keys:?}");
+        assert!(json.get("baseFontSize").is_some(), "{keys:?}");
+    }
+
+    /// A settings file written before the rename still loads, with its values.
+    ///
+    /// Without the aliases the rename would reset all fourteen fields to their
+    /// defaults on first launch — the same data loss as a corrupt file, by the
+    /// opposite route, and silent.
+    #[test]
+    fn a_snake_case_settings_file_still_loads_with_its_values() {
+        // `r##` rather than `r#`: the hex colours below contain `"#`, which ends
+        // a single-hash raw string in the middle of the JSON.
+        let old = r##"{
+            "remote": {"url": "https://example.com", "username": "someone", "folder": "/dav/Music"},
+            "base_font_size": 19,
+            "ui_scale": 1.25,
+            "theme_mode": "custom",
+            "custom_base_color": "#101010",
+            "custom_accent_color": "#ff8800",
+            "headphone_profile": "hd650",
+            "headphone_calibration_enabled": true,
+            "bpm_overrides": {"/a.mp3": 128.0},
+            "cache_max_bytes": 12345678900,
+            "metadata_lookup_enabled": true,
+            "vibe_limit": 0.75,
+            "sync_enabled": true
+        }"##;
+
+        let s: Settings = serde_json::from_str(old).expect("an older file must still open");
+
+        assert_eq!(s.base_font_size, 19);
+        assert_eq!(s.ui_scale, 1.25);
+        assert_eq!(s.theme_mode, ThemeMode::Custom);
+        assert_eq!(s.custom_base_color, "#101010");
+        assert_eq!(s.custom_accent_color, "#ff8800");
+        assert_eq!(s.headphone_profile, "hd650");
+        assert!(s.headphone_calibration_enabled);
+        assert_eq!(s.bpm_overrides.get("/a.mp3"), Some(&128.0));
+        assert_eq!(s.cache_max_bytes, 12_345_678_900);
+        assert!(s.metadata_lookup_enabled);
+        assert_eq!(s.vibe_limit, 0.75);
+        assert!(s.sync_enabled);
+        assert_eq!(s.remote.url, "https://example.com");
+    }
+
+    /// And a file in the new format loads too, so the round trip closes.
+    #[test]
+    fn a_camel_case_settings_file_loads() {
+        let original = Settings {
+            vibe_limit: 0.8,
+            sync_enabled: true,
+            base_font_size: 20,
+            ..Default::default()
+        };
+
+        let text = serde_json::to_string(&original).expect("write");
+        assert!(text.contains("vibeLimit"), "{text}");
+        let back: Settings = serde_json::from_str(&text).expect("read");
+        assert_eq!(back, original);
     }
 }
