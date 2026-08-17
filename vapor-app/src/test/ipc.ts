@@ -746,6 +746,11 @@ export class FakeBackend {
       case "startup_problems":
         return this.damaged;
 
+      // The pass runs in the background and reports by event; the fake has
+      // nothing to report, which is the correct quiescent behaviour.
+      case "identify_library":
+        return undefined;
+
       case "set_dj_mode":
         this.settings = { ...this.settings, djMode: a.enabled === true };
         return this.settings;

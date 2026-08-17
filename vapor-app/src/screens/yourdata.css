@@ -213,3 +213,13 @@
   color: var(--sov-ink);
   font-size: var(--fs-sm);
 }
+
+/* The one action in the app that discloses the whole library. Its warning line
+   is marked so it cannot be skimmed past as more explanatory prose. */
+.data__note--warn {
+  color: var(--ink);
+  padding: var(--s-2) var(--s-3);
+  border-left: 2px solid var(--warn, var(--accent));
+  background: var(--glass-fill);
+  border-radius: var(--r-hair);
+}

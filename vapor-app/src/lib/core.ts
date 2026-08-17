@@ -425,6 +425,39 @@ export function clearAlbumArt(album: string, lead: string): Promise<AlbumArt> {
   return invoke<AlbumArt>("clear_album_art", { album, lead });
 }
 
+/** Emitted on `identify-progress`, once per track and once at the end. */
+export interface IdentifyProgress {
+  done: number;
+  total: number;
+  /** The track just finished. */
+  title: string;
+  /** Tempos corrected so far — the point of the exercise. */
+  corrected: number;
+  /** Tracks Deezer had a genre for. */
+  genres: number;
+  finished: boolean;
+}
+
+/**
+ * Ask Deezer about every track in the library.
+ *
+ * **Sends the artist and title of the whole library to a third party.** It is
+ * the largest disclosure the app ever makes, which is why it is a button with
+ * its own sentence rather than something the automatic-lookup setting quietly
+ * turns on.
+ *
+ * What it is for is the tempo octave: a beat tracker is reliable about the
+ * pulse and unreliable about whether a listener counts it at 87 or 174, and
+ * nothing measurable on this device settles it. Deezer's number is never
+ * adopted as the tempo — it only chooses between octaves of the tempo measured
+ * here, and only once the durations agree the two are the same recording.
+ *
+ * Returns as soon as the pass starts; watch `identify-progress`.
+ */
+export function identifyLibrary(): Promise<void> {
+  return invoke<void>("identify_library");
+}
+
 /** Turn the DJ on or off. Persisted; the backend acts on it. */
 export function setDjMode(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_dj_mode", { enabled });

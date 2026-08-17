@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
+import { listen } from "@tauri-apps/api/event";
 
 /** Offered ceilings. A large library is a legitimate reason to want a large
  *  cache — the point of the bound is that it is finite and chosen, not small. */
@@ -40,6 +41,37 @@ export function YourData() {
   const [location, setLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /** Progress of the library identification pass, or null before one runs. */
+  const [identify, setIdentify] = useState<core.IdentifyProgress | null>(null);
+
+  // Reported per track by the backend rather than polled: the pass is minutes
+  // long and already emits an event for exactly this.
+  useEffect(() => {
+    const unlisten = listen<core.IdentifyProgress>("identify-progress", (e) => {
+      setIdentify(e.payload);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
+
+  async function startIdentify() {
+    setError(null);
+    setIdentify({
+      done: 0,
+      total: 0,
+      title: "starting",
+      corrected: 0,
+      genres: 0,
+      finished: false,
+    });
+    try {
+      await core.identifyLibrary();
+    } catch (e: unknown) {
+      setError(messageOf(e));
+      setIdentify(null);
+    }
+  }
 
   const refresh = useCallback(async () => {
     const [r, c, l] = await Promise.allSettled([
@@ -196,6 +228,37 @@ export function YourData() {
           </div>
         </section>
       )}
+
+      <section className="data__card glass">
+        <h2 className="label">identify the library</h2>
+        <p className="data__note">
+          Vapor works out tempo, key and loudness from the audio on this device.
+          The one thing it cannot work out is whether a track you hear at 174
+          was measured as 87 — both readings describe the same pulse, and only a
+          second opinion can say which one a listener counts.
+        </p>
+        <p className="data__note data__note--warn">
+          This sends the artist and title of <strong>every track</strong> to
+          Deezer. It is the largest thing Vapor ever discloses, and nothing else
+          in the app does it.
+        </p>
+        {identify ? (
+          <p className="data__note">
+            {identify.finished
+              ? `Done. ${identify.corrected} tempo${identify.corrected === 1 ? "" : "s"} corrected, ${identify.genres} genre${identify.genres === 1 ? "" : "s"} found.`
+              : `${identify.done} of ${identify.total} — ${identify.title}`}
+          </p>
+        ) : null}
+        <button
+          className="data__button"
+          onClick={() => void startIdentify()}
+          disabled={identify !== null && !identify.finished}
+        >
+          {identify !== null && !identify.finished
+            ? "Identifying…"
+            : "Identify my library"}
+        </button>
+      </section>
 
       <section className="data__card glass">
         <h2 className="label">what Vapor never does</h2>

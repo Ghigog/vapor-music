@@ -889,6 +889,9 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     });
 
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    // Left as they were: a per-track lookup is about this screen, and the tempo
+    // reference is gathered by the library-wide pass.
+    let previous = app.looked.get(&href).cloned().unwrap_or_default();
     app.looked.insert(
         href.clone(),
         metadata::Looked {
@@ -897,6 +900,7 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
             album_art,
             genre,
             attempted: true,
+            ..previous
         },
     );
     app.save_looked()?;
@@ -913,6 +917,158 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
 #[tauri::command]
 fn media_keys_available() -> bool {
     media::bundled()
+}
+
+/// Progress of the library identification pass.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentifyProgress {
+    done: usize,
+    total: usize,
+    /// The track just finished, so a screen can name what is happening.
+    title: String,
+    /// How many tempos have been corrected so far — the point of the exercise.
+    corrected: usize,
+    /// How many tracks Deezer had a genre for.
+    genres: usize,
+    /// Set on the final message.
+    finished: bool,
+}
+
+/// Ask Deezer about every track in the library.
+///
+/// **This sends the artist and title of the whole library to a third party.**
+/// It is the largest thing the app ever discloses, so it is a deliberate act
+/// with its own button and its own sentence, rather than something the
+/// automatic-lookup setting quietly enables.
+///
+/// What it is for: the tempo octave. A beat tracker is reliable about the pulse
+/// and unreliable about whether a listener counts it at 87 or 174 — both this
+/// crate and Essentia read Delta Heavy's "Space Time" at 87, and neither is
+/// wrong. Nothing measurable on this device settles it. A per-track reference
+/// does, where one exists, and Deezer publishes one for some recordings.
+///
+/// Their number is never adopted as the tempo. It chooses between octaves of
+/// the tempo measured here, and only after the durations agree that both are
+/// describing the same recording. A wrong search hit is otherwise a stranger's
+/// tempo for music nobody is playing.
+#[tauri::command]
+async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>) -> Result<()> {
+    use tauri::Emitter;
+
+    let (todo, remote) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        let todo: Vec<(String, String, String, String, f32, f64)> = app
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let analysis = app.analysis.get(&row.href)?;
+                let mut r = row.clone();
+                app.apply_tags(&mut r);
+                Some((
+                    r.href.clone(),
+                    r.title.clone(),
+                    r.artist.clone(),
+                    r.album.clone(),
+                    analysis.bpm,
+                    analysis.duration,
+                ))
+            })
+            .collect();
+        (todo, app.settings.remote.clone())
+    };
+    let _ = remote;
+
+    if todo.is_empty() {
+        return Err(Error(
+            "Nothing to identify yet — analyse the library first.".to_string(),
+        ));
+    }
+
+    let shared: Shared = Arc::clone(&state);
+    let handle = app_handle.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok(lookup) = metadata::Lookup::new() else {
+            return;
+        };
+        let total = todo.len();
+        let (mut corrected, mut genres) = (0usize, 0usize);
+
+        for (i, (href, title, artist, album, bpm, duration)) in todo.into_iter().enumerate() {
+            let facts = lookup.track_facts(&artist, &title);
+            let (_art, genre) = lookup.album(&artist, &album);
+
+            if let Ok(mut app) = shared.lock() {
+                let entry = app.looked.entry(href.clone()).or_default();
+                entry.attempted = true;
+                if !genre.trim().is_empty() {
+                    entry.genre = genre.clone();
+                    genres += 1;
+                }
+                if let Some(f) = &facts {
+                    entry.deezer_bpm = f.bpm;
+                    entry.deezer_duration = f.duration;
+                }
+
+                // The correction, and every guard on it. Same recording first,
+                // then an octave only, then recorded the way a hand correction
+                // is — so the beat grid is re-tracked by the machinery that
+                // already exists rather than by a second copy of it.
+                if let Some(f) = &facts {
+                    if metadata::same_recording(duration, f.duration) {
+                        if let Some(fixed) = vapor_library::octave_from_reference(bpm, f.bpm) {
+                            if app.settings.bpm_override(&href).is_none()
+                                && app.settings.set_bpm_override(&href, fixed)
+                            {
+                                corrected += 1;
+                            }
+                        }
+                    }
+                }
+                let _ = app.save_looked();
+                let _ = app.save_settings();
+            }
+
+            let _ = handle.emit(
+                "identify-progress",
+                &IdentifyProgress {
+                    done: i + 1,
+                    total,
+                    title: title.clone(),
+                    corrected,
+                    genres,
+                    finished: false,
+                },
+            );
+
+            // Deezer rate-limits, and a library is a lot of requests. Slower
+            // than necessary is better than being cut off halfway.
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        // Re-track the grids of everything just corrected, through the same
+        // path a hand correction uses.
+        let corrected_hrefs: Vec<String> = shared
+            .lock()
+            .map(|app| app.settings.bpm_overrides.keys().cloned().collect())
+            .unwrap_or_default();
+        retrack_grids(&handle, &shared, corrected_hrefs);
+
+        let _ = handle.emit(
+            "identify-progress",
+            &IdentifyProgress {
+                done: total,
+                total,
+                title: String::new(),
+                corrected,
+                genres,
+                finished: true,
+            },
+        );
+    });
+
+    Ok(())
 }
 
 /// Files that could not be read at startup and were moved aside.
@@ -5146,6 +5302,7 @@ pub fn run() {
             set_dj_mode,
             set_sync_enabled,
             startup_problems,
+            identify_library,
             media_keys_available,
             sync_view,
             open_pairing,

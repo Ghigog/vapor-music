@@ -106,6 +106,51 @@ pub fn tempo_band(genre: &str) -> Option<(f32, f32)> {
     })
 }
 
+/// The tempo a trusted reference says this track is really at.
+///
+/// Better evidence than [`octave_correct`] and used in preference to it: a
+/// per-track number beats a guess from the genre a record was filed under, and
+/// it works for the great majority of a library that carries no genre tag at
+/// all.
+///
+/// Only ever returns an *octave* of the measured tempo, never the reference
+/// value itself. The reference can be a different mix, a radio edit, or simply
+/// wrong, and its job here is narrow: to say which octave of a pulse this crate
+/// already found is the one a listener counts. Replacing 87.0 with a stranger's
+/// 173.7 would import their error along with their answer, so 87.0 becomes
+/// exactly 174.0.
+///
+/// `None` when the two already agree, when the reference is missing or absurd,
+/// and when no octave lands close enough to be the same pulse.
+pub fn octave_from_reference(measured: f32, reference: f32) -> Option<f32> {
+    if !measured.is_finite() || measured <= 0.0 {
+        return None;
+    }
+    // A reference of zero is Deezer's "we do not know", not a tempo, and the
+    // band beyond it is nothing any music is played at.
+    if !reference.is_finite() || !(20.0..=300.0).contains(&reference) {
+        return None;
+    }
+
+    // Within this of the reference counts as the same reading. Wide enough to
+    // absorb the disagreement between two estimators on the same track — they
+    // routinely differ by a percent or so — and far narrower than the factor of
+    // two that separates the octaves being chosen between.
+    const TOLERANCE: f32 = 0.06;
+    let agrees = |a: f32| (a / reference - 1.0).abs() <= TOLERANCE;
+
+    if agrees(measured) {
+        return None;
+    }
+    // Halves and doubles only. A reference that agrees with none of them is
+    // describing a different recording, and the right answer is to keep what
+    // was measured here.
+    [2.0f32, 0.5, 4.0, 0.25]
+        .into_iter()
+        .map(|m| measured * m)
+        .find(|candidate| agrees(*candidate))
+}
+
 /// The tempo a genre says this track is really at.
 ///
 /// Returns `Some` only when the detected tempo is *outside* the genre's band
@@ -374,5 +419,62 @@ mod tests {
         assert_eq!(tempo_band("  DRUM & BASS  "), Some((160.0, 185.0)));
         assert_eq!(tempo_band("Sea Shanty"), None);
         assert_eq!(tempo_band(""), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Resolving an octave against a per-track reference
+    // -----------------------------------------------------------------------
+
+    /// The case from the owner's library: Knife Party's "Bonfire" measures 87.0
+    /// here and Deezer reports 173.7. Both describe the same pulse; only one is
+    /// the tempo a listener counts.
+    #[test]
+    fn a_reference_resolves_a_half_time_reading() {
+        assert_eq!(octave_from_reference(87.0, 173.7), Some(174.0));
+        assert_eq!(octave_from_reference(86.9, 172.3), Some(173.8));
+    }
+
+    /// The corrected value is an octave of *our* measurement, never the
+    /// reference. Their number may carry their own error, and this borrows
+    /// their judgement about the octave rather than their arithmetic.
+    #[test]
+    fn the_result_is_an_octave_of_the_measurement_not_the_reference() {
+        let fixed = octave_from_reference(87.0, 173.7).expect("a correction");
+        assert_eq!(fixed, 174.0, "took the reference verbatim");
+        assert_ne!(fixed, 173.7);
+    }
+
+    #[test]
+    fn a_double_time_reading_is_halved() {
+        assert_eq!(octave_from_reference(160.0, 80.0), Some(80.0));
+    }
+
+    /// Agreement needs no correction, and near-agreement is still agreement:
+    /// two estimators differ by a percent or so on the same track.
+    #[test]
+    fn nothing_is_changed_when_the_two_already_agree() {
+        assert_eq!(octave_from_reference(123.0, 123.0), None);
+        assert_eq!(octave_from_reference(119.2, 120.0), None);
+        assert_eq!(octave_from_reference(174.0, 173.7), None);
+    }
+
+    /// Deezer writes 0 when it does not know, which is most of the time. That
+    /// is not a tempo and must never be treated as one.
+    #[test]
+    fn a_missing_reference_is_not_a_tempo() {
+        assert_eq!(octave_from_reference(87.0, 0.0), None);
+        assert_eq!(octave_from_reference(87.0, f32::NAN), None);
+        assert_eq!(octave_from_reference(87.0, 5.0), None);
+        assert_eq!(octave_from_reference(87.0, 900.0), None);
+        assert_eq!(octave_from_reference(0.0, 174.0), None);
+    }
+
+    /// A reference that is neither our reading nor an octave of it is
+    /// describing a different recording — a remix, a radio edit, a mismatch.
+    /// Keep what was measured here.
+    #[test]
+    fn an_unrelated_reference_is_ignored() {
+        assert_eq!(octave_from_reference(87.0, 128.0), None);
+        assert_eq!(octave_from_reference(140.0, 100.0), None);
     }
 }

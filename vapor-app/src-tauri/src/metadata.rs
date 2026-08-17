@@ -75,6 +75,18 @@ pub struct Looked {
     pub album_art: String,
     #[serde(default)]
     pub genre: String,
+    /// Deezer's own tempo for this recording. **Zero means they do not know**,
+    /// which is most of the time — it is an absent value, not a default.
+    ///
+    /// Never used as a tempo. Its only job is to say which octave of the tempo
+    /// measured here a listener would count; see
+    /// `vapor_library::octave_from_reference`.
+    #[serde(default)]
+    pub deezer_bpm: f32,
+    /// Their length in seconds, used to check the match is the same recording
+    /// before anything of theirs is believed.
+    #[serde(default)]
+    pub deezer_duration: u32,
     /// Whether a lookup has been attempted at all.
     ///
     /// Distinct from every field being empty: a track whose lyrics simply do
@@ -238,6 +250,57 @@ pub const ARTIST_KEYS: &[&str] = &[
     "picture_small",
 ];
 pub const ALBUM_KEYS: &[&str] = &["cover_xl", "cover_big", "cover_medium", "cover_small"];
+
+/// What Deezer knows about one recording.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TrackFacts {
+    /// Deezer's own tempo. **Zero means they do not know**, which is most of
+    /// the time — it is a real field with a real absent value, not a default.
+    pub bpm: f32,
+    /// Length in seconds, used to check the match is the same recording.
+    pub duration: u32,
+}
+
+/// Read a Deezer `/track/{id}` response.
+pub fn track_facts_of(body: &str) -> Option<TrackFacts> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    // An error object is a valid document and not a track.
+    if value.get("error").is_some() {
+        return None;
+    }
+    Some(TrackFacts {
+        bpm: value.get("bpm").and_then(|b| b.as_f64()).unwrap_or(0.0) as f32,
+        duration: value.get("duration").and_then(|d| d.as_u64()).unwrap_or(0) as u32,
+    })
+}
+
+/// The id of the first track in a Deezer search response.
+pub fn track_id_of(body: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("data")?
+        .as_array()?
+        .first()?
+        .get("id")?
+        .as_u64()
+}
+
+/// Whether two durations describe the same recording.
+///
+/// Track search is fuzzy: asking for an artist and a title can return a remix,
+/// a live cut, or a different song altogether. Accepting whatever comes back
+/// would import a stranger's tempo for a recording nobody is playing, so the
+/// length has to agree first.
+///
+/// Five seconds, which absorbs the usual disagreement about where a track ends
+/// — trailing silence, a fade counted or not — while still separating a radio
+/// edit from an extended mix.
+pub fn same_recording(ours_secs: f64, theirs_secs: u32) -> bool {
+    if theirs_secs == 0 || !ours_secs.is_finite() || ours_secs <= 0.0 {
+        return false;
+    }
+    (ours_secs - theirs_secs as f64).abs() <= 5.0
+}
 
 /// The id of the first album in a Deezer search response.
 ///
@@ -428,6 +491,24 @@ impl Lookup {
         self.get(&url)
             .map(|b| image_url_of(&b, ARTIST_KEYS))
             .unwrap_or_default()
+    }
+
+    /// What Deezer knows about one recording: its tempo and its length.
+    ///
+    /// Two requests, because the search result does not carry a tempo — the
+    /// same shape as the album lookup, and for the same reason.
+    pub fn track_facts(&self, artist: &str, title: &str) -> Option<TrackFacts> {
+        if !is_searchable(title) {
+            return None;
+        }
+        let query = if is_searchable(artist) {
+            format!("{artist} {title}")
+        } else {
+            title.to_string()
+        };
+        let url = format!("https://api.deezer.com/search/track?q={}", encode(&query));
+        let id = track_id_of(&self.get(&url)?)?;
+        track_facts_of(&self.get(&format!("https://api.deezer.com/track/{id}"))?)
     }
 
     /// Album art, and the genre.
@@ -715,6 +796,64 @@ mod tests {
             url.contains("1000x1000"),
             "expected the xl rung of the ladder, got {url}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deezer's own tempo, and the guards on believing it
+    // -----------------------------------------------------------------------
+
+    /// `GET https://api.deezer.com/track/3786816142` — captured 2026-08-17.
+    /// Note `bpm: 0`, which is Deezer for "we do not know" and is the common
+    /// case rather than the exception.
+    const REAL_TRACK_UNKNOWN_BPM: &str = r#"{"id":3786816142,"title":"Space Time","duration":289,"bpm":0,"gain":-7.3,"type":"track"}"#;
+
+    /// A recording they do have a tempo for. Ours reads 87.0 for this one.
+    const REAL_TRACK_KNOWN_BPM: &str = r#"{"id":128069739,"title":"Bonfire","duration":272,"bpm":173.7,"gain":-5.4,"type":"track"}"#;
+
+    #[test]
+    fn a_track_response_is_read_including_the_absent_tempo() {
+        let known = track_facts_of(REAL_TRACK_KNOWN_BPM).expect("a track");
+        assert!((known.bpm - 173.7).abs() < 1e-3);
+        assert_eq!(known.duration, 272);
+
+        let unknown = track_facts_of(REAL_TRACK_UNKNOWN_BPM).expect("a track");
+        assert_eq!(unknown.bpm, 0.0, "zero is absent, not a tempo");
+        assert_eq!(unknown.duration, 289);
+    }
+
+    /// Deezer answers a bad id with an error object, which is valid JSON and
+    /// not a track. Reading it as one would give a tempo of zero and a length
+    /// of zero, and the length is what guards everything else.
+    #[test]
+    fn an_error_response_is_not_a_track() {
+        let body = r#"{"error":{"type":"DataException","message":"no data","code":800}}"#;
+        assert_eq!(track_facts_of(body), None);
+        assert_eq!(track_facts_of("not json"), None);
+    }
+
+    /// Track search is fuzzy — an artist and a title can return a remix, a live
+    /// cut, or a different song. The length has to agree before anything of
+    /// theirs is believed, or a wrong hit imports a stranger's tempo for a
+    /// recording nobody is playing.
+    #[test]
+    fn a_different_recording_is_refused_by_its_length() {
+        // The same track: 289 s against 289.7 s measured here.
+        assert!(same_recording(289.7, 289));
+        assert!(same_recording(272.0, 272));
+        // A radio edit against an extended mix.
+        assert!(!same_recording(289.0, 210));
+        // An absent length proves nothing, so it is refused.
+        assert!(!same_recording(289.0, 0));
+        assert!(!same_recording(0.0, 289));
+        assert!(!same_recording(f64::NAN, 289));
+    }
+
+    #[test]
+    fn a_search_response_yields_the_first_track_id() {
+        let body = r#"{"data":[{"id":3786816142,"title":"Space Time"},{"id":9,"title":"Other"}],"total":2}"#;
+        assert_eq!(track_id_of(body), Some(3786816142));
+        assert_eq!(track_id_of(r#"{"data":[]}"#), None);
+        assert_eq!(track_id_of("{}"), None);
     }
 
     /// The whole lookup, against the live services.
