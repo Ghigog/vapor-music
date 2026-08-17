@@ -1958,6 +1958,75 @@ named a mechanism where the requirement was an outcome:
 
 ---
 
+## Vibe DJ — open work (2026-08-17)
+
+State after a day of fixes, written down so it survives a fresh session.
+
+### What now works
+
+The DJ conducts. `dj_mode` is a persisted setting the supervisor reads — it was
+`useState(true)` in `App.tsx`, so the half of the app that decides what plays
+next had never heard of it and nothing ever added to the queue. `extend_set`
+appends the DJ's pick when the set has nowhere left to go, `Queue::set_next`
+adds a track that is not already queued instead of refusing it, and
+`Queue::has_more` answers "does this set have anywhere to go" rather than
+`peek_next`, which under repeat-all wraps to the beginning and says yes forever.
+
+Intensity replaced the energy measure for matching and curves. `energy_level` is
+mean RMS over peak RMS — a consistency ratio that put ballads above drum & bass
+on the real library. `intensity_from_lufs` separates the same groups by 0.256
+instead of 0.031 and needs no re-analysis, since LUFS was already stored.
+
+### VDJ-1 : Switch is unreachable (open)
+
+`match_kind_between` returns `Switch` **only** when the two genres differ, and
+`same_genre` treats an unknown genre as similar. The library carries 46 genres
+across 534 tracks and they are only `Indie`, `Jazz`, `R&B` and `Unknown genre`,
+so the branch is dead and the screen can never show three candidates.
+
+Two ways out, and they are not exclusive: run the identify pass so albums have
+Deezer genres, or change what a Switch keys on — with intensity now meaning
+loudness, a large intensity jump is arguably a better definition of "switch it
+up" than a genre label ever was.
+
+### VDJ-2 : the planner has never run (open)
+
+Two mechanisms, and only the weaker one is reachable without a button press.
+`extend_set` appends **one** track when the queue empties, which is why the
+queue reads "2 to come". `pathfinder::plan` does A* with a beam width of 6 over
+`transition_cost + curve_cost` and plans `MAX_PLANNED = 10` tracks along the
+chosen curve — but only from "Conduct from here".
+
+The fix Dylan asked for: selecting a curve *is* the action, so choosing a mood
+plans the set immediately and the button goes. Curves become colour with the
+explanation moved to Help, and the curve auto-advances each match/fresh/match/
+switch cycle — build, hold, chill, wave, hold, chill — for a rolling arc.
+
+### VDJ-3 : the suggestion cards (open)
+
+Reduced to list rows while removing verbosity. The design is three cards
+horizontally, artwork as the main element, the short info line beneath. Restore
+that; the text removal was right, the layout change was not.
+
+### VDJ-4 : the identify pass has never been run (blocked on Dylan)
+
+`identify_library` asks Deezer for each track's tempo and album genre, and uses
+their tempo only to choose which octave of the tempo measured here is the one a
+listener counts — Delta Heavy's "Space Time" measures 87 and is 174, and both
+this crate and Essentia agree on 87, so nothing on the device can settle it.
+Unblocks VDJ-1 and the whole class of drum & bass matching chill hip hop.
+
+Waiting on a button press: it sends artist and title for every track.
+
+### VDJ-5 : the hiccup (open)
+
+A small audible glitch in an otherwise much-improved transition, heard once and
+not investigated. Reproduce offline with `bin/render` rather than by ear.
+Candidates: the stretcher re-priming as the post-transition glide crosses unity,
+a decoder stall at the seam, the limiter.
+
+---
+
 ## Tech debt
 
 Recovered from the tech-debt document deleted on 2026-08-16 (commit cb3a979)
