@@ -2,20 +2,17 @@
 
 What is done, what is not, and what to run when the NDK is installed.
 
-## State, as of 2026-08-17
+## What this covers
 
-| | State |
-|---|---|
-| Rust shell compiles for `aarch64-linux-android` | Gated in CI (`android (compile)` in `app.yml`) |
-| Credential store | Written (`src/secrets/android.rs`), compiled, **never run on a device** |
-| Audio | `cpal` declares its own Oboe backend for Android; not run |
-| Media keys | Compile to no-ops — `souvlaki` has an `empty` platform for Android |
-| Gradle project (`gen/android`) | Does not exist; `tauri android init` has never been run |
-| Anything at all on hardware or an emulator | No |
+Everything here is a decision or an instruction. **Status — what is built, what
+is verified, what is not — lives in `docs/workspace/tickets.md` under AND-1**,
+because a status table in a guide is stale the first time someone acts on the
+guide.
 
-Nothing here has played a note on a phone. The claim this document makes is
-narrow and exact: **it compiles**, and the parts that can be tested without a
-device are tested.
+One thing is worth stating flatly and does not go stale, because it is a claim
+about a kind of evidence rather than about a date: **no part of this has been
+run on Android hardware or an emulator.** The verification is a compile, and
+`app.yml` is where it happens.
 
 ## The machine this was written on
 
@@ -55,7 +52,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 cd vapor-app && npm run tauri android init
 ```
 
-`init` generates `gen/android`, which is not in the tree. Two things to check in
+`init` generates the Gradle project under `gen/android`. Two things to check in
 what it writes, because both are decisions rather than defaults:
 
 - **`android:allowBackup`.** The credential store keeps its ciphertext in

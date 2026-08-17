@@ -152,7 +152,7 @@ As a developer or designer joining the project,
 I'd like the design language doc to accurately describe the current glass palette,
 So that I can build new components correctly from day one.
 
-**Context:** `docs/design_language.md` still describes the original blue-violet palette, the dual accent (Aurora + Aqua), and the Frutiger Aero aesthetic as co-primary.
+**Context:** `docs/DESIGN_LANGUAGE.md` still describes the original blue-violet palette, the dual accent (Aurora + Aqua), and the Frutiger Aero aesthetic as co-primary.
 
 **Description:** Update §1 (philosophy), §2.2 (dark palette tables), §2.3 (light palette), §2.4 (dynamic palette note), and Appendix A quick-reference card to reflect the Apple Glass system.
 
@@ -165,7 +165,7 @@ So that I can build new components correctly from day one.
 - Add entry to changelog table
 
 **Acceptance Criteria:**
-- Given a developer reads design_language.md
+- Given a developer reads DESIGN_LANGUAGE.md
 - When they look up the primary accent hex
 - Then they see `#007AFF` (light) / `#0A84FF` (dark), not `#7B6EF6`
 
@@ -2079,6 +2079,41 @@ The curves are colour and shape now, not prose: each swatch draws its own
 `Curve::target_energy` and is warm if it climbs, cool if it falls. The arithmetic
 that used to sit under each label was accurate and was not what anyone is
 choosing between.
+
+### AND-1 : Android (compiling, never run)
+
+The status `docs/ANDROID.md` deliberately does not carry. That document holds
+the decisions and the bring-up steps; this holds what is true today.
+
+**Done and verified by a compile:**
+
+* The shell resolves and compiles for `aarch64-linux-android` — gated by the
+  `android (compile)` job in `app.yml`, on a runner that has an NDK.
+* `secrets` is a seam. Desktop keeps `keyring`; a target with no store chosen
+  fails to compile rather than falling back to a mock (TD-50).
+* `secrets::android` — AES-256-GCM under an Android Keystore key, ciphertext in
+  `SharedPreferences`. Type-checked on all three desktop runners through
+  `--features android-check`, so a mistyped JNI signature is a compile error on
+  a laptop rather than a `NoSuchMethodError` on a phone.
+* Media keys compile to no-ops: `souvlaki` ships an `empty` platform for
+  Android, so `media.rs` needed no gating.
+
+**Done and not verified at all:** everything above, at runtime. No emulator in
+CI, no NDK on the development machine, so nothing has executed on Android.
+
+**Not started:**
+
+* `gen/android` — `tauri android init` has not been run, so there is no Gradle
+  project, no manifest and therefore no permissions.
+* Audio on a device. `cpal` declares its own Oboe backend for the target, which
+  is why it compiles; whether a real-time callback that must not allocate
+  behaves through Oboe is unmeasured. `oboe-shared-stdcxx` is a link-time
+  choice a `cargo check` cannot answer.
+* Peer discovery needs `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` and a held
+  multicast lock. Off by default, so it should fail quietly.
+
+**Blocked on:** an NDK on the development machine, for anything beyond a
+compile.
 
 ### VDJ-4 : the identify pass has never been run (blocked on Dylan)
 

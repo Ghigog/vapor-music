@@ -109,7 +109,7 @@ Vapor's UI is built for focused, distraction-free listening.
 - **Apple-inspired glassmorphism** — frosted-glass panels, a minimal 3-colour palette, and seamless adaptation to any wallpaper or desktop. Two built-in themes: **Vapor Dark** (deep charcoal glass, `#0A84FF` accent) and **Vapor Light** (white frosted glass, `#007AFF` accent).
 - **Low-Glare Ambient Mode** — a distraction-free, dimmed UI designed for late-night or ambient listening
 - Dashboard widget mode — a minimal, unobtrusive now-playing overlay for multitaskers
-- Fully themeable with community-shareable colour schemes (see the [Theme System Developer Guide](docs/theme_system.md) and [Design Language](docs/design_language.md) for details on creating custom visual presets)
+- Fully themeable with community-shareable colour schemes (see the [Theme System Developer Guide](docs/theme_system.md) and [Design Language](docs/DESIGN_LANGUAGE.md) for details on creating custom visual presets)
 
 ---
 
