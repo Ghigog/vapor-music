@@ -202,6 +202,47 @@ test.describe("Press and hold a track", () => {
   });
 });
 
+test.describe("Playlists as a tab", () => {
+  /**
+   * The playlist rail lives in the sidebar, and a phone has no sidebar, so
+   * playlists were the one thing on this screen with no way to reach them.
+   * They are a Library tab now, which is where the Daylight design puts them.
+   */
+  test("is reachable and opens a playlist", async ({ page }) => {
+    await boot(page, {
+      playlists: [
+        {
+          id: "p1",
+          name: "Night Drive",
+          customCoverPath: "",
+          tracks: ["/dav/Koofr/Music/xtal.m4a"],
+          folderId: "",
+        },
+      ],
+    });
+
+    await page.getByRole("tab", { name: "Playlists" }).click();
+
+    const playlist = page.getByRole("button", { name: /night drive/i });
+    await expect(playlist).toBeVisible();
+    await playlist.click();
+
+    await expect(page.getByRole("heading", { name: /night drive/i })).toBeVisible();
+  });
+
+  /** Creating one has to work here too: it is the only route on a phone. */
+  test("can make a playlist without a sidebar", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("tab", { name: "Playlists" }).click();
+    await page.getByRole("button", { name: /new playlist/i }).click();
+    await page.getByPlaceholder(/playlist name/i).fill("Openers");
+    await page.getByPlaceholder(/playlist name/i).press("Enter");
+
+    await expect(page.getByRole("button", { name: /openers/i })).toBeVisible();
+  });
+});
+
 test.describe("The layout fits the screen", () => {
   /**
    * A page wider than its viewport is the symptom every one of the above shares.

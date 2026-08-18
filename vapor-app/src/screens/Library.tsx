@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Songs } from "./Songs";
+import { PlaylistRail } from "../components/PlaylistRail";
 import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
 
 /**
@@ -24,11 +25,21 @@ import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
  * Playlists, and the flat list is one of them (docs/FINDINGS.md). It is one
  * of them here now too, and it renders the table.
  */
-const TABS: ReadonlyArray<{ id: GroupBy; label: string }> = [
+/**
+ * Which tab is showing.
+ *
+ * Playlists are not a way of grouping the library — they are a different list
+ * entirely — so this is `GroupBy` plus one, rather than a fifth `GroupBy` that
+ * the backend would then have to be taught to reject.
+ */
+type Tab = GroupBy | "playlist";
+
+const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "album", label: "Albums" },
   { id: "artist", label: "Artists" },
   { id: "genre", label: "Genres" },
   { id: "none", label: "Songs" },
+  { id: "playlist", label: "Playlists" },
 ];
 
 type Load =
@@ -59,11 +70,14 @@ export type Opened = {
 
 export function Library({
   onOpen,
+  onOpenPlaylist,
   opened: controlledOpened,
   onOpenedChange,
 }: {
   /** Opens a track's liner notes — the table's double-click. */
   onOpen?: ((href: string) => void) | undefined;
+  /** Opens a playlist from the Playlists tab. */
+  onOpenPlaylist?: ((id: string) => void) | undefined;
   /**
    * The drill-down, when the caller owns it.
    *
@@ -86,7 +100,9 @@ export function Library({
     else setOwnOpened(next);
   };
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
-  const [groupBy, setGroupBy] = useState<GroupBy>("album");
+  const [tab, setTab] = useState<Tab>("album");
+  /** What to ask the library for, or null on a tab that is not asking it. */
+  const groupBy: GroupBy | null = tab === "playlist" ? null : tab;
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   /** A failure to start playback belongs on screen, not in the console. */
   const [playError, setPlayError] = useState<string | null>(null);
@@ -97,6 +113,8 @@ export function Library({
     // Debounced because the table re-runs the whole filter/sort/group pipeline
     // per keystroke. 120ms is below the threshold where typing feels laggy but
     // high enough to collapse a burst of keystrokes into one round trip.
+    if (!groupBy) return;
+
     const t = setTimeout(() => {
       core
         .libraryView({ query, groupBy, sortKey: "title", ascending: true })
@@ -116,7 +134,7 @@ export function Library({
 
   /** The albums or artists for the current tab. */
   useEffect(() => {
-    if (!isEntityTab(groupBy)) {
+    if (!groupBy || !isEntityTab(groupBy)) {
       setEntities(null);
       return;
     }
@@ -215,21 +233,21 @@ export function Library({
       </div>
 
       <div className="library__tabs" role="tablist">
-        {TABS.map((tab) => (
+        {TABS.map((item) => (
           <button
-            key={tab.id}
+            key={item.id}
             role="tab"
-            aria-selected={groupBy === tab.id}
+            aria-selected={tab === item.id}
             className={
-              "library__tab" + (groupBy === tab.id ? " library__tab--on" : "")
+              "library__tab" + (tab === item.id ? " library__tab--on" : "")
             }
             onClick={() => {
-              setGroupBy(tab.id);
+              setTab(item.id);
               // As does changing tab.
               setOpened(null);
             }}
           >
-            {tab.label}
+            {item.label}
           </button>
         ))}
       </div>
@@ -258,12 +276,21 @@ export function Library({
             }
           />
         </div>
+      ) : tab === "playlist" ? (
+        /* The rail the sidebar carries, as a tab.
+         *
+         * The same component rather than a second list: it already creates,
+         * renames, files into folders and takes dropped tracks, and a phone
+         * has no sidebar to reach any of that from. */
+        <div className="library__body">
+          <PlaylistRail activeId={null} onOpen={onOpenPlaylist ?? (() => {})} />
+        </div>
       ) : groupBy === "none" ? (
         /* The flat list is the table, not an ungrouped grid of cards: the whole
            point of it is the columns — artist, album, tempo, key — and sorting
            by them. It gets the search field above rather than one of its own. */
         <Songs onOpen={onOpen} query={query} />
-      ) : isEntityTab(groupBy) ? (
+      ) : groupBy && isEntityTab(groupBy) ? (
         <div className="library__body">
           <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
 

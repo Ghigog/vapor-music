@@ -329,6 +329,7 @@ export function App() {
               {screen === "library" && (
                 <Library
                   onOpen={openLiner}
+                  onOpenPlaylist={openPlaylist}
                   opened={opened}
                   onOpenedChange={setOpened}
                 />
