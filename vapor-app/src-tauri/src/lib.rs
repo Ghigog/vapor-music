@@ -3486,8 +3486,11 @@ fn window_handle(handle: &tauri::AppHandle) -> Option<*mut std::ffi::c_void> {
     use tauri::Manager as _;
     handle
         .get_webview_window("main")
+        // `HWND.0` is already `*mut c_void` in the `windows` version Tauri
+        // pins, so a cast here is one clippy rejects — and clippy is only run
+        // on Windows for this function, which is how it survived.
         .and_then(|w| w.hwnd().ok())
-        .map(|hwnd| hwnd.0 as *mut std::ffi::c_void)
+        .map(|hwnd| hwnd.0)
 }
 
 #[cfg(not(target_os = "windows"))]
