@@ -26,6 +26,19 @@ android {
     }
     buildTypes {
         getByName("debug") {
+            // A debug build installs alongside the real app instead of
+            // replacing it. Without this the two share
+            // `com.dylangrowcoot.vapormusic`, and because they are signed with
+            // different keys Android refuses the install outright — the only
+            // way through being to uninstall the other one, which takes its
+            // settings, its playlists and its stored password with it. A test
+            // build should never be able to cost someone their data.
+            //
+            // It also gets its own data directory, which is what makes the
+            // credential store's first run a real first run.
+            //
+            // NOTE: `tauri android build` rewrites this file from its template
+            // and drops this line. See AND-3.
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true

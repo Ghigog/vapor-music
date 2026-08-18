@@ -9,10 +9,12 @@ is verified, what is not — lives in `docs/workspace/tickets.md` under AND-1**,
 because a status table in a guide is stale the first time someone acts on the
 guide.
 
-One thing is worth stating flatly and does not go stale, because it is a claim
-about a kind of evidence rather than about a date: **no part of this has been
-run on Android hardware or an emulator.** The verification is a compile, and
-`app.yml` is where it happens.
+One thing is worth stating flatly, because it is a claim about a kind of
+evidence rather than about a date: **a compile is not a run.** The Android job
+in `app.yml` proves the code builds, and the first launch on real hardware still
+found a fault no build could have — nothing was publishing the Android runtime
+handles, so the app started, rendered, and had no sound (AND-4). Keep the two
+columns separate.
 
 ## The machine this was written on
 
@@ -106,9 +108,11 @@ In rough order of how likely each is to be wrong on the first device:
    `NoSuchMethodError` at runtime. Every call goes through `check!`, which
    clears the pending exception and reports which step threw, so the first
    failure should name itself rather than abort the process.
-2. **`ndk_context` not being initialised.** `runtime()` reports this rather than
-   dereferencing null. If it fires, audio is broken too — `cpal`'s Oboe backend
-   takes its handle from the same place.
+2. ~~**`ndk_context` not being initialised.**~~ This one was right, and it
+   happened on the first launch: nothing published the handles, so there was no
+   audio and there would have been no credential store. `src/android.rs`
+   publishes them now (AND-4). If it ever regresses, the symptom is an app that
+   starts and renders perfectly with no sound.
 3. **Audio.** `cpal` on Android is, in its own words, the least battle-tested
    part of that crate, and this app asks more of it than most: a real-time
    thread that must not allocate. `oboe-shared-stdcxx` is a link-time choice

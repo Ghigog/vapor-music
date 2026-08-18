@@ -2080,44 +2080,61 @@ The curves are colour and shape now, not prose: each swatch draws its own
 that used to sit under each label was accurate and was not what anyone is
 choosing between.
 
-### AND-1 : Android (builds an APK, never run)
+### AND-1 : Android (runs on a Pixel 9; audio opens)
 
 The status `docs/ANDROID.md` deliberately does not carry.
 
-**Done, and verified by building it:**
+**Verified on hardware** — a Pixel 9 over wireless debugging, 2026-08-18:
 
-* The shell compiles for `aarch64-linux-android`, on a GitHub runner and now on
-  this machine — NDK 30.0.15729638, installed 2026-08-18.
-* `tauri android init` has been run. `gen/android` is in the tree, and the
-  `src-tauri/gen/` ignore rule now covers `gen/schemas` only: the manifest holds
-  decisions that exist nowhere else, and ignoring the directory meant they lived
-  on one laptop and would come back as template defaults on the next checkout.
-* A debug APK builds: `app-universal-debug.apk`, 259 MB unoptimised with debug
-  info. `libc++_shared.so` is bundled by the Gradle plugin, which settles the
-  `oboe-shared-stdcxx` question — the linker reports the library wanting
-  `libOpenSLES.so`, so cpal's audio backend really is linked in.
-* `minSdk` is 24, above the API 23 that `KeyGenParameterSpec` needs.
-* `allowBackup` is off, deliberately: the Keystore key behind the credential
-  store is never backed up, so a restored backup would carry a record nothing
-  can read.
-* `secrets` is a seam. Desktop keeps `keyring`; a target with no store chosen
-  fails to compile rather than falling back to a mock (TD-50). The JNI store is
-  type-checked on all three desktop runners through `--features android-check`.
+* The app installs, starts, and renders. Onboarding lays out correctly at
+  phone width with no changes made for it.
+* An audio device opens: `AAudioStream_requestStart` returns 0 in our process.
+* No panic and no `UnsatisfiedLinkError` in logcat on a cold start.
 
-**Not verified at all: that any of it runs.** No emulator image is installed and
-no device has been attached, so nothing has executed on Android. A build is not
-a run.
+**Verified by building it:** the shell compiles for `aarch64-linux-android` here
+and in CI; a debug APK builds; `libc++_shared.so` is bundled by the Gradle
+plugin, settling the `oboe-shared-stdcxx` question a `cargo check` could not.
 
-**Next, and it needs a device or an emulator image:**
+**Found by running it — see AND-4.** Nothing was publishing the Android runtime
+handles, so audio was dead on the first launch. Fixed.
 
-* Does the app start, and does the webview render.
-* The JNI credential store, end to end: save a password, read it back.
-* Audio through cpal's Android backend — specifically whether a callback that
-  must not allocate behaves there.
+**Still unverified:**
+
+* The credential store, end to end. It compiles and is type-checked on four
+  platforms; no password has been saved and read back on a device. This is the
+  one that most wants a real test — JNI signatures resolve at runtime, not at
+  build time.
+* Playback itself. A device is open; no audio has been decoded through it, and
+  a real-time callback that must not allocate is a different question from a
+  stream that starts.
 * Peer discovery needs `INTERNET` (present) plus `CHANGE_WIFI_MULTICAST_STATE`
   and a held multicast lock (neither present). Deliberately not added: a
   permission for a feature that cannot work yet is a permission asked for
   nothing. Sync is off by default, so it should fail quietly.
+
+**Decisions in `gen/android`, which is in the tree:** `allowBackup="false"`
+(the Keystore key behind the credential store is never backed up, so a restored
+backup would carry a record nothing can read); `minSdk = 24` (above the API 23
+`KeyGenParameterSpec` needs); and a `.debug` application id suffix, so a test
+build installs alongside the real app rather than demanding an uninstall that
+would take someone's settings, playlists and password with it.
+
+### AND-3 : `app/build.gradle.kts` is regenerated on every build (worked around)
+
+The Tauri CLI rewrites `gen/android/app/build.gradle.kts` from its template on
+every `tauri android build`, so an edit to that file survives exactly until the
+next build — and silently, since the build reports success and simply produces
+an APK without the change. Found by watching a `.debug` suffix disappear twice.
+
+Comments in the file survive; property lines are replaced. Do not read that as a
+merge worth relying on.
+
+The customisation therefore lives in `gen/android/build.gradle.kts`, the root
+file, which the CLI leaves alone, as a `subprojects { plugins.withId(...) }`
+hook. `AndroidManifest.xml` is not regenerated and is a normal place to edit.
+
+Worth revisiting if Tauri gains a supported way to set an application id suffix,
+or if the root file starts being templated too.
 
 ### AND-2 : the Windows shell tests crashed the test binary (fixed 2026-08-17)
 
@@ -2148,6 +2165,30 @@ device disabled would have done on launch. It was never only a CI problem.
 **Found by** running the Windows step with `--test-threads=1 --nocapture`. A
 parallel run names the binary and not the test; one thread at a time made the
 last line printed the culprit.
+
+### AND-4 : nothing published the Android runtime handles (fixed 2026-08-18)
+
+`ndk_context` holds the `JavaVM` and app `Context` in a process-wide static so
+that library code deep in a dependency tree can reach the Android runtime.
+`cpal` reads it to open a stream through Oboe; `secrets::android` reads it to
+reach the Keystore. Neither `tauri` nor `wry` depends on the crate at all — they
+carry their own JNI plumbing — so nothing ever called
+`initialize_android_context`.
+
+First launch on a device: the app came up perfectly, rendered, and had no sound.
+One line in logcat said why — the audio thread panicked with "android context
+was not initialized", reported as "the audio thread stopped before reporting".
+The credential store would have failed the same way, though it reports the
+condition rather than panicking.
+
+Fixed by `src/android.rs`, called from `MainActivity.onCreate` before `super`.
+The application context is used rather than the activity, and its global
+reference is leaked deliberately: one per process, and dropping it would leave
+the static pointing at a collected object.
+
+**It compiled for a day before this.** Four platforms, CI green, a debug APK
+that installed. Nothing about the failure is visible from a build — which is the
+argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
 ### VDJ-4 : the identify pass has never been run (blocked on Dylan)
 

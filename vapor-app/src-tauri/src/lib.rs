@@ -17,6 +17,8 @@
 //! core would have to be written twice.
 
 mod analysis;
+#[cfg(any(target_os = "android", feature = "android-check"))]
+mod android;
 /// Public so `tests/audio_realtime.rs` can drive the audio path without a
 /// device. Nothing outside the crate uses it.
 pub mod audio;
