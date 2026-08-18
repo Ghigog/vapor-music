@@ -1,0 +1,94 @@
+/*
+ * The track sheet: what a narrow row cannot say for itself.
+ *
+ * Bottom-anchored rather than centred. A phone's reachable area is the bottom
+ * of the screen, and this is opened by a thumb already resting there.
+ */
+
+.sheet__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(20, 30, 48, 0.34);
+}
+
+.sheet {
+  width: 100%;
+  max-width: 520px;
+  margin: 12px;
+  /* Clears the home indicator, which the shell leaves to whatever is last and
+     this is now in front of. */
+  margin-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 20px;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg, 0 18px 40px rgba(38, 62, 116, 0.22));
+}
+
+.sheet__title {
+  margin: 0 0 16px;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: var(--fs-lg);
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.sheet__facts {
+  margin: 0 0 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.sheet__fact {
+  display: grid;
+  /* The labels are a mono column of fixed width, so the values line up as a
+     column rather than stepping in and out with the length of each label. */
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+.sheet__value {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.sheet__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.sheet__open,
+.sheet__close {
+  flex: 1;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+}
+
+.sheet__open {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+}
+
+.sheet__close {
+  border: 1px solid var(--glass-rim);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+
+.sheet__open:focus-visible,
+.sheet__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

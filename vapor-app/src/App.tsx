@@ -29,6 +29,7 @@ import "./components/transport.css";
 import "./components/states.css";
 import "./components/notice.css";
 import "./components/help.css";
+import "./components/tracksheet.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 import "./screens/queue.css";

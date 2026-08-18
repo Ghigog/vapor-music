@@ -118,25 +118,87 @@ test.describe("The track table at 412px", () => {
     expect(clipped).toBe(false);
   });
 
-  test("puts tempo and key under the artist, where the columns used to be", async ({
-    page,
-  }) => {
+  test("shows the title and nothing else", async ({ page }) => {
     await boot(page);
     await openSongs(page);
 
-    await expect(page.locator(".songrow__meta").first()).toBeVisible();
-    await expect(page.locator(".songrow__meta").first()).toContainText("BPM");
+    await expect(page.locator(".songrow__title").first()).toBeVisible();
+    // Artist, tempo, key and the sleeve are all off the row; the sleeve never
+    // loaded a picture in the first place.
+    for (const gone of ["__artist", "__meta", "__art", "__info"]) {
+      await expect(page.locator(`.songrow${gone}`).first()).toBeHidden();
+    }
+  });
+});
+
+test.describe("Press and hold a track", () => {
+  async function openSongs(page: Page) {
+    await page
+      .getByRole("navigation", { name: "Screens" })
+      .getByRole("button", { name: "Library", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "Songs" }).click();
+  }
+
+  /** The gesture: down, wait past the threshold, up. */
+  async function hold(page: Page, title: string) {
+    await page
+      .getByRole("option")
+      .filter({ hasText: title })
+      .click({ delay: 700 });
+  }
+
+  /**
+   * The narrow row is a title alone, so everything else it used to say has to
+   * be somewhere a thumb can reach.
+   */
+  test("opens the facts the row no longer carries", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    await hold(page, "Windowlicker");
+
+    const sheet = page.getByRole("dialog", { name: /about windowlicker/i });
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toContainText("Aphex Twin");
+    await expect(sheet).toContainText("Windowlicker EP");
+    await expect(sheet).toContainText("124 BPM");
+    await expect(sheet).toContainText("8A");
   });
 
   /**
-   * Liner notes are revealed by `:hover`, which a phone does not have, so the
-   * control existed and could never be shown.
+   * A row plays when tapped. The click that arrives at the end of a hold must
+   * not also start the track, or reading about something plays it.
    */
-  test("the liner-notes control is reachable without a pointer", async ({ page }) => {
+  test("does not also start the track", async ({ page }) => {
     await boot(page);
     await openSongs(page);
 
-    await expect(page.locator(".songrow__info").first()).toBeVisible();
+    await hold(page, "Windowlicker");
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    await expect(page.locator(".transport__title")).toHaveText(/nothing playing/i);
+  });
+
+  test("carries the liner notes, which the row no longer offers", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    await hold(page, "Windowlicker");
+    await page.getByRole("button", { name: /liner notes/i }).click();
+
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /back/i })).toBeVisible();
+  });
+
+  test("closes without a keyboard", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    await hold(page, "Windowlicker");
+    await page.getByRole("button", { name: /^close$/i }).click();
+
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 });
 

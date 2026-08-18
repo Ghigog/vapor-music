@@ -24,6 +24,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
 import { startTrackDrag } from "../components/PlaylistRail";
+import { TrackSheet } from "../components/TrackSheet";
+import { useLongPress } from "../lib/longPress";
 import type { Row, SortKey } from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
@@ -136,6 +138,20 @@ export function Songs({
    *  bulk action applies to — moving focus should not silently change what a
    *  person is about to add to a playlist. */
   const [focused, setFocused] = useState(0);
+  /** The track whose facts are being read, opened by press-and-hold. */
+  const [sheetFor, setSheetFor] = useState<Row | null>(null);
+  /*
+   * Which row the finger went down on.
+   *
+   * One `useLongPress` for the whole table rather than one per row: a hook
+   * cannot be called inside the map that renders them, and only one press is
+   * ever in flight. The row is stashed on pointerdown so the timer, when it
+   * fires, knows what it fired on.
+   */
+  const pressedRow = useRef<Row | null>(null);
+  const hold = useLongPress(() => {
+    if (pressedRow.current) setSheetFor(pressedRow.current);
+  });
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -493,8 +509,16 @@ export function Songs({
                   height: ROW_HEIGHT,
                   transform: `translateY(${item.start}px)`,
                 }}
+                {...hold.handlers}
+                onPointerDown={(e) => {
+                  pressedRow.current = row;
+                  hold.handlers.onPointerDown(e);
+                }}
                 draggable
                 onDragStart={(e) => {
+                  // Starting a drag is a press and hold too. Without this the
+                  // sheet opens on the way to a playlist.
+                  hold.cancel();
                   // A drag on a selected row takes the whole selection; on an
                   // unselected one it takes just that row, which keeps the
                   // single-track case direct. The table has had multi-select
@@ -526,6 +550,9 @@ export function Songs({
                    * liner notes.
                    */
                   if (e.detail > 1) return;
+                  // A press-and-hold has already opened the sheet; the click
+                  // that follows it must not also start the track.
+                  if (hold.swallowClick()) return;
                   setFocused(item.index);
 
                   if (e.shiftKey) {
@@ -562,6 +589,20 @@ export function Songs({
           })}
         </div>
       </div>
+
+      {sheetFor && (
+        <TrackSheet
+          title={sheetFor.title}
+          artist={sheetFor.artistSource === "unknown" ? "" : sheetFor.artist}
+          album={sheetFor.albumSource === "unknown" ? "" : sheetFor.album}
+          bpm={sheetFor.bpm}
+          musicalKey={sheetFor.key}
+          {...(onOpen
+            ? { onOpen: () => onOpen(sheetFor.href) }
+            : {})}
+          onClose={() => setSheetFor(null)}
+        />
+      )}
     </div>
   );
 }

@@ -471,11 +471,41 @@
 @media (max-width: 767px) {
   .songs__cols,
   .songrow {
-    grid-template-columns: 22px 48px minmax(0, 1fr);
-    /* Room at the trailing edge for the liner-notes control, which moves out
-       from over the artwork below. Set on both, because the header and the row
-       share one column definition and drift the moment they disagree. */
-    padding-right: 50px;
+    /*
+     * Three columns still, with the artwork's collapsed to nothing.
+     *
+     * The header pins its names cell to grid column 3 with an inline
+     * `grid-column`, which a stylesheet cannot outrank. Dropping to two
+     * columns therefore did not move that cell down to 2 — it opened an
+     * implicit fourth column and parked the headings against the right edge,
+     * far from the titles they sort. Keeping the column and giving it no width
+     * keeps both grids counting the same way.
+     */
+    grid-template-columns: 22px 0 minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  /*
+   * No artwork on a track row.
+   *
+   * It never loaded one: the row renders a gradient and no `<img>` at all, on
+   * every platform, so at 412px it was 48px of decoration standing where the
+   * title needed to be. The sleeve still belongs to an album, which has one
+   * of its own at the top of the opened view.
+   */
+  .songrow__art {
+    /*
+     * Zero-sized, not `display: none`.
+     *
+     * Removing it takes it out of the grid, and the row's children are
+     * auto-placed — so the names cell slid into the collapsed artwork column
+     * and the title rendered at zero width. It has to stay an item and simply
+     * occupy nothing.
+     */
+    visibility: hidden;
+    width: 0;
+    height: 0;
+    box-shadow: none;
   }
 
   /* The header pins its cells with an inline `grid-column`, so hiding the
@@ -495,58 +525,49 @@
     display: none;
   }
 
-  /* Title on its own line, artist and metadata sharing the next. The title
-     takes a full basis to force the wrap; the artist is the half that gives
-     when the pair is too wide, which is the right half to lose. */
+  /*
+   * The title, and nothing else.
+   *
+   * Artist, album, tempo and key are behind a press and hold — see
+   * `TrackSheet`. A row that tries to carry four more facts at this width ends
+   * up carrying none of them legibly, which is what "Car…" over "Ins…" was.
+   */
+  .songrow__artist,
+  .songrow__meta {
+    display: none;
+  }
+
   .songrow__names {
-    flex-flow: row wrap;
-    align-items: baseline;
-    column-gap: 6px;
+    justify-content: center;
   }
 
   .songrow__title {
-    flex: 1 0 100%;
+    font-size: var(--fs-body);
   }
 
-  .songrow__artist {
-    flex: 0 1 auto;
-    min-width: 0;
-  }
-
-  .songrow__meta {
-    display: inline;
-    flex: 0 0 auto;
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    letter-spacing: var(--ls-label);
-    color: var(--ink-4);
+  /*
+   * Hold is a gesture, so the row must not be selectable text and must not
+   * scroll horizontally under the finger. Android would otherwise start a
+   * selection at about the same delay the hold fires at.
+   */
+  .songrow {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: pan-y;
   }
 }
 
 /*
- * Liner notes, at a width with no room to hide them over the artwork.
+ * Liner notes leave the narrow row entirely.
  *
- * The wide table reveals this control on hover, on top of the sleeve. Neither
- * half survives a phone: there is no hover to reveal it with, so it has to be
- * permanently visible, and permanently visible over the sleeve means every row
- * has its artwork blacked out. So on narrow it moves to the trailing edge —
- * art leading, action trailing — into the space the dropped columns freed.
+ * The control is revealed on hover, over the artwork. A phone has neither: no
+ * hover to reveal it, and now no artwork to sit on. The action moved into the
+ * press-and-hold sheet, where it shares one gesture with the metadata instead
+ * of competing for 44px with the row's own tap.
  */
 @media (max-width: 767px) {
   .songrow__info {
-    left: auto;
-    right: 6px;
-    width: 38px;
-    height: 38px;
-    background: rgba(255, 255, 255, 0.72);
-    color: var(--ink-2);
-    box-shadow: var(--shadow-sm);
-  }
-}
-
-/* Shown outright where there is no pointer to reveal it with. */
-@media (hover: none) {
-  .songrow__info {
-    opacity: 1;
+    display: none;
   }
 }
