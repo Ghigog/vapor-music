@@ -45,7 +45,7 @@ use tauri::{Manager, State};
 use vapor_engine::TrackSource;
 use vapor_library::{
     index::{GroupBy, Row, SortKey},
-    Curve, FolderStore, PlaylistStore, Queue, Settings, TrackMeta,
+    Curve, FolderStore, GroupStore, PlaylistStore, Queue, Settings, TrackMeta,
 };
 
 /// Everything the shell holds between commands.
@@ -59,6 +59,13 @@ struct AppState {
     /// Folders that playlists are filed into. A folder owns no tracks — a
     /// playlist carries a `folder_id` pointing at one.
     folders: FolderStore,
+    /// Smart groups: saved sets of artists, albums and genres.
+    ///
+    /// A group holds *entities*, not tracks, which is what makes it different
+    /// from a playlist — membership is resolved against the library when it is
+    /// read, so a group stays current as the library grows. `group.rs` has been
+    /// complete and tested since the port and nothing was wired to it.
+    groups: GroupStore,
     /// Lyrics and artwork looked up from public services, keyed by href.
     ///
     /// Kept apart from `analysis` and `tags` on purpose: those are what this
@@ -228,6 +235,7 @@ impl AppState {
         let cache_max_bytes = settings.cache_max_bytes;
         let playlists = quarantined!("playlists").unwrap_or_default();
         let folders = quarantined!("folders").unwrap_or_default();
+        let groups = quarantined!("groups").unwrap_or_default();
         let looked = quarantined!("metadata").unwrap_or_default();
         let trust = quarantined!("trust").unwrap_or_default();
         let tombstones = quarantined!("tombstones").unwrap_or_default();
@@ -251,6 +259,7 @@ impl AppState {
             settings,
             playlists,
             folders,
+            groups,
             looked,
             device_id,
             trust,
@@ -402,6 +411,11 @@ impl AppState {
 
     fn save_folders(&self) -> Result<()> {
         self.store.save("folders", &self.folders)?;
+        Ok(())
+    }
+
+    fn save_groups(&self) -> Result<()> {
+        self.store.save("groups", &self.groups)?;
         Ok(())
     }
 
@@ -2197,6 +2211,153 @@ fn create_playlist(
 fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folder>> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
     Ok(app.folders.all().to_vec())
+}
+
+/* ---- Smart groups ----------------------------------------------------
+ *
+ * A group is a saved set of artists, albums and genres — not of tracks. That is
+ * the whole difference from a playlist: membership is worked out against the
+ * library each time it is read, so a group takes in records added later without
+ * anyone maintaining it.
+ *
+ * `vapor_library::group` has held all of this, tested, since the port; the same
+ * file's `FolderStore` half was wired up and this half was not, so the feature
+ * existed everywhere except in the app. These are the commands it was missing.
+ * -------------------------------------------------------------------- */
+
+#[tauri::command]
+fn dynamic_groups(state: State<'_, Shared>) -> Result<Vec<vapor_library::DynamicGroup>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.groups.all().to_vec())
+}
+
+#[tauri::command]
+fn create_group(name: String, state: State<'_, Shared>) -> Result<vapor_library::DynamicGroup> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error("A group needs a name.".to_string()));
+    }
+    let id = new_id("group");
+    let created = app.groups.create(id, name).clone();
+    app.save_groups()?;
+    Ok(created)
+}
+
+#[tauri::command]
+fn rename_group(id: String, name: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error("A group needs a name.".to_string()));
+    }
+    let renamed = app.groups.rename(&id, name);
+    if renamed {
+        app.save_groups()?;
+    }
+    Ok(renamed)
+}
+
+#[tauri::command]
+fn delete_group(id: String, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let Some(gone) = app.groups.delete(&id) else {
+        return Ok(false);
+    };
+    // `group.rs` asks the caller to clear any cover override keyed to this id,
+    // because a stale image outliving its group is what the GDScript's inline
+    // call prevented. There is nothing to clear yet: overrides are keyed by
+    // album and href, and a group has neither — it has no artwork of its own.
+    // When it gets some, this is where letting go of it belongs.
+    let _ = gone;
+    app.save_groups()?;
+    Ok(true)
+}
+
+/// Add an artist, album or genre to a group.
+///
+/// A track is refused rather than quietly turned into its album: a group holds
+/// entities, and resolving one for the caller would make the set contain
+/// something nobody put in it.
+#[tauri::command]
+fn add_to_group(
+    id: String,
+    entity_type: String,
+    value: String,
+    state: State<'_, Shared>,
+) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let Some(kind) = vapor_library::EntityType::parse(&entity_type) else {
+        return Err(Error(format!(
+            "A smart group holds artists, albums and genres. \"{entity_type}\" is none of those."
+        )));
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(Error("There is nothing named here to add.".to_string()));
+    }
+    let added = app.groups.add_entity(&id, kind, value);
+    if added {
+        app.save_groups()?;
+    }
+    Ok(added)
+}
+
+#[tauri::command]
+fn remove_from_group(
+    id: String,
+    entity_type: String,
+    value: String,
+    state: State<'_, Shared>,
+) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let Some(kind) = vapor_library::EntityType::parse(&entity_type) else {
+        return Ok(false);
+    };
+    let removed = app.groups.remove_entity(&id, kind, &value);
+    if removed {
+        app.save_groups()?;
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+fn reorder_groups(from: usize, to: usize, state: State<'_, Shared>) -> Result<bool> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let moved = app.groups.reorder(from, to);
+    if moved {
+        app.save_groups()?;
+    }
+    Ok(moved)
+}
+
+/// Every track a group currently resolves to.
+///
+/// Worked out on read rather than stored, which is the point of the feature: a
+/// record added to the library after the group was made belongs to it without
+/// anyone saying so.
+#[tauri::command]
+fn group_tracks(id: String, state: State<'_, Shared>) -> Result<Vec<Row>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let Some(group) = app.groups.get(&id) else {
+        return Ok(Vec::new());
+    };
+    Ok(tracks_in_group(&app, group))
+}
+
+fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGroup) -> Vec<Row> {
+    use vapor_library::EntityType;
+    app.rows
+        .iter()
+        .filter(|row| {
+            group.entities.iter().any(|e| match e.entity_type {
+                EntityType::Artist => row.artist == e.value,
+                EntityType::Album => row.album == e.value,
+                EntityType::Genre => genre_of(app, &row.href) == e.value,
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 #[tauri::command]
@@ -5411,6 +5572,7 @@ fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     app.settings = Settings::default();
     app.playlists = PlaylistStore::default();
     app.folders = FolderStore::default();
+    app.groups = GroupStore::default();
     app.looked.clear();
     app.queue = Queue::default();
     app.rows.clear();
@@ -5528,6 +5690,14 @@ pub fn run() {
             playlist_rows,
             playlist_folders,
             create_folder,
+            dynamic_groups,
+            create_group,
+            rename_group,
+            delete_group,
+            add_to_group,
+            remove_from_group,
+            reorder_groups,
+            group_tracks,
             rename_folder,
             delete_folder,
             set_playlist_folder,
@@ -6205,6 +6375,54 @@ mod tests {
 
         assert_eq!(follow.href, queued);
         assert!(follow.selected, "Follow is what happens if nobody acts");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A group is a set of entities, and its tracks are worked out on read.
+    ///
+    /// That is the whole difference from a playlist: nothing is stored per
+    /// track, so a record added to the library afterwards belongs to the group
+    /// without anyone touching it.
+    #[test]
+    fn a_group_takes_in_tracks_added_after_it_was_made() {
+        use vapor_library::EntityType;
+        let (mut app, dir) = app();
+        app.rows.push(row("/one.mp3", "One"));
+        app.rows[0].artist = "Aphex Twin".to_string();
+
+        let id = app.groups.create("g1", "Braindance").id.clone();
+        assert!(app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
+
+        let group = app.groups.get(&id).expect("the group").clone();
+        assert_eq!(tracks_in_group(&app, &group).len(), 1);
+
+        // A record that did not exist when the group was made.
+        app.rows.push(row("/two.mp3", "Two"));
+        app.rows[1].artist = "Aphex Twin".to_string();
+        assert_eq!(
+            tracks_in_group(&app, &group).len(),
+            2,
+            "the group did not pick up a track added after it",
+        );
+
+        // And nothing by anyone else wanders in.
+        app.rows.push(row("/three.mp3", "Three"));
+        app.rows[2].artist = "Boards of Canada".to_string();
+        assert_eq!(tracks_in_group(&app, &group).len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Adding the same entity twice is a no-op, not a second row — dragging an
+    /// artist onto a group you already dropped them on should do nothing.
+    #[test]
+    fn adding_an_entity_twice_does_not_duplicate_it() {
+        use vapor_library::EntityType;
+        let (mut app, dir) = app();
+        let id = app.groups.create("g1", "Braindance").id.clone();
+
+        assert!(app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
+        assert!(!app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
+        assert_eq!(app.groups.get(&id).expect("the group").entities.len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 

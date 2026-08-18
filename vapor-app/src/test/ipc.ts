@@ -40,6 +40,7 @@ export interface FakeOptions {
   playlists?: core.Playlist[];
   /** Playlist folders. Not to be confused with `unreadableFolders` below. */
   folders?: core.Folder[];
+  groups?: core.DynamicGroup[];
   /** Start with lyric and artwork lookups permitted. Off by default, as ships. */
   metadataLookup?: boolean;
   /** What a lookup would find, by href. Anything absent finds nothing. */
@@ -180,6 +181,7 @@ export class FakeBackend {
   private scanned: boolean;
   private playlists: core.Playlist[];
   private folders: core.Folder[];
+  private groups: core.DynamicGroup[];
   /** Startup damage sentences the backend would report. Empty by default. */
   private damaged: string[] = [];
   /** Covers chosen by hand, keyed as the backend keys them. */
@@ -333,6 +335,7 @@ export class FakeBackend {
     this.scanned = connected;
     this.playlists = options.playlists ?? [];
     this.folders = options.folders ?? [];
+    this.groups = options.groups ?? [];
     this.analysed = connected ? this.rows.length : 0;
     this.unreadableFolders = options.unreadableFolders ?? 0;
     this.cacheBytes = options.cacheBytes ?? 1_200_000_000;
@@ -868,6 +871,106 @@ export class FakeBackend {
           foldersDeleted: 0,
           created,
         };
+      }
+
+      // --- Smart groups ---------------------------------------------------
+      //
+      // A group holds entities and resolves to tracks on read, so the fake
+      // resolves them the same way the backend does rather than storing a
+      // track list — a fake that kept a list would let a screen pass here and
+      // fail against a library that had grown.
+      case "dynamic_groups":
+        return this.groups;
+
+      case "create_group": {
+        const name = String(a.name ?? "").trim();
+        if (!name) throw new Error("A group needs a name.");
+        const made: core.DynamicGroup = {
+          id: `group-${this.nextId++}`,
+          name,
+          entities: [],
+        };
+        this.groups = [made, ...this.groups];
+        return made;
+      }
+
+      case "rename_group": {
+        const name = String(a.name ?? "").trim();
+        if (!name) throw new Error("A group needs a name.");
+        const g = this.groups.find((x) => x.id === a.id);
+        if (!g) return false;
+        g.name = name;
+        return true;
+      }
+
+      case "delete_group": {
+        const before = this.groups.length;
+        this.groups = this.groups.filter((x) => x.id !== a.id);
+        return this.groups.length !== before;
+      }
+
+      case "add_to_group": {
+        const kind = String(a.entityType ?? "");
+        if (!["artist", "album", "genre"].includes(kind)) {
+          throw new Error(
+            `A smart group holds artists, albums and genres. "${kind}" is none of those.`,
+          );
+        }
+        const value = String(a.value ?? "").trim();
+        if (!value) throw new Error("There is nothing named here to add.");
+        const g = this.groups.find((x) => x.id === a.id);
+        if (!g) return false;
+        // Idempotent, as the store is.
+        if (g.entities.some((e) => e.entityType === kind && e.value === value)) {
+          return false;
+        }
+        g.entities = [
+          ...g.entities,
+          { entityType: kind as core.EntityType, value },
+        ];
+        return true;
+      }
+
+      case "remove_from_group": {
+        const g = this.groups.find((x) => x.id === a.id);
+        if (!g) return false;
+        const before = g.entities.length;
+        g.entities = g.entities.filter(
+          (e) => !(e.entityType === a.entityType && e.value === a.value),
+        );
+        return g.entities.length !== before;
+      }
+
+      case "reorder_groups": {
+        const from = Number(a.from);
+        const to = Number(a.to);
+        if (
+          from < 0 ||
+          to < 0 ||
+          from >= this.groups.length ||
+          to >= this.groups.length
+        ) {
+          return false;
+        }
+        const next = [...this.groups];
+        const [moved] = next.splice(from, 1);
+        if (moved) next.splice(to, 0, moved);
+        this.groups = next;
+        return true;
+      }
+
+      case "group_tracks": {
+        const g = this.groups.find((x) => x.id === a.id);
+        if (!g) return [];
+        return this.rows.filter((r) =>
+          g.entities.some((e) =>
+            e.entityType === "artist"
+              ? r.artist === e.value
+              : e.entityType === "album"
+                ? r.album === e.value
+                : r.genre === e.value,
+          ),
+        );
       }
 
       case "playlist_folders":

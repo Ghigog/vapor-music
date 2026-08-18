@@ -633,6 +633,71 @@ export function syncSharedDocument(): Promise<SharedSyncResult> {
   return invoke<SharedSyncResult>("sync_shared_document");
 }
 
+// --- Smart groups -----------------------------------------------------------
+
+/**
+ * What a smart group can hold.
+ *
+ * Entities, not tracks. That is what makes a group different from a playlist:
+ * membership is resolved against the library whenever it is read, so a record
+ * added later belongs without anyone maintaining a list. A track dropped on a
+ * group is refused for the same reason — it is not one of these.
+ */
+export type EntityType = "artist" | "album" | "genre";
+
+export interface Entity {
+  entityType: EntityType;
+  value: string;
+}
+
+export interface DynamicGroup {
+  id: string;
+  name: string;
+  entities: Entity[];
+}
+
+export function dynamicGroups(): Promise<DynamicGroup[]> {
+  return invoke<DynamicGroup[]>("dynamic_groups");
+}
+
+export function createGroup(name: string): Promise<DynamicGroup> {
+  return invoke<DynamicGroup>("create_group", { name });
+}
+
+export function renameGroup(id: string, name: string): Promise<boolean> {
+  return invoke<boolean>("rename_group", { id, name });
+}
+
+export function deleteGroup(id: string): Promise<boolean> {
+  return invoke<boolean>("delete_group", { id });
+}
+
+/** Idempotent: adding an entity a group already holds changes nothing. */
+export function addToGroup(
+  id: string,
+  entityType: EntityType,
+  value: string,
+): Promise<boolean> {
+  return invoke<boolean>("add_to_group", { id, entityType, value });
+}
+
+export function removeFromGroup(
+  id: string,
+  entityType: EntityType,
+  value: string,
+): Promise<boolean> {
+  return invoke<boolean>("remove_from_group", { id, entityType, value });
+}
+
+export function reorderGroups(from: number, to: number): Promise<boolean> {
+  return invoke<boolean>("reorder_groups", { from, to });
+}
+
+/** Every track the group resolves to right now. */
+export function groupTracks(id: string): Promise<Row[]> {
+  return invoke<Row[]>("group_tracks", { id });
+}
+
 // --- Playlist folders -------------------------------------------------------
 
 export function playlistFolders(): Promise<Folder[]> {
