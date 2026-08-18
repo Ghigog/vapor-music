@@ -372,6 +372,11 @@
   transition: opacity var(--dur-fast) var(--ease);
 }
 
+.card__play .icon {
+  width: 14px;
+  height: 14px;
+}
+
 /* Never hidden from the keyboard, only from a resting pointer — the same rule
    the Songs table's info button follows. */
 .card--entity:hover .card__play,

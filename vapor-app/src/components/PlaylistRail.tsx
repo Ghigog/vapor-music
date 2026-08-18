@@ -275,7 +275,7 @@ export function PlaylistRail({
             title="New folder"
             onClick={() => setCreating({ kind: "folder" })}
           >
-            <span aria-hidden="true">🗀</span>
+            <span className="icon icon--group" aria-hidden="true" />
           </button>
           <button
             className="rail__new"

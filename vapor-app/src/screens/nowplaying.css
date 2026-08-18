@@ -219,6 +219,18 @@
   transition: background var(--dur-fast) var(--ease);
 }
 
+/* Sized in px, because these buttons still set a `font-size` for the glyphs
+   they no longer contain and an em-sized icon would inherit it. */
+.np__button .icon {
+  width: 21px;
+  height: 21px;
+}
+
+.np__button--play .icon {
+  width: 30px;
+  height: 30px;
+}
+
 .np__button:hover {
   background: #fff;
   color: var(--ink);

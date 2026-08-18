@@ -277,6 +277,12 @@
   border-radius: var(--r-sm);
 }
 
+/* px, not em: the button keeps a font-size for the "+" beside this one. */
+.rail__new .icon {
+  width: 15px;
+  height: 15px;
+}
+
 .rail__new:hover {
   background: rgba(255, 255, 255, 0.6);
   color: var(--ink);
@@ -548,6 +554,13 @@
 .icon--settings {
   -webkit-mask-image: url("/icons/settings.png");
   mask-image: url("/icons/settings.png");
+}
+
+/* A folder in the playlist rail. The glyph was `🗀`, which Android draws as a
+   full-colour emoji folder among line-art controls. */
+.icon--group {
+  -webkit-mask-image: url("/icons/group.png");
+  mask-image: url("/icons/group.png");
 }
 
 /* Previous is next, mirrored. */

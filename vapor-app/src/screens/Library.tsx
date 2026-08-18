@@ -626,7 +626,7 @@ function EntityCard({
         onClick={onPlay}
         aria-label={`Play ${entity.name}`}
       >
-        ▶
+        <span className="icon icon--play" aria-hidden="true" />
       </button>
       <div className="card__meta">
         <span className="card__title" title={entity.name}>

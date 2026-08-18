@@ -146,13 +146,19 @@ export function NowPlaying() {
         </div>
       </div>
 
+      {/*
+        Icons, not codepoints — the same fault the transport had in 7c7a9ac and
+        the same fix. `⏮ ⏸ ▶ ⏭` let the platform choose the font, and Android
+        chooses a full-colour emoji font, so this screen's controls arrived as
+        coloured glyphs beside the line-art ones on the bar below it.
+      */}
       <div className="np__controls">
         <button
           className="np__button"
           onClick={() => void core.previousTrack().then(refresh)}
           aria-label="Previous track"
         >
-          ⏮
+          <span className="icon icon--next icon--flip" aria-hidden="true" />
         </button>
         <button
           className="np__button np__button--play"
@@ -163,14 +169,17 @@ export function NowPlaying() {
           }
           aria-label={playing ? "Pause" : "Play"}
         >
-          {playing ? "⏸" : "▶"}
+          <span
+            className={"icon " + (playing ? "icon--pause" : "icon--play")}
+            aria-hidden="true"
+          />
         </button>
         <button
           className="np__button"
           onClick={() => void core.nextTrack().then(refresh)}
           aria-label="Next track"
         >
-          ⏭
+          <span className="icon icon--next" aria-hidden="true" />
         </button>
       </div>
 
