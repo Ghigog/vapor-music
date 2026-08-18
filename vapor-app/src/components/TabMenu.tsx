@@ -18,6 +18,7 @@ export interface TabMenuItem {
 }
 
 export function TabMenu({
+  menu,
   title,
   items,
   empty,
@@ -26,6 +27,8 @@ export function TabMenu({
   onCreate,
   onClose,
 }: {
+  /** Which list this is, so a drop knows what it landed on. */
+  menu: "playlist" | "group";
   title: string;
   items: TabMenuItem[];
   /** Shown instead of the list when there is nothing in it yet. */
@@ -70,7 +73,7 @@ export function TabMenu({
           <p className="tabmenu__empty">{empty}</p>
         ) : (
           /* The scroller the drag work holds a finger against to scroll. */
-          <ul className="tabmenu__list" data-tabmenu-scroll="">
+          <ul className="tabmenu__list" data-tabmenu-scroll="" data-menu={menu}>
             {items.map((item) => (
               <li key={item.id}>
                 <button

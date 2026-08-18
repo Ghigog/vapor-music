@@ -19,6 +19,7 @@ import { Library, type Opened } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
 import { TabMenu, type TabMenuItem } from "./components/TabMenu";
+import { DragLayer } from "./components/DragLayer";
 import { Vibe } from "./screens/Vibe";
 import { NowPlaying } from "./screens/NowPlaying";
 import { LinerNotes } from "./screens/LinerNotes";
@@ -33,6 +34,7 @@ import "./components/notice.css";
 import "./components/help.css";
 import "./components/tracksheet.css";
 import "./components/tabmenu.css";
+import "./components/draglayer.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 import "./screens/queue.css";
@@ -148,6 +150,10 @@ export function App() {
   const [group, setGroup] = useState<string | null>(null);
   /** Which tab's list is open, if any. Not a place, so not in the history. */
   const [menu, setMenu] = useState<Menu | null>(null);
+  /** What the last drop did, or why it would not. */
+  const [dropSaid, setDropSaid] = useState<{ text: string; ok: boolean } | null>(
+    null,
+  );
   const [playlistItems, setPlaylistItems] = useState<TabMenuItem[]>([]);
   const [groupItems, setGroupItems] = useState<TabMenuItem[]>([]);
   /**
@@ -330,6 +336,12 @@ export function App() {
 
   if (status.kind === "ready") {
     return (
+      <DragLayer
+        openMenu={menu}
+        onOpenMenu={(which) => void openMenu(which)}
+        onCloseMenu={() => setMenu(null)}
+        onResult={(text, ok) => setDropSaid({ text, ok })}
+      >
       <div className="shell">
         {damaged.length > 0 && !damagedSeen && (
           <div className="damaged" role="alert">
@@ -503,8 +515,26 @@ export function App() {
           </button>
         </nav>
 
+        {/*
+          What the last drop did. A refusal has to say why — dropping a track on
+          a smart group is the one move the rules turn down, and a drag that
+          simply does nothing reads as a broken gesture rather than an answer.
+        */}
+        {dropSaid && (
+          <div
+            className={
+              "shell__said" + (dropSaid.ok ? "" : " shell__said--no")
+            }
+            role="status"
+            onAnimationEnd={() => setDropSaid(null)}
+          >
+            {dropSaid.text}
+          </div>
+        )}
+
         {menu === "playlist" && (
           <TabMenu
+            menu="playlist"
             title="Playlists"
             items={playlistItems}
             empty="No playlists yet."
@@ -525,6 +555,7 @@ export function App() {
 
         {menu === "group" && (
           <TabMenu
+            menu="group"
             title="Smart groups"
             items={groupItems}
             empty="No smart groups yet. A group holds artists, albums and genres, and keeps up with the library as it grows."
@@ -540,6 +571,7 @@ export function App() {
           />
         )}
       </div>
+      </DragLayer>
     );
   }
 

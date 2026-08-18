@@ -627,3 +627,44 @@
 .data__title--section {
   font-size: var(--fs-lg);
 }
+
+/* What a drop did, or would not do. Fades itself out; `animationend` is what
+   clears the state, so the element and the timer cannot disagree. */
+.shell__said {
+  position: fixed;
+  z-index: 50;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  max-width: 80vw;
+  padding: 10px 16px;
+  border-radius: var(--r-md);
+  background: rgba(20, 22, 26, 0.9);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  text-align: center;
+  animation: shell-said 3.4s ease forwards;
+}
+
+.shell__said--no {
+  background: rgba(150, 44, 44, 0.94);
+}
+
+@keyframes shell-said {
+  0% { opacity: 0; transform: translate(-50%, 8px); }
+  8% { opacity: 1; transform: translate(-50%, 0); }
+  82% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell__said {
+    animation-duration: 3.4s;
+    animation-name: shell-said-plain;
+  }
+  @keyframes shell-said-plain {
+    0%, 90% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+}

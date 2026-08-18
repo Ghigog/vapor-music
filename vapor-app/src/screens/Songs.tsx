@@ -26,6 +26,7 @@ import * as core from "../lib/core";
 import { startTrackDrag } from "../components/PlaylistRail";
 import { TrackSheet } from "../components/TrackSheet";
 import { useLongPress } from "../lib/longPress";
+import { useDrag } from "../components/DragLayer";
 import type { Row, SortKey } from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 
@@ -149,9 +150,30 @@ export function Songs({
    * fires, knows what it fired on.
    */
   const pressedRow = useRef<Row | null>(null);
-  const hold = useLongPress(() => {
-    if (pressedRow.current) setSheetFor(pressedRow.current);
-  });
+  const carry = useDrag();
+  const hold = useLongPress(
+    () => {
+      if (pressedRow.current) setSheetFor(pressedRow.current);
+    },
+    // Held, then moved: pick the row up. A drag from a selected row takes the
+    // whole selection, the same rule the desktop drag follows.
+    (x, y) => {
+      const row = pressedRow.current;
+      if (!row) return;
+      const hrefs = selected.has(row.href)
+        ? rows.filter((r) => selected.has(r.href)).map((r) => r.href)
+        : [row.href];
+      carry.begin(
+        {
+          kind: "track",
+          values: hrefs,
+          label: hrefs.length > 1 ? `${hrefs.length} tracks` : row.title,
+        },
+        x,
+        y,
+      );
+    },
+  );
 
   const scrollRef = useRef<HTMLDivElement>(null);
 

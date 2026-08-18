@@ -369,6 +369,136 @@ test.describe("Playlists and groups open from the bar", () => {
   });
 });
 
+test.describe("Dragging with a finger", () => {
+  /**
+   * HTML5 drag-and-drop never fires on touch, so none of this exists for free:
+   * the thing that follows the finger, working out what is under it, opening a
+   * target by resting on it, and the drop itself are all ours.
+   *
+   * Driven with synthetic pointer events of type `touch`, not `page.mouse`.
+   * Two reasons, and both are the point: `dragTo` speaks the HTML5 protocol
+   * that does not work here, and a *mouse* press on a `draggable` row starts
+   * the browser's own drag — which then stops delivering pointer events
+   * entirely. The touch path is the one being tested and the one that ships.
+   */
+  async function send(
+    page: Page,
+    type: "pointerdown" | "pointermove" | "pointerup",
+    x: number,
+    y: number,
+  ) {
+    await page.evaluate(
+      ([t, cx, cy]) => {
+        const target =
+          document.elementFromPoint(cx as number, cy as number) ?? window;
+        target.dispatchEvent(
+          new PointerEvent(t as string, {
+            pointerId: 1,
+            pointerType: "touch",
+            isPrimary: true,
+            clientX: cx as number,
+            clientY: cy as number,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      },
+      [type, x, y] as const,
+    );
+  }
+
+  async function centreOf(page: Page, selector: string) {
+    const box = await page.locator(selector).first().boundingBox();
+    if (!box) throw new Error(`no box for ${selector}`);
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  }
+
+  async function openSongs(page: Page) {
+    await page
+      .getByRole("navigation", { name: "Screens" })
+      .getByRole("button", { name: "Library", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "Songs" }).click();
+    await expect(page.locator(".songrow__title").first()).toBeVisible();
+  }
+
+  /** Hold a row past the threshold, then lift it by moving. */
+  async function lift(page: Page) {
+    const row = await centreOf(page, ".songrow");
+    await send(page, "pointerdown", row.x, row.y);
+    await page.waitForTimeout(600);
+    await send(page, "pointermove", row.x + 24, row.y);
+    await expect(page.locator(".draglayer")).toBeVisible();
+  }
+
+  test("a held row is picked up, and resting on a tab opens its list", async ({
+    page,
+  }) => {
+    await boot(page, {
+      playlists: [
+        {
+          id: "p1",
+          name: "Night Drive",
+          customCoverPath: "",
+          tracks: [],
+          folderId: "",
+        },
+      ],
+    });
+    await openSongs(page);
+    await lift(page);
+
+    // Rest on the tab: no further movement, which is what resting is.
+    const tab = await centreOf(page, '[data-tab="playlist"]');
+    await send(page, "pointermove", tab.x, tab.y);
+    await expect(page.getByRole("dialog", { name: "Playlists" })).toBeVisible();
+
+    const item = await centreOf(page, '[data-drop-id="p1"]');
+    await send(page, "pointermove", item.x, item.y);
+    await send(page, "pointerup", item.x, item.y);
+
+    await expect(page.getByText(/added 1 track/i)).toBeVisible();
+  });
+
+  /**
+   * The one move the rules turn down. A group holds artists, albums and
+   * genres, and a drag that silently did nothing would read as a broken
+   * gesture rather than an answer.
+   */
+  test("a track dropped on a smart group is refused, with a reason", async ({
+    page,
+  }) => {
+    await boot(page, {
+      groups: [{ id: "g1", name: "Braindance", entities: [] }],
+    });
+    await openSongs(page);
+    await lift(page);
+
+    const tab = await centreOf(page, '[data-tab="group"]');
+    await send(page, "pointermove", tab.x, tab.y);
+    await expect(page.getByRole("dialog", { name: "Smart groups" })).toBeVisible();
+
+    const item = await centreOf(page, '[data-drop-id="g1"]');
+    await send(page, "pointermove", item.x, item.y);
+    await send(page, "pointerup", item.x, item.y);
+
+    await expect(page.getByText(/not single tracks/i)).toBeVisible();
+  });
+
+  /** Moving before the hold arms is a scroll, and must not pick anything up. */
+  test("a flick through the list does not start a drag", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    const row = await centreOf(page, ".songrow");
+    await send(page, "pointerdown", row.x, row.y);
+    await send(page, "pointermove", row.x, row.y - 120);
+    await send(page, "pointerup", row.x, row.y - 120);
+
+    await expect(page.locator(".draglayer")).toHaveCount(0);
+  });
+});
+
 test.describe("The Vibe screen at 412px", () => {
   /**
    * With nothing playing the screen has no exits and no curves to draw, so a

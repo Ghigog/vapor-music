@@ -1,0 +1,51 @@
+/*
+ * What follows the finger.
+ *
+ * On desktop the browser draws this; on touch there is nothing to draw it, so
+ * it is a real element positioned at the pointer. `pointer-events: none` so it
+ * never becomes what is under the finger — and `targetAt` hides it before
+ * asking, because Safari answers from the compositor rather than hit-testing.
+ */
+
+.draglayer {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  transform: translate(-50%, -140%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 62vw;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 26px rgba(38, 62, 116, 0.28);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.draglayer__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draglayer__count {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+}
+
+/* While something is being carried, nothing else should be selecting text or
+   deciding it is being scrolled. */
+body:has(.draglayer) {
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
