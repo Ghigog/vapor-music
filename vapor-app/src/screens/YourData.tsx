@@ -35,7 +35,7 @@ const NEVERS = [
   "Load a single analytics or advertising SDK.",
 ];
 
-export function YourData() {
+export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
   const [rows, setRows] = useState<core.DataRow[]>([]);
   const [cache, setCache] = useState<core.CacheStatus | null>(null);
   const [location, setLocation] = useState("");
@@ -102,8 +102,18 @@ export function YourData() {
 
   return (
     <div className="data">
+      {/*
+        Embedded, this is a section of Settings rather than a screen of its own,
+        so it takes a section's heading. Two `h1`s on one page is a document
+        with two titles, and a screen reader's heading list is how a lot of
+        people navigate a form this long.
+      */}
       <header className="data__head">
-        <h1 className="data__title">Your data</h1>
+        {embedded ? (
+          <h2 className="data__title data__title--section">Your data</h2>
+        ) : (
+          <h1 className="data__title">Your data</h1>
+        )}
         <p className="data__lede">
           Everything Vapor knows about your library, and exactly where it sits.
         </p>

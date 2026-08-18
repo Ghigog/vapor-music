@@ -261,8 +261,23 @@ test.describe("Correcting a tempo", () => {
  * and centred. Moving between them slid the whole page sideways, and each
  * screen had reached its width by a private decision rather than a shared one.
  */
+/**
+ * Go to a screen, whichever way it is reached.
+ *
+ * Settings stopped being a nav destination — it is the bubble in the corner —
+ * and Your Data stopped being a screen at all: it is a section at the bottom
+ * of Settings. Tests that walked the nav for all four had to learn both.
+ */
+async function goTo(page: Page, name: string) {
+  if (name === "Settings") {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    return;
+  }
+  await page.getByRole("button", { name, exact: true }).click();
+}
+
 test.describe("Screen layout", () => {
-  const screens = ["Library", "Vibe DJ", "Your Data", "Settings"];
+  const screens = ["Library", "Vibe DJ", "Settings"];
 
   test("every screen starts at the same left edge", async ({ page }) => {
     await boot(page);
@@ -273,7 +288,7 @@ test.describe("Screen layout", () => {
 
     const lefts: { name: string; x: number }[] = [];
     for (const name of screens) {
-      await page.getByRole("button", { name, exact: true }).click();
+      await goTo(page, name);
       const root = page.getByRole("main").locator("> *").first();
       await expect(root).toBeVisible();
       const box = await root.boundingBox();
@@ -310,9 +325,10 @@ test.describe("Screen layout", () => {
  * actually be pressed. Do not add coverage here by adding screens to this list.
  */
 test.describe("Every screen opens", () => {
-  // The four destinations. Now Playing opens from the player bar and the queue
-  // lives on Vibe, so neither is reachable from the sidebar to smoke-test.
-  const screens = ["Library", "Vibe DJ", "Your Data", "Settings"];
+  // Now Playing opens from the player bar and the queue lives on Vibe, so
+  // neither is reachable from the nav to smoke-test. Your Data is no longer a
+  // screen — it is the last section of Settings, and is covered below.
+  const screens = ["Library", "Vibe DJ", "Settings"];
 
   for (const name of screens) {
     test(`${name} renders without an error`, async ({ page }) => {
@@ -320,13 +336,28 @@ test.describe("Every screen opens", () => {
       page.on("pageerror", (e) => failures.push(String(e)));
 
       await boot(page);
-      await page.getByRole("button", { name, exact: true }).click();
+      await goTo(page, name);
 
       // Something rendered, and nothing threw on the way.
       await expect(page.getByRole("main")).not.toBeEmpty();
       expect(failures).toEqual([]);
     });
   }
+
+  /** Your Data moved rather than went: it is the bottom of Settings now. */
+  test("Your Data renders inside Settings", async ({ page }) => {
+    const failures: string[] = [];
+    page.on("pageerror", (e) => failures.push(String(e)));
+
+    await boot(page);
+    await goTo(page, "Settings");
+
+    await expect(
+      page.getByRole("heading", { name: /your data/i }),
+    ).toBeVisible();
+    await expect(page.getByText(/what Vapor never does/i)).toBeVisible();
+    expect(failures).toEqual([]);
+  });
 });
 
 /**

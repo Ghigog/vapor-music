@@ -24,6 +24,7 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
+import { YourData } from "./YourData";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
 
@@ -57,8 +58,6 @@ export function Settings() {
 
   const [status, setStatus] = useState<core.AnalysisStatus | null>(null);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
-  const [cache, setCache] = useState<core.CacheStatus | null>(null);
-  const [location, setLocation] = useState("");
 
   /** Whether the keychain holds a password for the username in the box.
    *
@@ -91,15 +90,13 @@ export function Settings() {
     }
   }, []);
 
+  // Cache size and data location used to be read here too, for a summary this
+  // screen no longer draws: Your Data is at the bottom of it and reports both,
+  // and asking the backend twice for one answer is how two numbers on one
+  // screen end up disagreeing.
   const refresh = useCallback(async () => {
-    const [s, c, l] = await Promise.allSettled([
-      core.analysisStatus(),
-      core.cacheStatus(),
-      core.dataLocation(),
-    ]);
+    const [s] = await Promise.allSettled([core.analysisStatus()]);
     if (s.status === "fulfilled") setStatus(s.value);
-    if (c.status === "fulfilled") setCache(c.value);
-    if (l.status === "fulfilled") setLocation(l.value);
   }, []);
 
   useEffect(() => {
@@ -474,19 +471,14 @@ export function Settings() {
       <SyncPanel />
 
       <section className="settings__card glass">
-        <h2 className="settings__section">Your data</h2>
-        {cache && (
-          <>
-            <p className="settings__stat numeric">
-              {formatBytes(cache.bytes)} of {formatBytes(cache.maxBytes)} used ·{" "}
-              {cache.tracksCached.toLocaleString()} of{" "}
-              {cache.tracksTotal.toLocaleString()} tracks on this device
-            </p>
-            <p className="settings__path numeric" title={cache.location}>
-              {location || cache.location}
-            </p>
-          </>
-        )}
+        {/*
+          This card used to be headed "Your data" and opened with a cache
+          summary and a path. Your Data itself is at the bottom of this screen
+          now and reports both properly, so all this card still owns is the one
+          decision on it — and a second "Your data" heading on one page is two
+          headings claiming to be the same place.
+        */}
+        <h2 className="settings__section">Looking things up</h2>
         <p className="settings__hint">
           Everything is a plain file here. No account, nothing shared, nothing
           leaves unless you move it.
@@ -583,6 +575,14 @@ export function Settings() {
         </p>
       </section>
 
+      {/*
+        Your Data, at the bottom of Settings rather than on a tab of its own.
+        It is still the screen the sovereignty claim is proved on — see
+        design/README.md — and it reads as the end of "here is how this is set
+        up", which is where someone asking "what does it keep, and where" is
+        already standing.
+      */}
+      <YourData embedded />
     </div>
   );
 }
@@ -667,15 +667,3 @@ function Field({
   );
 }
 
-/** Bytes as a person reads them. Binary units, since that is what the bound
- *  is expressed in. */
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = bytes / 1024 ** i;
-  return `${value >= 10 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
-}

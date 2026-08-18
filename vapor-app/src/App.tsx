@@ -57,13 +57,20 @@ type Screen =
   | "data"
   | "settings";
 
-/** Grouped the way a person moves through the app: find something, then hear
- *  it, then the things about the app itself. */
+/**
+ * Where you can go.
+ *
+ * Your Data is not here any more — it is a section at the bottom of Settings,
+ * which is where someone asking "what does this keep, and where" is already
+ * standing. Settings is not here either: it is a control in the corner of every
+ * screen, because it is somewhere you visit and leave rather than a place the
+ * app is.
+ *
+ * Grouped the way a person moves through the app: find something, then hear it.
+ */
 const NAV: { id: Screen; label: string; group: number }[] = [
   { id: "library", label: "Library", group: 0 },
   { id: "vibe", label: "Vibe DJ", group: 1 },
-  { id: "data", label: "Your Data", group: 2 },
-  { id: "settings", label: "Settings", group: 2 },
 ];
 
 /**
@@ -357,6 +364,25 @@ export function App() {
         {/* Outside the content column: the shell grid spans it across both, and
             playback outlives whichever screen started it. */}
         <Transport onOpenNowPlaying={() => go("playing")} />
+
+        {/*
+          Settings, from anywhere.
+          
+          It stopped being a destination: it is somewhere you visit and leave,
+          not a place the app is, and it was taking a quarter of a four-item tab
+          bar to say otherwise. Outside `.shell__content` so it does not scroll
+          away with whatever screen is under it, and it pushes a history entry
+          like any other place — the back gesture has to leave it.
+        */}
+        <button
+          className="shell__settings"
+          aria-label="Settings"
+          title="Settings"
+          aria-current={screen === "settings" ? "page" : undefined}
+          onClick={() => go("settings")}
+        >
+          <span className="icon icon--settings" aria-hidden="true" />
+        </button>
 
         {/* The same destinations as the sidebar, for the widths that hide it.
             After the transport in the DOM because that is the order they are in

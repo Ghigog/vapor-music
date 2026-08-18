@@ -41,7 +41,8 @@ test.describe("Navigation exists at all", () => {
     await boot(page);
 
     const tabs = page.getByRole("navigation", { name: "Screens" });
-    await tabs.getByRole("button", { name: "Settings", exact: true }).click();
+    // Settings is the corner bubble now, not a tab.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(/where your music lives/i)).toBeVisible();
 
     // The half that was missing: a way out that is not the back gesture.
@@ -49,16 +50,38 @@ test.describe("Navigation exists at all", () => {
     await expect(page.getByRole("heading", { name: /your library/i })).toBeVisible();
   });
 
+  /** It has to be there on every screen, which is the whole reason it moved. */
+  test("the settings bubble is reachable from each destination", async ({ page }) => {
+    await boot(page);
+    const tabs = page.getByRole("navigation", { name: "Screens" });
+    const bubble = page.getByRole("button", { name: "Settings", exact: true });
+
+    for (const name of ["Library", "Vibe DJ"]) {
+      await tabs.getByRole("button", { name: new RegExp(`^${name}`, "i") }).click();
+      await expect(bubble).toBeVisible();
+    }
+  });
+
+  /** Your Data moved into Settings rather than going away. */
+  test("Your Data is the bottom of Settings", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /^your data$/i }),
+    ).toBeVisible();
+  });
+
   test("the tab bar marks where you are", async ({ page }) => {
     await boot(page);
 
     const tabs = page.getByRole("navigation", { name: "Screens" });
-    await tabs.getByRole("button", { name: "Your Data" }).click();
+    await tabs.getByRole("button", { name: /^vibe dj|^shuffle/i }).click();
 
-    await expect(tabs.getByRole("button", { name: "Your Data" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await expect(
+      tabs.getByRole("button", { name: /^vibe dj|^shuffle/i }),
+    ).toHaveAttribute("aria-current", "page");
     await expect(
       tabs.getByRole("button", { name: "Library", exact: true }),
     ).not.toHaveAttribute("aria-current", "page");
@@ -384,10 +407,7 @@ test.describe("The layout fits the screen", () => {
     [
       "Settings",
       async (page: Page) => {
-        await page
-          .getByRole("navigation", { name: "Screens" })
-          .getByRole("button", { name: "Settings", exact: true })
-          .click();
+        await page.getByRole("button", { name: "Settings", exact: true }).click();
       },
     ],
     [

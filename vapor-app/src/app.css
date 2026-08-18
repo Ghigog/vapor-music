@@ -545,7 +545,72 @@
   mask-image: url("/icons/next.png");
 }
 
+.icon--settings {
+  -webkit-mask-image: url("/icons/settings.png");
+  mask-image: url("/icons/settings.png");
+}
+
 /* Previous is next, mirrored. */
 .icon--flip {
   transform: scaleX(-1);
+}
+
+/* ---- The settings bubble ---------------------------------------------
+ *
+ * Settings was a nav destination taking a quarter of the tab bar to say that
+ * the app is sometimes "at" settings, which it is not — you go there, change
+ * one thing and leave. It is a control in the corner now, on every screen.
+ *
+ * Fixed rather than in the grid: the shell's rows are notice, content, player
+ * and tabs, and a fifth row for one button would cost every screen its height.
+ * Fixed also means it survives the content column scrolling under it, which is
+ * what "from any screen" has to mean.
+ * -------------------------------------------------------------------- */
+
+.shell__settings {
+  position: fixed;
+  z-index: 30;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--glass-rim);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--ink-2);
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  box-shadow: var(--shadow-sm);
+}
+
+.shell__settings .icon {
+  width: 19px;
+  height: 19px;
+}
+
+.shell__settings[aria-current="page"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.shell__settings:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Nothing renders under the bubble. The screens whose own controls live in the
+   same corner reserve its width rather than letting it sit on top of them. */
+.data__head,
+.settings__head,
+.vibe__head {
+  padding-right: 52px;
+}
+
+/* A section heading rather than a page title, for Your Data inside Settings. */
+.data__title--section {
+  font-size: var(--fs-lg);
 }
