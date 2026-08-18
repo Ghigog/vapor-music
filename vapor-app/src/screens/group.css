@@ -1,0 +1,119 @@
+/* One smart group: what it is, then what that currently means. */
+
+.group__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.group__title,
+.group__rename {
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-family: var(--font-display);
+  font-weight: 200;
+  font-size: var(--fs-hero);
+  letter-spacing: var(--ls-hero);
+  line-height: 1.05;
+  color: var(--ink);
+}
+
+.group__title {
+  cursor: pointer;
+}
+
+.group__rename {
+  border-bottom: 1px solid var(--accent);
+  outline: none;
+  width: 100%;
+}
+
+.group__empty {
+  max-width: 54ch;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* The set itself. Chips rather than rows: these are a handful of names, and a
+   table of four things is furniture. */
+.group__chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 0;
+}
+
+.group__chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-radius: var(--r-pill, 999px);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 0 0 1px var(--glass-rim);
+}
+
+.group__chip-kind {
+  color: var(--ink-4);
+}
+
+.group__chip-value {
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+.group__chip-drop {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 4px;
+  color: var(--ink-3);
+  font-size: var(--fs-body);
+  line-height: 1;
+}
+
+.group__chip-drop:hover {
+  color: var(--ink);
+}
+
+.group__tracks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.group__track {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.group__track:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.group__track-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.group__track-artist {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}

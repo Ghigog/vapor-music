@@ -18,11 +18,13 @@ import { Transport } from "./components/Transport";
 import { Library, type Opened } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
+import { TabMenu, type TabMenuItem } from "./components/TabMenu";
 import { Vibe } from "./screens/Vibe";
 import { NowPlaying } from "./screens/NowPlaying";
 import { LinerNotes } from "./screens/LinerNotes";
 import { YourData } from "./screens/YourData";
 import { Settings } from "./screens/Settings";
+import { SmartGroup } from "./screens/SmartGroup";
 import { Onboarding } from "./screens/Onboarding";
 import * as core from "./lib/core";
 import "./components/transport.css";
@@ -30,6 +32,7 @@ import "./components/states.css";
 import "./components/notice.css";
 import "./components/help.css";
 import "./components/tracksheet.css";
+import "./components/tabmenu.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 import "./screens/queue.css";
@@ -39,6 +42,7 @@ import "./screens/nowplaying.css";
 import "./screens/onboarding.css";
 import "./screens/liner.css";
 import "./screens/yourdata.css";
+import "./screens/group.css";
 import "./screens/playlist.css";
 
 /*
@@ -56,6 +60,15 @@ type Screen =
   | "vibe"
   | "data"
   | "settings";
+
+/**
+ * The two tabs that open a list instead of going somewhere.
+ *
+ * Playlists and smart groups are collections you pick from, not places the app
+ * is, so pressing one raises a window from the bar rather than replacing the
+ * screen. They are also the drop targets the drag work aims at.
+ */
+type Menu = "playlist" | "group";
 
 /**
  * Where you can go.
@@ -131,6 +144,12 @@ export function App() {
   /** The album or artist opened inside Library. Held here, not in Library, so
    *  it lands in the history entry below and the back gesture can leave it. */
   const [opened, setOpened] = useState<Opened | null>(null);
+  /** The smart group being looked at — a drill-down like the others. */
+  const [group, setGroup] = useState<string | null>(null);
+  /** Which tab's list is open, if any. Not a place, so not in the history. */
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [playlistItems, setPlaylistItems] = useState<TabMenuItem[]>([]);
+  const [groupItems, setGroupItems] = useState<TabMenuItem[]>([]);
   /**
    * Whether the DJ is conducting the queue.
    *
@@ -158,7 +177,7 @@ export function App() {
   const fromPop = useRef(false);
   const firstPlace = useRef(true);
   useEffect(() => {
-    const place = { screen, liner: liner?.href ?? null, playlist, opened };
+    const place = { screen, liner: liner?.href ?? null, playlist, opened, group };
     if (firstPlace.current) {
       firstPlace.current = false;
       window.history.replaceState(place, "");
@@ -174,7 +193,7 @@ export function App() {
     // `opened` by value rather than by reference: it is rebuilt on every
     // render that changes it, and a reference dep would push an entry for a
     // re-render that went nowhere.
-  }, [screen, liner?.href, playlist, opened?.kind, opened?.name]);
+  }, [screen, liner?.href, playlist, opened?.kind, opened?.name, group]);
 
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
@@ -183,12 +202,17 @@ export function App() {
         liner: string | null;
         playlist: string | null;
         opened: Opened | null;
+        group: string | null;
       } | null;
       if (!place) return;
       fromPop.current = true;
       setScreen(place.screen);
       setPlaylist(place.playlist);
       setOpened(place.opened ?? null);
+      setGroup(place.group ?? null);
+      // A list is not a place, so walking history closes whichever is open
+      // rather than restoring it.
+      setMenu(null);
       // The screen to return to is taken as the one being restored: the
       // original "from" is not in the entry, and going back from Liner Notes
       // should land where the history says, not where it was opened from.
@@ -225,7 +249,39 @@ export function App() {
     setLiner(null);
     setPlaylist(null);
     setOpened(null);
+    setGroup(null);
+    setMenu(null);
     setScreen(id);
+  }
+
+  /**
+   * Open a tab's list, filling it first.
+   *
+   * Read on open rather than kept in step: the list is short, it is looked at
+   * for a second, and a subscription that has to be invalidated by six other
+   * screens is how a menu ends up showing a playlist that was deleted.
+   */
+  async function openMenu(which: Menu) {
+    if (which === "playlist") {
+      const all = await core.playlists().catch(() => []);
+      setPlaylistItems(
+        all.map((p) => ({
+          id: p.id,
+          label: p.name,
+          detail: `${p.tracks.length}`,
+        })),
+      );
+    } else {
+      const all = await core.dynamicGroups().catch(() => []);
+      setGroupItems(
+        all.map((g) => ({
+          id: g.id,
+          label: g.name,
+          detail: g.entities.length === 0 ? "empty" : `${g.entities.length}`,
+        })),
+      );
+    }
+    setMenu(which);
   }
 
   function openLiner(href: string) {
@@ -234,7 +290,16 @@ export function App() {
 
   function openPlaylist(id: string) {
     setLiner(null);
+    setGroup(null);
+    setMenu(null);
     setPlaylist(id);
+  }
+
+  function openGroup(id: string) {
+    setLiner(null);
+    setPlaylist(null);
+    setMenu(null);
+    setGroup(id);
   }
 
   // Asked once, at startup, because that is when it is decided. A person who
@@ -331,12 +396,17 @@ export function App() {
               onOpen={openLiner}
               onGone={() => setPlaylist(null)}
             />
+          ) : group ? (
+            <SmartGroup
+              id={group}
+              onOpen={openLiner}
+              onGone={() => setGroup(null)}
+            />
           ) : (
             <>
               {screen === "library" && (
                 <Library
                   onOpen={openLiner}
-                  onOpenPlaylist={openPlaylist}
                   opened={opened}
                   onOpenedChange={setOpened}
                 />
@@ -393,19 +463,82 @@ export function App() {
               key={item.id}
               className={
                 "shell__tab" +
-                (screen === item.id && !liner && !playlist
+                (screen === item.id && !liner && !playlist && !group
                   ? " shell__tab--on"
                   : "")
               }
               aria-current={
-                screen === item.id && !liner && !playlist ? "page" : undefined
+                screen === item.id && !liner && !playlist && !group
+                  ? "page"
+                  : undefined
               }
               onClick={() => go(item.id)}
             >
               {navLabel(item, djMode)}
             </button>
           ))}
+
+          {/*
+            These two open a list rather than going anywhere, so they are
+            `aria-expanded` rather than `aria-current` — they are not a page
+            you can be on. `data-tab` is what a drag aims at.
+          */}
+          <button
+            className={"shell__tab" + (playlist ? " shell__tab--on" : "")}
+            data-tab="playlist"
+            aria-haspopup="dialog"
+            aria-expanded={menu === "playlist"}
+            onClick={() => void openMenu("playlist")}
+          >
+            Playlists
+          </button>
+          <button
+            className={"shell__tab" + (group ? " shell__tab--on" : "")}
+            data-tab="group"
+            aria-haspopup="dialog"
+            aria-expanded={menu === "group"}
+            onClick={() => void openMenu("group")}
+          >
+            Groups
+          </button>
         </nav>
+
+        {menu === "playlist" && (
+          <TabMenu
+            title="Playlists"
+            items={playlistItems}
+            empty="No playlists yet."
+            createLabel="New playlist"
+            onPick={openPlaylist}
+            onCreate={() => {
+              // Made and opened, then renamed in place — the same shape as a
+              // new group. Asking for a name first is a dialog on top of a
+              // dialog, and the screen it lands on can already rename it.
+              void core
+                .createPlaylist("New playlist")
+                .then((p) => openPlaylist(p.id))
+                .catch(() => setMenu(null));
+            }}
+            onClose={() => setMenu(null)}
+          />
+        )}
+
+        {menu === "group" && (
+          <TabMenu
+            title="Smart groups"
+            items={groupItems}
+            empty="No smart groups yet. A group holds artists, albums and genres, and keeps up with the library as it grows."
+            createLabel="New group"
+            onCreate={() => {
+              void core
+                .createGroup("New group")
+                .then((g) => openGroup(g.id))
+                .catch(() => setMenu(null));
+            }}
+            onPick={openGroup}
+            onClose={() => setMenu(null)}
+          />
+        )}
       </div>
     );
   }

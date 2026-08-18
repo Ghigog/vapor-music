@@ -1,0 +1,117 @@
+/*
+ * The window that rises from a tab.
+ *
+ * Bottom-anchored and capped in height: it opens next to the thumb that opened
+ * it, and a list of forty playlists must scroll inside itself rather than
+ * becoming the screen — the point of it not being a screen.
+ */
+
+.tabmenu__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(20, 30, 48, 0.28);
+}
+
+.tabmenu {
+  width: 100%;
+  max-width: 520px;
+  margin: 12px;
+  /* Clear of the tab bar it rises from, and of the home indicator under that. */
+  margin-bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+  padding: 14px;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg, 0 18px 40px rgba(38, 62, 116, 0.22));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 52vh;
+}
+
+.tabmenu__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.tabmenu__title {
+  margin: 0;
+}
+
+.tabmenu__new {
+  border: 0;
+  background: none;
+  padding: 4px 2px;
+  cursor: pointer;
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.tabmenu__empty {
+  margin: 0;
+  padding: 12px 2px;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+
+.tabmenu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+}
+
+.tabmenu__item {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+.tabmenu__item:hover,
+.tabmenu__item:focus-visible {
+  background: rgba(255, 255, 255, 0.7);
+  outline: none;
+}
+
+/* What a drag is currently over. Set by the drag work, not by hover — a finger
+   has no hover, and the row under it has to say so somehow. */
+.tabmenu__item[data-over="true"] {
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tabmenu__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabmenu__detail {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  color: var(--ink-4);
+}

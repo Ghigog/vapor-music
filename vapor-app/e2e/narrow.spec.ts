@@ -264,13 +264,19 @@ test.describe("Press and hold a track", () => {
   });
 });
 
-test.describe("Playlists as a tab", () => {
+test.describe("Playlists and groups open from the bar", () => {
+  function tab(page: Page, name: string) {
+    return page
+      .getByRole("navigation", { name: "Screens" })
+      .getByRole("button", { name, exact: true });
+  }
+
   /**
-   * The playlist rail lives in the sidebar, and a phone has no sidebar, so
-   * playlists were the one thing on this screen with no way to reach them.
-   * They are a Library tab now, which is where the Daylight design puts them.
+   * The rail lives in the sidebar and a phone has no sidebar, so playlists were
+   * unreachable. They are a tab now — and it opens a list rather than going to
+   * a screen, because a playlist is something you pick, not a place the app is.
    */
-  test("is reachable and opens a playlist", async ({ page }) => {
+  test("the playlists tab opens a list, and picking one opens it", async ({ page }) => {
     await boot(page, {
       playlists: [
         {
@@ -283,25 +289,83 @@ test.describe("Playlists as a tab", () => {
       ],
     });
 
-    await page.getByRole("tab", { name: "Playlists" }).click();
+    await tab(page, "Playlists").click();
 
-    const playlist = page.getByRole("button", { name: /night drive/i });
-    await expect(playlist).toBeVisible();
-    await playlist.click();
+    const menu = page.getByRole("dialog", { name: "Playlists" });
+    await expect(menu).toBeVisible();
+    await menu.getByRole("button", { name: /night drive/i }).click();
 
+    await expect(menu).toHaveCount(0);
     await expect(page.getByRole("heading", { name: /night drive/i })).toBeVisible();
   });
 
-  /** Creating one has to work here too: it is the only route on a phone. */
-  test("can make a playlist without a sidebar", async ({ page }) => {
+  test("a new playlist is made and opened from the list", async ({ page }) => {
     await boot(page);
 
-    await page.getByRole("tab", { name: "Playlists" }).click();
+    await tab(page, "Playlists").click();
     await page.getByRole("button", { name: /new playlist/i }).click();
-    await page.getByPlaceholder(/playlist name/i).fill("Openers");
-    await page.getByPlaceholder(/playlist name/i).press("Enter");
 
-    await expect(page.getByRole("button", { name: /openers/i })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /new playlist/i }),
+    ).toBeVisible();
+  });
+
+  /**
+   * A smart group holds artists, albums and genres, and resolves to tracks when
+   * it is read — so it keeps up with the library rather than being maintained.
+   */
+  test("the groups tab opens a list, and a new group opens empty", async ({ page }) => {
+    await boot(page);
+
+    await tab(page, "Groups").click();
+    const menu = page.getByRole("dialog", { name: "Smart groups" });
+    await expect(menu).toBeVisible();
+    await expect(menu).toContainText(/no smart groups yet/i);
+
+    await menu.getByRole("button", { name: /new group/i }).click();
+
+    await expect(page.getByRole("button", { name: /^new group$/i })).toBeVisible();
+    await expect(page.getByText(/drag an artist, album or genre onto it/i)).toBeVisible();
+  });
+
+  test("an existing group lists the tracks it resolves to", async ({ page }) => {
+    await boot(page, {
+      groups: [
+        {
+          id: "g1",
+          name: "Braindance",
+          entities: [{ entityType: "artist", value: "Aphex Twin" }],
+        },
+      ],
+    });
+
+    await tab(page, "Groups").click();
+    await page
+      .getByRole("dialog", { name: "Smart groups" })
+      .getByRole("button", { name: /braindance/i })
+      .click();
+
+    // Both Aphex Twin tracks in the fixture, and nothing by anyone else.
+    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
+    await expect(page.getByText("Xtal", { exact: true })).toBeVisible();
+    await expect(page.getByText("Roygbiv", { exact: true })).toHaveCount(0);
+  });
+
+  /** Back has to leave a group, the way it leaves every other drill-down. */
+  test("back leaves a group", async ({ page }) => {
+    await boot(page, {
+      groups: [{ id: "g1", name: "Braindance", entities: [] }],
+    });
+
+    await tab(page, "Groups").click();
+    await page
+      .getByRole("dialog", { name: "Smart groups" })
+      .getByRole("button", { name: /braindance/i })
+      .click();
+    await expect(page.getByRole("button", { name: /^braindance$/i })).toBeVisible();
+
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: /your library/i })).toBeVisible();
   });
 });
 
