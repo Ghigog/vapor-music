@@ -243,6 +243,91 @@ test.describe("Playlists as a tab", () => {
   });
 });
 
+test.describe("The Vibe screen at 412px", () => {
+  /**
+   * With nothing playing the screen has no exits and no curves to draw, so a
+   * test that merely tolerated their absence would pass against any layout at
+   * all. Start a track first.
+   */
+  /**
+   * Five analysed tracks, because three exits need three candidates behind
+   * whatever is playing and the default fixture only carries three analysed
+   * rows in total — two of which the other cards take.
+   */
+  const LIBRARY = [
+    ["/1.mp3", "Alpha", 128, "8A", "house"],
+    ["/2.mp3", "Bravo", 126, "8A", "house"],
+    ["/3.mp3", "Charlie", 124, "9A", "house"],
+    ["/4.mp3", "Delta", 90, "2B", "ambient"],
+    ["/5.mp3", "Echo", 174, "11B", "jungle"],
+  ] as const;
+
+  async function vibeWithASetRunning(page: Page) {
+    await boot(page, {
+      rows: LIBRARY.map(([href, title, bpm, key, genre]) => ({
+        href,
+        title,
+        artist: "Nobody",
+        album: "A Record",
+        artistSource: "tag",
+        albumSource: "tag",
+        genre,
+        bpm,
+        key,
+        year: 2020,
+        manualPos: 0,
+      })),
+    });
+    await page.getByRole("tab", { name: "Songs" }).click();
+    await page.getByRole("option").filter({ hasText: "Alpha" }).click();
+    await expect(page.locator(".transport__title")).toHaveText("Alpha");
+
+    await page
+      .getByRole("navigation", { name: "Screens" })
+      .getByRole("button", { name: /vibe dj|shuffle/i })
+      .click();
+  }
+
+  /**
+   * Three exits are a set of three. `auto-fit` with a 120px minimum needs
+   * 380px to lay them across and a phone has less, so they came out two above
+   * one — which reads as the DJ having found two options, not three.
+   */
+  test("puts the three exits on one row", async ({ page }) => {
+    await vibeWithASetRunning(page);
+
+    const exits = page.locator(".vibe__exits > li");
+    await expect(exits).toHaveCount(3);
+
+    const tops = await exits.evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().top)),
+    );
+    expect(new Set(tops).size, `exits wrapped onto ${new Set(tops).size} rows`).toBe(1);
+  });
+
+  test("puts the four curves on one row, without their labels", async ({ page }) => {
+    await vibeWithASetRunning(page);
+
+    const curves = page.locator(".vibe__curve");
+    await expect(curves).toHaveCount(4);
+
+    const tops = await curves.evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().top)),
+    );
+    expect(new Set(tops).size, `curves wrapped onto ${new Set(tops).size} rows`).toBe(1);
+
+    // The name is still there to be read, just not drawn.
+    await expect(curves.first()).toHaveAccessibleName(/build|chill|wave|hold/i);
+  });
+
+  /** Deprecated: the curve buttons are how the vibe is changed. */
+  test("has no vibe limit slider", async ({ page }) => {
+    await vibeWithASetRunning(page);
+
+    await expect(page.getByLabel(/vibe limit/i)).toHaveCount(0);
+  });
+});
+
 test.describe("The layout fits the screen", () => {
   /**
    * A page wider than its viewport is the symptom every one of the above shares.

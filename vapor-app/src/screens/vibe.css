@@ -532,3 +532,28 @@
 .vibe__exit-warn {
   color: var(--warn, var(--accent));
 }
+
+/* ---- Narrow layout ---------------------------------------------------
+ *
+ * `auto-fit` with a 120px minimum needs 380px to lay three exits across, and a
+ * phone's content column is narrower than that — so the three cards came out
+ * two-then-one and the set's three choices stopped reading as a set of three.
+ * The four curves did the same at a 96px minimum, wrapping "Hold Steady" onto
+ * a line of its own.
+ *
+ * Fixed counts here rather than smaller minimums: three exits and four curves
+ * are what these rows are, and `auto-fit` will always answer a narrow enough
+ * column by dropping one.
+ * -------------------------------------------------------------------- */
+
+@media (max-width: 767px) {
+  .vibe__exits {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .vibe__curves {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+}

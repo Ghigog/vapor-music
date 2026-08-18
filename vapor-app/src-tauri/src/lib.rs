@@ -4116,7 +4116,42 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
             })
     });
 
-    let follow = queued.as_deref().and_then(|h| pool.get(h));
+    // Follow is the plan's next track. When there is no plan yet — nothing has
+    // been queued behind what is playing — there is still an answer to "where
+    // would the DJ go from here", and it is the same question `candidate_cost`
+    // asks. Without this the screen opened on two cards and grew a third the
+    // moment anything was queued, which reads as a bug in the DJ rather than an
+    // absent plan.
+    //
+    // Stay and Switch already do exactly this: both fall back rather than
+    // withhold a card that nothing cleared a threshold for. Follow was the one
+    // exit that could still come back empty.
+    let follow = queued
+        .as_deref()
+        // A queue with nothing after the current track wraps under repeat-all,
+        // so `peek_next` answers with the record already playing. Offered as
+        // Follow that is a card saying "next, this again".
+        .filter(|h| *h != current.as_str())
+        .and_then(|h| pool.get(h))
+        // Two cards pointing at one track is the same failure wearing a second
+        // label, which the planned case already refuses to do.
+        .filter(|t| stay.is_none_or(|s| s.href != t.href))
+        .filter(|t| switch.is_none_or(|s| s.href != t.href))
+        .or_else(|| {
+            candidates
+                .iter()
+                .copied()
+                .filter(|t| stay.is_none_or(|s| s.href != t.href))
+                .filter(|t| switch.is_none_or(|s| s.href != t.href))
+                .min_by(|a, b| {
+                    candidate_cost(app, from, a, Exit::Follow).total_cmp(&candidate_cost(
+                        app,
+                        from,
+                        b,
+                        Exit::Follow,
+                    ))
+                })
+        });
     let chosen: Vec<(&TrackMeta, Exit)> = [
         stay.map(|t| (t, Exit::Stay)),
         follow.map(|t| (t, Exit::Follow)),
@@ -6128,6 +6163,51 @@ mod tests {
 
         assert_eq!(follow.href, queued);
         assert!(follow.selected, "Follow is what happens if nobody acts");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Three exits before anything has been planned.
+    ///
+    /// The screen opened on two cards — Stay and Switch — and grew a third the
+    /// moment something was queued, which reads as the DJ malfunctioning rather
+    /// than as an absent plan. Follow was the plan's next track and nothing
+    /// else, so with no plan there was no card; Stay and Switch had both been
+    /// given fallbacks already and Follow had not.
+    ///
+    /// Deliberately without `extend_set`: the existing three-exit test plans
+    /// first, which is exactly why this never showed up.
+    #[test]
+    fn three_exits_are_offered_before_the_set_has_been_planned() {
+        let (app, dir) = conducting();
+        // Not `peek_next().is_none()`: a one-track queue wraps under repeat-all
+        // and answers with the track playing, which is precisely the state that
+        // used to produce a Follow card offering the current record back.
+        assert_eq!(
+            app.queue.peek_next(None),
+            Some("/a.mp3"),
+            "the fixture is meant to have no real next track",
+        );
+
+        let cards = mix_candidates_for(&app);
+        let exits: Vec<Exit> = cards.iter().map(|c| c.exit).collect();
+        assert_eq!(
+            exits,
+            vec![Exit::Stay, Exit::Follow, Exit::Switch],
+            "got {} card(s) with no plan yet",
+            cards.len(),
+        );
+
+        // Nothing is queued, so nothing is what happens if nobody acts. The
+        // card is an answer, not a claim about the set.
+        assert!(
+            cards.iter().all(|c| !c.selected),
+            "a card claimed to be queued when the set had not been planned",
+        );
+
+        let mut hrefs: Vec<&str> = cards.iter().map(|c| c.href.as_str()).collect();
+        hrefs.sort_unstable();
+        hrefs.dedup();
+        assert_eq!(hrefs.len(), 3, "the same track appeared under two exits");
         let _ = std::fs::remove_dir_all(dir);
     }
 

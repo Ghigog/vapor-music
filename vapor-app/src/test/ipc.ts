@@ -570,7 +570,21 @@ export class FakeBackend {
           rest.filter((r) => departing.includes(r)).sort(byTempo)[0] ??
           rest.slice().sort((a, b) => byTempo(b, a))[0];
 
-        const follow = this.rows.find((r) => r.href === queuedNext);
+        // Follow is the plan's next track, and before anything is planned there
+        // is no such track — which left the screen showing two cards until
+        // something was queued, and growing a third afterwards. Stay and Switch
+        // both fall back rather than withhold a card; Follow now does too, and
+        // never onto what is playing or onto a track another card already took.
+        const follow =
+          this.rows.find((r) => r.href === queuedNext && r.href !== from.href) ??
+          pool
+            .filter((r) => r.href !== stay?.href && r.href !== switchTo?.href)
+            .slice()
+            .sort(
+              (a, b) =>
+                Math.abs(Math.abs(from.bpm - a.bpm) - 15) -
+                Math.abs(Math.abs(from.bpm - b.bpm) - 15),
+            )[0];
         const cards: [core.Row | undefined, core.Exit, string][] = [
           [stay, "stay", "Bass Swap"],
           [follow, "follow", "Filter Sweep"],
