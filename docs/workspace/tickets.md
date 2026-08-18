@@ -2080,40 +2080,44 @@ The curves are colour and shape now, not prose: each swatch draws its own
 that used to sit under each label was accurate and was not what anyone is
 choosing between.
 
-### AND-1 : Android (compiling, never run)
+### AND-1 : Android (builds an APK, never run)
 
-The status `docs/ANDROID.md` deliberately does not carry. That document holds
-the decisions and the bring-up steps; this holds what is true today.
+The status `docs/ANDROID.md` deliberately does not carry.
 
-**Done and verified by a compile:**
+**Done, and verified by building it:**
 
-* The shell resolves and compiles for `aarch64-linux-android` — gated by the
-  `android (compile)` job in `app.yml`, on a runner that has an NDK.
+* The shell compiles for `aarch64-linux-android`, on a GitHub runner and now on
+  this machine — NDK 30.0.15729638, installed 2026-08-18.
+* `tauri android init` has been run. `gen/android` is in the tree, and the
+  `src-tauri/gen/` ignore rule now covers `gen/schemas` only: the manifest holds
+  decisions that exist nowhere else, and ignoring the directory meant they lived
+  on one laptop and would come back as template defaults on the next checkout.
+* A debug APK builds: `app-universal-debug.apk`, 259 MB unoptimised with debug
+  info. `libc++_shared.so` is bundled by the Gradle plugin, which settles the
+  `oboe-shared-stdcxx` question — the linker reports the library wanting
+  `libOpenSLES.so`, so cpal's audio backend really is linked in.
+* `minSdk` is 24, above the API 23 that `KeyGenParameterSpec` needs.
+* `allowBackup` is off, deliberately: the Keystore key behind the credential
+  store is never backed up, so a restored backup would carry a record nothing
+  can read.
 * `secrets` is a seam. Desktop keeps `keyring`; a target with no store chosen
-  fails to compile rather than falling back to a mock (TD-50).
-* `secrets::android` — AES-256-GCM under an Android Keystore key, ciphertext in
-  `SharedPreferences`. Type-checked on all three desktop runners through
-  `--features android-check`, so a mistyped JNI signature is a compile error on
-  a laptop rather than a `NoSuchMethodError` on a phone.
-* Media keys compile to no-ops: `souvlaki` ships an `empty` platform for
-  Android, so `media.rs` needed no gating.
+  fails to compile rather than falling back to a mock (TD-50). The JNI store is
+  type-checked on all three desktop runners through `--features android-check`.
 
-**Done and not verified at all:** everything above, at runtime. No emulator in
-CI, no NDK on the development machine, so nothing has executed on Android.
+**Not verified at all: that any of it runs.** No emulator image is installed and
+no device has been attached, so nothing has executed on Android. A build is not
+a run.
 
-**Not started:**
+**Next, and it needs a device or an emulator image:**
 
-* `gen/android` — `tauri android init` has not been run, so there is no Gradle
-  project, no manifest and therefore no permissions.
-* Audio on a device. `cpal` declares its own Oboe backend for the target, which
-  is why it compiles; whether a real-time callback that must not allocate
-  behaves through Oboe is unmeasured. `oboe-shared-stdcxx` is a link-time
-  choice a `cargo check` cannot answer.
-* Peer discovery needs `INTERNET` and `CHANGE_WIFI_MULTICAST_STATE` and a held
-  multicast lock. Off by default, so it should fail quietly.
-
-**Blocked on:** an NDK on the development machine, for anything beyond a
-compile.
+* Does the app start, and does the webview render.
+* The JNI credential store, end to end: save a password, read it back.
+* Audio through cpal's Android backend — specifically whether a callback that
+  must not allocate behaves there.
+* Peer discovery needs `INTERNET` (present) plus `CHANGE_WIFI_MULTICAST_STATE`
+  and a held multicast lock (neither present). Deliberately not added: a
+  permission for a feature that cannot work yet is a permission asked for
+  nothing. Sync is off by default, so it should fail quietly.
 
 ### AND-2 : the Windows shell tests crashed the test binary (fixed 2026-08-17)
 

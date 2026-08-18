@@ -1,5 +1,12 @@
 node_modules/
 dist/
 src-tauri/target/
-src-tauri/gen/
+# `gen/schemas` is regenerated from the command list on every build and is
+# nobody's to edit. `gen/android` is not: `tauri android init` writes it once
+# and then it is ours — the manifest carries decisions (allowBackup is off,
+# because the Keystore key behind the credential store is never backed up) that
+# exist nowhere else. Ignoring the whole of `gen/` meant those decisions lived
+# only on the machine that made them and would come back as the template's
+# defaults on the next checkout, with nothing to say they had been considered.
+src-tauri/gen/schemas/
 *.local

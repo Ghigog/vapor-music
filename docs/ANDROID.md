@@ -52,21 +52,30 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 cd vapor-app && npm run tauri android init
 ```
 
-`init` generates the Gradle project under `gen/android`. Two things to check in
-what it writes, because both are decisions rather than defaults:
+`init` writes the Gradle project to `gen/android`, which is **in the tree** —
+`.gitignore` covers `gen/schemas` only. Running `init` again on a checkout that
+already has it will overwrite hand-made changes, so read the diff before
+accepting one. Two of those changes are decisions rather than defaults:
 
-- **`android:allowBackup`.** The credential store keeps its ciphertext in
-  `SharedPreferences`, and the key that opens it is in the Keystore, which is
+- **`android:allowBackup="false"`.** The credential store keeps its ciphertext
+  in `SharedPreferences`, and the key that opens it is in the Keystore, which is
   never backed up. A restored backup therefore carries an unreadable record —
-  handled (an unparseable record reads as "no password saved"), but `false` is
-  the honest setting for a file that cannot survive the trip.
-- **`minSdkVersion`.** `KeyGenParameterSpec` is API 23. Tauri's template targets
-  24, which is above it.
+  handled, since an unparseable record reads as "no password saved" — but
+  enrolling a file in a backup it cannot survive is not honest.
+- **`minSdk = 24`.** `KeyGenParameterSpec` is API 23, so 24 clears it. Left at
+  the template's value; noted because lowering it would break the credential
+  store silently.
 
 Then:
 
 ```bash
 cd vapor-app && npm run tauri android dev
+```
+
+Or, to produce an installable APK without a device attached:
+
+```bash
+cd vapor-app && npm run build && npm run tauri android build -- --debug --target aarch64
 ```
 
 ## Checks that do not need a device
