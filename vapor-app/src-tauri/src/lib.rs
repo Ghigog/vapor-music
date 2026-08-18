@@ -3254,6 +3254,17 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
         return None;
     }
 
+    // And the same recording under a different filename.
+    //
+    // The pool the planner works from collapses duplicates, so it should never
+    // choose one — but a queue can be built by hand, by a playlist, or by
+    // pressing play on an album, and none of those go through the planner. Two
+    // rips of one track beat-match perfectly and mix into themselves, which is
+    // the one transition guaranteed to sound like a fault.
+    if same_recording(app, current, &next) {
+        return None;
+    }
+
     let outgoing = app.analysis.get(current)?;
     let incoming = app.analysis.get(&next)?;
 
@@ -4017,7 +4028,8 @@ fn skip_penalties(app: &AppState) -> std::collections::HashMap<(String, String),
 /// the whole library's analysis to ask a question about it. Building it here
 /// keeps that where it already lives.
 fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMeta> {
-    app.rows
+    let pool: std::collections::HashMap<String, TrackMeta> = app
+        .rows
         .iter()
         .filter_map(|row| {
             let analysis = app.analysis.get(&row.href)?;
@@ -4070,6 +4082,85 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
                 },
             ))
         })
+        .collect();
+
+    dedupe_recordings(app, pool)
+}
+
+/// The identity of a *recording*, as opposed to a file.
+///
+/// Case- and space-insensitive, because two rips of one track disagree about
+/// capitalisation more often than they agree. A track missing either field
+/// falls back to its href and so stays unique — collapsing everything untitled
+/// into one entry would be worse than keeping the duplicates.
+/// Whether two hrefs are the same recording — the same track, twice on disk.
+fn same_recording(app: &AppState, a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let key = |href: &str| {
+        app.rows
+            .iter()
+            .find(|r| r.href == href)
+            .map(recording_key)
+    };
+    match (key(a), key(b)) {
+        // `recording_key` falls back to the href when a title or artist is
+        // missing, so two untitled files never collapse into each other.
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn recording_key(row: &Row) -> String {
+    let title = row.title.trim().to_lowercase();
+    let artist = row.artist.trim().to_lowercase();
+    if title.is_empty() || artist.is_empty() {
+        return row.href.clone();
+    }
+    format!("{title}\u{1}{artist}")
+}
+
+/// One file per recording.
+///
+/// A library with the same track twice — `Bocca di rosa` and
+/// `Bocca di rosa (1)` — hands the planner two entries with identical tempo,
+/// key and intensity. Their transition cost is therefore as close to nothing as
+/// the model can produce, which makes the duplicate the *cheapest* possible next
+/// step: the set walked out of a track and straight back into it. The
+/// pathfinder's own guard is `!path.contains(href)`, and two copies are two
+/// hrefs, so it never saw a repeat.
+///
+/// Collapsing here fixes every consumer at once — the planner, the Vibe
+/// screen's three exits, and the mix that gets armed — because all three read
+/// this pool.
+///
+/// The survivor is the lexicographically first href rather than whichever
+/// happened to be scanned first, so a set is the same set on the next launch.
+fn dedupe_recordings(
+    app: &AppState,
+    pool: std::collections::HashMap<String, TrackMeta>,
+) -> std::collections::HashMap<String, TrackMeta> {
+    use std::collections::HashMap;
+
+    let mut keep: HashMap<String, String> = HashMap::new();
+    for row in &app.rows {
+        if !pool.contains_key(&row.href) {
+            continue;
+        }
+        keep.entry(recording_key(row))
+            .and_modify(|href| {
+                if row.href < *href {
+                    *href = row.href.clone();
+                }
+            })
+            .or_insert_with(|| row.href.clone());
+    }
+
+    let kept: std::collections::HashSet<&String> = keep.values().collect();
+    pool.iter()
+        .filter(|(href, _)| kept.contains(href))
+        .map(|(href, meta)| (href.clone(), meta.clone()))
         .collect()
 }
 
@@ -6423,6 +6514,89 @@ mod tests {
         assert!(app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
         assert!(!app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
         assert_eq!(app.groups.get(&id).expect("the group").entities.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The set walked out of a track and straight back into it.
+    ///
+    /// A library holding the same recording twice — `Bocca di rosa` and
+    /// `Bocca di rosa (1)` — gives the planner two entries with identical
+    /// tempo, key and intensity, so their transition cost is as near nothing as
+    /// the model can produce and the duplicate is the *cheapest* next step. The
+    /// pathfinder's guard is `!path.contains(href)`, and two copies are two
+    /// hrefs, so it never saw a repeat.
+    #[test]
+    fn a_duplicate_file_is_not_a_second_track() {
+        let (mut app, dir) = conducting();
+
+        // The same recording, twice, exactly as a re-download leaves it.
+        app.rows.push(row("/a-copy.mp3", "/a-copy.mp3"));
+        let i = app.rows.len() - 1;
+        app.rows[i].title = "Carlo Martello".to_string();
+        app.rows[i].artist = "Fabrizio De Andre".to_string();
+        app.analysis
+            .insert("/a-copy.mp3".to_string(), analysed_track(174.0, "4A", 0.8));
+
+        let original = app
+            .rows
+            .iter()
+            .position(|r| r.href == "/a.mp3")
+            .expect("the fixture track");
+        app.rows[original].title = "Carlo Martello".to_string();
+        app.rows[original].artist = "Fabrizio De Andre".to_string();
+
+        let pool = track_meta_pool(&app);
+        assert!(
+            !(pool.contains_key("/a.mp3") && pool.contains_key("/a-copy.mp3")),
+            "both copies of one recording reached the planner",
+        );
+
+        // And nothing else was lost on the way.
+        assert!(pool.contains_key("/c.mp3"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The guard that does not depend on the planner having been involved.
+    ///
+    /// A queue can be built by hand, by a playlist, or by pressing play on an
+    /// album, and none of those go through the pool. Two rips of one track
+    /// beat-match perfectly and mix into themselves.
+    #[test]
+    fn a_mix_is_not_armed_between_two_copies_of_one_recording() {
+        let (mut app, dir) = conducting();
+        app.rows.push(row("/a-copy.mp3", "/a-copy.mp3"));
+        let i = app.rows.len() - 1;
+        app.rows[i].title = "Carlo Martello".to_string();
+        app.rows[i].artist = "Fabrizio De Andre".to_string();
+        app.analysis
+            .insert("/a-copy.mp3".to_string(), analysed_track(174.0, "4A", 0.8));
+
+        let original = app
+            .rows
+            .iter()
+            .position(|r| r.href == "/a.mp3")
+            .expect("the fixture track");
+        app.rows[original].title = "Carlo Martello".to_string();
+        app.rows[original].artist = "Fabrizio De Andre".to_string();
+
+        app.queue.set_tracks(
+            vec!["/a.mp3".to_string(), "/a-copy.mp3".to_string()],
+            Some("/a.mp3"),
+        );
+        assert!(
+            plan_mix(&app, 0.0).is_none(),
+            "armed a mix from a track into another copy of itself",
+        );
+
+        // A different record still mixes, so this is not refusing everything.
+        // `/b.mp3` rather than `/c.mp3`: 172 against 174 is a tempo the engine
+        // will actually match, and 128 is not — a refusal there would be about
+        // the ratio, not about this guard.
+        app.queue.set_tracks(
+            vec!["/a.mp3".to_string(), "/b.mp3".to_string()],
+            Some("/a.mp3"),
+        );
+        assert!(plan_mix(&app, 0.0).is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 
