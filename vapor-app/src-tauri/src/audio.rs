@@ -524,7 +524,30 @@ impl Engine {
 
         let frames = (out.len() / self.channels).min(self.scratch.len());
         let was_transitioning = self.mixer.is_transitioning();
-        let produced = self.mixer.render(&mut self.scratch[..frames]);
+
+        /*
+         * Paused means nothing moves.
+         *
+         * The mixer's transition envelope is advanced by `block / sample_rate`
+         * every time `render` is called — wall clock, not audio actually
+         * produced. So a mix that was under way when the pause arrived went on
+         * crossfading through the pause: the incoming deck faded up, the
+         * envelope completed, the decks swapped and the queue advanced, all
+         * while the app said it was paused. What that sounds like is the next
+         * track slowly appearing, in pieces.
+         *
+         * Not rendering at all while paused is what stops it, and it stops the
+         * pending transition and the tempo glide with the same line — those are
+         * driven from inside `render` too.
+         */
+        let produced = if self.intent == Intent::Playing {
+            self.mixer.render(&mut self.scratch[..frames])
+        } else {
+            for s in self.scratch[..frames].iter_mut() {
+                *s = [0.0; 2];
+            }
+            0
+        };
 
         // A transition that was running and now is not has completed, and the
         // decks have changed roles: what was cued is now what is playing. The
@@ -712,6 +735,10 @@ impl Engine {
                 Command::Play => {
                     if self.intent == Intent::Paused {
                         self.mixer.outgoing().play();
+                        // Both decks, if a mix was under way when it stopped.
+                        if self.mixer.is_transitioning() {
+                            self.mixer.incoming().play();
+                        }
                         self.intent = Intent::Playing;
                         self.link
                             .status
@@ -721,8 +748,20 @@ impl Engine {
 
                 Command::Pause => {
                     if self.intent == Intent::Playing {
-                        // The deck keeps its read position, so this resumes
-                        // where it left off rather than restarting.
+                        // Both decks, not only the one in front.
+                        //
+                        // A mix has two decks running. Stopping just the
+                        // outgoing one left the incoming track playing under an
+                        // envelope still being written every block, which is
+                        // the next song arriving in fragments while the button
+                        // says paused.
+                        //
+                        // The decks keep their read positions, so this resumes
+                        // where it left off rather than restarting — including
+                        // resuming the mix itself, part-way through.
+                        if self.mixer.is_transitioning() {
+                            self.mixer.incoming().stop();
+                        }
                         self.mixer.outgoing().stop();
                         self.intent = Intent::Paused;
                         self.link

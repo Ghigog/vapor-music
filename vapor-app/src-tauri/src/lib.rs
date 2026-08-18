@@ -2422,6 +2422,29 @@ fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {
     })
 }
 
+/// How far ahead the DJ needs the library described.
+///
+/// Three: the track playing has to be mixed *out of*, and the exits the Vibe
+/// screen offers are Stay, Follow and Switch. Analysing further ahead than the
+/// set has been planned is work for a route nobody has chosen yet.
+const MIX_LOOKAHEAD: usize = 3;
+
+/// Whether anything in the next few tracks still needs describing.
+///
+/// The pass is ordered from the queue (see `start_analysis`), so restarting it
+/// is how the upcoming tracks get to the front. Asking about a window rather
+/// than only the current track is what stops the DJ arriving at a record it
+/// cannot mix.
+fn needs_analysis_soon(app: &AppState, lookahead: usize) -> bool {
+    let from = app.queue.current_index().unwrap_or(0);
+    app.queue
+        .tracks()
+        .iter()
+        .skip(from)
+        .take(lookahead + 1)
+        .any(|href| needs_analysis(app, href))
+}
+
 #[tauri::command]
 fn play_tracks(
     app_handle: tauri::AppHandle,
@@ -2438,11 +2461,18 @@ fn play_tracks(
         if let Some(current) = current.clone() {
             begin_playback(&shared, &mut app, current);
         }
-        // Only when the track being started is one analysis has not described
-        // yet. Restarting the pass costs the track in flight, and paying that
-        // to re-order a queue of already-analysed tracks would be worse than
-        // leaving the pass where it is.
-        current.is_some_and(|href| needs_analysis(&app, &href))
+        // The track being started, and the few behind it.
+        //
+        // This used to ask only about the current track, which meant a queue
+        // whose *next* records were undescribed never re-ordered the pass — so
+        // the DJ reached a track it knew nothing about and could not mix into
+        // it. `plan_mix` needs the incoming track analysed before it arrives,
+        // not while it is arriving.
+        //
+        // Still bounded, for the reason the old comment gave: restarting costs
+        // the track in flight, and paying that to re-order a queue that is
+        // already described would be worse than leaving the pass alone.
+        needs_analysis_soon(&app, MIX_LOOKAHEAD)
     };
 
     if jump_the_queue {
@@ -3065,6 +3095,18 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
 
     let outgoing = app.analysis.get(current)?;
     let incoming = app.analysis.get(&next)?;
+
+    // Described is not the same as usable.
+    //
+    // A record can carry an analysis whose tempo came back as nothing — a
+    // track too short or too quiet for the beat tracker to find a pulse in.
+    // `track_meta_pool` has always refused those, so the Vibe screen never
+    // offered one; the mix planner did not, so the one path that could still
+    // reach an undescribed tempo was the queue. Beat-matching against 0 BPM is
+    // not a mix, and there is nothing to hear in the result but the fault.
+    if outgoing.bpm <= 0.0 || incoming.bpm <= 0.0 {
+        return None;
+    }
 
     // The keys at the seam, where analysis produced them — an outro that
     // modulates is what the incoming track actually meets (TD-13).
@@ -6163,6 +6205,71 @@ mod tests {
 
         assert_eq!(follow.href, queued);
         assert!(follow.selected, "Follow is what happens if nobody acts");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A mix needs a tempo on both sides, not merely a row in the cache.
+    ///
+    /// A track too short or too quiet for the beat tracker comes back analysed
+    /// with a tempo of nothing. `track_meta_pool` has always refused those, so
+    /// they never reached the Vibe screen — but the queue is a second way in,
+    /// and the planner took whatever the queue handed it. Beat-matching against
+    /// 0 BPM is not a mix.
+    #[test]
+    fn a_mix_is_not_planned_into_a_track_with_no_tempo() {
+        let (mut app, dir) = conducting();
+
+        // The planner is willing while both ends are described.
+        app.queue.set_tracks(
+            vec!["/a.mp3".to_string(), "/b.mp3".to_string()],
+            Some("/a.mp3"),
+        );
+        // Position 0: the fixture's `cue_out` is 0, so that is where this
+        // pair's arming window sits.
+        assert!(
+            plan_mix(&app, 0.0).is_some(),
+            "the fixture cannot plan a mix at all, so this proves nothing",
+        );
+
+        // Same track, analysed, no tempo found.
+        app.analysis
+            .insert("/b.mp3".to_string(), analysed_track(0.0, "4A", 0.8));
+        assert!(
+            plan_mix(&app, 0.0).is_none(),
+            "planned a beat-match against a tempo of zero",
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The DJ has to know the library before it arrives at it.
+    ///
+    /// The pass is ordered from the queue, so restarting it is how upcoming
+    /// tracks reach the front. That restart used to be asked for only when the
+    /// track *being started* was undescribed — so a queue whose next records
+    /// were unknown never re-ordered, and the DJ reached a track it could not
+    /// mix into.
+    #[test]
+    fn the_next_few_tracks_are_what_decides_to_reorder_the_pass() {
+        let (mut app, dir) = conducting();
+        app.queue.set_tracks(
+            vec![
+                "/a.mp3".to_string(),
+                "/b.mp3".to_string(),
+                "/c.mp3".to_string(),
+            ],
+            Some("/a.mp3"),
+        );
+
+        // Everything in the window is described: nothing to re-order for.
+        assert!(!needs_analysis_soon(&app, MIX_LOOKAHEAD));
+
+        // A track two ahead is not, and that is the case the old condition
+        // could not see, because the track playing was fine.
+        app.analysis.remove("/c.mp3");
+        assert!(
+            needs_analysis_soon(&app, MIX_LOOKAHEAD),
+            "an undescribed track in the window did not ask for the pass",
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
