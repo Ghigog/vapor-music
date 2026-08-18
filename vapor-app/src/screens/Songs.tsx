@@ -377,16 +377,23 @@ export function Songs({
                   onClick={() => toggleSort(col.id)}
                 >
                   {col.label}
+                  {/*
+                    Always rendered, empty when this is not the sort.
+                    Appearing only on the active control changed its width, so
+                    pressing one heading shoved the others sideways — the row
+                    re-laid itself out under the finger that had just chosen.
+                    The space is held whether or not there is an arrow in it.
+                  */}
+                  <span className="songs__col-arrow" aria-hidden="true">
+                    {sortKey === col.id ? (ascending ? "↑" : "↓") : ""}
+                  </span>
                   {sortKey === col.id && (
-                    <>
-                      <span aria-hidden="true">{ascending ? " ↑" : " ↓"}</span>
-                      {/* The arrow is the sighted reader's copy of this. Both
-                          are needed: an arrow glyph read aloud is "up arrow",
-                          which does not say what it is sorting. */}
-                      <span className="a11y-only">
-                        , sorted {ascending ? "ascending" : "descending"}
-                      </span>
-                    </>
+                    // The arrow is the sighted reader's copy of this. Both are
+                    // needed: an arrow glyph read aloud is "up arrow", which
+                    // does not say what it is sorting.
+                    <span className="a11y-only">
+                      , sorted {ascending ? "ascending" : "descending"}
+                    </span>
                   )}
                 </button>
               ))}

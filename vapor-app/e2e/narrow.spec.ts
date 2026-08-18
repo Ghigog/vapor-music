@@ -131,6 +131,45 @@ test.describe("The track table at 412px", () => {
   });
 });
 
+test.describe("Sorting does not move the headings", () => {
+  async function openSongs(page: Page) {
+    await page
+      .getByRole("navigation", { name: "Screens" })
+      .getByRole("button", { name: "Library", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "Songs" }).click();
+  }
+
+  /**
+   * The arrow used to be rendered only on the active heading, which made that
+   * heading wider than the others — so pressing one shoved its neighbours
+   * sideways and the row re-laid itself out under the finger that had just
+   * chosen. The slot is always there now.
+   */
+  test("pressing a heading leaves the others where they were", async ({ page }) => {
+    await boot(page);
+    await openSongs(page);
+
+    // By class, not by role: the accessible name gains ", sorted ascending"
+    // when a heading becomes the sort, so a name-based locator stops matching
+    // the very element whose position is the thing being measured.
+    const headings = page.locator(".songs__col");
+    const lefts = () =>
+      headings.evaluateAll((els) =>
+        els.map((e) => Math.round(e.getBoundingClientRect().left)),
+      );
+
+    const before = await lefts();
+    expect(before.length).toBeGreaterThan(1);
+
+    // Title holds the arrow at first; move it to Artist.
+    await headings.nth(1).click();
+    await expect(headings.nth(1)).toHaveAccessibleName(/sorted/i);
+
+    expect(await lefts(), "the headings moved when one was pressed").toEqual(before);
+  });
+});
+
 test.describe("Press and hold a track", () => {
   async function openSongs(page: Page) {
     await page
