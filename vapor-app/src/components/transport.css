@@ -216,3 +216,16 @@
   outline-offset: 3px;
   border-radius: var(--r-hair);
 }
+
+/* The icons are line art, and line art needs room.
+   Sized in px rather than em: the buttons set a font-size for the labels they
+   no longer contain, and inheriting it drew a 16px icon in a 34px button. */
+.transport__button .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.transport__button--primary .icon {
+  width: 24px;
+  height: 24px;
+}

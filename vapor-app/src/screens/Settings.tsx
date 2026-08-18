@@ -555,6 +555,34 @@ export function Settings() {
         </div>
       </section>
 
+      {/*
+        Attribution, because it is a licence condition rather than a courtesy.
+
+        The transport icons are CC BY, which requires credit "in any reasonable
+        manner" *to the people using the work* — a line in a repository file
+        does not reach them. THIRD_PARTY_NOTICES.md has carried this since the
+        Godot build and flagged the gap; shipping the icons in this app is what
+        makes closing it overdue rather than optional. See docs/LICENSING.md.
+      */}
+      <section className="settings__card glass">
+        <h2 className="settings__section">About</h2>
+        <p className="settings__hint">
+          Icons by Gregor Cresnar, from the Noun Project, used under a{" "}
+          <a
+            href="https://creativecommons.org/licenses/by/3.0/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Creative Commons Attribution licence
+          </a>
+          .
+        </p>
+        <p className="settings__hint">
+          Vapor Music is free software under the AGPL-3.0. Tempo and key
+          detection use Essentia; time-stretching uses Signalsmith Stretch.
+        </p>
+      </section>
+
     </div>
   );
 }

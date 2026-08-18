@@ -11,7 +11,7 @@
  * to play, and a disabled transport on a first run is clutter posing as
  * consistency.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
@@ -120,6 +120,57 @@ export function App() {
   /** Read from settings, not invented here. The backend is the half that
    *  decides what plays next, so it has to be the one that knows. */
   const [djMode, setDjMode] = useState(true);
+
+  /**
+   * Where the app is, in the webview's own history.
+   *
+   * Navigation is component state, which on Android meant the back gesture had
+   * nothing to walk: it went straight past the app to the launcher, so Settings
+   * was a screen you left by killing the app and starting it again.
+   *
+   * Two halves fix it. `MainActivity` re-enables wry's `handleBackNavigation`,
+   * which Tauri turns off — back then calls `webView.goBack()` when there is
+   * anywhere to go and finishes the activity when there is not. And this pushes
+   * an entry per place, so there is somewhere to go. Desktop gets the same
+   * thing for free: a mouse's back button, and Cmd-[.
+   */
+  const fromPop = useRef(false);
+  const firstPlace = useRef(true);
+  useEffect(() => {
+    const place = { screen, liner: liner?.href ?? null, playlist };
+    if (firstPlace.current) {
+      firstPlace.current = false;
+      window.history.replaceState(place, "");
+      return;
+    }
+    // A change that *came from* the back gesture must not push a new entry, or
+    // going back would land on itself and the gesture would never leave.
+    if (fromPop.current) {
+      fromPop.current = false;
+      return;
+    }
+    window.history.pushState(place, "");
+  }, [screen, liner?.href, playlist]);
+
+  useEffect(() => {
+    const onPop = (event: PopStateEvent) => {
+      const place = event.state as {
+        screen: Screen;
+        liner: string | null;
+        playlist: string | null;
+      } | null;
+      if (!place) return;
+      fromPop.current = true;
+      setScreen(place.screen);
+      setPlaylist(place.playlist);
+      // The screen to return to is taken as the one being restored: the
+      // original "from" is not in the entry, and going back from Liner Notes
+      // should land where the history says, not where it was opened from.
+      setLiner(place.liner ? { href: place.liner, from: place.screen } : null);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   useEffect(() => {
     // Settings is the round trip worth making at boot: it decides where to

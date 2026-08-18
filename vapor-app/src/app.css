@@ -410,3 +410,53 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* ---- Icons (Gregor Cresnar, the Noun Project, CC BY) ---------------------
+ *
+ * Masks rather than `<img>`. The files are one-colour line art, so painting
+ * them through a mask lets one drawing serve a white control on the accent
+ * circle and an ink-coloured one beside it, without shipping two files or
+ * hard-coding a colour into the artwork.
+ *
+ * They replaced `⏮ ⏸ ▶ ⏹ ⏭`. A codepoint is not an icon: the platform picks
+ * the font, and on Android those arrive as full-colour emoji — the stop control
+ * rendered as an orange square that matched nothing else on the screen.
+ *
+ * CC BY requires attribution visible to the people using the work, not only in
+ * a repository file. That is the credit on Settings → About, and it is a
+ * licence condition rather than a courtesy: see docs/LICENSING.md.
+ * ------------------------------------------------------------------------ */
+
+.icon {
+  display: block;
+  width: 1.15em;
+  height: 1.15em;
+  /* `currentColor` is the whole point of the mask: the control decides. */
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.icon--play {
+  -webkit-mask-image: url("/icons/play.png");
+  mask-image: url("/icons/play.png");
+}
+
+.icon--pause {
+  -webkit-mask-image: url("/icons/pause.png");
+  mask-image: url("/icons/pause.png");
+}
+
+.icon--next {
+  -webkit-mask-image: url("/icons/next.png");
+  mask-image: url("/icons/next.png");
+}
+
+/* Previous is next, mirrored. */
+.icon--flip {
+  transform: scaleX(-1);
+}

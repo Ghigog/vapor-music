@@ -5,6 +5,18 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   /**
+   * Let the back gesture walk the app's own history.
+   *
+   * `WryActivity` defaults this to true, and `TauriActivity` turns it off. With
+   * it off, back goes straight past the app to the launcher — Settings was a
+   * screen you left by killing the app. With it on, back calls
+   * `webView.goBack()` while there is anywhere to go and finishes the activity
+   * when there is not, which is what the gesture means everywhere else on the
+   * phone. The entries it walks are pushed by `App.tsx`.
+   */
+  override val handleBackNavigation: Boolean = true
+
+  /**
    * Hand the JavaVM and the application Context to `ndk_context`.
    *
    * Neither Tauri nor wry depends on `ndk_context`, so nothing was publishing

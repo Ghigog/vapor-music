@@ -119,6 +119,13 @@ export function Transport({
         </div>
       </div>
 
+      {/* The glyphs are images, not characters.
+          They were `⏮ ⏸ ▶ ⏭` — and a codepoint is not an icon. The platform
+          picks the font, so on Android those render as full-colour emoji: the
+          stop control came out as an orange square that matched nothing else on
+          screen. These are the icons the Godot build used, drawn at one weight
+          by one person, and they are masks rather than `<img>` so each one takes
+          the colour of the control it sits in. */}
       <div className="transport__controls">
         <button
           className="transport__button"
@@ -126,7 +133,9 @@ export function Transport({
           disabled={!available}
           aria-label="Previous track"
         >
-          ⏮
+          {/* The set has no "previous": it is the same drawing, mirrored, which
+              is what the two controls are. */}
+          <span className="icon icon--next icon--flip" aria-hidden="true" />
         </button>
         <button
           className="transport__button transport__button--primary"
@@ -136,15 +145,10 @@ export function Transport({
           disabled={!available || idle}
           aria-label={playing ? "Pause" : "Play"}
         >
-          {playing ? "⏸" : "▶"}
-        </button>
-        <button
-          className="transport__button"
-          onClick={() => void act(core.stopPlayback)}
-          disabled={!available || idle}
-          aria-label="Stop"
-        >
-          ⏹
+          <span
+            className={"icon " + (playing ? "icon--pause" : "icon--play")}
+            aria-hidden="true"
+          />
         </button>
         <button
           className="transport__button"
@@ -152,7 +156,7 @@ export function Transport({
           disabled={!available}
           aria-label="Next track"
         >
-          ⏭
+          <span className="icon icon--next" aria-hidden="true" />
         </button>
       </div>
 

@@ -398,6 +398,46 @@ test.describe("Navigation", () => {
  * heading, so "All Melody" was a header with nine tiles beneath it and none of
  * them was the album. A tab called Albums lists albums.
  */
+test.describe("Going back", () => {
+  /**
+   * Back has to leave a screen, not the app.
+   *
+   * Navigation was component state with no history behind it, so on Android the
+   * back gesture went straight past the app to the launcher: Settings was a
+   * screen you left by killing the app and starting it again. `App.tsx` pushes
+   * an entry per place, and `MainActivity` re-enables the `handleBackNavigation`
+   * that Tauri turns off, so the gesture calls `webView.goBack()` while there is
+   * anywhere to go.
+   *
+   * Asserted through the browser's own history, which is the same mechanism the
+   * gesture drives.
+   */
+  test("returns to the previous screen rather than leaving", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByText(/where your music lives/i)).toBeVisible();
+
+    await page.goBack();
+
+    await expect(page.getByRole("heading", { name: /your library/i })).toBeVisible();
+  });
+
+  test("walks back through several screens in order", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: "Vibe DJ" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByText(/where your music lives/i)).toBeVisible();
+
+    await page.goBack();
+    await expect(page.getByRole("button", { name: /^help$/i })).toBeVisible();
+
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: /your library/i })).toBeVisible();
+  });
+});
+
 test.describe("Albums and artists", () => {
   test("the Albums tab lists albums, not tracks", async ({ page }) => {
     await boot(page);
