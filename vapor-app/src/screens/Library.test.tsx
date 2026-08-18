@@ -1,13 +1,13 @@
 /**
- * The Library's album artwork panel.
+ * The Library's album cover, and the toggle it carries.
  *
  * A file's embedded artwork can simply be wrong — the owner's copy of one album
  * carries an unrelated picture, and reading the file more carefully cannot fix
  * that. The only thing that knows the picture is wrong is the person looking at
- * it, so the panel exists to let them say so and have the app go and ask.
+ * it, so the cover exists to let them say so and have the app go and ask.
  *
- * Tested for what a person does: open an album, see a cover, press the button,
- * get a different cover, change their mind.
+ * Tested for what a person does: open an album, see a cover, tap it, get a
+ * different cover, change their mind and tap again.
  */
 import { describe, expect, it } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -46,18 +46,21 @@ async function openTheAlbum(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("Library — album artwork", () => {
-  it("offers to find artwork, and says what pressing it does", async () => {
+  /** The cover is the control: tapping it swaps where the picture comes from. */
+  function cover() {
+    return screen.findByRole("button", { name: /cover of currents/i });
+  }
+
+  it("says where the picture is from and where tapping sends the query", async () => {
     useBackend({ rows: album(), covers: true });
     const user = userEvent.setup();
     render(<Library />);
     await openTheAlbum(user);
 
-    expect(
-      await screen.findByRole("button", { name: /find artwork/i }),
-    ).toBeInTheDocument();
-    // The label has to say where the query goes. This is the one part of the
+    // The control has to say where the query goes. This is the one part of the
     // app that talks to a stranger.
-    expect(screen.getByText(/sends the artist and album name to deezer/i)).toBeInTheDocument();
+    expect(await cover()).toHaveAccessibleName(/search deezer/i);
+    expect(screen.getByText(/^from file$/i)).toBeInTheDocument();
   });
 
   it("replaces the cover with what the search found", async () => {
@@ -70,18 +73,20 @@ describe("Library — album artwork", () => {
     render(<Library />);
     await openTheAlbum(user);
 
-    await user.click(await screen.findByRole("button", { name: /find artwork/i }));
+    await user.click(await cover());
 
     await waitFor(() => {
       expect(screen.getByAltText(/cover of currents/i)).toHaveAttribute("src", FOUND);
     });
     // And it says the cover is no longer the file's.
-    expect(screen.getByText(/using artwork found on deezer/i)).toBeInTheDocument();
+    expect(screen.getByText(/^deezer$/i)).toBeInTheDocument();
   });
 
   /// The undo matters as much as the action: album search is fuzzy, and a wrong
-  /// match with no way back is worse than the wrong artwork it replaced.
-  it("can be sent back to the file's own artwork", async () => {
+  /// match with no way back is worse than the wrong artwork it replaced. The
+  /// same control undoes it, which is what makes it a toggle rather than a
+  /// button with a second button hiding underneath it.
+  it("can be sent back to the file's own artwork by tapping again", async () => {
     useBackend({
       rows: album(),
       covers: true,
@@ -91,37 +96,38 @@ describe("Library — album artwork", () => {
     render(<Library />);
     await openTheAlbum(user);
 
-    await user.click(await screen.findByRole("button", { name: /find artwork/i }));
+    await user.click(await cover());
     await waitFor(() => {
       expect(screen.getByAltText(/cover of currents/i)).toHaveAttribute("src", FOUND);
     });
 
-    await user.click(screen.getByRole("button", { name: /file’s own artwork/i }));
+    await user.click(await cover());
 
     await waitFor(() => {
       expect(screen.getByAltText(/cover of currents/i)).not.toHaveAttribute("src", FOUND);
     });
-    expect(screen.getByText(/using the artwork inside the files/i)).toBeInTheDocument();
+    expect(screen.getByText(/^from file$/i)).toBeInTheDocument();
   });
 
   /// Nothing matching is an ordinary outcome — tags and services disagree about
   /// spelling all the time — and it has to be said on screen rather than
-  /// leaving the button stuck on "Searching…".
+  /// leaving the control stuck on "Searching…".
   it("says so when the search finds nothing", async () => {
     useBackend({ rows: album(), covers: true, albumArtSearch: {} });
     const user = userEvent.setup();
     render(<Library />);
     await openTheAlbum(user);
 
-    await user.click(await screen.findByRole("button", { name: /find artwork/i }));
+    await user.click(await cover());
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/nothing came back/i);
-    // The button is usable again rather than left disabled.
-    expect(screen.getByRole("button", { name: /find artwork/i })).toBeEnabled();
+    // Usable again rather than left disabled.
+    expect(await cover()).toBeEnabled();
   });
 
   /// An album whose files carry no picture at all is the fallback case, and the
-  /// panel is exactly where it can be fixed.
+  /// cover is exactly where it can be fixed — including when there is no
+  /// picture there to tap yet.
   it("still offers the search when the files have no artwork", async () => {
     useBackend({
       rows: album(),
@@ -132,7 +138,7 @@ describe("Library — album artwork", () => {
     render(<Library />);
     await openTheAlbum(user);
 
-    await user.click(await screen.findByRole("button", { name: /find artwork/i }));
+    await user.click(await cover());
 
     await waitFor(() => {
       expect(screen.getByAltText(/cover of currents/i)).toHaveAttribute("src", FOUND);
@@ -152,7 +158,7 @@ describe("Library — album artwork", () => {
 
     await screen.findByRole("button", { name: /‹ artists/i });
     expect(
-      screen.queryByRole("button", { name: /find artwork/i }),
+      screen.queryByRole("button", { name: /cover of/i }),
     ).not.toBeInTheDocument();
   });
 });

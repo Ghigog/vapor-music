@@ -237,15 +237,17 @@ export function Library({
       {/* Inside an album or an artist: the same table, narrowed to it. */}
       {opened ? (
         <div className="library__body">
-          <div className="library__crumb">
-            <button className="library__back" onClick={() => setOpened(null)}>
-              ‹ {opened.kind === "album" ? "Albums" : "Artists"}
-            </button>
-            <h2 className="library__opened">{opened.name}</h2>
+          <div className="library__opened-head">
+            <div className="library__crumb">
+              <button className="library__back" onClick={() => setOpened(null)}>
+                ‹ {opened.kind === "album" ? "Albums" : "Artists"}
+              </button>
+              <h2 className="library__opened">{opened.name}</h2>
+            </div>
+            {opened.kind === "album" && (
+              <AlbumArtwork album={opened.name} artist={opened.artist} lead={opened.lead} />
+            )}
           </div>
-          {opened.kind === "album" && (
-            <AlbumArtwork album={opened.name} artist={opened.artist} lead={opened.lead} />
-          )}
           <Songs
             onOpen={onOpen}
             query=""
@@ -389,7 +391,7 @@ function EmptyLibrary({
  * So there is no error state here: the gradient placeholder *is* the answer.
  */
 /**
- * An opened album's cover, and the button that goes and finds the right one.
+ * An opened album's cover, and the toggle between where it can come from.
  *
  * A file's embedded artwork can simply be wrong — the owner's copy of one album
  * carries an unrelated picture — and no amount of reading the file better fixes
@@ -397,10 +399,16 @@ function EmptyLibrary({
  * it, so this is the one place where they can say so and have the app go and
  * ask a service.
  *
- * Searching sends the artist and album to Deezer, which the label says plainly.
- * That is deliberately not behind the automatic-lookup setting: pressing this
- * *is* the asking that setting exists to require, and answering "turn on a
- * setting first" to "find the real cover" would be a worse app.
+ * The picture is the control: tapping it swaps between the file's own artwork
+ * and a Deezer lookup. It used to be a "Find artwork" button and three lines of
+ * body text sitting beside the square, which on a phone was most of the screen
+ * spent explaining a thing you could have simply been shown.
+ *
+ * Searching still sends the artist and album to Deezer, and the label under the
+ * picture says which of the two you are looking at. It is deliberately not
+ * behind the automatic-lookup setting: tapping *is* the asking that setting
+ * exists to require, and answering "turn on a setting first" to "find the real
+ * cover" would be a worse app.
  */
 function AlbumArtwork({
   album,
@@ -465,37 +473,36 @@ function AlbumArtwork({
 
   return (
     <div className="albumart">
-      <div className="albumart__art">
+      <button
+        className="albumart__art"
+        onClick={() => void (chosen ? revert() : find())}
+        disabled={busy}
+        // The whole explanation, in the place it applies to. What this used to
+        // say took three lines of body text beside a 132px square and pushed
+        // the track list off a phone screen.
+        title={
+          chosen
+            ? "Using artwork from Deezer. Tap for the artwork inside the files."
+            : "Using the artwork inside the files. Tap to search Deezer for it."
+        }
+        aria-label={
+          chosen
+            ? `Cover of ${album}, from Deezer. Use the artwork inside the files instead.`
+            : `Cover of ${album}, from the files. Search Deezer for artwork instead.`
+        }
+      >
         {src ? (
           <img className="albumart__img" src={src} alt={`Cover of ${album}`} />
         ) : (
           <div className="card__art-sheen" aria-hidden="true" />
         )}
-      </div>
-      <div className="albumart__side">
-        <ErrorNotice error={error} onDismiss={() => setError(null)} />
-        <button
-          className="albumart__find"
-          onClick={() => void find()}
-          disabled={busy}
-        >
-          {busy ? "Searching…" : "Find artwork"}
-        </button>
-        <p className="albumart__note">
-          {chosen
-            ? "Using artwork found on Deezer."
-            : "Using the artwork inside the files. Searching sends the artist and album name to Deezer."}
-        </p>
-        {chosen && (
-          <button
-            className="albumart__revert"
-            onClick={() => void revert()}
-            disabled={busy}
-          >
-            Use the file’s own artwork
-          </button>
-        )}
-      </div>
+        {/* Which of the two you are looking at. Two words, over the picture, so
+            saying it costs no layout. */}
+        <span className="albumart__source">
+          {busy ? "Searching…" : chosen ? "Deezer" : "From file"}
+        </span>
+      </button>
+      <ErrorNotice error={error} onDismiss={() => setError(null)} />
     </div>
   );
 }

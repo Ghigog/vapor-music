@@ -427,19 +427,41 @@
  */
 .albumart {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: var(--s-4);
+  gap: var(--s-2);
   padding: 0 0 var(--s-4);
 }
 
+/*
+ * The cover is the control.
+ *
+ * It was a square with a "Find artwork" button and a three-line explanation
+ * beside it, which on a phone was most of the screen given over to describing
+ * something you could be shown instead. Tapping now swaps between the file's
+ * own artwork and a Deezer lookup, and the label below says which you have.
+ */
 .albumart__art {
+  position: relative;
   flex: none;
   width: 132px;
   height: 132px;
+  padding: 0;
+  border: 0;
   border-radius: var(--r-card);
   overflow: hidden;
+  cursor: pointer;
   background: var(--glass-fill);
   box-shadow: inset 0 0 0 1px var(--glass-rim);
+}
+
+.albumart__art:disabled {
+  cursor: default;
+}
+
+.albumart__art:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .albumart__img {
@@ -449,46 +471,50 @@
   display: block;
 }
 
-.albumart__side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s-2);
-  min-width: 0;
+/* Over the picture rather than under it, so naming the source costs no layout
+   on a screen that has none to give. */
+.albumart__source {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px 6px;
+  background: linear-gradient(transparent, rgba(20, 22, 26, 0.62));
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
 }
 
-.albumart__find {
-  padding: 6px 14px;
-  color: var(--ink);
-  background: var(--glass-fill);
-  border: 1px solid var(--accent);
-  border-radius: var(--r-hair);
-  cursor: pointer;
-}
+/* ---- Narrow layout ---------------------------------------------------
+ *
+ * The opened-album header stacked a back link, a title and a 132px square on
+ * three separate rows, which left the track list starting halfway down the
+ * screen with a column of empty space beside the cover. Side by side instead,
+ * and the cover smaller: the album is the context here, not the subject.
+ * -------------------------------------------------------------------- */
 
-.albumart__find:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
+@media (max-width: 767px) {
+  .library__opened-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
 
-.albumart__note {
-  margin: 0;
-  max-width: 46ch;
-  color: var(--ink-dim);
-  font-size: 12px;
-}
+  /* Visual order only. The back control stays first in the DOM, which is the
+     order it is read and tabbed in. */
+  .library__opened-head .albumart {
+    order: -1;
+    padding: 0;
+  }
 
-/* Reverting is the quieter of the two: it undoes rather than does. */
-.albumart__revert {
-  padding: 2px 0;
-  color: var(--ink-dim);
-  background: none;
-  border: none;
-  text-decoration: underline;
-  cursor: pointer;
-  font-size: 12px;
-}
+  .albumart__art {
+    width: 84px;
+    height: 84px;
+  }
 
-.albumart__revert:hover:not(:disabled) {
-  color: var(--ink);
+  .library__crumb {
+    min-width: 0;
+  }
 }
