@@ -41,29 +41,50 @@ function isEntityTab(group: GroupBy): group is "album" | "artist" {
   return group === "album" || group === "artist";
 }
 
+/**
+ * The album or artist being looked inside.
+ *
+ * Exported because App holds it: it is a place in the app, so it belongs in the
+ * history entry with the others. See `opened` below.
+ */
+export type Opened = {
+  kind: "album" | "artist";
+  name: string;
+  /** Any track on it — enough to resolve artwork, since an album's identity
+   *  is its title plus the folder its tracks live in. */
+  lead: string;
+  /** The album's artist, for an artwork search. Empty for an artist tile. */
+  artist: string;
+};
+
 export function Library({
   onOpen,
+  opened: controlledOpened,
+  onOpenedChange,
 }: {
   /** Opens a track's liner notes — the table's double-click. */
   onOpen?: ((href: string) => void) | undefined;
+  /**
+   * The drill-down, when the caller owns it.
+   *
+   * It began as local state, which meant the back gesture could not see it:
+   * opening an album and pressing back left the app entirely, because as far
+   * as the history stack was concerned nothing had happened. App owns it now
+   * for the same reason it already owned Liner Notes and playlists.
+   *
+   * Both props are optional and Library keeps its own copy when they are
+   * absent, so it still stands up on its own in a test.
+   */
+  opened?: Opened | null | undefined;
+  onOpenedChange?: ((opened: Opened | null) => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
-  /**
-   * The album or artist being looked inside, if any.
-   *
-   * A drill-down rather than a route: there are no URLs, and coming back is
-   * one button. Cleared whenever the tab or the search changes, because both
-   * of those mean "show me something else".
-   */
-  const [opened, setOpened] = useState<{
-    kind: "album" | "artist";
-    name: string;
-    /** Any track on it — enough to resolve artwork, since an album's identity
-     *  is its title plus the folder its tracks live in. */
-    lead: string;
-    /** The album's artist, for an artwork search. Empty for an artist tile. */
-    artist: string;
-  } | null>(null);
+  const [ownOpened, setOwnOpened] = useState<Opened | null>(null);
+  const opened = onOpenedChange ? (controlledOpened ?? null) : ownOpened;
+  const setOpened = (next: Opened | null) => {
+    if (onOpenedChange) onOpenedChange(next);
+    else setOwnOpened(next);
+  };
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>("album");
   const [load, setLoad] = useState<Load>({ kind: "loading" });
@@ -117,11 +138,6 @@ export function Library({
       clearTimeout(t);
     };
   }, [query, groupBy]);
-
-  /** Changing tab or search means "show me something else". */
-  useEffect(() => {
-    setOpened(null);
-  }, [groupBy, query]);
 
   /**
    * Play a card, queueing everything currently on screen behind it.
@@ -186,7 +202,11 @@ export function Library({
           type="search"
           value={query}
           placeholder="Search your library"
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            // Searching means "show me something else".
+            setOpened(null);
+          }}
           // The library is local, so there is nothing to autocomplete against
           // and nothing to send anywhere.
           autoComplete="off"
@@ -203,7 +223,11 @@ export function Library({
             className={
               "library__tab" + (groupBy === tab.id ? " library__tab--on" : "")
             }
-            onClick={() => setGroupBy(tab.id)}
+            onClick={() => {
+              setGroupBy(tab.id);
+              // As does changing tab.
+              setOpened(null);
+            }}
           >
             {tab.label}
           </button>

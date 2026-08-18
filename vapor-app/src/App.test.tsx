@@ -23,8 +23,10 @@ describe("App — startup damage", () => {
     render(<App />);
 
     // Wait for the shell to settle so this is not asserting on a frame before
-    // the check has run.
-    await screen.findByRole("navigation");
+    // the check has run. By name because the shell renders two navigations —
+    // the sidebar and the narrow-width tab bar — and CSS, which decides which
+    // of them is showing, is not applied here.
+    await screen.findByRole("navigation", { name: /screens and playlists/i });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -65,7 +67,9 @@ describe("App — startup damage", () => {
     backend.fail("startup_problems", "the state lock is poisoned");
     render(<App />);
 
-    expect(await screen.findByRole("navigation")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("navigation", { name: /screens and playlists/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

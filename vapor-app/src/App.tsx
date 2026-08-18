@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
-import { Library } from "./screens/Library";
+import { Library, type Opened } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
 import { Vibe } from "./screens/Vibe";
@@ -65,6 +65,16 @@ const NAV: { id: Screen; label: string; group: number }[] = [
   { id: "settings", label: "Settings", group: 2 },
 ];
 
+/**
+ * What a destination is called right now.
+ *
+ * Vibe DJ is "Shuffle" with the DJ switched off, because that is what it does
+ * then. Shared so the sidebar and the mobile tab bar cannot drift apart on it.
+ */
+function navLabel(item: (typeof NAV)[number], djMode: boolean): string {
+  return item.id === "vibe" && !djMode ? "Shuffle" : item.label;
+}
+
 type Status =
   | { kind: "loading" }
   | { kind: "onboarding" }
@@ -110,6 +120,9 @@ export function App() {
    *  a nav destination, so it lives beside `screen` rather than in it — but it
    *  is reachable from the rail on every screen, so it has no "from". */
   const [playlist, setPlaylist] = useState<string | null>(null);
+  /** The album or artist opened inside Library. Held here, not in Library, so
+   *  it lands in the history entry below and the back gesture can leave it. */
+  const [opened, setOpened] = useState<Opened | null>(null);
   /**
    * Whether the DJ is conducting the queue.
    *
@@ -137,7 +150,7 @@ export function App() {
   const fromPop = useRef(false);
   const firstPlace = useRef(true);
   useEffect(() => {
-    const place = { screen, liner: liner?.href ?? null, playlist };
+    const place = { screen, liner: liner?.href ?? null, playlist, opened };
     if (firstPlace.current) {
       firstPlace.current = false;
       window.history.replaceState(place, "");
@@ -150,7 +163,10 @@ export function App() {
       return;
     }
     window.history.pushState(place, "");
-  }, [screen, liner?.href, playlist]);
+    // `opened` by value rather than by reference: it is rebuilt on every
+    // render that changes it, and a reference dep would push an entry for a
+    // re-render that went nowhere.
+  }, [screen, liner?.href, playlist, opened?.kind, opened?.name]);
 
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
@@ -158,11 +174,13 @@ export function App() {
         screen: Screen;
         liner: string | null;
         playlist: string | null;
+        opened: Opened | null;
       } | null;
       if (!place) return;
       fromPop.current = true;
       setScreen(place.screen);
       setPlaylist(place.playlist);
+      setOpened(place.opened ?? null);
       // The screen to return to is taken as the one being restored: the
       // original "from" is not in the entry, and going back from Liner Notes
       // should land where the history says, not where it was opened from.
@@ -187,6 +205,20 @@ export function App() {
         setStatus({ kind: "error", message: String(e) });
       });
   }, []);
+
+  /**
+   * Go to a destination, from either navigation.
+   *
+   * Leaving a drill-down open behind a destination change is how you land on
+   * Library and get Liner Notes: the drill-downs render in front of `screen`,
+   * so both have to be cleared for the tab you pressed to be the thing you see.
+   */
+  function go(id: Screen) {
+    setLiner(null);
+    setPlaylist(null);
+    setOpened(null);
+    setScreen(id);
+  }
 
   function openLiner(href: string) {
     setLiner({ href, from: screen });
@@ -244,7 +276,7 @@ export function App() {
             </button>
           </div>
         )}
-        <nav className="shell__sidebar">
+        <nav className="shell__sidebar" aria-label="Screens and playlists">
           {NAV.map((item, i) => (
             <div key={item.id}>
               {/* A rule between groups rather than headings: three labels over
@@ -259,13 +291,9 @@ export function App() {
                     ? " nav__item--on"
                     : "")
                 }
-                onClick={() => {
-                  setLiner(null);
-                  setPlaylist(null);
-                  setScreen(item.id);
-                }}
+                onClick={() => go(item.id)}
               >
-                {item.id === "vibe" && !djMode ? "Shuffle" : item.label}
+                {navLabel(item, djMode)}
               </button>
             </div>
           ))}
@@ -297,7 +325,13 @@ export function App() {
             />
           ) : (
             <>
-              {screen === "library" && <Library onOpen={openLiner} />}
+              {screen === "library" && (
+                <Library
+                  onOpen={openLiner}
+                  opened={opened}
+                  onOpenedChange={setOpened}
+                />
+              )}
               {screen === "playing" && <NowPlaying />}
               {screen === "vibe" && (
                 <Vibe
@@ -320,11 +354,30 @@ export function App() {
 
         {/* Outside the content column: the shell grid spans it across both, and
             playback outlives whichever screen started it. */}
-        <Transport onOpenNowPlaying={() => {
-          setLiner(null);
-          setPlaylist(null);
-          setScreen("playing");
-        }} />
+        <Transport onOpenNowPlaying={() => go("playing")} />
+
+        {/* The same destinations as the sidebar, for the widths that hide it.
+            After the transport in the DOM because that is the order they are in
+            on screen, which is the order to tab and to read them in. */}
+        <nav className="shell__tabs" aria-label="Screens">
+          {NAV.map((item) => (
+            <button
+              key={item.id}
+              className={
+                "shell__tab" +
+                (screen === item.id && !liner && !playlist
+                  ? " shell__tab--on"
+                  : "")
+              }
+              aria-current={
+                screen === item.id && !liner && !playlist ? "page" : undefined
+              }
+              onClick={() => go(item.id)}
+            >
+              {navLabel(item, djMode)}
+            </button>
+          ))}
+        </nav>
       </div>
     );
   }

@@ -114,7 +114,16 @@
     color var(--dur-fast) var(--ease);
 }
 
-.library__tab:hover {
+/*
+ * Not the selected tab.
+ *
+ * `.library__tab:hover` outranks `.library__tab--on` — a class plus a
+ * pseudo-class beats a single class — so hovering the selected tab replaced its
+ * accent fill with white and left white text on it. The label disappeared.
+ * Worse on a touch screen, where the hover state stays behind after the tap
+ * that selected it, so the tab you just chose is the blank one.
+ */
+.library__tab:not(.library__tab--on):hover {
   background: rgba(255, 255, 255, 0.85);
 }
 

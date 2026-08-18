@@ -24,6 +24,22 @@
    * of the shell cut off; `vh` first for anything that does not know `dvh`. */
   height: 100vh;
   height: 100dvh;
+  /*
+   * The shell owns the safe area, so no screen inside it has to.
+   *
+   * `viewport-fit=cover` in index.html means the webview extends under the
+   * Android status bar and the home indicator, and nothing consumed the insets:
+   * the Library header rendered behind the clock. Padding here rather than on
+   * each screen keeps one rule for it, and `border-box` so the fixed height
+   * above still means the viewport instead of overflowing it by the inset.
+   *
+   * Bottom is deliberately absent: whatever is last — the tab bar on mobile,
+   * the transport on desktop — adds it, so it is never counted twice.
+   */
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
   display: grid;
   /* Sidebar plus content; the mini player spans both at the bottom, and a
      notice row above everything for the rare startup problem. That row is
@@ -44,10 +60,12 @@
 @media (max-width: 767px) {
   .shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto auto;
     grid-template-areas:
       "notice"
       "content"
-      "player";
+      "player"
+      "tabs";
   }
 }
 
@@ -69,6 +87,15 @@
   grid-area: content;
   overflow: auto;
   padding: 42px 28px 28px;
+}
+
+/* The 42px top is room for the macOS traffic lights, which a phone has no use
+   for, and 28px of side padding is width the track table cannot spare at
+   374px. The status bar is handled by the shell's inset, not here. */
+@media (max-width: 767px) {
+  .shell__content {
+    padding: 18px 16px 18px;
+  }
 }
 
 .shell__player {
@@ -119,6 +146,68 @@
   background: rgba(255, 255, 255, 0.85);
   color: var(--ink);
   box-shadow: var(--shadow-sm);
+}
+
+/* ---- Mobile tab bar --------------------------------------------------
+ *
+ * The sidebar is `display: none` below the tablet breakpoint and for a long
+ * while nothing took its place, so the phone had no navigation at all. You
+ * could reach Settings through onboarding and then had no way back out of it
+ * short of killing the app — which is the other half of the back-gesture bug
+ * fixed in 7c7a9ac, and the half that made it look unfixed.
+ *
+ * Navigation and transport stay on separate rows. The design's own teardown of
+ * the Godot narrow layout — `design/_ref/Vapor Music - Today (Mobile).dc.html`
+ * — criticises precisely the merge: eight 44px controls inside 374px, where
+ * "Play is the same size and weight as Settings". Four destinations get ~90px
+ * each here, and playback keeps the bar above.
+ *
+ * Text rather than icons, because the sidebar this stands in for is text: it is
+ * the same navigation moved, not a second visual language. There is also no
+ * icon in the set for Your Data, and drawing one to fill a grid slot is how a
+ * set stops meaning anything.
+ * -------------------------------------------------------------------- */
+
+.shell__tabs {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .shell__tabs {
+    grid-area: tabs;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 4px;
+    margin: 0 14px 14px;
+    padding: 6px;
+    /* The home indicator overlays the bottom of the viewport. The shell leaves
+       the bottom inset to whatever is last so it is added once; here. */
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .shell__tab {
+    border: 0;
+    background: none;
+    border-radius: var(--r-md);
+    /* The smallest target a thumb hits reliably. */
+    min-height: 44px;
+    padding: 4px 2px;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+    color: var(--ink-2);
+    /* "Your Data" and "Vibe DJ" wrap onto two lines rather than clipping. */
+    line-height: 1.25;
+  }
+
+  /* Matches .nav__item--on: the same state, drawn the same way. */
+  .shell__tab--on {
+    background: rgba(255, 255, 255, 0.85);
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
 }
 
 /* The content column owns its own scrolling so the table can size to it. */

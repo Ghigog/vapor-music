@@ -21,7 +21,34 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  /*
+   * Two viewports, because the app has two layouts and only one of them was
+   * ever tested.
+   *
+   * Every mobile defect Dylan hit on the phone — no navigation at all below
+   * 768px, headings overprinting each other, titles clipped to three
+   * characters — was invisible here, because the only project was a 1280px
+   * desktop window where none of those layouts apply.
+   *
+   * The narrow project runs its own suite rather than the whole one: the
+   * journeys reach for the playlist rail and other things the sidebar owns,
+   * and a sidebar hidden by design is not a failure worth reporting on every
+   * run. What is worth pinning is in `narrow.spec.ts`.
+   */
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /narrow\.spec\.ts/,
+    },
+    {
+      // A real phone preset rather than a small window: it brings the touch
+      // input and `hover: none` that the layout branches on.
+      name: "narrow",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /narrow\.spec\.ts/,
+    },
+  ],
   webServer: {
     command: "npx vite --config vite.e2e.config.ts",
     url: "http://localhost:1421",

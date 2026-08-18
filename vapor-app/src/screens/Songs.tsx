@@ -344,6 +344,9 @@ export function Songs({
                 "songs__cell" +
                 (inCell[0]?.numeric ? " songs__cell--num" : "")
               }
+              // The narrow layout drops cells 4-6, and it cannot select them by
+              // the inline `gridColumn` below. Same numbers as COLUMNS.
+              data-cell={cell}
               style={{ gridColumn: cell }}
             >
               {inCell.map((col) => (
@@ -626,6 +629,16 @@ function SongRow({
 }) {
   const artist = row.artistSource === "unknown" ? "—" : row.artist;
   const album = row.albumSource === "unknown" ? "—" : row.album;
+  /*
+   * Tempo and key for the narrow layout, which has no columns for them.
+   *
+   * Built the way the cells build them: an unanalysed track contributes
+   * nothing rather than a fabricated 120 BPM, and a row with neither shows no
+   * sub-line at all instead of "— · —".
+   */
+  const meta = [row.bpm > 0 ? `${Math.round(row.bpm)} BPM` : null, row.key]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <>
@@ -639,6 +652,9 @@ function SongRow({
         <span className="songrow__artist" title={artist}>
           {artist}
         </span>
+        {/* Shown only below the tablet breakpoint; the wide table has columns
+            for both of these and would be saying it twice. */}
+        {meta && <span className="songrow__meta">{meta}</span>}
       </div>
       <span className="songrow__album" title={album}>
         {album}

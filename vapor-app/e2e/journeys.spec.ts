@@ -230,7 +230,9 @@ test.describe("Correcting a tempo", () => {
     await row.getByRole("textbox").fill("128");
     await row.getByRole("textbox").press("Enter");
 
-    await expect(row.getByText("128")).toBeVisible();
+    // The BPM cell by name, not by its text: the narrow layout's sub-line
+    // carries the same number, and this test is about the cell.
+    await expect(row.locator(".songrow__bpm")).toHaveText("128");
   });
 
   /** The selecting click must leave the rows where they were. */
@@ -435,6 +437,26 @@ test.describe("Going back", () => {
 
     await page.goBack();
     await expect(page.getByRole("heading", { name: /your library/i })).toBeVisible();
+  });
+
+  /**
+   * The drill-down is a place too.
+   *
+   * Opening an album was Library's own state, which the history stack could not
+   * see: back skipped straight past it and left the app, exactly as Settings
+   * used to. App owns it now, so an album is an entry like any other.
+   */
+  test("leaves an opened album before it leaves the app", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
+    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
+
+    await page.goBack();
+
+    // Back at the grid, with the other albums showing again.
+    await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /‹ albums/i })).toHaveCount(0);
   });
 });
 
