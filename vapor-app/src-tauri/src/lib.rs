@@ -5417,14 +5417,39 @@ struct AnalysisStatus {
     stopped_because: String,
 }
 
+/// How much of the library is described, and how big the library is.
+///
+/// One answer, used by the Settings card and by the notification. They had one
+/// each: the card counted the library, and the notification counted the *pass*
+/// — so it opened at "0 of 526" while the card said "34 of 563", because 526
+/// was what this run had left to do rather than anything a person owns. Two
+/// counts of one thing is one too many.
+///
+/// A permanently refused file counts as done. It is not outstanding work, and
+/// leaving it out of the numerator means the total can never be reached.
+fn analysis_counts(app: &AppState) -> (usize, usize) {
+    let total = app.rows.len();
+    let outstanding = app
+        .rows
+        .iter()
+        .filter(|r| {
+            !app.failures.contains_key(&r.href)
+                && app
+                    .analysis
+                    .get(&r.href)
+                    .is_none_or(|a| a.version < analysis::ANALYSIS_VERSION)
+        })
+        .count();
+    (total.saturating_sub(outstanding), total)
+}
+
 #[tauri::command]
 fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
-    let outstanding = analysis::pending(&hrefs, &app.analysis, &app.failures).len();
+    let (analysed, total) = analysis_counts(&app);
     Ok(AnalysisStatus {
-        analysed: hrefs.len().saturating_sub(outstanding),
-        total: hrefs.len(),
+        analysed,
+        total,
         running: app.analysing,
         current: app.analysing_title.clone(),
         stopped_because: app.analysis_stopped_because.clone(),
@@ -5538,7 +5563,12 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
     // pass could be running, downloading, with nothing in the shade to say so,
     // which is indistinguishable from it not having started.
     #[cfg(target_os = "android")]
-    android::service_analysis(0, todo.len(), true);
+    {
+        let counts = shared.lock().ok().map(|app| analysis_counts(&app));
+        if let Some((done, total)) = counts {
+            android::service_analysis(done, total, true);
+        }
+    }
 
     let state_arc: Shared = Arc::clone(shared);
     let handle = app_handle.clone();
@@ -5648,8 +5678,17 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                 // Keep the process alive for the rest of the pass. Android
                 // freezes a backgrounded app, and this one is mostly waiting on
                 // downloads — see `PlaybackService.kt`.
+                //
+                // Reported as the library, not as this run: `progress` counts
+                // the tracks *this pass* has left, which is neither what the
+                // card says nor what anyone owns.
                 #[cfg(target_os = "android")]
-                android::service_analysis(progress.done, progress.total, true);
+                {
+                    let counts = state_arc.lock().ok().map(|app| analysis_counts(&app));
+                    if let Some((done, total)) = counts {
+                        android::service_analysis(done, total, true);
+                    }
+                }
 
                 let _ = handle.emit("analysis-progress", &progress);
             },
@@ -6880,6 +6919,32 @@ mod tests {
             "the chosen departure was relabelled as the set agreeing with it",
         );
         assert!(queued.selected, "and it is what happens if nobody acts");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// One count, so the card and the notification cannot disagree.
+    ///
+    /// They had one each: the card counted the library and the notification
+    /// counted the pass, so it opened at "0 of 526" beside a card reading
+    /// "34 of 563". A file the decoder has permanently refused counts as done —
+    /// it is not outstanding work, and excluding it makes the total one the
+    /// pass can never reach.
+    #[test]
+    fn the_count_is_of_the_library_and_includes_what_cannot_be_described() {
+        let (mut app, dir) = app();
+        for href in ["/a.mp3", "/b.mp3", "/c.mp3"] {
+            app.rows.push(row(href, href));
+        }
+        assert_eq!(analysis_counts(&app), (0, 3));
+
+        app.analysis
+            .insert("/a.mp3".to_string(), analysed_track(120.0, "8A", 0.5));
+        assert_eq!(analysis_counts(&app), (1, 3));
+
+        // Refused for good: done, as far as anything left to do goes.
+        app.failures
+            .insert("/b.mp3".to_string(), "no decodable audio track".to_string());
+        assert_eq!(analysis_counts(&app), (2, 3));
         let _ = std::fs::remove_dir_all(dir);
     }
 
