@@ -53,9 +53,27 @@ try { await access(LAYER); } catch {
 const srgb = (r, g, b, a = 1) =>
   `srgb:${[r, g, b, a].map((v) => v.toFixed(5)).join(",")}`;
 
+/**
+ * Per-appearance fills.
+ *
+ * The tinted appearance is derived from the artwork rather than swapped for a
+ * palette, so a uniformly bright icon has nothing for the tint to land on and
+ * stays pale while the rest of the Dock has gone colour. Giving Dark and Tinted
+ * their own darker fill is what makes the derivation land. Default is untouched
+ * and still white.
+ */
+const APPEARANCES = MARK.icon.appearances ?? {};
+const fillSpecs = [];
+if (APPEARANCES.dark) fillSpecs.push({ appearance: "dark-color", value: { solid: APPEARANCES.dark } });
+if (APPEARANCES.tinted) {
+  fillSpecs.push({ appearance: "light-tint", value: { solid: APPEARANCES.tinted } });
+  fillSpecs.push({ appearance: "dark-tint", value: { solid: APPEARANCES.tinted } });
+}
+
 // The document. One group holding the mark, on a white tile.
 const doc = {
   fill: { solid: srgb(1, 1, 1) },
+  ...(fillSpecs.length ? { "fill-specializations": fillSpecs } : {}),
   groups: [
     {
       layers: [{ "image-name": "mark.png" }],

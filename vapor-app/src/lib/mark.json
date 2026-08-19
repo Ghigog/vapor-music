@@ -23,6 +23,11 @@
     "shadowOpacity": 0.5,
     "$shadowOpacity": "Opacity of the shadow macOS 26 drops under the mark layer in the .icon asset.",
     "layerBoost": "saturate(1.65) contrast(1.35) brightness(0.85)",
-    "$layerBoost": "CSS filter applied to the Icon Composer layer only. The mark's shading assumes an environment and reads light on a white tile; this restores contrast without changing its geometry."
+    "$layerBoost": "CSS filter applied to the Icon Composer layer only. The mark's shading assumes an environment and reads light on a white tile; this restores contrast without changing its geometry.",
+    "appearances": {
+      "$comment": "Per-appearance fills for the macOS 26 layered icon. Default stays white. The Dark and Tinted appearances get a dark fill because the tinted appearance is derived from the artwork's luminance — a uniformly bright icon has nothing for the tint to land on and renders pale while the rest of the Dock has gone colour. Only a real Dock can confirm the tinted result; actool records these but cannot render them.",
+      "dark": "srgb:0.07100,0.07500,0.12200,1.00000",
+      "tinted": "srgb:0.16500,0.18400,0.27500,1.00000"
+    }
   }
 }
