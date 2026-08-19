@@ -142,11 +142,11 @@ impl RemoteSource {
         let (bytes, total) = if self.seekable {
             self.fetch
                 .range(start, CHUNK)
-                .map_err(|e| std::io::Error::other(e))?
+                .map_err(std::io::Error::other)?
         } else {
             // No ranges: take the lot, once. Slower to start and no worse than
             // what playback did before this existed.
-            let all = self.fetch.whole().map_err(|e| std::io::Error::other(e))?;
+            let all = self.fetch.whole().map_err(std::io::Error::other)?;
             let len = all.len() as u64;
             (all, Some(len))
         };
