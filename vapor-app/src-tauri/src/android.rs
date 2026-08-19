@@ -199,3 +199,25 @@ where
 {
     let _ = PRESS_HANDLER.set(Box::new(handler));
 }
+
+/// Tell the service a pass is running, and how far it has got.
+///
+/// Analysis is a long, download-bound job, and a backgrounded app is frozen —
+/// so before this it stopped the moment someone switched to another app, with
+/// nothing playing to keep the service up on playback's behalf.
+pub fn service_analysis(done: usize, total: usize, active: bool) {
+    let _ = with_context(|env, context| {
+        env.call_static_method(
+            "com/dylangrowcoot/vapormusic/PlaybackService",
+            "analysis",
+            "(Landroid/content/Context;IIZ)V",
+            &[
+                (&context).into(),
+                (done as i32).into(),
+                (total as i32).into(),
+                active.into(),
+            ],
+        )?;
+        Ok(())
+    });
+}

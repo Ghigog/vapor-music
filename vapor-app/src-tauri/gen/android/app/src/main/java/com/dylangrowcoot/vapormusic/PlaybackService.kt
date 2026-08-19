@@ -45,6 +45,28 @@ class PlaybackService : android.app.Service() {
     private var session: MediaSessionCompat? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /*
+     * Two reasons to be alive, not one.
+     *
+     * The service began as the thing that keeps *playback* going, and analysis
+     * — which is a long download-bound job the app also has to survive being
+     * backgrounded for — had no protection at all: switch to another app with
+     * nothing playing and Android froze the process mid-pass.
+     *
+     * So the service stays up while either is true and goes away when neither
+     * is. The notification prefers playback, because that is the one a person
+     * is listening to; analysis takes it over when nothing is.
+     */
+    private var playing = false
+    private var title = ""
+    private var artist = ""
+    private var position = 0L
+    private var duration = 0L
+
+    private var analysing = false
+    private var analysedDone = 0
+    private var analysedTotal = 0
+
     override fun onBind(intent: Intent?) = null
 
     override fun onCreate() {
@@ -86,15 +108,33 @@ class PlaybackService : android.app.Service() {
         // callback, and this is what turns them back into session events.
         session?.let { MediaButtonReceiver.handleIntent(it, intent) }
 
-        val title = intent?.getStringExtra(EXTRA_TITLE) ?: ""
-        val artist = intent?.getStringExtra(EXTRA_ARTIST) ?: ""
-        val playing = intent?.getBooleanExtra(EXTRA_PLAYING, false) ?: false
-        val position = intent?.getLongExtra(EXTRA_POSITION, 0L) ?: 0L
-        val duration = intent?.getLongExtra(EXTRA_DURATION, 0L) ?: 0L
+        when (intent?.getStringExtra(EXTRA_KIND)) {
+            KIND_ANALYSIS -> {
+                analysing = intent.getBooleanExtra(EXTRA_ACTIVE, false)
+                analysedDone = intent.getIntExtra(EXTRA_DONE, 0)
+                analysedTotal = intent.getIntExtra(EXTRA_TOTAL, 0)
+            }
+            else -> {
+                title = intent?.getStringExtra(EXTRA_TITLE) ?: ""
+                artist = intent?.getStringExtra(EXTRA_ARTIST) ?: ""
+                playing = intent?.getBooleanExtra(EXTRA_PLAYING, false) ?: false
+                position = intent?.getLongExtra(EXTRA_POSITION, 0L) ?: 0L
+                duration = intent?.getLongExtra(EXTRA_DURATION, 0L) ?: 0L
+            }
+        }
 
-        publish(title, artist, playing, position, duration)
+        // Nothing left to stay up for.
+        if (!playing && title.isEmpty() && !analysing) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
-        if (playing) {
+        publish()
+
+        // The CPU has to keep running for either of them — a frozen process
+        // does not decode audio and does not finish a download.
+        if (playing || analysing) {
             if (wakeLock?.isHeld == false) wakeLock?.acquire(WAKE_LOCK_LIMIT)
         } else if (wakeLock?.isHeld == true) {
             wakeLock?.release()
@@ -106,13 +146,7 @@ class PlaybackService : android.app.Service() {
         return START_NOT_STICKY
     }
 
-    private fun publish(
-        title: String,
-        artist: String,
-        playing: Boolean,
-        position: Long,
-        duration: Long,
-    ) {
+    private fun publish() {
         val session = session ?: return
 
         session.setMetadata(
@@ -150,10 +184,19 @@ class PlaybackService : android.app.Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
+        // Playback wins the notification when there is any; otherwise it
+        // reports the pass, so a person who backgrounded the app during one can
+        // see it is still going and how far it has got.
+        val showingPlayback = title.isNotEmpty()
+        val heading = if (showingPlayback) title else "Listening to your library"
+        val body =
+            if (showingPlayback) artist
+            else "$analysedDone of $analysedTotal analysed"
+
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(title.ifEmpty { "Vapor Music" })
-            .setContentText(artist)
+            .setContentTitle(heading)
+            .setContentText(body)
             .setContentIntent(open)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -216,6 +259,12 @@ class PlaybackService : android.app.Service() {
         private const val CHANNEL = "vapor.playback"
         private const val NOTIFICATION_ID = 1
 
+        private const val EXTRA_KIND = "kind"
+        private const val KIND_ANALYSIS = "analysis"
+        private const val EXTRA_ACTIVE = "active"
+        private const val EXTRA_DONE = "done"
+        private const val EXTRA_TOTAL = "total"
+
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_ARTIST = "artist"
         private const val EXTRA_PLAYING = "playing"
@@ -267,10 +316,37 @@ class PlaybackService : android.app.Service() {
             }
         }
 
-        /** Called from Rust when there is nothing playing to keep alive for. */
+        /**
+         * Called from Rust while the analysis pass is running.
+         *
+         * The pass is minutes to hours of downloading, and a backgrounded app
+         * is frozen — so without this it simply stopped the moment someone
+         * switched away, which is what it did.
+         */
+        @JvmStatic
+        fun analysis(context: Context, done: Int, total: Int, active: Boolean) {
+            val intent = Intent(context, PlaybackService::class.java).apply {
+                putExtra(EXTRA_KIND, KIND_ANALYSIS)
+                putExtra(EXTRA_ACTIVE, active)
+                putExtra(EXTRA_DONE, done)
+                putExtra(EXTRA_TOTAL, total)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        /**
+         * Called from Rust when there is nothing playing.
+         *
+         * Not `stopService`: a pass may still be running, and the service
+         * decides for itself when neither reason is left.
+         */
         @JvmStatic
         fun stop(context: Context) {
-            context.stopService(Intent(context, PlaybackService::class.java))
+            update(context, "", "", false, 0L, 0L)
         }
 
         private fun PlaybackService.action(action: Long): PendingIntent =

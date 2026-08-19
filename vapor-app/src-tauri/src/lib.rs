@@ -5605,9 +5605,20 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                         }
                     }
                 }
+                // Keep the process alive for the rest of the pass. Android
+                // freezes a backgrounded app, and this one is mostly waiting on
+                // downloads — see `PlaybackService.kt`.
+                #[cfg(target_os = "android")]
+                android::service_analysis(progress.done, progress.total, true);
+
                 let _ = handle.emit("analysis-progress", &progress);
             },
         );
+
+        // The pass is over, so this is no longer a reason to stay up. The
+        // service decides for itself whether playback still is.
+        #[cfg(target_os = "android")]
+        android::service_analysis(0, 0, false);
 
         // Only if this is still the current pass: a pass that was replaced
         // finishes after its replacement started, and clearing the flag here
