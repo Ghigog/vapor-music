@@ -31,7 +31,7 @@ import { SyncPanel } from "../components/SyncPanel";
 type Busy = "idle" | "saving" | "scanning" | "analysing";
 
 /** Which card a notice belongs to, so an answer appears beside its question. */
-type Card = "remote" | "analysis" | "data";
+type Card = "remote" | "analysis" | "data" | "dupes";
 
 export function Settings() {
   const [url, setUrl] = useState("");
@@ -57,6 +57,8 @@ export function Settings() {
   const [settings, setSettings] = useState<core.Settings | null>(null);
 
   const [status, setStatus] = useState<core.AnalysisStatus | null>(null);
+  /** How many files are second-or-later copies, so the switch can say. */
+  const [dupes, setDupes] = useState<number | null>(null);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
 
   /** Whether the keychain holds a password for the username in the box.
@@ -95,8 +97,12 @@ export function Settings() {
   // and asking the backend twice for one answer is how two numbers on one
   // screen end up disagreeing.
   const refresh = useCallback(async () => {
-    const [s] = await Promise.allSettled([core.analysisStatus()]);
+    const [s, d] = await Promise.allSettled([
+      core.analysisStatus(),
+      core.duplicateCount(),
+    ]);
     if (s.status === "fulfilled") setStatus(s.value);
+    if (d.status === "fulfilled") setDupes(d.value);
   }, []);
 
   useEffect(() => {
@@ -469,6 +475,68 @@ export function Settings() {
       </section>
 
       <SyncPanel />
+
+      <section className="settings__card glass">
+        <h2 className="settings__section">Duplicates</h2>
+        <p className="settings__hint">
+          {dupes === null
+            ? "Counting the copies in your library…"
+            : dupes === 0
+              ? "Nothing is in your library twice."
+              : dupes === 1
+                ? "One track is in your library twice."
+                : `${dupes.toLocaleString()} tracks are in your library twice.`}
+        </p>
+
+        {/*
+          Off by default, and it hides rather than deletes.
+
+          These are the person's own files. A library quietly showing fewer
+          tracks than are on disk is one you cannot trust to tell you what you
+          have, so this is a view you switch on — the copies stay where they
+          are, to be tidied by hand.
+        */}
+        <label className="settings__switch">
+          <input
+            type="checkbox"
+            checked={settings?.hideDuplicates ?? false}
+            disabled={!settings}
+            onChange={(e) => {
+              const on = e.target.checked;
+              void core
+                .setHideDuplicates(on)
+                .then(setSettings)
+                .then(() =>
+                  setNote({
+                    card: "dupes",
+                    text: on
+                      ? "Extra copies are hidden from the library. Nothing has been deleted — they are still on disk."
+                      : "Every copy is showing again.",
+                  }),
+                )
+                .catch((e: unknown) =>
+                  setNote({ card: "dupes", text: messageOf(e) }),
+                );
+            }}
+          />
+          <span>Hide extra copies of a track</span>
+        </label>
+
+        {note?.card === "dupes" && (
+          <p className="settings__hint">{note.text}</p>
+        )}
+
+        {/*
+          Said here rather than left implied: the DJ's exclusion is not this
+          switch, and someone who leaves this off should not think their sets
+          are affected.
+        */}
+        <p className="settings__hint">
+          The Vibe DJ never mixes into a second copy either way. Two copies of
+          one track share a tempo, a key and an intensity, so a set free to use
+          both will mix a record into itself.
+        </p>
+      </section>
 
       <section className="settings__card glass">
         {/*

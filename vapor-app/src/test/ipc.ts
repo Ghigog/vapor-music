@@ -304,6 +304,7 @@ export class FakeBackend {
       bpmOverrides: {},
       albumArt: {},
       preferLookedUpArt: false,
+      hideDuplicates: false,
       cacheMaxBytes: 8_000_000_000,
       metadataLookupEnabled: options.metadataLookup ?? false,
       vibeLimit: 0.5,
@@ -469,6 +470,16 @@ export class FakeBackend {
         // Exact, not substring: opening an album means that album.
         if (view.album) rows = rows.filter((r) => r.album === view.album);
         if (view.artist) rows = rows.filter((r) => r.artist === view.artist);
+        // Last, as the backend does it, so the count is of what was asked for.
+        if (this.settings.hideDuplicates) {
+          const seen = new Set<string>();
+          rows = rows.filter((r) => {
+            const key = `${r.title.trim().toLowerCase()}\u0001${r.artist.trim().toLowerCase()}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        }
         const key = view.sortKey ?? "title";
         rows.sort((x, y) => {
           const pick = (r: core.Row) =>
@@ -773,6 +784,13 @@ export class FakeBackend {
 
       // Empty on every normal launch. A test that wants the damage banner sets
       // `damaged` on the options — see `FakeOptions`.
+      case "set_hide_duplicates":
+        this.settings = {
+          ...this.settings,
+          hideDuplicates: a.enabled === true,
+        };
+        return this.settings;
+
       case "startup_problems":
         return this.damaged;
 
@@ -879,6 +897,19 @@ export class FakeBackend {
       // resolves them the same way the backend does rather than storing a
       // track list — a fake that kept a list would let a screen pass here and
       // fail against a library that had grown.
+      case "duplicate_count": {
+        // Keyed on title and artist, not on the filename — a second copy is
+        // called "Thing (1)" and would otherwise count as its own record.
+        const seen = new Set<string>();
+        let dupes = 0;
+        for (const r of this.rows) {
+          const key = `${r.title.trim().toLowerCase()}\u0001${r.artist.trim().toLowerCase()}`;
+          if (seen.has(key)) dupes += 1;
+          else seen.add(key);
+        }
+        return dupes;
+      }
+
       case "dynamic_groups":
         return this.groups;
 

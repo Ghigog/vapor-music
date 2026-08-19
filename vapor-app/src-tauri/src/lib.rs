@@ -647,6 +647,12 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
     if let Some(artist) = view.artist.as_deref() {
         rows.retain(|r| r.artist == artist && r.artist_source.is_known());
     }
+    // Last, so the count a person sees is of what they asked for. A view, not a
+    // deletion: the files are untouched and still there to tidy by hand.
+    if app.settings.hide_duplicates {
+        let dupes = duplicate_hrefs(app);
+        rows.retain(|r| !dupes.contains(&r.href));
+    }
     rows
 }
 
@@ -1389,6 +1395,14 @@ fn clear_album_art(album: String, lead: String, state: State<'_, Shared>) -> Res
 fn set_prefer_looked_up_art(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.settings.prefer_looked_up_art = enabled;
+    app.save_settings()?;
+    Ok(app.settings.clone())
+}
+
+#[tauri::command]
+fn set_hide_duplicates(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.settings.hide_duplicates = enabled;
     app.save_settings()?;
     Ok(app.settings.clone())
 }
@@ -2224,6 +2238,16 @@ fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folde
  * file's `FolderStore` half was wired up and this half was not, so the feature
  * existed everywhere except in the app. These are the commands it was missing.
  * -------------------------------------------------------------------- */
+
+/// How many files are second-or-later copies of a recording.
+///
+/// So the switch that hides them can say what it would hide, and so someone
+/// tidying up by hand knows whether there is anything to tidy.
+#[tauri::command]
+fn duplicate_count(state: State<'_, Shared>) -> Result<usize> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(duplicate_hrefs(&app).len())
+}
 
 #[tauri::command]
 fn dynamic_groups(state: State<'_, Shared>) -> Result<Vec<vapor_library::DynamicGroup>> {
@@ -4089,10 +4113,17 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
 
 /// The identity of a *recording*, as opposed to a file.
 ///
-/// Case- and space-insensitive, because two rips of one track disagree about
-/// capitalisation more often than they agree. A track missing either field
-/// falls back to its href and so stays unique — collapsing everything untitled
-/// into one entry would be worse than keeping the duplicates.
+/// Taken from the file's own tags first, and only then from the row. That
+/// distinction is the whole of it: `Row::title` is derived from the path by
+/// `build_row` and `apply_tags` never overwrites it, so a second copy is titled
+/// `Bocca di rosa (1)` — a different string, and so a different recording to
+/// any comparison of rows. The tag inside both files says the same thing, which
+/// is the question actually being asked.
+///
+/// Case- and space-insensitive, because two rips agree about the track and
+/// disagree about capitalisation more often than the reverse. A track with no
+/// usable title or artist keys on its href and stays unique — collapsing
+/// everything untitled into one entry would be worse than the duplicates.
 /// Whether two hrefs are the same recording — the same track, twice on disk.
 fn same_recording(app: &AppState, a: &str, b: &str) -> bool {
     if a == b {
@@ -4102,7 +4133,7 @@ fn same_recording(app: &AppState, a: &str, b: &str) -> bool {
         app.rows
             .iter()
             .find(|r| r.href == href)
-            .map(recording_key)
+            .map(|r| recording_key(app, r))
     };
     match (key(a), key(b)) {
         // `recording_key` falls back to the href when a title or artist is
@@ -4112,13 +4143,44 @@ fn same_recording(app: &AppState, a: &str, b: &str) -> bool {
     }
 }
 
-fn recording_key(row: &Row) -> String {
-    let title = row.title.trim().to_lowercase();
-    let artist = row.artist.trim().to_lowercase();
+fn recording_key(app: &AppState, row: &Row) -> String {
+    let tags = app.tags.get(&row.href);
+    let field = |tag: Option<&String>, fallback: &str| {
+        tag.map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| fallback.trim())
+            .to_lowercase()
+    };
+    let title = field(tags.and_then(|t| t.title.as_ref()), &row.title);
+    let artist = field(tags.and_then(|t| t.artist.as_ref()), &row.artist);
     if title.is_empty() || artist.is_empty() {
         return row.href.clone();
     }
     format!("{title}\u{1}{artist}")
+}
+
+/// The duplicates: every file that is not the first copy of its recording.
+///
+/// Ordered by href so the survivor is the same one after a restart.
+fn duplicate_hrefs(app: &AppState) -> std::collections::HashSet<String> {
+    use std::collections::HashMap;
+    let mut first: HashMap<String, String> = HashMap::new();
+    for row in &app.rows {
+        first
+            .entry(recording_key(app, row))
+            .and_modify(|href| {
+                if row.href < *href {
+                    *href = row.href.clone();
+                }
+            })
+            .or_insert_with(|| row.href.clone());
+    }
+    let kept: std::collections::HashSet<&String> = first.values().collect();
+    app.rows
+        .iter()
+        .filter(|r| !kept.contains(&r.href))
+        .map(|r| r.href.clone())
+        .collect()
 }
 
 /// One file per recording.
@@ -4148,7 +4210,7 @@ fn dedupe_recordings(
         if !pool.contains_key(&row.href) {
             continue;
         }
-        keep.entry(recording_key(row))
+        keep.entry(recording_key(app, row))
             .and_modify(|href| {
                 if row.href < *href {
                     *href = row.href.clone();
@@ -5781,6 +5843,7 @@ pub fn run() {
             playlist_rows,
             playlist_folders,
             create_folder,
+            duplicate_count,
             dynamic_groups,
             create_group,
             rename_group,
@@ -5799,6 +5862,7 @@ pub fn run() {
             find_album_art,
             clear_album_art,
             set_prefer_looked_up_art,
+            set_hide_duplicates,
             artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
@@ -6514,6 +6578,71 @@ mod tests {
         assert!(app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
         assert!(!app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
         assert_eq!(app.groups.get(&id).expect("the group").entities.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The tag is the recording; the filename is not.
+    ///
+    /// `Row::title` comes from the path and `apply_tags` never overwrites it,
+    /// so a second copy is titled `Bocca di rosa (1)` and compares as a
+    /// different track. Both files carry the same tag, which is the question.
+    #[test]
+    fn a_copy_is_recognised_by_its_tag_not_its_filename() {
+        let (mut app, dir) = app();
+        for href in ["/bocca.mp3", "/bocca (1).mp3"] {
+            app.rows.push(row(href, href));
+            app.tags.insert(
+                href.to_string(),
+                tags::Tags {
+                    title: Some("Bocca di rosa".to_string()),
+                    artist: Some("Fabrizio De Andre".to_string()),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        // Path-derived titles genuinely differ, which is what used to defeat it.
+        assert_ne!(app.rows[0].title, app.rows[1].title);
+
+        let dupes = duplicate_hrefs(&app);
+        assert_eq!(dupes.len(), 1, "the two copies were not seen as one record");
+        // The survivor is the first href, so it is the same one next launch.
+        assert!(dupes.contains("/bocca.mp3") || dupes.contains("/bocca (1).mp3"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Hiding is a view. The files are untouched and the count still knows.
+    #[test]
+    fn hiding_duplicates_does_not_remove_anything() {
+        let (mut app, dir) = app();
+        for href in ["/one.mp3", "/one (1).mp3"] {
+            app.rows.push(row(href, href));
+            app.tags.insert(
+                href.to_string(),
+                tags::Tags {
+                    title: Some("One".to_string()),
+                    artist: Some("Someone".to_string()),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: None,
+            album: None,
+            artist: None,
+        };
+        assert_eq!(resolved_rows(&app, &view).len(), 2);
+
+        app.settings.hide_duplicates = true;
+        assert_eq!(resolved_rows(&app, &view).len(), 1);
+        // Still on disk, still counted, still there to delete by hand.
+        assert_eq!(app.rows.len(), 2);
+        assert_eq!(duplicate_hrefs(&app).len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 

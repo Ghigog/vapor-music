@@ -165,6 +165,21 @@ pub struct Settings {
     #[serde(alias = "prefer_looked_up_art")]
     pub prefer_looked_up_art: bool,
 
+    /// Whether the library hides second and later copies of a recording.
+    ///
+    /// Off by default: these are the person's own files, and a library that
+    /// quietly shows fewer tracks than are on disk is a library you cannot
+    /// trust to be telling you what you have. Hiding them is a view, not a
+    /// deletion — nothing is removed, and the duplicates are still there to be
+    /// tidied up by hand.
+    ///
+    /// The Vibe DJ excludes them regardless of this, which is a different
+    /// question: two copies of one track are identical in tempo, key and
+    /// intensity, so a set that may use both will mix a record into itself.
+    #[serde(default)]
+    #[serde(alias = "hide_duplicates")]
+    pub hide_duplicates: bool,
+
     /// Ceiling on the local audio cache, in bytes.
     ///
     /// The library lives in the user's cloud and local storage is only a cache,
@@ -273,6 +288,7 @@ impl Default for Settings {
             headphone_profile: String::new(),
             headphone_calibration_enabled: false,
             bpm_overrides: std::collections::HashMap::new(),
+            hide_duplicates: false,
             album_art: std::collections::HashMap::new(),
             prefer_looked_up_art: false,
             cache_max_bytes: default_cache_max_bytes(),

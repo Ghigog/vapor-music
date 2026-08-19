@@ -499,6 +499,45 @@ test.describe("Dragging with a finger", () => {
   });
 });
 
+test.describe("Duplicate tracks", () => {
+  const TWICE = ["/a.mp3", "/a (1).mp3"].map((href, i) => ({
+    href,
+    // The filenames differ; the recording does not. That gap is the bug —
+    // the row title comes from the path, so the copy reads as its own track.
+    title: "Bocca di rosa",
+    artist: "Fabrizio De Andre",
+    album: "Volume 1",
+    artistSource: "tag" as const,
+    albumSource: "tag" as const,
+    genre: "canzone",
+    bpm: 121 + i * 0,
+    key: "6A",
+    year: 1967,
+    manualPos: 0,
+  }));
+
+  test("are counted, and hidden only when asked", async ({ page }) => {
+    await boot(page, { rows: TWICE });
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByText(/one track is in your library twice/i)).toBeVisible();
+
+    // Off by default: both copies are still listed.
+    const tabs = page.getByRole("navigation", { name: "Screens" });
+    await tabs.getByRole("button", { name: "Library", exact: true }).click();
+    await page.getByRole("tab", { name: "Songs" }).click();
+    await expect(page.locator(".songrow")).toHaveCount(2);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByLabel(/hide extra copies/i).check();
+    await expect(page.getByText(/nothing has been deleted/i)).toBeVisible();
+
+    await tabs.getByRole("button", { name: "Library", exact: true }).click();
+    await page.getByRole("tab", { name: "Songs" }).click();
+    await expect(page.locator(".songrow")).toHaveCount(1);
+  });
+});
+
 test.describe("The Vibe screen at 412px", () => {
   /**
    * With nothing playing the screen has no exits and no curves to draw, so a

@@ -202,6 +202,16 @@ export interface Settings {
   albumArt: Record<string, string>;
   /** Whether a looked-up cover outranks the file's own embedded artwork. */
   preferLookedUpArt: boolean;
+  /**
+   * Whether the library hides second and later copies of a recording.
+   *
+   * Off by default: these are your own files, and a library quietly showing
+   * fewer tracks than are on disk is one you cannot trust. Hiding is a view,
+   * not a deletion. The Vibe DJ excludes duplicates regardless — two copies of
+   * one track are identical in tempo, key and intensity, so a set free to use
+   * both will mix a record into itself.
+   */
+  hideDuplicates: boolean;
   /** Ceiling on the local audio cache, in bytes. */
   cacheMaxBytes: number;
   /**
@@ -488,6 +498,10 @@ export function setPreferLookedUpArt(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_prefer_looked_up_art", { enabled });
 }
 
+export function setHideDuplicates(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_hide_duplicates", { enabled });
+}
+
 /**
  * A looked-up portrait for an artist, as a data URI.
  *
@@ -654,6 +668,11 @@ export interface DynamicGroup {
   id: string;
   name: string;
   entities: Entity[];
+}
+
+/** How many files are second-or-later copies of a recording. */
+export function duplicateCount(): Promise<number> {
+  return invoke<number>("duplicate_count");
 }
 
 export function dynamicGroups(): Promise<DynamicGroup[]> {
