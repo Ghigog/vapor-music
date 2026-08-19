@@ -121,20 +121,47 @@ export function Settings() {
     void refresh();
   }, [refresh, checkStored]);
 
-  // Progress arrives per track rather than being polled: the pass is minutes
-  // long and the backend already emits an event for exactly this.
+  /*
+   * Progress arrives per track rather than being polled: the pass is minutes
+   * long — hours on a large library over a slow connection — and the backend
+   * already emits an event for exactly this.
+   *
+   * `refresh` on every event, not only on the last one. `status` carries
+   * `running`, and it was read once when this screen mounted and then not
+   * again until a pass *finished*. So a pass that started afterwards left the
+   * screen holding a snapshot that said nothing was running — which is what
+   * gates the meter below, so a pass could be working through a library with
+   * no sign of it on screen at all and a count that never moved.
+   *
+   * It is a local call answering from memory, once a track, so this is cheap.
+   */
   useEffect(() => {
     const unlisten = listen<core.AnalysisProgress>("analysis-progress", (e) => {
       setProgress(e.payload);
+      void refresh();
       if (e.payload.done >= e.payload.total) {
         setBusy("idle");
-        void refresh();
       }
     });
     return () => {
       void unlisten.then((f) => f());
     };
   }, [refresh]);
+
+  /*
+   * A pass that is no longer running gives the buttons back.
+   *
+   * `busy` is set by pressing Analyse and was cleared only by a pass reaching
+   * its last track. Anything else that ended it — a connection that died, the
+   * credential going unreadable behind a locked screen — left this screen with
+   * its own controls disabled for as long as the app stayed open, which reads
+   * as the app having stopped working.
+   */
+  useEffect(() => {
+    if (busy === "analysing" && status?.running === false) {
+      setBusy("idle");
+    }
+  }, [busy, status?.running]);
 
   async function run<T>(
     kind: Busy,

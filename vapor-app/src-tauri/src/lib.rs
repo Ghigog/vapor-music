@@ -5531,13 +5531,21 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                 // OS keychain, and on Android the Keystore is not readable
                 // while the device is locked. A screen going off mid-library is
                 // enough.
+                // Generation-guarded, like the completion below: a pass that
+                // was replaced can fail here *after* its replacement has
+                // started, and clearing the flag unconditionally would report
+                // "not running" while one still is — which looks from the
+                // outside exactly like analysis having stopped, while the file
+                // on disk goes on growing.
                 if let Ok(mut app) = state_arc.lock() {
-                    app.analysing = false;
-                    app.analysing_title = String::new();
-                    app.analysis_stopped_because = format!(
-                        "Analysis stopped: {e}. It will carry on from where it \
-                         left off when you press Analyse."
-                    );
+                    if app.analysis_generation == generation {
+                        app.analysing = false;
+                        app.analysing_title = String::new();
+                        app.analysis_stopped_because = format!(
+                            "Analysis stopped: {e}. It will carry on from where \
+                             it left off when you press Analyse."
+                        );
+                    }
                 }
                 let _ = handle.emit("analysis-stopped", e.to_string());
                 return;
