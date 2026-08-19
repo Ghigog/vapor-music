@@ -258,6 +258,50 @@ impl Fetcher {
         })
     }
 
+    /// Fetch one file's bytes, giving up early if asked to.
+    ///
+    /// A track is several megabytes and most of a pass is spent inside this
+    /// call. `bytes()` reads the whole body in one go, so a cancel raised while
+    /// it was running could not be noticed until it returned — which is why
+    /// Stop appeared to do nothing for minutes at a time: the flag was only
+    /// read between tracks, and a track is almost entirely this.
+    ///
+    /// Reading in chunks costs nothing and makes the answer prompt.
+    pub fn fetch_until(
+        &self,
+        href: &str,
+        stopped: &dyn Fn() -> bool,
+    ) -> std::result::Result<Vec<u8>, String> {
+        use std::io::Read;
+
+        let mut response = self
+            .client
+            .get(format!("{}{href}", self.origin))
+            .header("Authorization", self.auth.clone())
+            .send()
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!("server returned {}", response.status()));
+        }
+
+        // 64 KiB: small enough that a cancel is answered inside a second on any
+        // connection worth downloading over, large enough not to make a syscall
+        // per packet.
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut collected = Vec::new();
+        loop {
+            if stopped() {
+                return Err("stopped".to_string());
+            }
+            let read = response.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                return Ok(collected);
+            }
+            collected.extend_from_slice(&buffer[..read]);
+        }
+    }
+
     /// Fetch one file's bytes.
     pub fn fetch(&self, href: &str) -> std::result::Result<Vec<u8>, String> {
         let response = self

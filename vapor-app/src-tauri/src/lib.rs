@@ -1035,8 +1035,30 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let Ok(lookup) = metadata::Lookup::new() else {
-            return;
+        let lookup = match metadata::Lookup::new() {
+            Ok(l) => l,
+            Err(e) => {
+                // Say the pass is over, however it ended.
+                //
+                // This returned silently, and the screen keys its button off
+                // "a pass has started and not reported finishing" — so a
+                // failure here disabled Identify for as long as the app stayed
+                // open, with nothing to press and nothing said. The same shape
+                // of fault as the analysis pass's, in a second place; both are
+                // now a terminal event rather than a bare `return`.
+                let _ = handle.emit(
+                    "identify-progress",
+                    IdentifyProgress {
+                        done: 0,
+                        total: 0,
+                        title: format!("could not start: {e}"),
+                        corrected: 0,
+                        genres: 0,
+                        finished: true,
+                    },
+                );
+                return;
+            }
         };
         let total = todo.len();
         let (mut corrected, mut genres) = (0usize, 0usize);
@@ -5414,8 +5436,16 @@ fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
 
 #[tauri::command]
 fn cancel_analysis(state: State<'_, Shared>) -> Result<()> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.cancel.stop();
+    // Reported stopped now, not when the pass gets round to noticing.
+    //
+    // The pass clears this itself on the way out and will do so again, which is
+    // harmless. But it winds down asynchronously — it has a chunk of a download
+    // to finish reading — and a screen that goes on saying "Listening…" until
+    // then is a screen ignoring the button that was just pressed.
+    app.analysing = false;
+    app.analysing_title = String::new();
     Ok(())
 }
 
@@ -5570,7 +5600,11 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                         .map(|r| r.title.clone())
                         .unwrap_or_default();
                 }
-                cache.store(href, || fetcher.fetch(href)).ok()
+                // Cancellable: Stop has to be answered during the download,
+                // not after it. See `Fetcher::fetch_until`.
+                cache
+                    .store(href, || fetcher.fetch_until(href, &|| cancel.is_stopped()))
+                    .ok()
             },
             &cancel,
             |progress| {

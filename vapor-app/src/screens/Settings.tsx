@@ -503,7 +503,11 @@ export function Settings() {
             <button
               className="settings__button"
               onClick={() => {
-                void core.cancelAnalysis();
+                // Awaited and read back, so the card reflects the press rather
+                // than waiting for a progress event that is not coming.
+                void core.cancelAnalysis().then(() => refresh());
+                setStarted(false);
+                setProgress(null);
                 setBusy("idle");
               }}
             >
