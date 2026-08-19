@@ -1,0 +1,4 @@
+# Scratch renders from `npm run mark -- --options` / `-- --contact-sheet`.
+# Regenerate on demand; only the masters below are checked in.
+options/
+sheet/

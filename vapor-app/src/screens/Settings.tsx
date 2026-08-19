@@ -27,6 +27,7 @@ import * as core from "../lib/core";
 import { YourData } from "./YourData";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
+import { VaporMark, LOGO_POSE } from "../components/VaporMark";
 
 type Busy = "idle" | "saving" | "scanning" | "analysing";
 
@@ -688,7 +689,20 @@ export function Settings() {
         makes closing it overdue rather than optional. See docs/LICENSING.md.
       */}
       <section className="settings__card glass">
-        <h2 className="settings__section">About</h2>
+        <h2 className="settings__section">About Vapor</h2>
+        {/*
+          The logo, pinned rather than animated. `LOGO_POSE` is the same frame
+          the app icon is rendered from, so this is not a picture *of* the mark
+          — it is the mark, drawn by the same code at the same pose. If the icon
+          is ever repinned, this moves with it.
+        */}
+        <div className="settings__lockup">
+          <VaporMark size={96} theme="light" pose={LOGO_POSE} />
+          <div className="settings__lockup-text">
+            <span className="settings__lockup-name">Vapor Music</span>
+            <span className="label">Music, continuous</span>
+          </div>
+        </div>
         <p className="settings__hint">
           Icons by Gregor Cresnar, from the Noun Project, used under a{" "}
           <a

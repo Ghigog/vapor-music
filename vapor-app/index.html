@@ -8,10 +8,16 @@
       Fonts are bundled rather than fetched: the app must work with no network,
       which is the entire premise, and the CSP blocks remote origins anyway.
     -->
+    <!--
+      Icons are generated, not drawn: `npm run mark` renders them from the same
+      element the app uses, pinned to the pose in src/lib/mark.json.
+    -->
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/fonts.css" />
     <link rel="stylesheet" href="/tokens.css" />
     <!-- The mark is a dependency-free custom element; it registers itself. -->
-    <script src="/vapor-mark.js" defer></script>
+    <script src="/vapor-ribbon.js" defer></script>
   </head>
   <body>
     <div id="root"></div>

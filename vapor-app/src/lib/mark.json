@@ -1,0 +1,22 @@
+{
+  "$comment": "The Vapor mark, pinned. Single source of truth for the app (src/components/VaporMark.tsx) and the icon exporter (scripts/export-mark.mjs), so a rendered icon and the running logo can never drift apart. Values are the ones the 'Ribbon Mark Lab' study renders at — the <vapor-ribbon> element's own fallbacks differ (turns 1.5, curl 0.85) and would quietly draw a different logo.",
+  "pose": 0,
+  "$pose": "Seconds into the idle animation. The renderer is deterministic, so this number IS the logo: same pose, same drawing, forever. 0 is the reference pose — the V with the hooked upper-left tip and the slightly elongated left arm. Legibility at 16px does not constrain this choice; the plate does that. Change it and re-run `npm run mark`, then `npx tauri icon brand/icon-1024.png`. `npm run mark -- --contact-sheet` renders the menu.",
+  "geometry": {
+    "turns": 1.6,
+    "ribbon": 1,
+    "curl": 0.55
+  },
+  "material": {
+    "dispersion": 1,
+    "hue": 0
+  },
+  "icon": {
+    "$comment": "Icon plate. A glass mark has no intrinsic contrast — it is only visible by what it refracts — so on an unknown background (dock, home screen, browser tab) it washes out. The plate supplies that background. Dark is the default because reversing the environment makes the rim carry the mark, which is what survives 16px. iOS additionally forbids alpha in app icons, so a plate is required there, not merely preferred.",
+    "plate": "dark",
+    "radius": 0.2237,
+    "$radius": "Corner radius as a fraction of the icon side. 0.2237 is the macOS squircle proportion.",
+    "inset": 0.16,
+    "$inset": "Margin between plate edge and the mark's bounding box, as a fraction of the side."
+  }
+}

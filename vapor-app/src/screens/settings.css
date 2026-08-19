@@ -375,3 +375,31 @@
   background: var(--accent);
   transition: width var(--dur-base) var(--ease);
 }
+
+/*
+ * The About lockup: the mark beside the wordmark.
+ *
+ * Baseline-aligned rather than centred — the mark's optical centre sits above
+ * its bounding-box centre (the ribbon's lower hook is heavier than its two
+ * arms), so centring it makes the wordmark look like it has slipped downwards.
+ */
+.settings__lockup {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings__lockup-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings__lockup-name {
+  font-family: var(--font-display);
+  font-weight: 200;
+  font-size: var(--fs-display);
+  letter-spacing: var(--ls-display);
+  line-height: 1;
+  color: var(--ink);
+}
