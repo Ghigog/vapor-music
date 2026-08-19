@@ -28,6 +28,13 @@
 //! environment it was handed and publishes both. It runs before Tauri builds
 //! anything, so every later caller finds the handles already in place.
 
+// Under `--features android-check` this module is compiled on a desktop, to
+// prove the JNI code still builds without an NDK. Its callers are all
+// `cfg(target_os = "android")` and are therefore *not* compiled there, so
+// everything here reads as dead — which is the point of the check, not a fault
+// in it.
+#![cfg_attr(not(target_os = "android"), allow(dead_code))]
+
 use jni::objects::JObject;
 use jni::JNIEnv;
 

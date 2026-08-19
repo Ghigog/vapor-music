@@ -170,28 +170,46 @@ impl Controls {
          *
          * souvlaki covers the three desktops through D-Bus, SMTC and
          * MPNowPlayingInfoCenter; Android's equivalent is a `MediaSession`
-         * owned by a foreground service, and the service is not optional
+         * owned by a foreground service, and that service is not optional
          * decoration — it is the only thing that stops the OS suspending the
          * process and starving the audio thread. `PlaybackService.kt` holds
-         * that end, and this routes to it through the same seam every other
-         * platform uses, so the supervisor calls one `publish` and does not
-         * know which it got.
+         * that end.
+         *
+         * One function per platform rather than `cfg` inside one: the two share
+         * no code, and threading both through each other left dead parameters
+         * and an early `return` on whichever target was not being compiled.
          */
         #[cfg(target_os = "android")]
         {
-            // Windows hangs SMTC off a window; Android has no use for one.
             let _ = window_handle;
-            crate::android::on_press(move |press| {
-                if let Some(press) = Press::from_i32(press) {
-                    on_press(press);
-                }
-            });
-            return Arc::new(Controls {
-                last: Mutex::new(None),
-            });
+            Self::attach_android(on_press)
         }
-
         #[cfg(not(target_os = "android"))]
+        {
+            Self::attach_desktop(window_handle, on_press)
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn attach_android<F>(on_press: F) -> Arc<Self>
+    where
+        F: Fn(Press) + Send + Sync + 'static,
+    {
+        crate::android::on_press(move |press| {
+            if let Some(press) = Press::from_i32(press) {
+                on_press(press);
+            }
+        });
+        Arc::new(Controls {
+            last: Mutex::new(None),
+        })
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn attach_desktop<F>(window_handle: Option<*mut std::ffi::c_void>, on_press: F) -> Arc<Self>
+    where
+        F: Fn(Press) + Send + Sync + 'static,
+    {
         let config = souvlaki::PlatformConfig {
             dbus_name: "vapor_music",
             display_name: "Vapor Music",
@@ -199,7 +217,6 @@ impl Controls {
             hwnd: window_handle,
         };
 
-        #[cfg(not(target_os = "android"))]
         let controls = match souvlaki::MediaControls::new(config) {
             Ok(mut controls) => {
                 match controls.attach(move |event| {
@@ -220,7 +237,6 @@ impl Controls {
             }
         };
 
-        #[cfg(not(target_os = "android"))]
         if !bundled() {
             // souvlaki's macOS backend returns `Ok` unconditionally — `new`
             // and `attach` cannot fail — so a successful registration says
@@ -234,11 +250,10 @@ impl Controls {
             );
         }
 
-        #[cfg(not(target_os = "android"))]
-        return Arc::new(Controls {
+        Arc::new(Controls {
             inner: Mutex::new(controls),
             last: Mutex::new(None),
-        });
+        })
     }
 
     /// Tell the system what is playing.
