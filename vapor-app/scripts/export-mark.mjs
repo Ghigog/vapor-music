@@ -70,98 +70,188 @@ await page.addScriptTag({ content: RIBBON });
  * page and its "On dark" panel — so the glass refracts something it expects
  * rather than whatever the user's dock happens to be.
  */
+/**
+ * Plate fills.
+ *
+ * White is the default because a macOS icon sits in a row of mostly light,
+ * shaded tiles; a full-bleed dark slab reads as a hole in that row.
+ */
 const PLATES = {
+  white: ["#ffffff", "#f4f6fb"],
   dark: ["#12131f", "#171a2c"],
   light: ["#f7f8fc", "#eceff9"],
 };
 
+/**
+ * The macOS icon grid, MEASURED rather than remembered.
+ *
+ * Taken off /System/Applications/Music.app and Notes.app on macOS 26.5: both
+ * put a body of exactly 80.47% of the canvas dead centre, with equal padding on
+ * all four sides, and bake a faint downward shadow into that padding (peak
+ * alpha 27 below the body, 8 above).
+ *
+ * The corner is NOT a circular arc. Fitting the measured profile — 51px inset
+ * at the body's top edge decaying to 8px at 10% depth — gives a superellipse
+ * |x|^n + |y|^n = 1 with n ≈ 2.2 and a corner extent of 24.76% of the body.
+ * A circular `roundRect` at the same radius sits ~3px wide through the middle
+ * of the curve, which is small in numbers and is precisely the "not quite an
+ * Apple icon" tell.
+ */
+const GRID = {
+  body: 0.8047,
+  corner: 0.2476,
+  exponent: 2.2,
+  shadowAlpha: 0.11,
+};
+
 /** Draw one mark and return its canvas as raw PNG bytes. */
-async function render(size, theme, poseAt, plate = "none") {
+async function render(size, theme, poseAt, plate = "none", shape = "squircle") {
   const dataUrl = await page.evaluate(async (a) => {
     // Built detached with `pose` set LAST: the element only draws once it is
     // frozen, so setting pose last collapses what would be one full-resolution
     // redraw per attribute into a single draw. Appending frozen also means no
     // rAF loop is ever started.
     const el = document.createElement("vapor-ribbon");
-    const { pose: p, plateStops: _ps, radius: _r, inset: _i, ...rest } = a;
+    const { pose: p, plateStops: _ps, shape: _sh, grid: _g, inset: _i, ...rest } = a;
     for (const [k, v] of Object.entries(rest)) el.setAttribute(k, v);
     el.setAttribute("pose", p);
     document.body.append(el);
     await new Promise((r) => requestAnimationFrame(r));
     const canvas = el.shadowRoot.querySelector("canvas");
-    let url;
-    if (a.plateStops) {
-      // Composite onto the plate rather than letting the element draw over a
-      // page background: the PNG has to carry the plate, since nothing behind
-      // an app icon is under our control.
-      const out = document.createElement("canvas");
-      out.width = out.height = canvas.width;
-      const g = out.getContext("2d");
-      const S = out.width, r = S * a.radius;
-      const grad = g.createLinearGradient(0, 0, S * 0.35, S);
-      grad.addColorStop(0, a.plateStops[0]);
-      grad.addColorStop(1, a.plateStops[1]);
-      g.beginPath();
-      g.roundRect(0, 0, S, S, r);
-      g.fillStyle = grad;
-      g.fill();
-      // The mark is drawn at full size and scaled down into the safe area, so
-      // the inset never costs resolution.
-      const inner = S * (1 - a.inset * 2);
-      g.drawImage(canvas, (S - inner) / 2, (S - inner) / 2, inner, inner);
-      url = out.toDataURL("image/png");
-    } else {
-      url = canvas.toDataURL("image/png");
+    if (!a.plateStops) {
+      const bare = canvas.toDataURL("image/png");
+      el.remove();
+      return bare;
     }
+
+    const S = canvas.width;
+    const out = document.createElement("canvas");
+    out.width = out.height = S;
+    const g = out.getContext("2d");
+    const G = a.grid;
+
+    /**
+     * Trace a superellipse-cornered rectangle.
+     *
+     * Each corner runs x = R − R·cos(θ)^(2/n), y = R − R·sin(θ)^(2/n), which
+     * satisfies ((R−x)/R)^n + ((R−y)/R)^n = 1 — the continuous corner Apple
+     * uses. n = 2 would give back a plain circular round-rect.
+     */
+    const squircle = (x0, y0, side, R, n) => {
+      const e = 2 / n, N = 48;
+      const pt = (cx, cy, sx, sy, t) => {
+        const th = (t * Math.PI) / 2;
+        return [cx + sx * (R - R * Math.pow(Math.cos(th), e)),
+                cy + sy * (R - R * Math.pow(Math.sin(th), e))];
+      };
+      g.beginPath();
+      const corners = [
+        [x0, y0, 1, 1],                     // top-left
+        [x0 + side, y0, -1, 1],             // top-right
+        [x0 + side, y0 + side, -1, -1],     // bottom-right
+        [x0, y0 + side, 1, -1],             // bottom-left
+      ];
+      corners.forEach(([cx, cy, sx, sy], ci) => {
+        for (let i = 0; i <= N; i++) {
+          // Alternate sweep direction so consecutive corners join head-to-tail.
+          const t = ci % 2 === 0 ? i / N : 1 - i / N;
+          const [px, py] = pt(cx, cy, sx, sy, t);
+          if (ci === 0 && i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+        }
+      });
+      g.closePath();
+    };
+
+    // Full-bleed for platforms that apply their own mask (iOS, Android);
+    // the measured macOS grid otherwise.
+    const bleed = a.shape === "square";
+    const side = bleed ? S : S * G.body;
+    const org = (S - side) / 2;
+    const R = side * G.corner;
+
+    if (!bleed) {
+      // The faint contact shadow real system icons bake into their padding.
+      g.save();
+      g.filter = `blur(${S * 0.012}px)`;
+      g.globalAlpha = G.shadowAlpha;
+      squircle(org, org + S * 0.008, side, R, G.exponent);
+      g.fillStyle = "#2a2f45";
+      g.fill();
+      g.restore();
+    }
+
+    const grad = g.createLinearGradient(org, org, org + side * 0.4, org + side);
+    grad.addColorStop(0, a.plateStops[0]);
+    grad.addColorStop(1, a.plateStops[1]);
+    if (bleed) { g.beginPath(); g.rect(0, 0, S, S); } else squircle(org, org, side, R, G.exponent);
+    g.fillStyle = grad;
+    g.fill();
+
+    // Clip the mark to the plate so nothing spills past the corner.
+    g.save();
+    if (bleed) { g.beginPath(); g.rect(0, 0, S, S); } else squircle(org, org, side, R, G.exponent);
+    g.clip();
+    // Drawn at full size and scaled into the safe area, so the inset costs no
+    // resolution.
+    const inner = side * (1 - a.inset * 2);
+    g.drawImage(canvas, org + (side - inner) / 2, org + (side - inner) / 2, inner, inner);
+    g.restore();
+
+    const url = out.toDataURL("image/png");
     el.remove();
     return url;
   }, {
     ...attrs(size, theme, poseAt),
     plateStops: plate === "none" ? null : PLATES[plate],
-    radius: MARK.icon.radius,
+    shape,
+    grid: GRID,
     inset: MARK.icon.inset,
   });
   return Buffer.from(dataUrl.split(",")[1], "base64");
 }
 
-async function emit(relPath, size, theme, plate = "none", poseAt = pose) {
+async function emit(relPath, size, theme, plate = "none", shape = "squircle", poseAt = pose) {
   const out = resolve(ROOT, relPath);
   await mkdir(dirname(out), { recursive: true });
-  const png = await render(size, theme, poseAt, plate);
+  const png = await render(size, theme, poseAt, plate, shape);
   await writeFile(out, png);
-  const tag = plate === "none" ? "transparent" : `${plate} plate`;
-  console.log(`  ${relPath.padEnd(34)} ${String(size).padStart(4)}px ${theme.padEnd(5)} ${tag}  (${(png.length / 1024).toFixed(1)} kB)`);
+  const tag = plate === "none" ? "transparent" : `${plate}/${shape}`;
+  console.log(`  ${relPath.padEnd(32)} ${String(size).padStart(4)}px ${theme.padEnd(5)} ${tag.padEnd(14)} (${(png.length / 1024).toFixed(1)} kB)`);
 }
 
 if (sheet) {
   // A pose is a permanent brand decision, so make it cheap to look at.
   console.log(`contact sheet — poses 0..13`);
-  for (let p = 0; p <= 13; p++) await emit(`brand/sheet/pose-${p}.png`, 256, "light", "none", p);
+  for (let p = 0; p <= 13; p++) await emit(`brand/sheet/pose-${p}.png`, 256, "light", "none", "squircle", p);
 } else if (argv.includes("--options")) {
-  // The three plate treatments, same pose, for picking between.
   console.log(`plate options — pose ${pose}`);
-  await emit("brand/options/a-dark-plate.png", 512, "dark", "dark");
-  await emit("brand/options/b-light-plate.png", 512, "light", "light");
-  await emit("brand/options/c-transparent.png", 512, "light", "none");
+  for (const [name, plate, theme] of [
+    ["a-white", "white", "light"],
+    ["b-white-dark-mark", "white", "dark"],
+    ["c-dark", "dark", "dark"],
+  ]) await emit(`brand/options/${name}.png`, 512, theme, plate, "squircle");
 } else {
   const plate = MARK.icon.plate;
-  const theme = plate === "light" ? "light" : plate === "dark" ? "dark" : "light";
-  console.log(`mark masters — pose ${pose}, turns ${MARK.geometry.turns}, ${plate} plate`);
+  const theme = MARK.icon.markTheme;
+  console.log(`mark masters — pose ${pose}, ${plate} plate`);
 
-  // The icon master. Opaque and full-bleed when plated, which is what iOS
-  // requires and what every other platform tolerates.
-  await emit("brand/icon-1024.png", 1024, theme, plate);
+  // macOS: the measured grid — inset body, superellipse corner, baked shadow.
+  // This is the master the .icns is cut from.
+  await emit("brand/icon-macos-1024.png", 1024, theme, plate, "squircle");
+
+  // Everything else masks the icon itself, so it wants full bleed. Handing a
+  // pre-rounded image to iOS gets the corners rounded twice.
+  await emit("brand/icon-square-1024.png", 1024, theme, plate, "square");
 
   // The bare mark, for in-app and marketing use where a plate would be wrong.
   await emit("brand/mark-1024.png", 1024, "light", "none");
   await emit("brand/mark-1024-dark.png", 1024, "dark", "none");
 
-  // Web. The favicon is plated for the same reason the app icon is — a browser
-  // tab strip is someone else's background.
-  await emit("public/favicon.png", 64, theme, plate);
-  await emit("public/apple-touch-icon.png", 180, theme, plate);
+  await emit("public/favicon.png", 64, theme, plate, "square");
+  await emit("public/apple-touch-icon.png", 180, theme, plate, "square");
 
-  console.log(`\nnext: npx tauri icon brand/icon-1024.png`);
+  console.log(`\nnext: npx tauri icon brand/icon-square-1024.png --ios-color "#ffffff"`);
+  console.log(`then: node scripts/make-icns.mjs   (macOS grid .icns)`);
 }
 
 await browser.close();

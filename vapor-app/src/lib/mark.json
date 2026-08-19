@@ -12,11 +12,11 @@
     "hue": 0
   },
   "icon": {
-    "$comment": "Icon plate. A glass mark has no intrinsic contrast — it is only visible by what it refracts — so on an unknown background (dock, home screen, browser tab) it washes out. The plate supplies that background. Dark is the default because reversing the environment makes the rim carry the mark, which is what survives 16px. iOS additionally forbids alpha in app icons, so a plate is required there, not merely preferred.",
-    "plate": "dark",
-    "radius": 0.2237,
-    "$radius": "Corner radius as a fraction of the icon side. 0.2237 is the macOS squircle proportion.",
-    "inset": 0.16,
-    "$inset": "Margin between plate edge and the mark's bounding box, as a fraction of the side."
+    "$comment": "Icon plate. A glass mark has no intrinsic contrast — it is only visible by what it refracts — so with no plate it washes out on an unknown background. White is the default because a macOS icon sits in a row of light, shaded tiles and a dark slab reads as a hole in that row. iOS additionally forbids alpha in app icons, so a plate is required there.",
+    "plate": "white",
+    "inset": 0.14,
+    "$inset": "Margin between plate edge and the mark's bounding box, as a fraction of the side.",
+    "markTheme": "dark",
+    "$markTheme": "Which environment the glass refracts, NOT the background it sits on. The dark environment renders a deeper, more saturated ribbon, which is what holds contrast against a white plate; the light environment refracts near-white and disappears into it."
   }
 }
