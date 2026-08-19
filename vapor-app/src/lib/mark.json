@@ -17,6 +17,12 @@
     "inset": 0.14,
     "$inset": "Margin between plate edge and the mark's bounding box, as a fraction of the side.",
     "markTheme": "dark",
-    "$markTheme": "Which environment the glass refracts, NOT the background it sits on. The dark environment renders a deeper, more saturated ribbon, which is what holds contrast against a white plate; the light environment refracts near-white and disappears into it."
+    "$markTheme": "Which environment the glass refracts, NOT the background it sits on. The dark environment renders a deeper, more saturated ribbon, which is what holds contrast against a white plate; the light environment refracts near-white and disappears into it.",
+    "layerInset": 0.15,
+    "$layerInset": "Margin for the Icon Composer foreground layer. Larger than the flat-icon inset because the system adds its own shadow and specular outside the artwork, and a layer that reaches the mask edge loses them.",
+    "shadowOpacity": 0.5,
+    "$shadowOpacity": "Opacity of the shadow macOS 26 drops under the mark layer in the .icon asset.",
+    "layerBoost": "saturate(1.65) contrast(1.35) brightness(0.85)",
+    "$layerBoost": "CSS filter applied to the Icon Composer layer only. The mark's shading assumes an environment and reads light on a white tile; this restores contrast without changing its geometry."
   }
 }

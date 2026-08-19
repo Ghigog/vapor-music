@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app": "tauri dev",
-    "app:build": "tauri build",
+    "app:build": "tauri build && node scripts/make-icon.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,7 +17,8 @@
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
     "verify-dist": "node scripts/verify-dist.mjs",
-    "mark": "node scripts/export-mark.mjs"
+    "mark": "node scripts/export-mark.mjs",
+    "icon:macos": "node scripts/make-icon.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",

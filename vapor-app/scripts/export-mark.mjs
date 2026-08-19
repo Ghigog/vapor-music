@@ -112,16 +112,38 @@ async function render(size, theme, poseAt, plate = "none", shape = "squircle") {
     // redraw per attribute into a single draw. Appending frozen also means no
     // rAF loop is ever started.
     const el = document.createElement("vapor-ribbon");
-    const { pose: p, plateStops: _ps, shape: _sh, grid: _g, inset: _i, ...rest } = a;
+    const { pose: p, plateStops: _ps, shape: _sh, grid: _g, inset: _i, layerInset: _li, layerBoost: _lb, ...rest } = a;
     for (const [k, v] of Object.entries(rest)) el.setAttribute(k, v);
     el.setAttribute("pose", p);
     document.body.append(el);
     await new Promise((r) => requestAnimationFrame(r));
     const canvas = el.shadowRoot.querySelector("canvas");
-    if (!a.plateStops) {
+    if (!a.plateStops && a.shape !== "layer") {
       const bare = canvas.toDataURL("image/png");
       el.remove();
       return bare;
+    }
+
+    // Icon Composer layer: the mark alone on transparent, inset to the safe
+    // area. No plate and no corner — the SYSTEM draws the tile, the mask, the
+    // material and the shadow. Supplying our own would be drawn on top of
+    // Apple's and read as a tile inside a tile.
+    if (a.shape === "layer") {
+      const L = canvas.width;
+      const lay = document.createElement("canvas");
+      lay.width = lay.height = L;
+      const lg = lay.getContext("2d");
+      const inner = L * (1 - a.layerInset * 2);
+      // The mark's own shading assumes an environment; dropped on a white tile
+      // it reads a stop or two lighter than it does in the app. The boost is a
+      // filter rather than a different render so the SHAPE stays identical to
+      // every other output — only its contrast moves.
+      if (a.layerBoost) lg.filter = a.layerBoost;
+      lg.drawImage(canvas, (L - inner) / 2, (L - inner) / 2, inner, inner);
+      lg.filter = "none";
+      const u = lay.toDataURL("image/png");
+      el.remove();
+      return u;
     }
 
     const S = canvas.width;
@@ -206,6 +228,8 @@ async function render(size, theme, poseAt, plate = "none", shape = "squircle") {
     shape,
     grid: GRID,
     inset: MARK.icon.inset,
+    layerInset: MARK.icon.layerInset ?? 0.14,
+    layerBoost: MARK.icon.layerBoost ?? null,
   });
   return Buffer.from(dataUrl.split(",")[1], "base64");
 }
@@ -246,6 +270,9 @@ if (sheet) {
   // The bare mark, for in-app and marketing use where a plate would be wrong.
   await emit("brand/mark-1024.png", 1024, "light", "none");
   await emit("brand/mark-1024-dark.png", 1024, "dark", "none");
+
+  // Icon Composer foreground layer (macOS 26 .icon).
+  await emit("brand/icon-layer-1024.png", 1024, theme, "none", "layer");
 
   await emit("public/favicon.png", 64, theme, plate, "square");
   await emit("public/apple-touch-icon.png", 180, theme, plate, "square");
