@@ -40,6 +40,10 @@ impl Press {
     /// named in the Kotlin companion object and the order here is the contract
     /// — **inserting a variant above `Previous` silently remaps every button**.
     #[cfg(any(target_os = "android", feature = "android-check"))]
+    // Its only caller is `attach_android`, which is not compiled on a desktop —
+    // so under `--features android-check`, whose whole job is to build the
+    // Android code without an NDK, this reads as unused.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn from_i32(press: i32) -> Option<Self> {
         match press {
             0 => Some(Press::Play),
