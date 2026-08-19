@@ -96,6 +96,34 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
     void refresh();
   }, [refresh]);
 
+  /*
+   * Follow the pass, which is what is changing these numbers.
+   *
+   * Everything on this screen was read once, when it opened. But an analysis
+   * pass downloads every track it describes — about ten megabytes each — so the
+   * offline cache and the track count climb the whole time it runs, and this
+   * screen sat showing whatever they were when it was opened. On a job lasting
+   * hours that is a stale figure presented as a current one, on the screen
+   * whose whole job is saying exactly what is stored and where.
+   *
+   * Rate-limited because reading the breakdown walks the cache directory: a
+   * track lands about once a minute today, but a warm cache or a fast
+   * connection would make that far more often, and this must not turn into a
+   * directory walk per track.
+   */
+  useEffect(() => {
+    let last = 0;
+    const unlisten = listen("analysis-progress", () => {
+      const now = Date.now();
+      if (now - last < 5000) return;
+      last = now;
+      void refresh();
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [refresh]);
+
   const localBytes = rows
     .filter((r) => r.local)
     .reduce((sum, r) => sum + r.bytes, 0);
