@@ -670,6 +670,51 @@ export interface DynamicGroup {
   entities: Entity[];
 }
 
+// --- Downloads --------------------------------------------------------------
+
+/**
+ * Keeping a track, as opposed to happening to have one.
+ *
+ * Everything else in the audio cache is there because something needed to read
+ * it once and is dropped when the set moves past it. These are the tracks you
+ * asked for: they live outside the evicted directory and stay until removed.
+ */
+export interface DownloadProgress {
+  done: number;
+  total: number;
+  /** What is being fetched now. Empty when finished. */
+  title: string;
+  finished: boolean;
+  /** Why it stopped early, if it did. */
+  error: string;
+}
+
+export type Collection = "playlist" | "group";
+
+/** Every track whose audio is kept on this device. */
+export function downloadedTracks(): Promise<string[]> {
+  return invoke<string[]>("downloaded_tracks");
+}
+
+/** Fetch and keep every track in a playlist or smart group.
+ *
+ *  Returns as soon as the work has started; follow `download-progress`. */
+export function downloadCollection(
+  kind: Collection,
+  id: string,
+): Promise<void> {
+  return invoke<void>("download_collection", { kind, id });
+}
+
+/** Stop keeping them. Returns how many were actually released — a track another
+ *  download still wants is kept. */
+export function removeDownload(
+  kind: Collection,
+  id: string,
+): Promise<number> {
+  return invoke<number>("remove_download", { kind, id });
+}
+
 /** How many files are second-or-later copies of a recording. */
 export function duplicateCount(): Promise<number> {
   return invoke<number>("duplicate_count");

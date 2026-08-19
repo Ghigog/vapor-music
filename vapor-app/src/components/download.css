@@ -1,0 +1,66 @@
+/* Keeping a collection on the device. */
+
+.download {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0 18px;
+}
+
+.download__button {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-pill, 999px);
+  background: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.download__button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Kept, rather than merely available: the sovereignty green, because this is
+   the one case where the audio really is on the device and staying there. */
+.download__button--has {
+  color: var(--sov-ink);
+  border-color: rgba(var(--sov-rgb), 0.5);
+  background: rgba(var(--sov-rgb), 0.12);
+}
+
+.download__button .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.download__now {
+  margin: 0;
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download__error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.download__mark {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--sov-ink);
+}

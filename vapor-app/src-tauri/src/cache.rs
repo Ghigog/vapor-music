@@ -88,9 +88,83 @@ impl Cache {
     }
 
     /// Local path, but only if the file is actually present.
+    /// Where downloads live: a sibling directory that eviction never walks.
+    ///
+    /// Structural rather than a flag. A "protected" set consulted by
+    /// `evict_to_fit` would have to be handed to every `Cache` ever
+    /// constructed — there are seven — and the first one that forgot would
+    /// silently delete music somebody asked to keep. A file in another
+    /// directory cannot be evicted by code that only reads this one.
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.dir.with_file_name("downloads")
+    }
+
+    fn download_path_for(&self, href: &str) -> PathBuf {
+        // The same name as the cached copy, in the other directory, so the two
+        // cannot disagree about which file is which track.
+        let name = self
+            .path_for(href)
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        self.downloads_dir().join(name)
+    }
+
+    /// The local file for `href`, downloaded or cached, if there is one.
+    ///
+    /// Downloads first: when a track is both, the kept copy is the one that
+    /// should be read, and the cached one is about to be evicted anyway.
     pub fn get(&self, href: &str) -> Option<PathBuf> {
+        let downloaded = self.download_path_for(href);
+        if downloaded.is_file() {
+            return Some(downloaded);
+        }
         let p = self.path_for(href);
         p.is_file().then_some(p)
+    }
+
+    /// Keep this track: fetch it into the downloads directory, where nothing
+    /// evicts it. Already downloaded is success, not work.
+    pub fn download<F>(&self, href: &str, fetch: F) -> Result<PathBuf, CacheError>
+    where
+        F: FnOnce() -> Result<Vec<u8>, String>,
+    {
+        let target = self.download_path_for(href);
+        if target.is_file() {
+            return Ok(target);
+        }
+        fs::create_dir_all(self.downloads_dir())?;
+        let bytes = fetch().map_err(CacheError::Fetch)?;
+        // The same temp-then-rename as `store`: a partial file that looks
+        // complete is worse than no file.
+        let temp = target.with_extension("part");
+        fs::write(&temp, &bytes)?;
+        fs::rename(&temp, &target)?;
+        Ok(target)
+    }
+
+    /// Stop keeping this track. Its cached copy, if any, is left alone — that
+    /// is the window's business.
+    pub fn remove_download(&self, href: &str) -> Result<(), CacheError> {
+        let path = self.download_path_for(href);
+        if path.is_file() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
+    /// How much the downloads take up.
+    pub fn downloads_size(&self) -> u64 {
+        fs::read_dir(self.downloads_dir())
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter_map(|e| e.metadata().ok())
+                    .filter(|m| m.is_file())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     pub fn contains(&self, href: &str) -> bool {

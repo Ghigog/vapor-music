@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import { DownloadButton } from "../components/DownloadButton";
 import { Empty } from "../components/States";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { startTrackDrag } from "../components/PlaylistRail";
@@ -171,6 +172,9 @@ export function Playlist({
             </span>
           )}
         </div>
+
+        {/* Keeping it, which is a different question from playing it. */}
+        <DownloadButton kind="playlist" id={id} hrefs={meta.tracks} />
 
         <div className="playlist__actions">
           <button

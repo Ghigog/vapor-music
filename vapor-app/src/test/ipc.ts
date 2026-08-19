@@ -182,6 +182,7 @@ export class FakeBackend {
   private playlists: core.Playlist[];
   private folders: core.Folder[];
   private groups: core.DynamicGroup[];
+  private pinned = new Set<string>();
   /** Startup damage sentences the backend would report. Empty by default. */
   private damaged: string[] = [];
   /** Covers chosen by hand, keyed as the backend keys them. */
@@ -390,6 +391,29 @@ export class FakeBackend {
 
     return this.handle(cmd, args ?? {}) as T;
   };
+
+  /** The tracks a playlist or group holds, as the backend resolves them. */
+  private collectionTracks(kind: string, id: string): string[] {
+    if (kind === "playlist") {
+      return this.playlists.find((p) => p.id === id)?.tracks ?? [];
+    }
+    if (kind === "group") {
+      const g = this.groups.find((x) => x.id === id);
+      if (!g) return [];
+      return this.rows
+        .filter((r) =>
+          g.entities.some((e) =>
+            e.entityType === "artist"
+              ? r.artist === e.value
+              : e.entityType === "album"
+                ? r.album === e.value
+                : r.genre === e.value,
+          ),
+        )
+        .map((r) => r.href);
+    }
+    return [];
+  }
 
   private handle(cmd: Command, a: Record<string, unknown>): unknown {
     switch (cmd) {
@@ -897,6 +921,39 @@ export class FakeBackend {
       // resolves them the same way the backend does rather than storing a
       // track list — a fake that kept a list would let a screen pass here and
       // fail against a library that had grown.
+      // --- Downloads ------------------------------------------------------
+      //
+      // Kept per href, the way the backend keeps them: a track in two
+      // downloaded playlists survives removing one of them, and a fake that
+      // stored a flag per collection would let a screen pass here and lose
+      // somebody's music in the real app.
+      case "downloaded_tracks":
+        return [...this.pinned];
+
+      case "download_collection": {
+        const hrefs = this.collectionTracks(String(a.kind), String(a.id));
+        if (hrefs.length === 0) {
+          throw new Error("There are no tracks in that to download.");
+        }
+        hrefs.forEach((h) => this.pinned.add(h));
+        return null;
+      }
+
+      case "remove_download": {
+        const hrefs = this.collectionTracks(String(a.kind), String(a.id));
+        const wanted = new Set(
+          this.playlists
+            .filter((p) => !(a.kind === "playlist" && p.id === a.id))
+            .flatMap((p) => p.tracks),
+        );
+        let removed = 0;
+        for (const h of hrefs) {
+          if (wanted.has(h)) continue;
+          if (this.pinned.delete(h)) removed += 1;
+        }
+        return removed;
+      }
+
       case "duplicate_count": {
         // Keyed on title and artist, not on the filename — a second copy is
         // called "Thing (1)" and would otherwise count as its own record.

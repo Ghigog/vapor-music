@@ -302,6 +302,56 @@ impl Fetcher {
         }
     }
 
+    /// Fetch `len` bytes from `at`.
+    ///
+    /// Returns the bytes and the object's total size when the server says what
+    /// it is — which it does in `Content-Range` on a `206`.
+    pub fn range(
+        &self,
+        href: &str,
+        at: u64,
+        len: u64,
+    ) -> std::result::Result<(Vec<u8>, Option<u64>), String> {
+        let response = self
+            .client
+            .get(format!("{}{href}", self.origin))
+            .header("Authorization", self.auth.clone())
+            .header("Range", format!("bytes={at}-{}", at + len - 1))
+            .send()
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!("server returned {}", response.status()));
+        }
+
+        // `Content-Range: bytes 0-255/9437184` — the part after the slash is
+        // the only place a partial response states the whole size.
+        let total = response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit('/').next().map(str::to_string))
+            .and_then(|v| v.parse::<u64>().ok());
+
+        let bytes = response.bytes().map_err(|e| e.to_string())?.to_vec();
+        Ok((bytes, total))
+    }
+
+    /// Whether this server answers a range request with a range.
+    ///
+    /// Asked with a one-byte request rather than assumed. `206 Partial Content`
+    /// means yes; a `200` means the server ignored the header and sent the
+    /// whole file, and playing from it has to fall back to holding all of it.
+    pub fn supports_ranges(&self, href: &str) -> bool {
+        self.client
+            .get(format!("{}{href}", self.origin))
+            .header("Authorization", self.auth.clone())
+            .header("Range", "bytes=0-0")
+            .send()
+            .map(|r| r.status() == reqwest::StatusCode::PARTIAL_CONTENT)
+            .unwrap_or(false)
+    }
+
     /// Fetch one file's bytes.
     pub fn fetch(&self, href: &str) -> std::result::Result<Vec<u8>, String> {
         let response = self

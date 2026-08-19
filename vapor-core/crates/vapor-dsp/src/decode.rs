@@ -159,12 +159,27 @@ pub fn decode_bytes_to_stereo(
 }
 
 /// A media source plus the format hint that goes with it.
-pub(crate) struct Source {
-    mss: MediaSourceStream,
-    hint: Hint,
+pub struct Source {
+    pub(crate) mss: MediaSourceStream,
+    pub(crate) hint: Hint,
 }
 
-pub(crate) fn source_from_path(path: &Path) -> Result<Source, DecodeError> {
+impl Source {
+    /// Build a source over anything symphonia can read.
+    ///
+    /// Public so the shell can hand in something that is not a file — a track
+    /// still arriving over the network, say. `ext_hint` is the file extension
+    /// where one is known; symphonia probes regardless, but the hint saves it
+    /// guessing and matters for containers that are easy to confuse.
+    pub fn new(source: Box<dyn symphonia::core::io::MediaSource>, ext_hint: Option<&str>) -> Self {
+        Source {
+            mss: MediaSourceStream::new(source, Default::default()),
+            hint: hint_from_extension(ext_hint),
+        }
+    }
+}
+
+pub fn source_from_path(path: &Path) -> Result<Source, DecodeError> {
     let file = File::open(path).map_err(|e| DecodeError::Io(e.to_string()))?;
     Ok(Source {
         mss: MediaSourceStream::new(Box::new(file), Default::default()),

@@ -9,6 +9,14 @@
 //! crate is `cargo test`-able on any CI runner, which is the property the
 //! current 224-test GUT suite lacks.
 
+/// Symphonia's "somewhere bytes come from" trait, re-exported.
+///
+/// This crate owns the symphonia dependency and its feature set; a caller that
+/// wants to hand in a source of its own — a track still arriving over the
+/// network, say — should not have to depend on symphonia separately and risk
+/// resolving a different version of the trait than the one used here.
+pub use symphonia::core::io::MediaSource;
+
 pub mod beats;
 pub mod decode;
 pub mod key;

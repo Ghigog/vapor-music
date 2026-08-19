@@ -538,6 +538,47 @@ test.describe("Duplicate tracks", () => {
   });
 });
 
+test.describe("Keeping a playlist on the device", () => {
+  /**
+   * Vapor plays from your server, and the audio cache holds a few tracks
+   * either side of the set and drops the rest. This is the exception someone
+   * asks for: fetched in full, kept outside the evicted directory, and gone
+   * only when they say so.
+   */
+  test("downloads a playlist, then gives the space back", async ({ page }) => {
+    await boot(page, {
+      playlists: [
+        {
+          id: "p1",
+          name: "Night Drive",
+          customCoverPath: "",
+          tracks: ["/dav/Koofr/Music/xtal.m4a"],
+          folderId: "",
+        },
+      ],
+    });
+
+    await page
+      .getByRole("navigation", { name: "Screens" })
+      .getByRole("button", { name: "Playlists", exact: true })
+      .click();
+    await page
+      .getByRole("dialog", { name: "Playlists" })
+      .getByRole("button", { name: /night drive/i })
+      .click();
+
+    const button = page.getByRole("button", { name: /^download$/i });
+    await expect(button).toBeVisible();
+    await button.click();
+
+    // It reports itself kept, which is the whole signal that it worked.
+    await expect(page.getByRole("button", { name: /downloaded/i })).toBeVisible();
+
+    await page.getByRole("button", { name: /downloaded/i }).click();
+    await expect(page.getByRole("button", { name: /^download$/i })).toBeVisible();
+  });
+});
+
 test.describe("The Vibe screen at 412px", () => {
   /**
    * With nothing playing the screen has no exits and no curves to draw, so a

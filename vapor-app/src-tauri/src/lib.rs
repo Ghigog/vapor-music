@@ -29,6 +29,7 @@ pub mod decoder;
 mod media;
 mod metadata;
 mod peers;
+mod remote_source;
 mod secrets;
 mod store;
 mod sync;
@@ -2284,6 +2285,175 @@ fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folde
  * existed everywhere except in the app. These are the commands it was missing.
  * -------------------------------------------------------------------- */
 
+/* ---- Downloads -------------------------------------------------------
+ *
+ * Keeping a track, as opposed to happening to have one.
+ *
+ * Everything else in the audio cache is there because something needed to read
+ * it once, and is dropped as soon as the set moves past it. These are the
+ * tracks somebody asked for, so they live in a directory eviction never walks
+ * and stay until they are removed by hand.
+ * -------------------------------------------------------------------- */
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadProgress {
+    done: usize,
+    total: usize,
+    /// What is being fetched right now. Empty when finished.
+    title: String,
+    finished: bool,
+    /// Why it stopped early, if it did.
+    error: String,
+}
+
+/// Every track whose audio is kept on the device.
+#[tauri::command]
+fn downloaded_tracks(state: State<'_, Shared>) -> Result<Vec<String>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.pinned.iter().cloned().collect())
+}
+
+fn collection_tracks(app: &AppState, kind: &str, id: &str) -> Vec<String> {
+    match kind {
+        "playlist" => app
+            .playlists
+            .get(id)
+            .map(|p| p.tracks.clone())
+            .unwrap_or_default(),
+        "group" => app
+            .groups
+            .get(id)
+            .map(|g| {
+                tracks_in_group(app, g)
+                    .into_iter()
+                    .map(|r| r.href)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Download every track in a playlist or smart group, and keep them.
+///
+/// Reported per track rather than as one long wait: on a slow connection this
+/// is minutes, and a button that goes quiet for minutes has failed as far as
+/// anyone can tell.
+#[tauri::command]
+async fn download_collection(
+    app_handle: tauri::AppHandle,
+    kind: String,
+    id: String,
+    state: State<'_, Shared>,
+) -> Result<()> {
+    use tauri::Emitter;
+
+    let (hrefs, remote, dir, max) = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        (
+            collection_tracks(&app, &kind, &id),
+            app.settings.remote.clone(),
+            app.cache.dir().to_path_buf(),
+            app.cache.max_bytes(),
+        )
+    };
+
+    if hrefs.is_empty() {
+        return Err(Error(
+            "There are no tracks in that to download.".to_string(),
+        ));
+    }
+
+    let shared: Shared = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = cache::Cache::new(dir, max);
+        let total = hrefs.len();
+
+        let fetcher = match webdav::Fetcher::new(&remote) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = app_handle.emit(
+                    "download-progress",
+                    DownloadProgress {
+                        done: 0,
+                        total,
+                        title: String::new(),
+                        finished: true,
+                        error: e,
+                    },
+                );
+                return;
+            }
+        };
+
+        for (i, href) in hrefs.iter().enumerate() {
+            let title = shared
+                .lock()
+                .ok()
+                .and_then(|a| {
+                    a.rows
+                        .iter()
+                        .find(|r| &r.href == href)
+                        .map(|r| r.title.clone())
+                })
+                .unwrap_or_default();
+
+            let outcome = cache.download(href, || fetcher.fetch(href));
+
+            if outcome.is_ok() {
+                if let Ok(mut app) = shared.lock() {
+                    app.pinned.insert(href.clone());
+                    let _ = app.save_pinned();
+                }
+            }
+
+            let _ = app_handle.emit(
+                "download-progress",
+                DownloadProgress {
+                    done: i + 1,
+                    total,
+                    title,
+                    finished: i + 1 == total,
+                    error: outcome.err().map(|e| e.to_string()).unwrap_or_default(),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+/// Stop keeping a collection's tracks.
+///
+/// Only where nothing else keeps them: a track in two downloaded playlists
+/// stays until both are removed.
+#[tauri::command]
+fn remove_download(kind: String, id: String, state: State<'_, Shared>) -> Result<usize> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let hrefs = collection_tracks(&app, &kind, &id);
+
+    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for p in app.playlists.all() {
+        if !(kind == "playlist" && p.id == id) {
+            wanted.extend(p.tracks.iter().cloned());
+        }
+    }
+
+    let mut removed = 0usize;
+    for href in hrefs {
+        if wanted.contains(&href) {
+            continue;
+        }
+        if app.pinned.remove(&href) {
+            let _ = app.cache.remove_download(&href);
+            removed += 1;
+        }
+    }
+    app.save_pinned()?;
+    Ok(removed)
+}
+
 /// How many files are second-or-later copies of a recording.
 ///
 /// So the switch that hides them can say what it would hide, and so someone
@@ -2833,6 +3003,58 @@ struct PlaybackState {
 /// bounded: a cold cache means a download, and decoding a five-minute track is
 /// seconds of CPU. Doing either on the command thread would freeze the window,
 /// and doing it on the audio thread is unthinkable.
+/// Open a track that is not on disk yet.
+///
+/// Streams it by range when the server allows, and falls back to fetching the
+/// whole file when it does not — which is what playback did before this
+/// existed: correct, just slower to start.
+///
+/// Either way the file is *not* stored here. Whether its audio is worth keeping
+/// is `keeps_audio`'s question, and the window fetcher answers it separately;
+/// storing a copy here as a side effect of playing once is how the cache filled
+/// up in the first place.
+fn stream_from_server(
+    remote: &vapor_library::RemoteConfig,
+    cache: &cache::Cache,
+    href: &str,
+    rate: u32,
+) -> std::result::Result<decoder::Streamer, String> {
+    use remote_source::RangeFetch as _;
+
+    let fetcher = std::sync::Arc::new(webdav::Fetcher::new(remote)?);
+    let track = std::sync::Arc::new(remote_source::RemoteTrack::new(fetcher, href));
+
+    if !track.streamable() {
+        // No ranges. Fetch it, keep it — a track that had to be downloaded in
+        // full to be played at all may as well be on disk for the next few
+        // minutes, and the window will drop it when the set moves on.
+        let path = cache
+            .store(href, || track.whole())
+            .map_err(|e| e.to_string())?;
+        return decoder::Streamer::start(&path, rate, 0);
+    }
+
+    // Shared between every open of this track, so the mix cueing into it does
+    // not fetch the same bytes the deck playing it already has.
+    let held = std::sync::Arc::new(std::sync::Mutex::new(remote_source::Chunks::default()));
+    let ext = href.rsplit('.').next().map(str::to_string);
+
+    decoder::Streamer::start_with(
+        Box::new(move || {
+            let source = remote_source::RemoteSource::new(
+                std::sync::Arc::clone(&track) as std::sync::Arc<dyn remote_source::RangeFetch>,
+                std::sync::Arc::clone(&held),
+            );
+            Ok(vapor_dsp::decode::Source::new(
+                Box::new(source),
+                ext.as_deref(),
+            ))
+        }),
+        rate,
+        0,
+    )
+}
+
 fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     let Some(player) = app.player.as_ref() else {
         app.playback_error = Some("No audio output device is available.".to_string());
@@ -2880,15 +3102,24 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
 
     tauri::async_runtime::spawn_blocking(move || {
         let cache = cache::Cache::new(cache_dir, cache_max);
-        let outcome = cache
-            .store(&href, || webdav::fetch_blocking(&remote, &href))
-            .map_err(|e| e.to_string())
-            .and_then(|path| {
-                // A decoder thread and a few seconds of window, rather than the
-                // whole track in memory (TD-09). Returns once there is enough
-                // audio to start, so playback opens with music.
-                decoder::Streamer::start(&path, rate, 0)
-            });
+
+        /*
+         * Play it from where it already is, or from the server as it arrives.
+         *
+         * A track in the window is on disk and opens instantly. Anything else
+         * used to be downloaded in full first — ten megabytes before a note —
+         * which was invisible only because the analysis pass had been filling
+         * the cache with the whole library.
+         *
+         * `RemoteSource` fetches by byte range, so playback starts as soon as
+         * the container's header is in. It needs ranges to do that: a server
+         * that refuses them leaves nothing to do but fetch the file, which is
+         * what this did before. See `remote_source`.
+         */
+        let outcome = match cache.get(&href) {
+            Some(path) => decoder::Streamer::start(&path, rate, 0),
+            None => stream_from_server(&remote, &cache, &href, rate),
+        };
 
         let Ok(mut app) = shared.lock() else {
             return;
@@ -6113,6 +6344,16 @@ fn data_breakdown(state: State<'_, Shared>) -> Result<Vec<DataRow>> {
             bytes: 0,
             local: false,
         },
+        // Downloads before the cache: they are the deliberate half, and on a
+        // device where somebody has kept a few playlists they will be most of
+        // the total. Separating them is the difference between "the app is
+        // holding two gigabytes" and "you asked it to keep two gigabytes".
+        DataRow {
+            label: "Downloads".to_string(),
+            path: app.cache.downloads_dir().display().to_string(),
+            bytes: app.cache.downloads_size(),
+            local: true,
+        },
         DataRow {
             label: "Offline cache".to_string(),
             path: app.cache.dir().display().to_string(),
@@ -6357,6 +6598,9 @@ pub fn run() {
             playlist_folders,
             create_folder,
             duplicate_count,
+            downloaded_tracks,
+            download_collection,
+            remove_download,
             dynamic_groups,
             create_group,
             rename_group,

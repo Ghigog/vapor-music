@@ -72,7 +72,25 @@ impl Streamer {
     /// *that* position rather than for the beginning is what lets a transition
     /// be armed without decoding the minutes of track in front of it.
     pub fn start(path: &Path, rate: u32, from: u64) -> Result<Streamer, String> {
-        let mut stream = PlaybackStream::open(path, rate).map_err(|e| e.to_string())?;
+        let owned = path.to_path_buf();
+        Self::start_with(
+            Box::new(move || vapor_dsp::decode::source_from_path(&owned)),
+            rate,
+            from,
+        )
+    }
+
+    /// Start from a source that is not a file — a track still arriving over the
+    /// network, in practice. See `crate::remote_source`.
+    ///
+    /// The closure may be called more than once: seeking falls back to opening
+    /// the track again when the container cannot seek by itself.
+    pub fn start_with(
+        reopen: vapor_dsp::stream::ReopenSource,
+        rate: u32,
+        from: u64,
+    ) -> Result<Streamer, String> {
+        let mut stream = PlaybackStream::open_with(reopen, rate).map_err(|e| e.to_string())?;
 
         let window = Arc::new(Window::for_seconds(rate, WINDOW_SECS));
         if let Some(total) = stream.total_frames() {

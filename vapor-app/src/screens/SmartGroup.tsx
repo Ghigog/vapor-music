@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
+import { DownloadButton } from "../components/DownloadButton";
 
 export function SmartGroup({
   id,
@@ -110,6 +111,17 @@ export function SmartGroup({
         What the group is, rather than what it currently contains. Removing one
         of these is what changes the group; the list below simply follows.
       */}
+      {/* A group resolves to tracks, so it can be kept like a playlist can —
+          and unlike one, what it holds changes as the library grows, so the
+          set kept is whatever it resolves to at the moment it was asked for. */}
+      {tracks.length > 0 && (
+        <DownloadButton
+          kind="group"
+          id={id}
+          hrefs={tracks.map((t) => t.href)}
+        />
+      )}
+
       {group.entities.length === 0 ? (
         <p className="group__empty">
           Nothing in this group yet. Drag an artist, album or genre onto it — a

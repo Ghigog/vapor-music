@@ -35,6 +35,7 @@ import "./components/help.css";
 import "./components/tracksheet.css";
 import "./components/tabmenu.css";
 import "./components/draglayer.css";
+import "./components/download.css";
 import "./screens/library.css";
 import "./screens/songs.css";
 import "./screens/queue.css";

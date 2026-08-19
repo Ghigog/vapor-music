@@ -32,7 +32,7 @@
 //!   library, so in practice the streaming path was dead code for music and
 //!   only ran for DJ sets. Nothing here has a length exception.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use symphonia::core::codecs::Decoder;
 use symphonia::core::formats::{FormatReader, SeekMode, SeekTo};
@@ -49,8 +49,17 @@ use crate::resample::StreamResampler;
 const DECODE_CHUNK: usize = 8192;
 
 /// A track being decoded as it plays.
+/// Opens the track again, from the beginning.
+///
+/// A closure rather than a path because a track is not always a file: it may be
+/// arriving over the network, in which case "open it again" means starting
+/// another read of the same remote object. Needed because seeking falls back to
+/// reopening and skipping when the container cannot seek — see
+/// [`PlaybackStream::reopen_and_skip`].
+pub type ReopenSource = Box<dyn Fn() -> Result<decode::Source, DecodeError> + Send>;
+
 pub struct PlaybackStream {
-    path: PathBuf,
+    reopen: ReopenSource,
     format: Box<dyn FormatReader>,
     decoder: Box<dyn Decoder>,
     track_id: u32,
@@ -75,7 +84,24 @@ impl PlaybackStream {
     /// audio, which keeps the cost of arming a track that is then cancelled to
     /// a file handle.
     pub fn open(path: &Path, target_rate: u32) -> Result<PlaybackStream, DecodeError> {
-        let opened = decode::open(decode::source_from_path(path)?)?;
+        let owned = path.to_path_buf();
+        Self::open_with(
+            Box::new(move || decode::source_from_path(&owned)),
+            target_rate,
+        )
+    }
+
+    /// Open whatever `reopen` produces, and prepare to deliver frames at
+    /// `target_rate`.
+    ///
+    /// The closure is called once here and again whenever a seek has to fall
+    /// back to reopening, so it must be able to produce the same track more
+    /// than once.
+    pub fn open_with(
+        reopen: ReopenSource,
+        target_rate: u32,
+    ) -> Result<PlaybackStream, DecodeError> {
+        let opened = decode::open(reopen()?)?;
         let source_rate = opened.sample_rate;
         if source_rate == 0 {
             return Err(DecodeError::Unsupported(
@@ -91,7 +117,7 @@ impl PlaybackStream {
         let total = opened.n_frames.map(|n| resampler.output_len_for(n));
 
         Ok(PlaybackStream {
-            path: path.to_path_buf(),
+            reopen,
             format: opened.format,
             decoder: opened.decoder,
             track_id: opened.track_id,
@@ -220,7 +246,7 @@ impl PlaybackStream {
     /// Seek by brute force: open the file again and throw away everything
     /// before the target. Returns the source frame reached.
     fn reopen_and_skip(&mut self, seconds: f64) -> Result<u64, DecodeError> {
-        let opened = decode::open(decode::source_from_path(&self.path)?)?;
+        let opened = decode::open((self.reopen)()?)?;
         self.format = opened.format;
         self.decoder = opened.decoder;
         self.track_id = opened.track_id;
