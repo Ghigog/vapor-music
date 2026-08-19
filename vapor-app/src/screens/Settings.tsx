@@ -59,6 +59,8 @@ export function Settings() {
   const [status, setStatus] = useState<core.AnalysisStatus | null>(null);
   /** How many files are second-or-later copies, so the switch can say. */
   const [dupes, setDupes] = useState<number | null>(null);
+  /** Whether a pass has been seen running since Analyse was pressed. */
+  const [started, setStarted] = useState(false);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
 
   /** Whether the keychain holds a password for the username in the box.
@@ -101,7 +103,10 @@ export function Settings() {
       core.analysisStatus(),
       core.duplicateCount(),
     ]);
-    if (s.status === "fulfilled") setStatus(s.value);
+    if (s.status === "fulfilled") {
+      setStatus(s.value);
+      if (s.value.running) setStarted(true);
+    }
     if (d.status === "fulfilled") setDupes(d.value);
   }, []);
 
@@ -158,10 +163,14 @@ export function Settings() {
    * as the app having stopped working.
    */
   useEffect(() => {
-    if (busy === "analysing" && status?.running === false) {
+    // `started` guards against the snapshot this screen mounted with: without
+    // it, pressing Analyse is undone by a `running: false` read from before the
+    // press, and the button comes straight back as though nothing happened.
+    if (busy === "analysing" && started && status?.running === false) {
       setBusy("idle");
+      setStarted(false);
     }
-  }, [busy, status?.running]);
+  }, [busy, started, status?.running]);
 
   async function run<T>(
     kind: Busy,
@@ -291,6 +300,14 @@ export function Settings() {
   async function analyse() {
     setProgress(null);
     await run("analysing", "analysis", core.analyseLibrary, () => {});
+    // Read the status straight back.
+    //
+    // The backend marks the pass running *before* it spawns the thread, so this
+    // returns `running: true` and the meter appears at once rather than at the
+    // first track — which on a slow connection is minutes away. It also stops
+    // the release below from firing against the snapshot taken when this screen
+    // mounted, which still says nothing is running.
+    await refresh();
   }
 
   return (

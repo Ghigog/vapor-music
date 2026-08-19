@@ -5928,6 +5928,33 @@ pub fn run() {
                 spawn_prefetcher(Arc::clone(&shared));
             }
 
+            /*
+             * Carry on describing the library.
+             *
+             * Analysis only ever began from a scan, from the Analyse button, or
+             * from playing a track nothing was known about — so a library part
+             * way through was simply left there, and every launch started with
+             * a pass that was not running and a count that had not moved. On a
+             * few hundred tracks that is a job spanning many sittings, and
+             * asking to be told to continue each time is asking about something
+             * the app already knows.
+             *
+             * `pending` skips everything already done, so this costs nothing on
+             * a library that is finished, and a pass already running is left
+             * alone by the generation check inside.
+             */
+            {
+                let for_analysis: Shared = Arc::clone(&shared);
+                let handle = app.handle().clone();
+                // After setup returns: `start_analysis` takes the lock, and
+                // this closure is holding it through `shared` above.
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = start_analysis(&handle, &for_analysis) {
+                        eprintln!("vapor-analysis: could not resume at launch: {e:?}");
+                    }
+                });
+            }
+
             // Local sync (SYNC-001, SYNC-004). Independent of audio: a device
             // with no speaker is exactly the sort of thing worth syncing to.
             //
