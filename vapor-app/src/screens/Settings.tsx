@@ -396,8 +396,10 @@ export function Settings() {
       <section className="settings__card glass">
         <h2 className="settings__section">Listening to your library</h2>
         <p className="settings__hint">
-          Tempo, key and cue points, worked out on this device. About half a
-          second a track, and only once — the results are kept.
+          Tempo, key and cue points, worked out on this device, once — the
+          results are kept. The listening itself takes about half a second a
+          track; fetching the track to listen to takes as long as your
+          connection does, which on a large library is most of the wait.
         </p>
 
         {status && (

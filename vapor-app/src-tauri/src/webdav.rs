@@ -210,6 +210,16 @@ pub struct Fetcher {
     client: reqwest::blocking::Client,
 }
 
+/// How long to wait for a connection to open.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How long to wait for the *next* bytes of a response, where that can be
+/// asked. The async client can; the blocking one in this reqwest cannot.
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// The longest a single track may take to arrive before it is given up on.
+const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 impl Fetcher {
     /// Read the credential once and open one client.
     pub fn new(remote: &vapor_library::RemoteConfig) -> std::result::Result<Self, String> {
@@ -223,6 +233,26 @@ impl Fetcher {
             ),
             client: reqwest::blocking::Client::builder()
                 .user_agent("VaporMusic/2.0")
+                // reqwest waits for ever by default, and the analysis pass
+                // fetches every track in the library through this one client on
+                // one thread. A socket that goes away without saying so — a
+                // phone changing network, a radio sleeping, a server dropping
+                // the connection — therefore stopped the pass dead: the fetch
+                // never returned, no further track was described, and the
+                // screen showed a run in flight with its own button disabled
+                // for as long as the app stayed open.
+                //
+                // A whole-request ceiling rather than a per-read one: the
+                // blocking builder in this reqwest has no `read_timeout`, which
+                // is the narrower question worth asking. Five minutes is
+                // therefore deliberately generous — it has to clear a large
+                // track on a bad connection without cutting it off — and it is
+                // a backstop against hanging for ever, not a performance
+                // budget. A track that trips it is recorded as a failure and
+                // the pass moves on to the next, which is the behaviour that
+                // was missing.
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(FETCH_TIMEOUT)
                 .build()
                 .map_err(|e| e.to_string())?,
         })
@@ -347,6 +377,8 @@ pub async fn scan(url: &str, username: &str, base: &str) -> Result<ScanResult, D
     let password = load_password(username)?;
     let client = reqwest::Client::builder()
         .user_agent("VaporMusic/2.0")
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
         .build()
         .map_err(|e| DavError::Network(e.to_string()))?;
 
