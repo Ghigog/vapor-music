@@ -1041,6 +1041,8 @@ export interface AnalysisStatus {
   running: boolean;
   /** The track it is on. Empty between tracks and when nothing is running. */
   current: string;
+  /** Why the last pass ended early, if it did. Empty otherwise. */
+  stoppedBecause: string;
 }
 
 export interface Analysis {

@@ -469,6 +469,16 @@ export function Settings() {
         {error?.card === "analysis" && (
           <ErrorNotice error={error.text} onDismiss={() => setError(null)} />
         )}
+        {/*
+          A pass that gave up says so. It used to return without a word and
+          without clearing its own "running" flag, so the screen showed a pass
+          in flight for ever with the Analyse button disabled — which from the
+          outside is analysis stopping by itself.
+        */}
+        {status?.stoppedBecause && (
+          <p className="settings__hint">{status.stoppedBecause}</p>
+        )}
+
         {note?.card === "analysis" && (
           <p className="settings__note">{note.text}</p>
         )}

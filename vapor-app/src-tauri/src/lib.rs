@@ -118,6 +118,16 @@ struct AppState {
     /// automatic pass was invisible.
     analysing: bool,
     analysing_title: String,
+    /// Which exit a person took by hand, until the set actually reaches it.
+    ///
+    /// Follow is *whatever is queued*, so choosing Switch and then re-reading
+    /// the screen showed the chosen track relabelled FOLLOW — the set had
+    /// silently agreed with you and the departure you asked for was no longer
+    /// visible anywhere. The label is held here until the track starts, so the
+    /// card keeps saying which way the set was sent.
+    chosen_exit: Option<Exit>,
+    /// Why the last pass ended early, if it did. Empty otherwise.
+    analysis_stopped_because: String,
     /// Where the four-step choice cycle has got to (§3 of the workflow doc).
 
     /// This installation's identity on the local network (SYNC-001).
@@ -281,6 +291,8 @@ impl AppState {
             cancel: analysis::Cancel::new(),
             analysis_generation: 0,
             analysing: false,
+            analysis_stopped_because: String::new(),
+            chosen_exit: None,
             analysing_title: String::new(),
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
@@ -2773,6 +2785,10 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     app.loading = true;
     app.playback_error = None;
     app.playing = Some(href.clone());
+    // The set has arrived. Whichever exit was taken to get here has been taken,
+    // so the label goes back to describing what is queued rather than what was
+    // asked for.
+    app.chosen_exit = None;
     // A mix arranged before this choice is now for the wrong track. The engine
     // cancels its own side when the load lands; this is the shell's half.
     app.armed_next = None;
@@ -3075,11 +3091,59 @@ fn genre_of(app: &AppState, href: &str) -> String {
 fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
     let (ga, gb) = (genre_of(app, a), genre_of(app, b));
     // Unknown on either side is not evidence of a jump.
-    if ga.is_empty() || gb.is_empty() {
+    if vapor_library::is_unknown_genre(&ga) || vapor_library::is_unknown_genre(&gb) {
         return true;
     }
     vapor_library::is_similar_genre(&ga, &gb)
 }
+
+/// How far a candidate moves away from what is playing, in kind rather than in
+/// tempo or level.
+///
+/// Genre when both sides have one; the artist otherwise.
+///
+/// The fallback is the point. Measured on this library, **488 of 534 tracks
+/// carry no genre tag at all** and a further 15 say "Unknown genre" — so genre
+/// is not a signal here, it is a blank, and `same_genre` answers "yes, the
+/// same" for every pair of them. That is why a De André ballad could be offered
+/// as the way to *stay* in a Keem the Cipher set: nothing in the model knew
+/// they were different music.
+///
+/// The artist is the strongest thing a folder-organised library does carry. Two
+/// tracks by one artist are far more likely to be one vibe than two tracks
+/// picked for tempo alone.
+fn kind_distance(app: &AppState, a: &str, b: &str) -> f32 {
+    let (ga, gb) = (genre_of(app, a), genre_of(app, b));
+    if !vapor_library::is_unknown_genre(&ga) && !vapor_library::is_unknown_genre(&gb) {
+        return if vapor_library::is_similar_genre(&ga, &gb) {
+            0.0
+        } else {
+            GENRE_JUMP
+        };
+    }
+    let artist = |href: &str| {
+        app.rows
+            .iter()
+            .find(|r| r.href == href)
+            .map(|r| r.artist.trim().to_lowercase())
+            .unwrap_or_default()
+    };
+    let (aa, ab) = (artist(a), artist(b));
+    if aa.is_empty() || ab.is_empty() || aa == ab {
+        0.0
+    } else {
+        ARTIST_JUMP
+    }
+}
+
+/// What leaving the genre costs a Stay, and earns a Switch.
+///
+/// Sized against the intensity term below, which is a 0–1 difference scaled by
+/// 100: a genre jump is worth more than any intensity gap, and an artist jump
+/// about a quarter of one, because a different artist is ordinary and a
+/// different genre is a decision.
+const GENRE_JUMP: f32 = 140.0;
+const ARTIST_JUMP: f32 = 28.0;
 
 /// Build the mixer's beat grid for a track, honouring a manual tempo.
 ///
@@ -4434,6 +4498,7 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
     let stay = candidates.iter().copied().min_by(|a, b| {
         let score = |t: &TrackMeta| {
             (from.energy_level - t.energy_level).abs() * 100.0
+                + kind_distance(app, &current, &t.href)
                 + candidate_cost(app, from, t, Exit::Stay)
         };
         score(a).total_cmp(&score(b))
@@ -4448,12 +4513,18 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
         .filter(|t| stay.is_none_or(|s| s.href != t.href))
         .filter(|t| exit_between(from, t, same_genre(app, &current, &t.href)) == Exit::Switch)
         .min_by(|a, b| {
-            candidate_cost(app, from, a, Exit::Switch).total_cmp(&candidate_cost(
-                app,
-                from,
-                b,
-                Exit::Switch,
-            ))
+            // Rewarded for leaving, not merely permitted to.
+            //
+            // This used to minimise `base + energy_diff * 20`, which among a
+            // set of departures picks the *mildest* one — so Switch offered the
+            // next track on the same album. Subtracting the distance means the
+            // furthest in kind wins, while `base` still keeps it to something
+            // the engine can actually mix into.
+            let score = |t: &TrackMeta| {
+                candidate_cost(app, from, t, Exit::Switch)
+                    - kind_distance(app, &current, &t.href)
+            };
+            score(a).total_cmp(&score(b))
         });
 
     // And when nothing clears the thresholds there is still a furthest track,
@@ -4508,9 +4579,28 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
                     ))
                 })
         });
+    /*
+     * The queued card keeps the label of the exit that put it there.
+     *
+     * Follow means "whatever is queued", so taking the Switch exit made the
+     * chosen track the Follow card on the next read — the set quietly agreed
+     * with you and the departure you had asked for stopped being visible. The
+     * label now holds until the set actually reaches the track, so the screen
+     * goes on saying which way it was sent.
+     *
+     * Only while it is still the queued one: `chosen_exit` is cleared when the
+     * track starts, and any other choice replaces it.
+     */
+    let queued_exit = app
+        .chosen_exit
+        .filter(|_| {
+            follow.is_some_and(|f| queued.as_deref() == Some(f.href.as_str()))
+        })
+        .unwrap_or(Exit::Follow);
+
     let chosen: Vec<(&TrackMeta, Exit)> = [
         stay.map(|t| (t, Exit::Stay)),
-        follow.map(|t| (t, Exit::Follow)),
+        follow.map(|t| (t, queued_exit)),
         switch.map(|t| (t, Exit::Switch)),
     ]
     .into_iter()
@@ -4555,9 +4645,17 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
 fn choose_next(href: String, curve: String, state: State<'_, Shared>) -> Result<()> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
 
+    // Which of the three this was, before the queue changes and the answer
+    // becomes "Follow" by definition.
+    let taken = mix_candidates_for(&app)
+        .into_iter()
+        .find(|c| c.href == href)
+        .map(|c| c.exit);
+
     if !app.queue.set_next(&href) {
         return Err(Error("That track is no longer in the queue.".to_string()));
     }
+    app.chosen_exit = taken;
 
     let pool = track_meta_pool(&app);
     if !pool.contains_key(&href) {
@@ -5291,6 +5389,13 @@ struct AnalysisStatus {
     running: bool,
     /// The track it is on. Empty between tracks and when nothing is running.
     current: String,
+    /// Why the last pass ended early, if it did. Empty otherwise.
+    ///
+    /// A pass that cannot open a connection used to return without a word and
+    /// without clearing `running`, so the screen showed a pass in flight that
+    /// was not, for ever, with its own button disabled — which is what
+    /// "the analysis stopped by itself" looks like from the outside.
+    stopped_because: String,
 }
 
 #[tauri::command]
@@ -5303,6 +5408,7 @@ fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
         total: hrefs.len(),
         running: app.analysing,
         current: app.analysing_title.clone(),
+        stopped_because: app.analysis_stopped_because.clone(),
     })
 }
 
@@ -5410,8 +5516,32 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
         // A pass that cannot read the credential has no way to fetch anything,
         // so it ends here rather than failing every track in turn and marking
         // the whole library unreadable.
-        let Ok(fetcher) = webdav::Fetcher::new(&remote) else {
-            return;
+        let fetcher = match webdav::Fetcher::new(&remote) {
+            Ok(f) => f,
+            Err(e) => {
+                // Say so, and put the flag back.
+                //
+                // `analysing` is set before this thread starts, and the only
+                // place it was cleared is after `analysis::run` returns — which
+                // this path never reaches. So a failure here left the app
+                // believing a pass was running until it was restarted, with the
+                // Analyse button disabled because a pass was "in flight".
+                //
+                // It is reachable in ordinary use: the credential lives in the
+                // OS keychain, and on Android the Keystore is not readable
+                // while the device is locked. A screen going off mid-library is
+                // enough.
+                if let Ok(mut app) = state_arc.lock() {
+                    app.analysing = false;
+                    app.analysing_title = String::new();
+                    app.analysis_stopped_because = format!(
+                        "Analysis stopped: {e}. It will carry on from where it \
+                         left off when you press Analyse."
+                    );
+                }
+                let _ = handle.emit("analysis-stopped", e.to_string());
+                return;
+            }
         };
 
         analysis::run(
@@ -5478,6 +5608,8 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
             if app.analysis_generation == generation {
                 app.analysing = false;
                 app.analysing_title = String::new();
+                // A pass that finished is not a pass that failed.
+                app.analysis_stopped_because = String::new();
             }
         }
     });
@@ -6578,6 +6710,75 @@ mod tests {
         assert!(app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
         assert!(!app.groups.add_entity(&id, EntityType::Artist, "Aphex Twin"));
         assert_eq!(app.groups.get(&id).expect("the group").entities.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Stay stays in the vibe, not merely at the level.
+    ///
+    /// It was chosen on intensity and transition cost alone, so with genre
+    /// absent — 488 of 534 tracks in Dylan's library carry no genre tag — the
+    /// closest *level* won outright, and a De André ballad was offered as the
+    /// way to stay in a hip hop set. The artist is the signal a
+    /// folder-organised library actually has.
+    #[test]
+    fn stay_prefers_the_artist_already_playing_when_genre_is_unknown() {
+        let (mut app, dir) = app();
+        let tracks = [
+            ("/keem-a.mp3", "KEEM THE CIPHER", 85.0, "9B", 0.55),
+            ("/keem-b.mp3", "KEEM THE CIPHER", 88.0, "9B", 0.60),
+            // Closer in level than the label-mate, and nothing like it.
+            ("/deandre.mp3", "Fabrizio De Andre", 96.0, "8A", 0.56),
+        ];
+        for (href, artist, bpm, key, energy) in tracks {
+            app.rows.push(row(href, href));
+            let i = app.rows.len() - 1;
+            app.rows[i].artist = artist.to_string();
+            app.analysis
+                .insert(href.to_string(), analysed_track(bpm, key, energy));
+        }
+        app.queue.set_tracks(vec!["/keem-a.mp3".to_string()], None);
+        app.playing = Some("/keem-a.mp3".to_string());
+
+        let stay = mix_candidates_for(&app)
+            .into_iter()
+            .find(|c| c.exit == Exit::Stay)
+            .expect("a Stay card");
+        assert_eq!(
+            stay.href, "/keem-b.mp3",
+            "Stay left the artist for a closer intensity",
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Choosing an exit does not silently become Follow.
+    ///
+    /// Follow is "whatever is queued", so taking the Switch exit made the
+    /// chosen track the Follow card the moment the screen re-read — the set
+    /// agreed with you and the departure stopped being visible anywhere.
+    #[test]
+    fn a_chosen_switch_keeps_saying_switch() {
+        let (mut app, dir) = conducting();
+        extend_set(&mut app);
+
+        let switch = mix_candidates_for(&app)
+            .into_iter()
+            .find(|c| c.exit == Exit::Switch)
+            .expect("a Switch card");
+
+        app.chosen_exit = Some(Exit::Switch);
+        assert!(app.queue.set_next(&switch.href));
+
+        let after = mix_candidates_for(&app);
+        let queued = after
+            .iter()
+            .find(|c| c.href == switch.href)
+            .expect("the chosen track is still offered");
+        assert_eq!(
+            queued.exit,
+            Exit::Switch,
+            "the chosen departure was relabelled as the set agreeing with it",
+        );
+        assert!(queued.selected, "and it is what happens if nobody acts");
         let _ = std::fs::remove_dir_all(dir);
     }
 

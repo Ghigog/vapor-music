@@ -1384,6 +1384,7 @@ export class FakeBackend {
           total: this.scanned ? this.rows.length : 0,
           running: this.analysing,
           current: this.analysingTitle,
+          stoppedBecause: "",
         };
 
       case "cache_status":

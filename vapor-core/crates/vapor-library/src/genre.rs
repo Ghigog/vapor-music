@@ -270,11 +270,28 @@ pub fn genre_distance(a: &str, b: &str) -> f32 {
 /// Loose similarity check used to bucket "interesting" versus "creative"
 /// candidates. Deliberately more permissive than [`genre_distance`].
 pub fn is_similar_genre(a: &str, b: &str) -> bool {
-    let (ca, cb) = (a.trim().to_lowercase(), b.trim().to_lowercase());
-    if ca.is_empty() || cb.is_empty() || ca == "unknown" || cb == "unknown" {
+    if is_unknown_genre(a) || is_unknown_genre(b) {
         return false;
     }
+    let (ca, cb) = (a.trim().to_lowercase(), b.trim().to_lowercase());
     ca == cb || ca.contains(&cb) || cb.contains(&ca)
+}
+
+/// Whether a genre string says anything.
+///
+/// `"unknown"` was the only placeholder recognised, and taggers do not agree on
+/// it: a real library carries `"Unknown genre"`, `"Other"` and `"Genre"` too,
+/// and each was being treated as the name of a genre — so two tracks tagged
+/// `"Unknown genre"` counted as a genre *match*, and matched nothing else.
+pub fn is_unknown_genre(g: &str) -> bool {
+    let g = g.trim().to_lowercase();
+    g.is_empty()
+        || g == "unknown"
+        || g == "unknown genre"
+        || g == "other"
+        || g == "genre"
+        || g == "none"
+        || g == "n/a"
 }
 
 #[cfg(test)]
