@@ -1,5 +1,6 @@
 package com.dylangrowcoot.vapormusic
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 
@@ -31,8 +32,28 @@ class MainActivity : TauriActivity() {
    */
   private external fun setupNdkContext()
 
+  /**
+   * Ask for the notification permission, once, on 33 and up.
+   *
+   * The foreground service runs either way — which is the half that matters,
+   * because it is what stops Android suspending the process and starving the
+   * audio thread. Without the permission it simply has nothing to draw, so the
+   * transport in the shade and on the lock screen is missing and nothing else
+   * is. Asked here rather than at the first play so the answer is already in
+   * when a set starts.
+   */
+  private fun askAboutNotifications() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val granted = checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+      android.content.pm.PackageManager.PERMISSION_GRANTED
+    if (!granted) {
+      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    askAboutNotifications()
     // Before `super`, which is where Tauri builds the app and starts the audio
     // device. Anything that reads `ndk_context` after this point finds it set.
     setupNdkContext()

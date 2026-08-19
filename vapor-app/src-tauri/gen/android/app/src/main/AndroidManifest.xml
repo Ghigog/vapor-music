@@ -2,6 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Playing with the screen off.
+         Android suspends a backgrounded process, and an app whose audio runs on
+         its own thread is suspended with it: the deck starves, which is heard
+         as stuttering, and then the process is frozen and the music stops. The
+         analysis pass dies the same way. A foreground service is the only thing
+         that changes that, and it must post a notification to exist — which is
+         the media notification anyway.
+         POST_NOTIFICATIONS is asked for at runtime on 33+; without it the
+         service still runs, it simply has nothing to draw. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
@@ -30,6 +44,24 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- `mediaPlayback` is required from 34 and is what makes the
+             exemption legitimate rather than a way of staying alive. -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Headset buttons and Bluetooth. Without a receiver the session gets
+             no media button while the app is in the background, which is most
+             of when they are pressed. -->
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
 
         <provider
           android:name="androidx.core.content.FileProvider"

@@ -33,6 +33,25 @@ pub enum Press {
     Previous,
 }
 
+impl Press {
+    /// From the integer `PlaybackService.kt` sends.
+    ///
+    /// JNI has no enums, so the two sides agree on numbers. The constants are
+    /// named in the Kotlin companion object and the order here is the contract
+    /// — **inserting a variant above `Previous` silently remaps every button**.
+    #[cfg(any(target_os = "android", feature = "android-check"))]
+    pub fn from_i32(press: i32) -> Option<Self> {
+        match press {
+            0 => Some(Press::Play),
+            1 => Some(Press::Pause),
+            2 => Some(Press::Toggle),
+            3 => Some(Press::Next),
+            4 => Some(Press::Previous),
+            _ => None,
+        }
+    }
+}
+
 /// What the system should be showing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NowPlaying {
@@ -133,8 +152,37 @@ impl Controls {
     /// every caller can go on using unconditionally.
     pub fn attach<F>(window_handle: Option<*mut std::ffi::c_void>, on_press: F) -> Arc<Self>
     where
-        F: Fn(Press) + Send + 'static,
+        // `Sync` for Android's sake: the handler is kept in a process-wide
+        // static there, because a JNI callback arrives on the JVM's thread with
+        // nothing of ours to hang it off.
+        F: Fn(Press) + Send + Sync + 'static,
     {
+        /*
+         * Android is not souvlaki's business.
+         *
+         * souvlaki covers the three desktops through D-Bus, SMTC and
+         * MPNowPlayingInfoCenter; Android's equivalent is a `MediaSession`
+         * owned by a foreground service, and the service is not optional
+         * decoration — it is the only thing that stops the OS suspending the
+         * process and starving the audio thread. `PlaybackService.kt` holds
+         * that end, and this routes to it through the same seam every other
+         * platform uses, so the supervisor calls one `publish` and does not
+         * know which it got.
+         */
+        #[cfg(target_os = "android")]
+        {
+            crate::android::on_press(move |press| {
+                if let Some(press) = Press::from_i32(press) {
+                    on_press(press);
+                }
+            });
+            return Arc::new(Controls {
+                inner: Mutex::new(None),
+                last: Mutex::new(None),
+            });
+        }
+
+        #[cfg(not(target_os = "android"))]
         let config = souvlaki::PlatformConfig {
             dbus_name: "vapor_music",
             display_name: "Vapor Music",
@@ -142,6 +190,7 @@ impl Controls {
             hwnd: window_handle,
         };
 
+        #[cfg(not(target_os = "android"))]
         let controls = match souvlaki::MediaControls::new(config) {
             Ok(mut controls) => {
                 match controls.attach(move |event| {
@@ -162,6 +211,7 @@ impl Controls {
             }
         };
 
+        #[cfg(not(target_os = "android"))]
         if !bundled() {
             // souvlaki's macOS backend returns `Ok` unconditionally — `new`
             // and `attach` cannot fail — so a successful registration says
@@ -175,10 +225,11 @@ impl Controls {
             );
         }
 
-        Arc::new(Controls {
+        #[cfg(not(target_os = "android"))]
+        return Arc::new(Controls {
             inner: Mutex::new(controls),
             last: Mutex::new(None),
-        })
+        });
     }
 
     /// Tell the system what is playing.
@@ -203,6 +254,37 @@ impl Controls {
             }
         }
 
+        self.send(now);
+
+        if let Ok(mut last) = self.last.lock() {
+            *last = Some(now.clone());
+        }
+    }
+
+    /// Hand the state to whichever platform is underneath.
+    ///
+    /// Split from `publish` so the "has this changed" question is asked once,
+    /// in one place, rather than in each backend — and so the two bodies do not
+    /// have to be threaded through each other with `cfg` on every other line.
+    #[cfg(target_os = "android")]
+    fn send(&self, now: &NowPlaying) {
+        // Nothing playing and nothing paused: no reason to hold the process
+        // alive, so the service and its wake lock go away.
+        if now.title.is_empty() {
+            crate::android::service_stop();
+        } else {
+            crate::android::service_update(
+                &now.title,
+                &now.artist,
+                now.playing,
+                now.position,
+                now.duration,
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn send(&self, now: &NowPlaying) {
         let Ok(mut guard) = self.inner.lock() else {
             return;
         };
@@ -229,10 +311,6 @@ impl Controls {
                 .then(|| std::time::Duration::from_secs_f64(now.duration)),
             ..Default::default()
         });
-
-        if let Ok(mut last) = self.last.lock() {
-            *last = Some(now.clone());
-        }
     }
 
     /// Publish from any thread, by hopping to the main one.

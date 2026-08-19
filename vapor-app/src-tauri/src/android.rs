@@ -93,3 +93,109 @@ fn publish(mut env: JNIEnv<'_>, activity: JObject<'_>) -> Result<(), String> {
     std::mem::forget(context);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// The playback service
+// ---------------------------------------------------------------------------
+
+/// Tell `PlaybackService` what is playing, starting it if it is not running.
+///
+/// Android suspends a backgrounded process, and the audio thread is suspended
+/// with it — the deck starves, which is heard as stuttering, and then the
+/// process is frozen and the music stops. A foreground service is the only
+/// thing that changes that. See `PlaybackService.kt`.
+///
+/// Everything here is best effort. A device that refuses to start the service
+/// costs background playback and nothing else, and this is called four times a
+/// second from the playback supervisor — a failure that logged every time would
+/// be its own problem.
+pub fn service_update(title: &str, artist: &str, playing: bool, position: f64, duration: f64) {
+    let _ = with_context(|env, context| {
+        let title = env.new_string(title)?;
+        let artist = env.new_string(artist)?;
+        env.call_static_method(
+            "com/dylangrowcoot/vapormusic/PlaybackService",
+            "update",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;ZJJ)V",
+            &[
+                (&context).into(),
+                (&title).into(),
+                (&artist).into(),
+                playing.into(),
+                ((position.max(0.0) * 1000.0) as i64).into(),
+                ((duration.max(0.0) * 1000.0) as i64).into(),
+            ],
+        )?;
+        Ok(())
+    });
+}
+
+/// Stop the service. Nothing is playing, so nothing needs keeping alive.
+pub fn service_stop() {
+    let _ = with_context(|env, context| {
+        env.call_static_method(
+            "com/dylangrowcoot/vapormusic/PlaybackService",
+            "stop",
+            "(Landroid/content/Context;)V",
+            &[(&context).into()],
+        )?;
+        Ok(())
+    });
+}
+
+/// Run `f` with a JNI environment attached to this thread and the app context.
+///
+/// The supervisor is a Rust thread the JVM has never heard of, so it has to
+/// attach before it can call anything — `attach_current_thread` detaches again
+/// when the guard drops, which is the behaviour wanted here: this is called
+/// from one long-lived thread, not from many.
+fn with_context<F>(f: F) -> Result<(), jni::errors::Error>
+where
+    F: FnOnce(&mut JNIEnv<'_>, JObject<'_>) -> Result<(), jni::errors::Error>,
+{
+    let ctx = ndk_context::android_context();
+    // SAFETY: both pointers were published by `publish` above and are valid for
+    // the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let mut env = vm.attach_current_thread()?;
+    let result = f(&mut env, context);
+    // An exception left pending poisons the next JNI call on this thread, which
+    // would be the next state update a quarter of a second later.
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+    result
+}
+
+/// A button on the notification, the lock screen, a headset or a car.
+///
+/// The integers match `media::Press`. Implemented here rather than in
+/// `media.rs` because the JNI name has to mangle to the Kotlin class that
+/// declares it — renaming either side breaks this silently.
+///
+/// # Safety
+///
+/// Called by the JVM on its main thread with a valid environment.
+#[no_mangle]
+pub extern "system" fn Java_com_dylangrowcoot_vapormusic_PlaybackService_onMediaButton(
+    _env: JNIEnv<'_>,
+    _this: JObject<'_>,
+    press: i32,
+) {
+    if let Some(handler) = PRESS_HANDLER.get() {
+        handler(press);
+    }
+}
+
+/// Where a press goes. Set once, when the media controls are attached.
+static PRESS_HANDLER: std::sync::OnceLock<Box<dyn Fn(i32) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Route notification and headset presses to `handler`.
+pub fn on_press<F>(handler: F)
+where
+    F: Fn(i32) + Send + Sync + 'static,
+{
+    let _ = PRESS_HANDLER.set(Box::new(handler));
+}
