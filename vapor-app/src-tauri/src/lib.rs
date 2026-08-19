@@ -5732,6 +5732,30 @@ fn keeps_audio(app: &AppState, href: &str) -> bool {
         .is_some_and(|window| window.iter().any(|h| h == href))
 }
 
+/// Drop every cached track the device has no reason to hold.
+///
+/// `prune_audio` walks the queue, which covers a set as it moves but says
+/// nothing about audio left over from before — and a device upgrading to this
+/// arrives with a cache full of tracks that were kept only because analysis had
+/// read them. On the library this was written against that was 5.4 GB across
+/// 556 files, none of which anything wanted any more.
+///
+/// The whole library rather than the queue, because that is the only list that
+/// can name what is on disk: the cache is content-addressed by a hash of the
+/// href, so a file cannot be turned back into the track it came from.
+fn sweep_audio(app: &AppState) -> usize {
+    let mut freed = 0usize;
+    for row in &app.rows {
+        if keeps_audio(app, &row.href) {
+            continue;
+        }
+        if app.cache.get(&row.href).is_some() && app.cache.remove(&row.href).is_ok() {
+            freed += 1;
+        }
+    }
+    freed
+}
+
 /// Drop the audio of tracks the set has moved away from.
 ///
 /// The window is a promise about what stays, not only about what is fetched:
@@ -6498,6 +6522,21 @@ pub fn run() {
                 // Only useful alongside playback: without a device there is no
                 // queue moving forward to run ahead of.
                 spawn_prefetcher(Arc::clone(&shared));
+            }
+
+            /*
+             * Give back what nothing is holding on to.
+             *
+             * Audio is kept for the window and for downloads; everything else
+             * in the cache was read once and forgotten. A device that has been
+             * through an analysis pass on an older build arrives with all of
+             * it, and nothing else would ever ask for it back.
+             */
+            if let Ok(app) = shared.lock() {
+                let freed = sweep_audio(&app);
+                if freed > 0 {
+                    eprintln!("cache: released {freed} tracks nothing was holding");
+                }
             }
 
             /*
