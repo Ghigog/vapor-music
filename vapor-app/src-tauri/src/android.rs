@@ -221,3 +221,29 @@ pub fn service_analysis(done: usize, total: usize, active: bool) {
         Ok(())
     });
 }
+
+/// Stop was pressed on the analysis notification.
+///
+/// # Safety
+///
+/// Called by the JVM on its main thread with a valid environment.
+#[no_mangle]
+pub extern "system" fn Java_com_dylangrowcoot_vapormusic_PlaybackService_onStopAnalysis(
+    _env: JNIEnv<'_>,
+    _this: JObject<'_>,
+) {
+    if let Some(handler) = STOP_ANALYSIS.get() {
+        handler();
+    }
+}
+
+static STOP_ANALYSIS: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Route the notification's Stop button to `handler`.
+pub fn on_stop_analysis<F>(handler: F)
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    let _ = STOP_ANALYSIS.set(Box::new(handler));
+}

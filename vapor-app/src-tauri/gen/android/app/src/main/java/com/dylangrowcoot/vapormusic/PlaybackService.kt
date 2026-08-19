@@ -109,6 +109,13 @@ class PlaybackService : android.app.Service() {
         session?.let { MediaButtonReceiver.handleIntent(it, intent) }
 
         when (intent?.getStringExtra(EXTRA_KIND)) {
+            KIND_STOP_ANALYSIS -> {
+                // The Stop button on the notification. The pass is told to wind
+                // down through the same path the in-app button uses; this only
+                // stops being a reason for the service to exist.
+                analysing = false
+                onStopAnalysis()
+            }
             KIND_ANALYSIS -> {
                 analysing = intent.getBooleanExtra(EXTRA_ACTIVE, false)
                 analysedDone = intent.getIntExtra(EXTRA_DONE, 0)
@@ -193,7 +200,7 @@ class PlaybackService : android.app.Service() {
             if (showingPlayback) artist
             else "$analysedDone of $analysedTotal analysed"
 
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
+        val builder = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(heading)
             .setContentText(body)
@@ -201,30 +208,56 @@ class PlaybackService : android.app.Service() {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(
-                android.R.drawable.ic_media_previous,
-                "Previous",
-                action(PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS),
-            )
-            .addAction(
-                if (playing) android.R.drawable.ic_media_pause
-                else android.R.drawable.ic_media_play,
-                if (playing) "Pause" else "Play",
-                action(PlaybackStateCompat.ACTION_PLAY_PAUSE),
-            )
-            .addAction(
-                android.R.drawable.ic_media_next,
-                "Next",
-                action(PlaybackStateCompat.ACTION_SKIP_TO_NEXT),
-            )
-            .setStyle(
-                MediaStyle()
-                    .setMediaSession(session.sessionToken)
-                    // Which of the three stay visible when the shade is
-                    // collapsed: back, play/pause, forward.
-                    .setShowActionsInCompactView(0, 1, 2),
-            )
-            .build()
+
+        if (showingPlayback) {
+            builder
+                .addAction(
+                    android.R.drawable.ic_media_previous,
+                    "Previous",
+                    action(PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS),
+                )
+                .addAction(
+                    if (playing) android.R.drawable.ic_media_pause
+                    else android.R.drawable.ic_media_play,
+                    if (playing) "Pause" else "Play",
+                    action(PlaybackStateCompat.ACTION_PLAY_PAUSE),
+                )
+                .addAction(
+                    android.R.drawable.ic_media_next,
+                    "Next",
+                    action(PlaybackStateCompat.ACTION_SKIP_TO_NEXT),
+                )
+                .setStyle(
+                    MediaStyle()
+                        .setMediaSession(session.sessionToken)
+                        // Which of the three stay visible when the shade is
+                        // collapsed: back, play/pause, forward.
+                        .setShowActionsInCompactView(0, 1, 2),
+                )
+        } else {
+            /*
+             * The pass, with a bar and the only way to be rid of it.
+             *
+             * `setOngoing` so it cannot be swiped away: the work carries on
+             * either way, and a notification that can be dismissed while the
+             * thing it reports keeps running is a notification that lies. Stop
+             * is therefore the only way to dismiss it, which is also the only
+             * honest one — it ends the work the notification is about.
+             *
+             * Transport controls are left off entirely here: there is nothing
+             * playing to skip.
+             */
+            builder
+                .setOngoing(true)
+                .setProgress(analysedTotal.coerceAtLeast(1), analysedDone, analysedTotal == 0)
+                .addAction(
+                    android.R.drawable.ic_menu_close_clear_cancel,
+                    "Stop",
+                    stopAnalysisIntent(),
+                )
+        }
+
+        val notification: Notification = builder.build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -255,12 +288,29 @@ class PlaybackService : android.app.Service() {
      */
     private external fun onMediaButton(press: Int)
 
+    /**
+     * Implemented in `src/android.rs`. Stops the analysis pass.
+     *
+     * Same naming contract as [onMediaButton]: the JNI symbol mangles to this
+     * class and method, so renaming either breaks it silently.
+     */
+    private external fun onStopAnalysis()
+
+    /** The Stop button on the pass notification, as an intent back to here. */
+    private fun stopAnalysisIntent(): PendingIntent = PendingIntent.getService(
+        this,
+        1,
+        Intent(this, PlaybackService::class.java).putExtra(EXTRA_KIND, KIND_STOP_ANALYSIS),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     companion object {
         private const val CHANNEL = "vapor.playback"
         private const val NOTIFICATION_ID = 1
 
         private const val EXTRA_KIND = "kind"
         private const val KIND_ANALYSIS = "analysis"
+        private const val KIND_STOP_ANALYSIS = "stop-analysis"
         private const val EXTRA_ACTIVE = "active"
         private const val EXTRA_DONE = "done"
         private const val EXTRA_TOTAL = "total"

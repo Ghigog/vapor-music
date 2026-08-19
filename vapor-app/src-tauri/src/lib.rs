@@ -6000,6 +6000,21 @@ pub fn run() {
                 });
             }
 
+            // Stop, from the pass's own notification. The same flag the
+            // in-app button raises, so there is one way to end a pass rather
+            // than two that have to agree.
+            #[cfg(target_os = "android")]
+            {
+                let for_stop: Shared = Arc::clone(&shared);
+                android::on_stop_analysis(move || {
+                    if let Ok(mut app) = for_stop.lock() {
+                        app.cancel.stop();
+                        app.analysing = false;
+                        app.analysing_title = String::new();
+                    }
+                });
+            }
+
             // Local sync (SYNC-001, SYNC-004). Independent of audio: a device
             // with no speaker is exactly the sort of thing worth syncing to.
             //
