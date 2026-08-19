@@ -59,6 +59,10 @@ struct AppState {
     /// Folders that playlists are filed into. A folder owns no tracks — a
     /// playlist carries a `folder_id` pointing at one.
     folders: FolderStore,
+    /// Tracks whose audio was downloaded on purpose, and must survive
+    /// eviction. Everything else in the audio cache is there because something
+    /// needed to read it once. See `keeps_audio`.
+    pinned: std::collections::HashSet<String>,
     /// Smart groups: saved sets of artists, albums and genres.
     ///
     /// A group holds *entities*, not tracks, which is what makes it different
@@ -246,6 +250,7 @@ impl AppState {
         let playlists = quarantined!("playlists").unwrap_or_default();
         let folders = quarantined!("folders").unwrap_or_default();
         let groups = quarantined!("groups").unwrap_or_default();
+        let pinned = quarantined!("pinned").unwrap_or_default();
         let looked = quarantined!("metadata").unwrap_or_default();
         let trust = quarantined!("trust").unwrap_or_default();
         let tombstones = quarantined!("tombstones").unwrap_or_default();
@@ -270,6 +275,7 @@ impl AppState {
             playlists,
             folders,
             groups,
+            pinned,
             looked,
             device_id,
             trust,
@@ -428,6 +434,11 @@ impl AppState {
 
     fn save_groups(&self) -> Result<()> {
         self.store.save("groups", &self.groups)?;
+        Ok(())
+    }
+
+    fn save_pinned(&self) -> Result<()> {
+        self.store.save("pinned", &self.pinned)?;
         Ok(())
     }
 
@@ -2641,6 +2652,16 @@ fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {
     })
 }
 
+/// How many played tracks keep their audio, so going back is instant.
+const KEEP_BEHIND: usize = 3;
+
+/// How many upcoming tracks keep their audio.
+///
+/// Only the next one is needed to arm a mix. The rest is for skipping: a person
+/// who presses next three times should not wait three times, and at about ten
+/// megabytes a track the insurance is cheap.
+const KEEP_AHEAD: usize = 5;
+
 /// How far ahead of the pass the fetchers may get.
 ///
 /// The audio cache exists so a track can be played without the network. Letting
@@ -3706,6 +3727,8 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
             if app.player.as_ref().is_some_and(|p| p.take_swapped()) {
                 let from = app.playing.clone();
                 app.queue.next(None);
+                // The set has moved, so the window has moved with it.
+                prune_audio(&app);
                 app.playing = app.armed_next.take();
                 // The decoders change roles with the decks. Assigning here also
                 // drops the one feeding the track that just ended, which joins
@@ -5446,6 +5469,55 @@ struct AnalysisStatus {
     stopped_because: String,
 }
 
+/// Whether this track's audio is worth keeping on the device.
+///
+/// Three reasons, and nothing else:
+///
+/// * it was **downloaded on purpose** — a pinned playlist or group, which is
+///   the one case where the person has said they want it kept;
+/// * it is **in the play window** — a few tracks either side of where the set
+///   is, so going back is instant and the next mix has something to cue from;
+/// * it is **playing right now**, which the window covers but which is worth
+///   being explicit about.
+///
+/// Everything else is a file fetched to be read once. That is what filled five
+/// gigabytes: analysis has to download every track to listen to it, and the
+/// bytes were landing in the same cache as playback and staying there.
+fn keeps_audio(app: &AppState, href: &str) -> bool {
+    if app.pinned.contains(href) {
+        return true;
+    }
+    if app.playing.as_deref() == Some(href) {
+        return true;
+    }
+    let tracks = app.queue.tracks();
+    let Some(at) = app.queue.current_index() else {
+        return false;
+    };
+    let from = at.saturating_sub(KEEP_BEHIND);
+    let to = (at + KEEP_AHEAD).min(tracks.len().saturating_sub(1));
+    tracks
+        .get(from..=to)
+        .is_some_and(|window| window.iter().any(|h| h == href))
+}
+
+/// Drop the audio of tracks the set has moved away from.
+///
+/// The window is a promise about what stays, not only about what is fetched:
+/// without this a long set accumulates every track it has been through, which
+/// is the same slow fill that analysis was causing, only quieter.
+///
+/// Only the queue is walked. The cache is content-addressed by a hash of the
+/// href, so a file on disk cannot be turned back into the track it came from —
+/// which is exactly why the byte bound exists underneath as a backstop.
+fn prune_audio(app: &AppState) {
+    for href in app.queue.tracks() {
+        if !keeps_audio(app, href) {
+            let _ = app.cache.remove(href);
+        }
+    }
+}
+
 /// How much of the library is described, and how big the library is.
 ///
 /// One answer, used by the Settings card and by the notification. They had one
@@ -5832,6 +5904,26 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                     }
                 }
 
+                /*
+                 * The audio has been read. Let it go.
+                 *
+                 * Analysis has to download every track in full to listen to it,
+                 * and those bytes were landing in the same cache as playback
+                 * and staying there — five gigabytes of tracks kept in order to
+                 * be measured once. Nothing wants them afterwards unless the
+                 * person asked for the track to be kept, or the set is near it.
+                 *
+                 * Not a retry: a track that failed for a *retryable* reason —
+                 * it simply was not downloaded when the pass reached it — has
+                 * nothing to drop, and one that failed permanently should not
+                 * be fetched again anyway.
+                 */
+                if let Ok(app) = state_arc.lock() {
+                    if !keeps_audio(&app, &progress.href) {
+                        let _ = app.cache.remove(&progress.href);
+                    }
+                }
+
                 let _ = handle.emit("analysis-progress", &progress);
             },
         );
@@ -6104,6 +6196,7 @@ fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
     app.playlists = PlaylistStore::default();
     app.folders = FolderStore::default();
     app.groups = GroupStore::default();
+    app.pinned = std::collections::HashSet::new();
     app.looked.clear();
     app.queue = Queue::default();
     app.rows.clear();
@@ -7067,6 +7160,52 @@ mod tests {
             "the chosen departure was relabelled as the set agreeing with it",
         );
         assert!(queued.selected, "and it is what happens if nobody acts");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Audio is kept for the set, for what was asked for, and nothing else.
+    ///
+    /// The cache reached five gigabytes because analysis has to download every
+    /// track to listen to it and the bytes stayed afterwards. Reading a file
+    /// once is not a reason to keep it.
+    #[test]
+    fn only_the_window_and_the_pinned_keep_their_audio() {
+        let (mut app, dir) = app();
+        let tracks: Vec<String> = (0..20).map(|i| format!("/{i}.mp3")).collect();
+        for href in &tracks {
+            app.rows.push(row(href, href));
+        }
+        app.queue.set_tracks(tracks.clone(), Some("/10.mp3"));
+        app.playing = Some("/10.mp3".to_string());
+
+        // Three back and five ahead of the track playing.
+        assert!(keeps_audio(&app, "/10.mp3"), "the track playing");
+        assert!(keeps_audio(&app, "/7.mp3"), "three back");
+        assert!(keeps_audio(&app, "/15.mp3"), "five ahead");
+
+        // And nothing else.
+        assert!(!keeps_audio(&app, "/6.mp3"), "four back is past the window");
+        assert!(
+            !keeps_audio(&app, "/16.mp3"),
+            "six ahead is past the window"
+        );
+
+        // Unless it was asked for on purpose, which outranks the window.
+        app.pinned.insert("/0.mp3".to_string());
+        assert!(
+            keeps_audio(&app, "/0.mp3"),
+            "a download is kept wherever it is"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A library nothing is playing from keeps nothing: an analysis pass on its
+    /// own is not a reason to hold audio.
+    #[test]
+    fn nothing_playing_means_nothing_kept() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/a.mp3", "A"));
+        assert!(!keeps_audio(&app, "/a.mp3"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
