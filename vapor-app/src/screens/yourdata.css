@@ -223,3 +223,47 @@
   background: var(--glass-fill);
   border-radius: var(--r-hair);
 }
+
+/* ---- What the total is made of ---------------------------------------
+ *
+ * One bar, one slice per local row, widths in proportion. It answers a
+ * question the list of sizes below can only be arithmetic'd into: on a real
+ * library the audio cache is all of it and everything else is a rounding
+ * error, and seeing that is the difference between "this app is hoarding" and
+ * "this is the music you asked it to keep".
+ * -------------------------------------------------------------------- */
+
+.data__split {
+  display: flex;
+  height: 10px;
+  margin: 2px 0 18px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 0 0 1px var(--glass-rim);
+}
+
+.data__split-part {
+  /* A slice too thin to see is still worth a sliver, so the bar does not
+     imply a row weighs nothing. */
+  min-width: 2px;
+  background: var(--ink-3);
+}
+
+/* Named per row rather than by position: the order of the list is not a
+   promise, and a colour that moves when a row is added is worse than none. */
+.data__split-part--offline-cache {
+  background: var(--accent);
+}
+
+.data__split-part--library-catalogue {
+  background: var(--sov);
+}
+
+.data__split-part--playlists {
+  background: var(--iri-a);
+}
+
+.data__split-part--settings {
+  background: var(--iri-b);
+}

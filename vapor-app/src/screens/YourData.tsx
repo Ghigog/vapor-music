@@ -35,6 +35,11 @@ const NEVERS = [
   "Load a single analytics or advertising SDK.",
 ];
 
+/** A class-safe name for a row, so each slice can carry its own colour. */
+function slug(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
 export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
   const [rows, setRows] = useState<core.DataRow[]>([]);
   const [cache, setCache] = useState<core.CacheStatus | null>(null);
@@ -153,6 +158,45 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
           <span className="data__total numeric">{bytes(localBytes)}</span>
         </div>
 
+        {/*
+          What the total is made of, at a glance.
+          
+          The rows below already give every number, but a list of sizes does not
+          answer "what is actually taking the space" without arithmetic — and on
+          this library the answer is that the audio cache is essentially all of
+          it and the metadata is a rounding error. That is worth being able to
+          see, because it is the difference between "the app is hoarding" and
+          "the app is holding music you asked it to hold".
+          
+          Only the local rows: the library on the server has no measured size,
+          and giving it a share of a bar about this device would be inventing
+          one.
+        */}
+        {localBytes > 0 && (
+          <div
+            className="data__split"
+            role="img"
+            aria-label={rows
+              .filter((r) => r.local && r.bytes > 0)
+              .map(
+                (r) =>
+                  `${r.label}: ${Math.round((r.bytes / localBytes) * 100)}%`,
+              )
+              .join(", ")}
+          >
+            {rows
+              .filter((r) => r.local && r.bytes > 0)
+              .map((r) => (
+                <span
+                  key={r.label}
+                  className={`data__split-part data__split-part--${slug(r.label)}`}
+                  style={{ width: `${(r.bytes / localBytes) * 100}%` }}
+                  title={`${r.label} — ${bytes(r.bytes)}`}
+                />
+              ))}
+          </div>
+        )}
+
         <ul className="data__rows">
           {rows.map((row) => (
             <li key={row.label} className="data__row">
@@ -192,7 +236,13 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
       {cache && (
         <section className="data__card glass">
           <div className="data__summary">
-            <h2 className="label">offline cache</h2>
+            {/* "Held" rather than "cached": this counts tracks whose *audio*
+                is on the device, which is a different question from how many
+                have been listened to and described. During an analysis pass the
+                two are far apart — the fetchers run ahead of the listening — and
+                two bare numbers on two cards invite the reader to pick one and
+                assume the other is wrong. */}
+            <h2 className="label">audio held on this device</h2>
             <span className="data__total numeric">
               {cache.tracksCached.toLocaleString()} of{" "}
               {cache.tracksTotal.toLocaleString()} tracks

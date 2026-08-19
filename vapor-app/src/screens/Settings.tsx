@@ -441,9 +441,12 @@ export function Settings() {
         <h2 className="settings__section">Listening to your library</h2>
         <p className="settings__hint">
           Tempo, key and cue points, worked out on this device, once — the
-          results are kept. The listening itself takes about half a second a
-          track; fetching the track to listen to takes as long as your
-          connection does, which on a large library is most of the wait.
+          results are kept. Every track has to be fetched from your server
+          before it can be listened to, and on a large library that download is
+          effectively the whole wait: the listening itself is under a second.
+          Several are fetched at a time, but a slow connection is still a slow
+          connection, and hundreds of tracks will take hours rather than
+          minutes.
         </p>
 
         {status && (

@@ -2641,6 +2641,35 @@ fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {
     })
 }
 
+/// How far ahead of the pass the fetchers may get.
+///
+/// The audio cache exists so a track can be played without the network. Letting
+/// these run unbounded turned it into a copy of the whole library — two
+/// gigabytes of tracks already described — in order to read each file once.
+const PREFETCH_WINDOW: usize = 12;
+
+/// How many tracks are fetched at once during an analysis pass.
+///
+/// The wait is the download, not the analysis — measured at 150 KB/s against
+/// about half a second of actual listening per track. Four is a compromise: it
+/// is enough to keep the analyser fed, and few enough that a phone is not
+/// opening a dozen sockets to somebody's WebDAV host.
+const PREFETCH_THREADS: usize = 4;
+
+/// How long the pass waits for a prefetcher to deliver a track, in 200ms ticks,
+/// before fetching it itself.
+///
+/// Deliberately short. The pass must take tracks in the order it was given
+/// them, but downloads finish in whatever order the network returns — so one
+/// slow track holds up every track behind it, however many of those have
+/// already arrived. Measured: 95 tracks landed in four minutes while the pass
+/// described *one*, because it was waiting on a single file.
+///
+/// Twenty seconds, then fetch it directly. That can mean pulling a copy of
+/// something already in flight, which at these speeds costs a couple of seconds
+/// — against minutes of the whole pass standing still.
+const PREFETCH_WAIT_TICKS: usize = 100;
+
 /// How far ahead the DJ needs the library described.
 ///
 /// Three: the track playing has to be mixed *out of*, and the exits the Vibe
@@ -5574,7 +5603,7 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = std::sync::Arc::new(cache::Cache::new(cache_dir, cache_max));
 
         // One session for the whole pass: one keychain read and one connection,
         // rather than one of each per track. See `webdav::Fetcher`.
@@ -5618,6 +5647,86 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
             }
         };
 
+        /*
+         * Fetch several tracks at once, because the fetching is the whole wait.
+         *
+         * Measured on Dylan's phone: 150 KB/s on one connection, tracks
+         * averaging 9.6 MB, so about a minute each — against roughly half a
+         * second to actually analyse one. The pass was strictly sequential:
+         * download a track, describe it, download the next. Which means the CPU
+         * was idle for 99% of a job that reads as CPU work, and 563 tracks came
+         * to nine hours.
+         *
+         * These threads run ahead filling the cache from the same list, in the
+         * same order, so by the time the pass reaches a track it is usually
+         * already local. Four, not more: the ceiling here is somebody's home
+         * connection and their server's patience, and a phone opening a dozen
+         * sockets to a WebDAV host is a good way to be rate-limited.
+         *
+         * `Cache::store` is safe to call for the same href from several threads
+         * at once — see `concurrent_stores_of_one_href_do_not_corrupt_it` — so
+         * the worst case here is duplicated work, never a damaged file.
+         */
+        let fetcher = std::sync::Arc::new(fetcher);
+        let queue: std::sync::Arc<Mutex<std::collections::VecDeque<(usize, String)>>> =
+            std::sync::Arc::new(Mutex::new(todo.iter().cloned().enumerate().collect()));
+        let prefetch_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Where the pass has got to, so the fetchers can stay near it.
+        let cursor = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let prefetchers: Vec<_> = (0..PREFETCH_THREADS)
+            .map(|_| {
+                let queue = std::sync::Arc::clone(&queue);
+                let cache = std::sync::Arc::clone(&cache);
+                let fetcher = std::sync::Arc::clone(&fetcher);
+                let cancel = cancel.clone();
+                let done = std::sync::Arc::clone(&prefetch_done);
+                let cursor = std::sync::Arc::clone(&cursor);
+                std::thread::spawn(move || {
+                    loop {
+                        if cancel.is_stopped() {
+                            break;
+                        }
+                        let next = queue.lock().ok().and_then(|mut q| q.pop_front());
+                        let Some((index, href)) = next else { break };
+
+                        /*
+                         * Stay near the pass rather than race the library.
+                         *
+                         * Unbounded, these run as fast as the network allows and
+                         * the audio cache fills with tracks described long ago:
+                         * two gigabytes inside twenty minutes, against a pass
+                         * that had reached fifty tracks. The audio is a *cache*,
+                         * kept so a track can be played without the network —
+                         * not somewhere to put the whole library in order to
+                         * read each file once.
+                         *
+                         * It also keeps them working on what the pass is about
+                         * to want, which is what stops one slow track holding up
+                         * a queue of finished ones.
+                         */
+                        while !cancel.is_stopped()
+                            && index
+                                > cursor.load(std::sync::atomic::Ordering::Acquire)
+                                    + PREFETCH_WINDOW
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                        if cancel.is_stopped() {
+                            break;
+                        }
+                        if cache.get(&href).is_some() {
+                            continue;
+                        }
+                        let _ = cache.store(&href, || {
+                            fetcher.fetch_until(&href, &|| cancel.is_stopped())
+                        });
+                    }
+                    done.fetch_add(1, std::sync::atomic::Ordering::Release);
+                })
+            })
+            .collect();
+
         analysis::run(
             &todo,
             // Fetch on demand. Analysis needs local bytes; this is where they
@@ -5636,6 +5745,39 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                         .map(|r| r.title.clone())
                         .unwrap_or_default();
                 }
+
+                // Where the pass has reached, so the fetchers know how far
+                // ahead of it they are allowed to be.
+                let at = todo.iter().position(|h| h == href).unwrap_or(0);
+                cursor.store(at, std::sync::atomic::Ordering::Release);
+
+                /*
+                 * Wait for the prefetchers rather than fetch a second copy.
+                 *
+                 * They pull from the same list in the same order, so a track
+                 * this pass has reached is either already local or in flight
+                 * with one of them. Downloading it again here would double the
+                 * traffic for the one thing that is actually slow.
+                 *
+                 * Bounded, and it gives up waiting once every prefetcher has
+                 * finished — otherwise a track they all failed on would stall
+                 * the pass rather than being recorded as a failure and passed
+                 * over.
+                 */
+                for _ in 0..PREFETCH_WAIT_TICKS {
+                    if cancel.is_stopped() {
+                        return None;
+                    }
+                    if let Some(path) = cache.get(href) {
+                        return Some(path);
+                    }
+                    if prefetch_done.load(std::sync::atomic::Ordering::Acquire) >= PREFETCH_THREADS
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+
                 // Cancellable: Stop has to be answered during the download,
                 // not after it. See `Fetcher::fetch_until`.
                 cache
@@ -5693,6 +5835,12 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                 let _ = handle.emit("analysis-progress", &progress);
             },
         );
+
+        // Wound down with the pass, so a cancelled run does not leave four
+        // threads pulling a library nobody asked for any more.
+        for worker in prefetchers {
+            let _ = worker.join();
+        }
 
         // The pass is over, so this is no longer a reason to stay up. The
         // service decides for itself whether playback still is.
