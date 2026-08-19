@@ -321,7 +321,11 @@ mod tests {
         let mut cache = Cache::new();
         cache.insert("/a.mp3".into(), analysed(ANALYSIS_VERSION));
 
-        let todo = pending(&["/a.mp3".into(), "/b.mp3".into()], &cache, &Failures::new());
+        let todo = pending(
+            &["/a.mp3".into(), "/b.mp3".into()],
+            &cache,
+            &Failures::new(),
+        );
         assert_eq!(todo, vec!["/b.mp3"], "a second launch should be instant");
     }
 
@@ -475,7 +479,12 @@ mod tests {
         let hrefs: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
         let cache = Cache::new();
 
-        let order = pending_first(&hrefs, &cache, &Failures::new(), &["c".to_string(), "a".to_string()]);
+        let order = pending_first(
+            &hrefs,
+            &cache,
+            &Failures::new(),
+            &["c".to_string(), "a".to_string()],
+        );
 
         assert_eq!(order, vec!["c", "a", "b", "d"]);
     }
@@ -498,7 +507,12 @@ mod tests {
         let hrefs: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
         let cache = Cache::new();
 
-        let order = pending_first(&hrefs, &cache, &Failures::new(), &["b".to_string(), "b".to_string()]);
+        let order = pending_first(
+            &hrefs,
+            &cache,
+            &Failures::new(),
+            &["b".to_string(), "b".to_string()],
+        );
 
         assert_eq!(order, vec!["b", "a"]);
     }
@@ -512,7 +526,12 @@ mod tests {
         let cache = Cache::new();
 
         let plain = pending(&hrefs, &cache, &Failures::new());
-        let order = pending_first(&hrefs, &cache, &Failures::new(), &["e".to_string(), "b".to_string()]);
+        let order = pending_first(
+            &hrefs,
+            &cache,
+            &Failures::new(),
+            &["e".to_string(), "b".to_string()],
+        );
 
         assert_eq!(order.len(), plain.len());
         let mut sorted = order.clone();

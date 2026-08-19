@@ -26,7 +26,8 @@ pub mod webdav;
 
 pub use camelot::{harmonic_relation_cost, key_distance, CamelotKey, CLASH_COST};
 pub use genre::{
-    genre_distance, is_similar_genre, is_unknown_genre, octave_correct, octave_from_reference, tempo_band,
+    genre_distance, is_similar_genre, is_unknown_genre, octave_correct, octave_from_reference,
+    tempo_band,
 };
 pub use group::{DynamicGroup, Entity, EntityType, Folder, FolderStore, GroupStore};
 pub use index::{

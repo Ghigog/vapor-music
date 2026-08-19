@@ -70,6 +70,10 @@ pub struct NowPlaying {
 /// `MediaControls` needs a window handle and, on macOS, a run loop, so nothing
 /// that goes through the platform can be reached from `cargo test`. The
 /// mapping is the part with a decision in it.
+/// Not on Android: souvlaki has no backend there, so there is no event of this
+/// type to map. Its buttons arrive as integers from `PlaybackService` and are
+/// mapped by [`Press::from_i32`].
+#[cfg(not(target_os = "android"))]
 pub fn press_of(event: &souvlaki::MediaControlEvent) -> Option<Press> {
     use souvlaki::MediaControlEvent as E;
     match event {
@@ -138,6 +142,10 @@ pub fn bundled() -> bool {
 
 /// The system's media controls, if this platform gave us any.
 pub struct Controls {
+    /// souvlaki's handle. Android has no souvlaki — its side of this module
+    /// talks to `PlaybackService` — so the field does not exist there rather
+    /// than existing and never being read.
+    #[cfg(not(target_os = "android"))]
     inner: Mutex<Option<souvlaki::MediaControls>>,
     /// The last state sent, so an unchanged one is not sent again.
     last: Mutex<Option<NowPlaying>>,
@@ -171,13 +179,14 @@ impl Controls {
          */
         #[cfg(target_os = "android")]
         {
+            // Windows hangs SMTC off a window; Android has no use for one.
+            let _ = window_handle;
             crate::android::on_press(move |press| {
                 if let Some(press) = Press::from_i32(press) {
                     on_press(press);
                 }
             });
             return Arc::new(Controls {
-                inner: Mutex::new(None),
                 last: Mutex::new(None),
             });
         }

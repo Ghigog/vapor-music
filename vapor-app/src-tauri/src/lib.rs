@@ -4543,8 +4543,7 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
             // furthest in kind wins, while `base` still keeps it to something
             // the engine can actually mix into.
             let score = |t: &TrackMeta| {
-                candidate_cost(app, from, t, Exit::Switch)
-                    - kind_distance(app, &current, &t.href)
+                candidate_cost(app, from, t, Exit::Switch) - kind_distance(app, &current, &t.href)
             };
             score(a).total_cmp(&score(b))
         });
@@ -4615,9 +4614,7 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
      */
     let queued_exit = app
         .chosen_exit
-        .filter(|_| {
-            follow.is_some_and(|f| queued.as_deref() == Some(f.href.as_str()))
-        })
+        .filter(|_| follow.is_some_and(|f| queued.as_deref() == Some(f.href.as_str())))
         .unwrap_or(Exit::Follow);
 
     let chosen: Vec<(&TrackMeta, Exit)> = [
@@ -5533,6 +5530,15 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
         app.analysing = true;
         app.analysing_title = String::new();
     }
+
+    // The notification goes up with the pass, not with its first result.
+    //
+    // It was raised from the progress callback, which fires when a track has
+    // been fetched *and* analysed — minutes away on a slow connection. So a
+    // pass could be running, downloading, with nothing in the shade to say so,
+    // which is indistinguishable from it not having started.
+    #[cfg(target_os = "android")]
+    android::service_analysis(0, todo.len(), true);
 
     let state_arc: Shared = Arc::clone(shared);
     let handle = app_handle.clone();

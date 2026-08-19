@@ -237,8 +237,7 @@ pub extern "system" fn Java_com_dylangrowcoot_vapormusic_PlaybackService_onStopA
     }
 }
 
-static STOP_ANALYSIS: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
-    std::sync::OnceLock::new();
+static STOP_ANALYSIS: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
 /// Route the notification's Stop button to `handler`.
 pub fn on_stop_analysis<F>(handler: F)
