@@ -66,7 +66,30 @@ pub extern "system" fn Java_com_dylangrowcoot_vapormusic_MainActivity_setupNdkCo
     }
 }
 
+/// Whether the handles have already been published this process.
+static PUBLISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn publish(mut env: JNIEnv<'_>, activity: JObject<'_>) -> Result<(), String> {
+    /*
+     * Once per process, whatever Android does with the activity.
+     *
+     * `ndk_context::initialize_android_context` asserts nothing was published
+     * before it, and the assert lives in a function that cannot unwind — so a
+     * second call does not return an error, it aborts the process.
+     *
+     * `onCreate` runs again whenever the activity is recreated, which this app
+     * now makes ordinary: tapping the playback notification brings
+     * `MainActivity` back, and a configuration change does the same. The app
+     * died on launch with "core unreachable" because the process was being
+     * killed underneath the webview.
+     *
+     * The handles are process-wide and identical every time, so the second
+     * publish had nothing to add even before it was fatal.
+     */
+    if PUBLISHED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Ok(());
+    }
+
     let vm = env.get_java_vm().map_err(|e| e.to_string())?;
 
     // The *application* context, not the activity. An activity is destroyed and

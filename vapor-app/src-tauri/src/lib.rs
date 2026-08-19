@@ -6532,11 +6532,26 @@ pub fn run() {
              * through an analysis pass on an older build arrives with all of
              * it, and nothing else would ever ask for it back.
              */
-            if let Ok(app) = shared.lock() {
-                let freed = sweep_audio(&app);
-                if freed > 0 {
-                    eprintln!("cache: released {freed} tracks nothing was holding");
-                }
+            {
+                // Off the startup path.
+                //
+                // This deletes a file per track — five hundred of them on a
+                // device coming from an older build — and `setup` has to reach
+                // `app.manage` before the webview asks it anything. Run inline,
+                // it lost that race: the first screen came up on "core
+                // unreachable, state not managed for command `settings`",
+                // because the state genuinely was not managed yet.
+                //
+                // Nothing waits on this, so nothing needs it to be quick.
+                let for_sweep: Shared = Arc::clone(&shared);
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Ok(app) = for_sweep.lock() {
+                        let freed = sweep_audio(&app);
+                        if freed > 0 {
+                            eprintln!("cache: released {freed} tracks nothing was holding");
+                        }
+                    }
+                });
             }
 
             /*

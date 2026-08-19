@@ -230,19 +230,48 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    // Settings is the round trip worth making at boot: it decides where to
-    // land, and it answers whether the core is reachable at all.
-    core
-      .settings()
-      .then((s) => {
-        const connected =
-          s.remote.url.trim() !== "" && s.remote.username.trim() !== "";
-        setDjMode(s.djMode ?? true);
-        setStatus({ kind: connected ? "ready" : "onboarding" });
-      })
-      .catch((e: unknown) => {
-        setStatus({ kind: "error", message: String(e) });
-      });
+    /*
+     * Settings is the round trip worth making at boot: it decides where to land,
+     * and it answers whether the core is reachable at all.
+     *
+     * Asked more than once, because "not yet" and "never" are different
+     * answers and this could not tell them apart. The backend registers its
+     * state at the end of `setup`, and `setup` first reads the library from
+     * disk — three and a half seconds for a few hundred tracks on a phone. A
+     * webview that loaded inside that window got "state not managed for command
+     * `settings`", reported the core unreachable, and stayed there for ever
+     * over an app that was working perfectly a moment later.
+     *
+     * So: keep asking for a few seconds. A core that is genuinely not there
+     * still says so, just later.
+     */
+    let cancelled = false;
+
+    const ask = async () => {
+      const deadline = Date.now() + 15_000;
+      let last = "";
+      while (!cancelled) {
+        try {
+          const s = await core.settings();
+          if (cancelled) return;
+          const connected =
+            s.remote.url.trim() !== "" && s.remote.username.trim() !== "";
+          setDjMode(s.djMode ?? true);
+          setStatus({ kind: connected ? "ready" : "onboarding" });
+          return;
+        } catch (e: unknown) {
+          last = String(e);
+          if (Date.now() > deadline) break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+      if (!cancelled) setStatus({ kind: "error", message: last });
+    };
+
+    void ask();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /**
