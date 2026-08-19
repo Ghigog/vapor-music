@@ -98,8 +98,39 @@ fn publish(mut env: JNIEnv<'_>, activity: JObject<'_>) -> Result<(), String> {
     // is finished with, and `ndk_context` would be left holding a pointer to a
     // collected object. There is exactly one of these per process.
     std::mem::forget(context);
+
+    /*
+     * Find `PlaybackService` now, while we are on a Java thread.
+     *
+     * `FindClass` resolves against the class loader of the *calling* frame. On
+     * a thread the JVM created that is the app's loader and everything is
+     * visible; on a thread Rust made and attached with
+     * `attach_current_thread` there is no Java frame, so the JVM falls back to
+     * the system loader — which knows the platform classes and nothing of this
+     * app. Every call to the service was therefore made from the playback
+     * supervisor or the analysis pass, on exactly such a thread, and every one
+     * of them failed to find the class.
+     *
+     * That is why the notification never appeared while the pass plainly ran.
+     * Cached here, from `onCreate`, where the lookup works.
+     */
+    match env.find_class(SERVICE_CLASS_NAME) {
+        Ok(class) => match env.new_global_ref(class) {
+            Ok(global) => {
+                let _ = SERVICE_CLASS.set(global);
+            }
+            Err(e) => eprintln!("android: could not hold on to {SERVICE_CLASS_NAME}: {e}"),
+        },
+        Err(e) => eprintln!("android: could not find {SERVICE_CLASS_NAME}: {e}"),
+    }
+
     Ok(())
 }
+
+const SERVICE_CLASS_NAME: &str = "com/dylangrowcoot/vapormusic/PlaybackService";
+
+/// `PlaybackService`, looked up on a Java thread and kept.
+static SERVICE_CLASS: std::sync::OnceLock<jni::objects::GlobalRef> = std::sync::OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // The playback service
@@ -117,11 +148,11 @@ fn publish(mut env: JNIEnv<'_>, activity: JObject<'_>) -> Result<(), String> {
 /// second from the playback supervisor — a failure that logged every time would
 /// be its own problem.
 pub fn service_update(title: &str, artist: &str, playing: bool, position: f64, duration: f64) {
-    let _ = with_context(|env, context| {
+    report(with_context(|env, context| {
         let title = env.new_string(title)?;
         let artist = env.new_string(artist)?;
         env.call_static_method(
-            "com/dylangrowcoot/vapormusic/PlaybackService",
+            service_class(),
             "update",
             "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;ZJJ)V",
             &[
@@ -134,20 +165,51 @@ pub fn service_update(title: &str, artist: &str, playing: bool, position: f64, d
             ],
         )?;
         Ok(())
-    });
+    }));
 }
 
 /// Stop the service. Nothing is playing, so nothing needs keeping alive.
 pub fn service_stop() {
-    let _ = with_context(|env, context| {
+    report(with_context(|env, context| {
         env.call_static_method(
-            "com/dylangrowcoot/vapormusic/PlaybackService",
+            service_class(),
             "stop",
             "(Landroid/content/Context;)V",
             &[(&context).into()],
         )?;
         Ok(())
-    });
+    }));
+}
+
+/// The cached `PlaybackService` class.
+///
+/// Falls back to the name, which will fail on a Rust-made thread for the reason
+/// given in `publish` — but failing loudly beats a silent no-op, and if the
+/// cache is empty something has already gone wrong at startup.
+fn service_class<'a>() -> jni::objects::JClass<'a> {
+    match SERVICE_CLASS.get() {
+        // SAFETY: the global reference is held for the life of the process, so
+        // this borrowed class outlives every use of it. `JClass` does not own
+        // the reference and dropping it releases nothing.
+        Some(global) => unsafe { jni::objects::JClass::from_raw(global.as_raw()) },
+        None => jni::objects::JClass::default(),
+    }
+}
+
+/// Say when a call into the service failed.
+///
+/// These used to be `let _ = …`. The notification not appearing while the pass
+/// visibly ran was this: every call was failing to find the class and no one
+/// was told. Once per process is enough to find that out; repeating it four
+/// times a second would be its own fault.
+fn report(result: Result<(), jni::errors::Error>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SAID: AtomicBool = AtomicBool::new(false);
+    if let Err(e) = result {
+        if !SAID.swap(true, Ordering::Relaxed) {
+            eprintln!("android: the playback service could not be reached: {e}");
+        }
+    }
 }
 
 /// Run `f` with a JNI environment attached to this thread and the app context.
@@ -213,9 +275,9 @@ where
 /// so before this it stopped the moment someone switched to another app, with
 /// nothing playing to keep the service up on playback's behalf.
 pub fn service_analysis(done: usize, total: usize, active: bool) {
-    let _ = with_context(|env, context| {
+    report(with_context(|env, context| {
         env.call_static_method(
-            "com/dylangrowcoot/vapormusic/PlaybackService",
+            service_class(),
             "analysis",
             "(Landroid/content/Context;IIZ)V",
             &[
@@ -226,7 +288,7 @@ pub fn service_analysis(done: usize, total: usize, active: bool) {
             ],
         )?;
         Ok(())
-    });
+    }));
 }
 
 /// Stop was pressed on the analysis notification.
