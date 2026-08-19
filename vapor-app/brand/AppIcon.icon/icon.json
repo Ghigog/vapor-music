@@ -12,13 +12,13 @@
     {
       "appearance": "light-tint",
       "value": {
-        "solid": "srgb:0.16500,0.18400,0.27500,1.00000"
+        "solid": "srgb:0.20000,0.20000,0.20000,1.00000"
       }
     },
     {
       "appearance": "dark-tint",
       "value": {
-        "solid": "srgb:0.16500,0.18400,0.27500,1.00000"
+        "solid": "srgb:0.20000,0.20000,0.20000,1.00000"
       }
     }
   ],
@@ -26,7 +26,21 @@
     {
       "layers": [
         {
-          "image-name": "mark.png"
+          "image-name": "mark.png",
+          "image-name-specializations": [
+            {
+              "appearance": "dark-color",
+              "value": "mark-light.png"
+            },
+            {
+              "appearance": "light-tint",
+              "value": "mark-light.png"
+            },
+            {
+              "appearance": "dark-tint",
+              "value": "mark-light.png"
+            }
+          ]
         }
       ],
       "specular": true,

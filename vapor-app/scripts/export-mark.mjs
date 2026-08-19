@@ -105,7 +105,7 @@ const GRID = {
 };
 
 /** Draw one mark and return its canvas as raw PNG bytes. */
-async function render(size, theme, poseAt, plate = "none", shape = "squircle") {
+async function render(size, theme, poseAt, plate = "none", shape = "squircle", boost = undefined) {
   const dataUrl = await page.evaluate(async (a) => {
     // Built detached with `pose` set LAST: the element only draws once it is
     // frozen, so setting pose last collapses what would be one full-resolution
@@ -229,15 +229,15 @@ async function render(size, theme, poseAt, plate = "none", shape = "squircle") {
     grid: GRID,
     inset: MARK.icon.inset,
     layerInset: MARK.icon.layerInset ?? 0.14,
-    layerBoost: MARK.icon.layerBoost ?? null,
+    layerBoost: boost !== undefined ? boost : (MARK.icon.layerBoost ?? null),
   });
   return Buffer.from(dataUrl.split(",")[1], "base64");
 }
 
-async function emit(relPath, size, theme, plate = "none", shape = "squircle", poseAt = pose) {
+async function emit(relPath, size, theme, plate = "none", shape = "squircle", poseAt = pose, boost = undefined) {
   const out = resolve(ROOT, relPath);
   await mkdir(dirname(out), { recursive: true });
-  const png = await render(size, theme, poseAt, plate, shape);
+  const png = await render(size, theme, poseAt, plate, shape, boost);
   await writeFile(out, png);
   const tag = plate === "none" ? "transparent" : `${plate}/${shape}`;
   console.log(`  ${relPath.padEnd(32)} ${String(size).padStart(4)}px ${theme.padEnd(5)} ${tag.padEnd(14)} (${(png.length / 1024).toFixed(1)} kB)`);
@@ -271,8 +271,13 @@ if (sheet) {
   await emit("brand/mark-1024.png", 1024, "light", "none");
   await emit("brand/mark-1024-dark.png", 1024, "dark", "none");
 
-  // Icon Composer foreground layer (macOS 26 .icon).
+  // Icon Composer foreground layers (macOS 26 .icon). TWO of them, because one
+  // image cannot serve both appearances: the default sits on a white tile and
+  // wants a darker mark, while the Dark and Tinted appearances sit on a dark
+  // base and want a light one. The .icon swaps them per appearance.
   await emit("brand/icon-layer-1024.png", 1024, theme, "none", "layer");
+  await emit("brand/icon-layer-light-1024.png", 1024, theme, "none", "layer",
+             pose, MARK.icon.layerBoostLight);
 
   await emit("public/favicon.png", 64, theme, plate, "square");
   await emit("public/apple-touch-icon.png", 180, theme, plate, "square");

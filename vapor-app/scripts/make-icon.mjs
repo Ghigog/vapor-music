@@ -54,21 +54,38 @@ const srgb = (r, g, b, a = 1) =>
   `srgb:${[r, g, b, a].map((v) => v.toFixed(5)).join(",")}`;
 
 /**
- * Per-appearance fills.
+ * APPEARANCES — why this is not "make it green".
  *
- * The tinted appearance is derived from the artwork rather than swapped for a
- * palette, so a uniformly bright icon has nothing for the tint to land on and
- * stays pale while the rest of the Dock has gone colour. Giving Dark and Tinted
- * their own darker fill is what makes the derivation land. Default is untouched
- * and still white.
+ * Tinted is not a palette swap. You author a GREYSCALE base and the system
+ * colourises it with whatever tint the user has chosen, so the only thing the
+ * author controls is contrast. A white tile hands the system near-white to
+ * colourise and comes back looking untinted — which is why the icon sat out of
+ * a tinted Dock while Discord, a flat mid-luminance icns, tinted correctly.
+ *
+ * So the tinted fill is a NEUTRAL GREY. Any colour cast here would skew every
+ * tint the user might pick; grey renders all of them faithfully.
+ *
+ * The artwork has to swap too. One image cannot serve both: the default sits on
+ * a white tile and wants a darker mark, Dark and Tinted sit on a dark base and
+ * want a light one. `image-name-specializations` carries the second image —
+ * verified embedded, 7 of 9 image digests in the compiled catalog change when
+ * it is present.
  */
 const APPEARANCES = MARK.icon.appearances ?? {};
+const TINTED_APPEARANCES = ["light-tint", "dark-tint"];
+
 const fillSpecs = [];
 if (APPEARANCES.dark) fillSpecs.push({ appearance: "dark-color", value: { solid: APPEARANCES.dark } });
 if (APPEARANCES.tinted) {
-  fillSpecs.push({ appearance: "light-tint", value: { solid: APPEARANCES.tinted } });
-  fillSpecs.push({ appearance: "dark-tint", value: { solid: APPEARANCES.tinted } });
+  for (const a of TINTED_APPEARANCES) fillSpecs.push({ appearance: a, value: { solid: APPEARANCES.tinted } });
 }
+
+const LIGHT_LAYER = resolve(ROOT, "brand/icon-layer-light-1024.png");
+let hasLight = true;
+try { await access(LIGHT_LAYER); } catch { hasLight = false; }
+const imageSpecs = hasLight
+  ? ["dark-color", ...TINTED_APPEARANCES].map((a) => ({ appearance: a, value: "mark-light.png" }))
+  : [];
 
 // The document. One group holding the mark, on a white tile.
 const doc = {
@@ -76,7 +93,12 @@ const doc = {
   ...(fillSpecs.length ? { "fill-specializations": fillSpecs } : {}),
   groups: [
     {
-      layers: [{ "image-name": "mark.png" }],
+      layers: [
+        {
+          "image-name": "mark.png",
+          ...(imageSpecs.length ? { "image-name-specializations": imageSpecs } : {}),
+        },
+      ],
       // Let the system light the mark and drop its shadow. Neutral rather than
       // tinted: the ribbon already carries the colour.
       specular: true,
@@ -89,6 +111,7 @@ const doc = {
 await rm(DOC, { recursive: true, force: true });
 await mkdir(join(DOC, "Assets"), { recursive: true });
 await copyFile(LAYER, join(DOC, "Assets", "mark.png"));
+if (hasLight) await copyFile(LIGHT_LAYER, join(DOC, "Assets", "mark-light.png"));
 await writeFile(join(DOC, "icon.json"), JSON.stringify(doc, null, 2) + "\n");
 console.log(`wrote ${DOC.replace(ROOT + "/", "")}`);
 

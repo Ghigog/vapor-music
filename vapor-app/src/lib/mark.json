@@ -25,9 +25,11 @@
     "layerBoost": "saturate(1.65) contrast(1.35) brightness(0.85)",
     "$layerBoost": "CSS filter applied to the Icon Composer layer only. The mark's shading assumes an environment and reads light on a white tile; this restores contrast without changing its geometry.",
     "appearances": {
-      "$comment": "Per-appearance fills for the macOS 26 layered icon. Default stays white. The Dark and Tinted appearances get a dark fill because the tinted appearance is derived from the artwork's luminance — a uniformly bright icon has nothing for the tint to land on and renders pale while the rest of the Dock has gone colour. Only a real Dock can confirm the tinted result; actool records these but cannot render them.",
+      "$comment": "Per-appearance fills for the macOS 26 layered icon. Default keeps its white tile. Dark gets the brand near-black. Tinted gets a NEUTRAL GREY on purpose: for the tinted appearance you author a greyscale base and the system colourises it with whatever tint the user has chosen, so any colour cast here would skew every tint. Grey keeps it faithful.",
       "dark": "srgb:0.07100,0.07500,0.12200,1.00000",
-      "tinted": "srgb:0.16500,0.18400,0.27500,1.00000"
-    }
+      "tinted": "srgb:0.20000,0.20000,0.20000,1.00000"
+    },
+    "layerBoostLight": "saturate(0.55) brightness(1.55) contrast(0.95)",
+    "$layerBoostLight": "Boost for the layer used by the Dark and Tinted appearances, which sit on a dark base and need a light mark."
   }
 }
