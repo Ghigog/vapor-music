@@ -5402,7 +5402,7 @@ struct AnalysisStatus {
 fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
     let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
-    let outstanding = analysis::pending(&hrefs, &app.analysis).len();
+    let outstanding = analysis::pending(&hrefs, &app.analysis, &app.failures).len();
     Ok(AnalysisStatus {
         analysed: hrefs.len().saturating_sub(outstanding),
         total: hrefs.len(),
@@ -5484,7 +5484,7 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
         app.analysis_generation += 1;
 
         (
-            analysis::pending_first(&hrefs, &app.analysis, &priority),
+            analysis::pending_first(&hrefs, &app.analysis, &app.failures, &priority),
             (app.cache.dir().to_path_buf(), app.cache.max_bytes()),
             app.cancel.clone(),
             app.settings.remote.clone(),

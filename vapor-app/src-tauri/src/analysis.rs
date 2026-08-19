@@ -168,13 +168,27 @@ pub fn analyse_file(path: &Path) -> Result<Analysis, String> {
 ///
 /// Skips anything already analysed at the current version. This is what makes
 /// a second launch instant rather than another ten minutes.
-pub fn pending(hrefs: &[String], cache: &Cache) -> Vec<String> {
+pub fn pending(hrefs: &[String], cache: &Cache, failed: &Failures) -> Vec<String> {
     hrefs
         .iter()
         .filter(|h| cache.get(*h).is_none_or(|a| a.version < ANALYSIS_VERSION))
+        // A track that will never decode is not outstanding work.
+        //
+        // Only permanent failures are recorded — "not downloaded yet" is not
+        // one — so this is a file the decoder has already refused. Without
+        // this every pass fetched it again to refuse it again, which on a
+        // library with a handful of Dolby Atmos rips is megabytes of download
+        // per pass spent on a foregone conclusion. It also meant the count
+        // could never reach the total: four files that cannot be described
+        // sat in "outstanding" for ever.
+        .filter(|h| !failed.contains_key(*h))
         .cloned()
         .collect()
 }
+
+/// Permanent failures, keyed by href. The shell owns the file; this only reads
+/// it, and only to know what not to attempt again.
+pub type Failures = std::collections::HashMap<String, String>;
 
 /// Pending work, with `first` brought to the front in the order given.
 ///
@@ -187,8 +201,13 @@ pub fn pending(hrefs: &[String], cache: &Cache) -> Vec<String> {
 /// Everything else keeps library order behind them. Nothing is dropped and
 /// nothing is duplicated, including when a track appears in `first` twice
 /// because the queue repeats it.
-pub fn pending_first(hrefs: &[String], cache: &Cache, first: &[String]) -> Vec<String> {
-    let todo = pending(hrefs, cache);
+pub fn pending_first(
+    hrefs: &[String],
+    cache: &Cache,
+    failed: &Failures,
+    first: &[String],
+) -> Vec<String> {
+    let todo = pending(hrefs, cache, failed);
     let outstanding: std::collections::HashSet<&str> = todo.iter().map(String::as_str).collect();
 
     let mut ordered = Vec::with_capacity(todo.len());
@@ -302,7 +321,7 @@ mod tests {
         let mut cache = Cache::new();
         cache.insert("/a.mp3".into(), analysed(ANALYSIS_VERSION));
 
-        let todo = pending(&["/a.mp3".into(), "/b.mp3".into()], &cache);
+        let todo = pending(&["/a.mp3".into(), "/b.mp3".into()], &cache, &Failures::new());
         assert_eq!(todo, vec!["/b.mp3"], "a second launch should be instant");
     }
 
@@ -313,7 +332,7 @@ mod tests {
         let mut cache = Cache::new();
         cache.insert("/a.mp3".into(), analysed(ANALYSIS_VERSION - 1));
 
-        let todo = pending(&["/a.mp3".into()], &cache);
+        let todo = pending(&["/a.mp3".into()], &cache, &Failures::new());
         assert_eq!(todo, vec!["/a.mp3"]);
     }
 
@@ -333,6 +352,24 @@ mod tests {
 
         assert_eq!(seen.len(), 3, "the pass stopped early: {seen:?}");
         assert!(seen.iter().all(|(_, failed)| *failed));
+    }
+
+    /// A file the decoder has refused is not outstanding work.
+    ///
+    /// Only permanent failures are recorded, so a track here is one that will
+    /// never describe. Fetching it again every pass spends megabytes on a
+    /// foregone conclusion, and leaving it in the count means the total is one
+    /// the pass can never reach.
+    #[test]
+    fn a_permanent_failure_is_not_pending_work() {
+        let cache = Cache::new();
+        let hrefs = vec!["/a.mp3".to_string(), "/b.mp3".to_string()];
+
+        assert_eq!(pending(&hrefs, &cache, &Failures::new()).len(), 2);
+
+        let mut failed = Failures::new();
+        failed.insert("/b.mp3".to_string(), "no decodable audio track".to_string());
+        assert_eq!(pending(&hrefs, &cache, &failed), vec!["/a.mp3".to_string()]);
     }
 
     /// A file that is merely not downloaded yet must not be remembered as
@@ -438,7 +475,7 @@ mod tests {
         let hrefs: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
         let cache = Cache::new();
 
-        let order = pending_first(&hrefs, &cache, &["c".to_string(), "a".to_string()]);
+        let order = pending_first(&hrefs, &cache, &Failures::new(), &["c".to_string(), "a".to_string()]);
 
         assert_eq!(order, vec!["c", "a", "b", "d"]);
     }
@@ -449,7 +486,7 @@ mod tests {
         let mut cache = Cache::new();
         cache.insert("c".to_string(), analysed(ANALYSIS_VERSION));
 
-        let order = pending_first(&hrefs, &cache, &["c".to_string()]);
+        let order = pending_first(&hrefs, &cache, &Failures::new(), &["c".to_string()]);
 
         // "c" needs nothing, so it neither appears nor displaces anything.
         assert_eq!(order, vec!["a", "b"]);
@@ -461,7 +498,7 @@ mod tests {
         let hrefs: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
         let cache = Cache::new();
 
-        let order = pending_first(&hrefs, &cache, &["b".to_string(), "b".to_string()]);
+        let order = pending_first(&hrefs, &cache, &Failures::new(), &["b".to_string(), "b".to_string()]);
 
         assert_eq!(order, vec!["b", "a"]);
     }
@@ -474,8 +511,8 @@ mod tests {
             .collect();
         let cache = Cache::new();
 
-        let plain = pending(&hrefs, &cache);
-        let order = pending_first(&hrefs, &cache, &["e".to_string(), "b".to_string()]);
+        let plain = pending(&hrefs, &cache, &Failures::new());
+        let order = pending_first(&hrefs, &cache, &Failures::new(), &["e".to_string(), "b".to_string()]);
 
         assert_eq!(order.len(), plain.len());
         let mut sorted = order.clone();
