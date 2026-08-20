@@ -669,6 +669,9 @@ struct LibraryView {
     ascending: bool,
     #[serde(default)]
     group_by: Option<String>,
+    /// Narrow to one genre, exactly. Set when a genre tile has been opened.
+    #[serde(default)]
+    genre: Option<String>,
     /// Narrow to one album, exactly. Set when a person has opened an album
     /// rather than typed something — a substring search for "Melody" also
     /// matches "All Melody (Reprise)" and every track whose title contains it,
@@ -761,6 +764,12 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
     if let Some(artist) = view.artist.as_deref() {
         rows.retain(|r| r.artist == artist && r.artist_source.is_known());
     }
+    if let Some(genre) = view.genre.as_deref() {
+        // Exact, like the other two: a genre tile means that genre, not every
+        // genre whose name contains it — "House" would otherwise drag in
+        // "Deep House" and "Progressive House".
+        rows.retain(|r| genre_of(app, &r.href) == genre);
+    }
     // Last, so the count a person sees is of what they asked for. A view, not a
     // deletion: the files are untouched and still there to tidy by hand.
     if app.settings.hide_duplicates {
@@ -780,9 +789,38 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
 #[tauri::command]
 fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<LibraryEntity>> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let rows = resolved_rows(&app, &view);
+    Ok(library_entities_for(&app, &view))
+}
 
-    let by_artist = matches!(view.group_by.as_deref(), Some("artist"));
+/// The body of [`library_entities`], reachable from a test.
+///
+/// A `#[tauri::command]` takes `State`, which cannot be built outside a running
+/// app, so logic left in a command body is logic no test can see — which is how
+/// the Genres tab shipped grouping by album since the port.
+fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity> {
+    let rows = resolved_rows(app, view);
+
+    /*
+     * Three kinds of tile, not two.
+     *
+     * This was a boolean — artist or album — and Genres fell to the `else`, so
+     * the tab grouped by *album* while the screen believed it had genres. What
+     * a person saw was a grid of tracks, because `Library.tsx` only treated
+     * album and artist as entity tabs and rendered everything else as rows.
+     * The tab has existed since the port and has never shown a genre.
+     */
+    #[derive(Clone, Copy, PartialEq)]
+    enum By {
+        Artist,
+        Album,
+        Genre,
+    }
+    let by = match view.group_by.as_deref() {
+        Some("artist") => By::Artist,
+        Some("genre") => By::Genre,
+        _ => By::Album,
+    };
+    let by_artist = by == By::Artist;
 
     // Insertion-ordered: the rows arrive sorted, and a map would scramble them.
     let mut order: Vec<String> = Vec::new();
@@ -790,10 +828,16 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
         std::collections::HashMap::new();
 
     for row in &rows {
-        let (name, known) = if by_artist {
-            (row.artist.clone(), row.artist_source.is_known())
-        } else {
-            (row.album.clone(), row.album_source.is_known())
+        let (name, known) = match by {
+            By::Artist => (row.artist.clone(), row.artist_source.is_known()),
+            By::Album => (row.album.clone(), row.album_source.is_known()),
+            // A genre comes from the tags or from a lookup, and "unknown" is
+            // simply an empty string — there is no `Source` to consult.
+            By::Genre => {
+                let g = genre_of(app, &row.href);
+                let known = !g.trim().is_empty();
+                (g, known)
+            }
         };
         if !known || name.is_empty() {
             continue;
@@ -805,10 +849,11 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
         // override between them. `album_key` adds the folder, which also keeps
         // two albums that happen to share a directory apart, and still holds a
         // various-artists compilation together.
-        let key = if by_artist {
-            name.clone()
-        } else {
-            vapor_library::settings::album_key(&name, &row.href)
+        let key = match by {
+            // A genre is its own identity, like an artist: two tracks tagged
+            // "House" are the same genre wherever they sit on disk.
+            By::Artist | By::Genre => name.clone(),
+            By::Album => vapor_library::settings::album_key(&name, &row.href),
         };
         if !members.contains_key(&key) {
             order.push(key.clone());
@@ -816,7 +861,7 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
         members.entry(key).or_default().push(row);
     }
 
-    Ok(order
+    order
         .into_iter()
         .filter_map(|key| {
             let tracks = members.get(&key)?;
@@ -824,13 +869,27 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
             // The display name comes off a member rather than out of the key:
             // the key carries a folder the person never typed and should not
             // read.
-            let name = if by_artist {
-                key.clone()
-            } else {
-                tracks.first()?.album.clone()
+            let name = match by {
+                By::Artist | By::Genre => key.clone(),
+                By::Album => tracks.first()?.album.clone(),
             };
 
-            let subtitle = if by_artist {
+            let subtitle = if by == By::Genre {
+                // How many artists sit under it, which is what tells one genre
+                // tile from another — the track count is already on the tile.
+                let mut artists: Vec<&str> = tracks
+                    .iter()
+                    .filter(|r| r.artist_source.is_known())
+                    .map(|r| r.artist.as_str())
+                    .collect();
+                artists.sort_unstable();
+                artists.dedup();
+                match artists.len() {
+                    0 => format!("{} tracks", tracks.len()),
+                    1 => "1 artist".to_string(),
+                    n => format!("{n} artists"),
+                }
+            } else if by_artist {
                 // How many albums, which is what distinguishes one artist tile
                 // from another at a glance.
                 let mut albums: Vec<&str> = tracks
@@ -869,7 +928,7 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
                 lead,
             })
         })
-        .collect())
+        .collect()
 }
 
 /// The embedded cover for one track, if analysis has read it.
@@ -1099,6 +1158,8 @@ struct IdentifyProgress {
     corrected: usize,
     /// How many tracks Deezer had a genre for.
     genres: usize,
+    /// How many tracks LRCLIB had words for.
+    worded: usize,
     /// Set on the final message.
     finished: bool,
 }
@@ -1176,6 +1237,7 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
                         title: format!("could not start: {e}"),
                         corrected: 0,
                         genres: 0,
+                        worded: 0,
                         finished: true,
                     },
                 );
@@ -1185,13 +1247,40 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
         let total = todo.len();
         let (mut corrected, mut genres) = (0usize, 0usize);
 
+        let mut worded = 0usize;
+
         for (i, (href, title, artist, album, bpm, duration)) in todo.into_iter().enumerate() {
-            let facts = lookup.track_facts(&artist, &title);
-            let (_art, genre) = lookup.album(&artist, &album);
+            /*
+             * Words as well as facts, in one pass.
+             *
+             * Lyrics used to be fetched only when someone opened Liner Notes or
+             * Now Playing on a particular track, which meant the library-wide
+             * pass and the per-track one were two different features doing
+             * overlapping work — and a person who wanted words for everything
+             * had to visit every track to get them.
+             *
+             * Asked concurrently: three independent services, and doing them in
+             * turn made this pass three round trips deep per track over a
+             * library that can run to hundreds.
+             */
+            let (facts, genre, words) = std::thread::scope(|scope| {
+                let f = scope.spawn(|| lookup.track_facts(&artist, &title));
+                let a = scope.spawn(|| lookup.album(&artist, &album));
+                let w = scope.spawn(|| lookup.lyrics(&artist, &title));
+                (
+                    f.join().unwrap_or(None),
+                    a.join().unwrap_or_default().1,
+                    w.join().unwrap_or(None),
+                )
+            });
 
             if let Ok(mut app) = shared.lock() {
                 let entry = app.looked.entry(href.clone()).or_default();
                 entry.attempted = true;
+                if let Some(words) = words {
+                    entry.lyrics = Some(words);
+                    worded += 1;
+                }
                 if !genre.trim().is_empty() {
                     entry.genre = genre.clone();
                     genres += 1;
@@ -1228,6 +1317,7 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
                     title: title.clone(),
                     corrected,
                     genres,
+                    worded,
                     finished: false,
                 },
             );
@@ -1253,6 +1343,7 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
                 title: String::new(),
                 corrected,
                 genres,
+                worded,
                 finished: true,
             },
         );
@@ -2665,6 +2756,33 @@ fn remove_download(kind: String, id: String, state: State<'_, Shared>) -> Result
 ///
 /// So the switch that hides them can say what it would hide, and so someone
 /// tidying up by hand knows whether there is anything to tidy.
+/// How much of the library has been looked up, and how much there is.
+///
+/// For the Settings button's subtitle: "50 of 500 fetched" is the only honest
+/// way to say whether pressing it again would do anything. `attempted` is the
+/// flag, not "found something" — a track LRCLIB has never heard of has still
+/// been asked about, and asking again costs a request and finds nothing.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LookupCounts {
+    fetched: usize,
+    total: usize,
+}
+
+#[tauri::command]
+fn lookup_counts(state: State<'_, Shared>) -> Result<LookupCounts> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let fetched = app
+        .rows
+        .iter()
+        .filter(|r| app.looked.get(&r.href).is_some_and(|l| l.attempted))
+        .count();
+    Ok(LookupCounts {
+        fetched,
+        total: app.rows.len(),
+    })
+}
+
 #[tauri::command]
 fn duplicate_count(state: State<'_, Shared>) -> Result<usize> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
@@ -7321,6 +7439,7 @@ pub fn run() {
             playlist_folders,
             create_folder,
             duplicate_count,
+            lookup_counts,
             downloaded_tracks,
             download_collection,
             remove_download,
@@ -7943,6 +8062,87 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Genres tab lists genres, not tracks.
+    ///
+    /// It listed tracks — a card per song, captioned with its artist — for as
+    /// long as the tab has existed. Two halves of one fault: `library_entities`
+    /// took a boolean, artist or album, so "genre" fell to the `else` and
+    /// grouped by album; and `Library.tsx` only treated album and artist as
+    /// entity tabs, so the screen rendered the plain row grid regardless.
+    #[test]
+    fn the_genres_tab_lists_genres_rather_than_tracks() {
+        let (mut app, dir) = app();
+        for (href, title, genre) in [
+            ("/a.mp3", "A", "House"),
+            ("/b.mp3", "B", "House"),
+            ("/c.mp3", "C", "Ambient"),
+            ("/d.mp3", "D", ""),
+        ] {
+            let mut r = row(href, href);
+            r.title = title.to_string();
+            r.genre = genre.to_string();
+            app.rows.push(r);
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("genre".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let got = library_entities_for(&app, &view);
+        let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec!["House", "Ambient"],
+            "expected one tile per genre, got {names:?}",
+        );
+        // Two tracks under House, one under Ambient — a tile counts its
+        // members, and a tile per track would have made every count 1.
+        assert_eq!(got[0].tracks, 2);
+        assert_eq!(got[1].tracks, 1);
+        // The untagged track is not a genre and gets no tile of its own.
+        assert!(!names.contains(&""), "an empty genre became a tile");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And opening one narrows to exactly that genre.
+    #[test]
+    fn opening_a_genre_shows_only_its_tracks() {
+        let (mut app, dir) = app();
+        for (href, genre) in [
+            ("/a.mp3", "House"),
+            ("/b.mp3", "Deep House"),
+            ("/c.mp3", "House"),
+        ] {
+            let mut r = row(href, href);
+            r.genre = genre.to_string();
+            app.rows.push(r);
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: None,
+            genre: Some("House".to_string()),
+            album: None,
+            artist: None,
+        };
+        let rows = resolved_rows(&app, &view);
+        let hrefs: Vec<&str> = rows.iter().map(|r| r.href.as_str()).collect();
+
+        // Exact, not a substring: "Deep House" is a different genre.
+        assert_eq!(hrefs, vec!["/a.mp3", "/c.mp3"], "got {hrefs:?}");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The DJ conducts within what was played from, not the library.
@@ -8568,6 +8768,7 @@ mod tests {
             sort_key: None,
             ascending: true,
             group_by: None,
+            genre: None,
             album: None,
             artist: None,
         };

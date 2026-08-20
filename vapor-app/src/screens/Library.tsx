@@ -47,8 +47,16 @@ type Load =
   | { kind: "error"; message: string };
 
 /** Which tabs list entities rather than tracks. */
-function isEntityTab(group: GroupBy): group is "album" | "artist" {
-  return group === "album" || group === "artist";
+/**
+ * Tabs that list *things* rather than tracks.
+ *
+ * Genres belongs here and did not: the tab rendered the plain row grid, so
+ * "Genres" showed a card per track — every song in the library, captioned with
+ * its artist. It had been that way since the port. `library_entities` now
+ * groups by genre as well, and this is the other half of it.
+ */
+function isEntityTab(group: GroupBy): group is "album" | "artist" | "genre" {
+  return group === "album" || group === "artist" || group === "genre";
 }
 
 /**
@@ -58,7 +66,7 @@ function isEntityTab(group: GroupBy): group is "album" | "artist" {
  * history entry with the others. See `opened` below.
  */
 export type Opened = {
-  kind: "album" | "artist";
+  kind: "album" | "artist" | "genre";
   name: string;
   /** Any track on it — enough to resolve artwork, since an album's identity
    *  is its title plus the folder its tracks live in. */
@@ -264,7 +272,12 @@ export function Library({
           <div className="library__opened-head">
             <div className="library__crumb">
               <button className="library__back" onClick={() => setOpened(null)}>
-                ‹ {opened.kind === "album" ? "Albums" : "Artists"}
+                ‹{" "}
+                {opened.kind === "album"
+                  ? "Albums"
+                  : opened.kind === "artist"
+                    ? "Artists"
+                    : "Genres"}
               </button>
               <h2 className="library__opened">{opened.name}</h2>
             </div>
@@ -278,7 +291,9 @@ export function Library({
             filter={
               opened.kind === "album"
                 ? { album: opened.name }
-                : { artist: opened.name }
+                : opened.kind === "artist"
+                  ? { artist: opened.name }
+                  : { genre: opened.name }
             }
             // Playing from inside an opened record conducts within it.
             scope={opened.name}
@@ -371,7 +386,7 @@ function EmptyLibrary({
   kind,
 }: {
   query: string;
-  kind?: "album" | "artist";
+  kind?: "album" | "artist" | "genre";
 }) {
   if (query.trim()) {
     return (
@@ -604,11 +619,11 @@ function EntityCard({
   onPlay,
 }: {
   entity: LibraryEntity;
-  kind: "album" | "artist";
+  kind: "album" | "artist" | "genre";
   onOpen: () => void;
   onPlay: () => void;
 }) {
-  const noun = kind === "album" ? "album" : "artist";
+  const noun = kind;
   return (
     <div className={"card card--entity" + (kind === "artist" ? " card--round" : "")}>
       <button

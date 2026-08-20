@@ -59,6 +59,8 @@ export interface LibraryView {
   sortKey?: SortKey;
   ascending?: boolean;
   groupBy?: GroupBy;
+  /** Narrow to one genre, exactly — set when a genre tile is opened. */
+  genre?: string;
   /** Narrow to exactly this album. Set by opening one, not by typing. */
   album?: string;
   /** Narrow to exactly this artist. */

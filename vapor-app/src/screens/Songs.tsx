@@ -104,7 +104,7 @@ export function Songs({
    * and any track whose title contains it, which is not what opening an album
    * means.
    */
-  filter?: { album?: string; artist?: string } | undefined;
+  filter?: { album?: string; artist?: string; genre?: string } | undefined;
   /**
    * What playing from this table is conducting over — an album or artist name
    * when the table is embedded in one, absent when it is the whole library.
@@ -198,6 +198,7 @@ export function Songs({
           groupBy: "none",
           ...(filter?.album ? { album: filter.album } : {}),
           ...(filter?.artist ? { artist: filter.artist } : {}),
+          ...(filter?.genre ? { genre: filter.genre } : {}),
         })
         .then((sections) => {
           if (cancelled) return;
@@ -212,7 +213,15 @@ export function Songs({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query, sortKey, ascending, revision, filter?.album, filter?.artist]);
+  }, [
+    query,
+    sortKey,
+    ascending,
+    revision,
+    filter?.album,
+    filter?.artist,
+    filter?.genre,
+  ]);
 
   useEffect(() => {
     core
