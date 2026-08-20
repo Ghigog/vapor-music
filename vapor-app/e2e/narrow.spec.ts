@@ -520,7 +520,8 @@ test.describe("Duplicate tracks", () => {
     await boot(page, { rows: TWICE });
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await expect(page.getByText(/one track is in your library twice/i)).toBeVisible();
+    // The row's subtitle is the count and its state, not a sentence about it.
+    await expect(page.getByText(/1 extra copy — still showing/i)).toBeVisible();
 
     // Off by default: both copies are still listed.
     const tabs = page.getByRole("navigation", { name: "Screens" });
@@ -529,8 +530,8 @@ test.describe("Duplicate tracks", () => {
     await expect(page.locator(".songrow")).toHaveCount(2);
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByLabel(/hide extra copies/i).check();
-    await expect(page.getByText(/nothing has been deleted/i)).toBeVisible();
+    await page.getByLabel(/hide duplicates/i).check();
+    await expect(page.getByText(/1 hidden/i)).toBeVisible();
 
     await tabs.getByRole("button", { name: "Library", exact: true }).click();
     await page.getByRole("tab", { name: "Songs" }).click();

@@ -425,9 +425,18 @@ export class FakeBackend {
 
       case "set_remote_config": {
         const url = String(a.url ?? "").trim();
-        // The real command refuses a value that is not an origin, because
-        // everything downstream hangs paths off it.
-        if (url !== "" && !/^https?:\/\//.test(url)) {
+        /*
+         * The real command refuses a value that is not an origin, because
+         * everything downstream hangs paths off it — and it checks the *host*,
+         * not just the scheme. A prefix check was enough while the address box
+         * started empty; it is prefilled with `https://` now, so a pasted app
+         * password arrives as `https://4wg9ie7xi8v7nbi6` and clears it.
+         *
+         * Kept in step deliberately: this fake exists so screens can be driven
+         * the way a person drives them, and a fake that accepts what the real
+         * one refuses tests the drift.
+         */
+        if (url !== "" && !/^https?:\/\/[^/]{4,}\.[^/]/.test(url)) {
           throw new Error(`"${url}" is not a server address`);
         }
         const previous = this.settings.remote.username;
@@ -661,6 +670,16 @@ export class FakeBackend {
       // 128 px against the stored original (PERF-004) — and a fixture has no
       // bytes to speak of, so what a test can check is that rows ask for the
       // small one at all.
+      case "lookup_counts": {
+        // Counts tracks *asked about*, matching the real command — a track
+        // nothing was found for has still been asked, and asking again costs a
+        // request and finds nothing.
+        return {
+          fetched: this.rows.filter((r) => this.attempted.has(r.href)).length,
+          total: this.rows.length,
+        };
+      }
+
       case "track_cover":
       case "track_thumb": {
         const href = String(a.href ?? "");

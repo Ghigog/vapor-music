@@ -1158,8 +1158,6 @@ struct IdentifyProgress {
     corrected: usize,
     /// How many tracks Deezer had a genre for.
     genres: usize,
-    /// How many tracks LRCLIB had words for.
-    worded: usize,
     /// Set on the final message.
     finished: bool,
 }
@@ -1237,7 +1235,6 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
                         title: format!("could not start: {e}"),
                         corrected: 0,
                         genres: 0,
-                        worded: 0,
                         finished: true,
                     },
                 );
@@ -1247,40 +1244,30 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
         let total = todo.len();
         let (mut corrected, mut genres) = (0usize, 0usize);
 
-        let mut worded = 0usize;
-
         for (i, (href, title, artist, album, bpm, duration)) in todo.into_iter().enumerate() {
             /*
-             * Words as well as facts, in one pass.
+             * Facts and artwork, not words.
              *
-             * Lyrics used to be fetched only when someone opened Liner Notes or
-             * Now Playing on a particular track, which meant the library-wide
-             * pass and the per-track one were two different features doing
-             * overlapping work — and a person who wanted words for everything
-             * had to visit every track to get them.
+             * Lyrics were briefly fetched here too, to make one button out of
+             * two features. Wrong shape: it turned a press into one LRCLIB
+             * request per track across the whole library, for words nobody had
+             * asked to read yet. They are fetched when a track loads instead —
+             * see `begin_playback` — which spreads the same work over the time
+             * somebody actually spends listening, and asks only about records
+             * they play.
              *
-             * Asked concurrently: three independent services, and doing them in
-             * turn made this pass three round trips deep per track over a
-             * library that can run to hundreds.
+             * Asked concurrently: two independent services, and in turn this
+             * pass was two round trips deep per track over hundreds of them.
              */
-            let (facts, genre, words) = std::thread::scope(|scope| {
+            let (facts, genre) = std::thread::scope(|scope| {
                 let f = scope.spawn(|| lookup.track_facts(&artist, &title));
                 let a = scope.spawn(|| lookup.album(&artist, &album));
-                let w = scope.spawn(|| lookup.lyrics(&artist, &title));
-                (
-                    f.join().unwrap_or(None),
-                    a.join().unwrap_or_default().1,
-                    w.join().unwrap_or(None),
-                )
+                (f.join().unwrap_or(None), a.join().unwrap_or_default().1)
             });
 
             if let Ok(mut app) = shared.lock() {
                 let entry = app.looked.entry(href.clone()).or_default();
                 entry.attempted = true;
-                if let Some(words) = words {
-                    entry.lyrics = Some(words);
-                    worded += 1;
-                }
                 if !genre.trim().is_empty() {
                     entry.genre = genre.clone();
                     genres += 1;
@@ -1317,7 +1304,6 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
                     title: title.clone(),
                     corrected,
                     genres,
-                    worded,
                     finished: false,
                 },
             );
@@ -1343,7 +1329,6 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
                 title: String::new(),
                 corrected,
                 genres,
-                worded,
                 finished: true,
             },
         );
@@ -3391,6 +3376,75 @@ struct PlaybackState {
     scope: String,
 }
 
+/// Look a track up while it loads, once, if lookups are permitted.
+///
+/// ## Why here and not in a library-wide pass
+///
+/// Lyrics were briefly folded into `identify_library` so that one button did
+/// everything. That made a single press cost one LRCLIB request per track
+/// across the whole library, for words nobody had asked to read.
+///
+/// The switch in Settings is better read as an *intention* than as a command:
+/// it says this person wants lyrics and artwork. Acting on it when a track
+/// loads spreads the same work across the time somebody spends listening, asks
+/// only about records they actually play, and puts the answer in the cache
+/// before they can open Now Playing to look for it.
+///
+/// Once per track, ever. `attempted` is set whatever comes back, so a record
+/// LRCLIB has never heard of is asked about once and then left alone — the
+/// cache is the memory, and emptying it is what asks again.
+fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
+    if !app.settings.metadata_lookup_enabled {
+        return;
+    }
+    if app.looked.get(href).is_some_and(|l| l.attempted) {
+        return;
+    }
+    let Some(row) = app.rows.iter().find(|r| r.href == href) else {
+        return;
+    };
+    let (artist, title, album) = (row.artist.clone(), row.title.clone(), row.album.clone());
+    let href = href.to_string();
+    let shared = Arc::clone(shared);
+    let dir = app.store.dir().to_path_buf();
+
+    // A plain thread, not the runtime's blocking pool: this outlives the
+    // command that started it and must not hold a lock or a runtime worker.
+    let spawned = std::thread::Builder::new()
+        .name("vapor-lookup".to_string())
+        .spawn(move || {
+            let Ok(lookup) = metadata::Lookup::new() else {
+                return;
+            };
+            let (words, sleeve) = std::thread::scope(|scope| {
+                let w = scope.spawn(|| lookup.lyrics(&artist, &title));
+                let a = scope.spawn(|| lookup.album(&artist, &album));
+                (w.join().unwrap_or(None), a.join().unwrap_or_default())
+            });
+            if !sleeve.0.is_empty() {
+                lookup.download_image(&sleeve.0, &dir);
+            }
+            if let Ok(mut app) = shared.lock() {
+                let entry = app.looked.entry(href).or_default();
+                entry.attempted = true;
+                if let Some(words) = words {
+                    entry.lyrics = Some(words);
+                }
+                if !sleeve.1.trim().is_empty() {
+                    entry.genre = sleeve.1;
+                }
+                if !sleeve.0.is_empty() {
+                    entry.album_art = sleeve.0;
+                }
+                let _ = app.save_looked();
+            }
+        });
+    if spawned.is_err() {
+        // Nothing to report: the words simply do not arrive, and Now Playing
+        // already draws that state.
+    }
+}
+
 /// Fetch, decode and start a track.
 ///
 /// The work happens on a blocking thread because it is neither quick nor
@@ -3455,6 +3509,12 @@ fn stream_from_server(
 }
 
 fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
+    // Words for what is about to play, if the person has asked for words at
+    // all. Off the playback path entirely: a lyrics service is not allowed to
+    // delay a track starting, and this is a nicety that can arrive late or not
+    // at all.
+    look_up_in_background(shared, app, &href);
+
     let Some(player) = app.player.as_ref() else {
         app.playback_error = Some("No audio output device is available.".to_string());
         return;
@@ -6305,11 +6365,36 @@ pub(crate) fn apply_remote_config(
     // rather than "that is not an address". Pasting an app password in here is
     // the way it actually happens.
     let trimmed = url.trim();
-    if !trimmed.is_empty() && !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+    let scheme = ["https://", "http://"]
+        .into_iter()
+        .find(|s| trimmed.starts_with(s));
+    /*
+     * The host has to look like one, not just the scheme.
+     *
+     * Checking only the prefix was enough while the box started empty: an app
+     * password pasted in had no `https://` and was refused. The box is now
+     * prefilled with `https://` so the shape of the answer is visible before it
+     * is typed — which means the same paste arrives as
+     * `https://4wg9ie7xi8v7nbi6`, clears a prefix check, and is stored as an
+     * origin. The scan then finds nothing and reports no error, which reads as
+     * "my library is empty".
+     *
+     * A dot in the host is the cheapest test that separates a hostname from a
+     * password. It refuses `localhost`, which nothing here has ever pointed at
+     * — a WebDAV origin for a music library is a remote one.
+     */
+    let host_looks_real = scheme.is_some_and(|s| {
+        trimmed[s.len()..]
+            .split('/')
+            .next()
+            .is_some_and(|host| host.contains('.') && host.len() > 3)
+    });
+    if !trimmed.is_empty() && (scheme.is_none() || !host_looks_real) {
         return Err(Error(format!(
             "\"{trimmed}\" is not a server address — it needs to start with \
-             https://. For Koofr that is https://app.koofr.net, and the app \
-             password goes in the Password field."
+             https:// and name a server. For Koofr that is \
+             https://app.koofr.net, and the app password goes in the Password \
+             field."
         )));
     }
 
@@ -9207,6 +9292,27 @@ mod tests {
             app.settings.remote.url.is_empty(),
             "the refused value was stored anyway"
         );
+
+        // The same paste, after the box began prefilling `https://`.
+        //
+        // A prefix check passed this: it starts with https://, so it is an
+        // address. It is a password with a scheme in front of it, and stored as
+        // an origin it produces a scan that finds nothing and reports no error
+        // — which reads as an empty library rather than a wrong address.
+        for not_one in [
+            "https://4wg9ie7xi8v7nbi6",
+            "https://",
+            "https:///dav/Music",
+        ] {
+            assert!(
+                apply_remote_config(&mut app, not_one, "someone", "Music").is_err(),
+                "{not_one:?} was accepted as a server address"
+            );
+            assert!(
+                app.settings.remote.url.is_empty(),
+                "{not_one:?} was stored anyway"
+            );
+        }
 
         assert!(apply_remote_config(
             &mut app,

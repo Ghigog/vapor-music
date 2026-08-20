@@ -766,6 +766,24 @@ export function removeDownload(
 }
 
 /** How many files are second-or-later copies of a recording. */
+/** How much of the library has been looked up, and how much there is. */
+export interface LookupCounts {
+  fetched: number;
+  total: number;
+}
+
+/**
+ * Tracks that have been asked about, against the library size.
+ *
+ * `fetched` counts tracks *asked about*, not tracks something was found for —
+ * a track LRCLIB has never heard of has still been asked, and asking again
+ * costs a request and finds nothing. It is what decides whether pressing Fetch
+ * would do anything.
+ */
+export function lookupCounts(): Promise<LookupCounts> {
+  return invoke<LookupCounts>("lookup_counts");
+}
+
 export function duplicateCount(): Promise<number> {
   return invoke<number>("duplicate_count");
 }

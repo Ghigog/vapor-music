@@ -29,6 +29,7 @@ import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
 import { VaporMark, LOGO_POSE } from "../components/VaporMark";
 import { HelpModal } from "../components/HelpModal";
+import { SettingRow, SettingGroup } from "../components/SettingRow";
 // The notices themselves, not a second copy of them. Same reasoning as the
 // Vibe help sheet importing `ai_dj_workflow.md`: a licence notice that is
 // retyped is one that goes stale, and this one is an obligation rather than
@@ -40,9 +41,25 @@ type Busy = "idle" | "saving" | "scanning" | "analysing";
 /** Which card a notice belongs to, so an answer appears beside its question. */
 type Card = "remote" | "analysis" | "data" | "dupes";
 
+/**
+ * Collapse a scheme typed on top of the prefilled one.
+ *
+ * The box starts at `https://` so the shape of the answer is visible before it
+ * is typed. Someone pasting a whole address then lands on
+ * `https://https://app.koofr.net`, which is what a prefix does when it is real
+ * text rather than a placeholder — and pasting an address is the *normal* way
+ * to fill this in, not an edge case.
+ */
+export function withoutDoubledScheme(value: string): string {
+  return value.replace(/^(https?:\/\/)(?=https?:\/\/)/i, "");
+}
+
 export function Settings() {
   /** Whether the licences sheet is open. */
   const [licences, setLicences] = useState(false);
+  /** How much of the library has been asked about, for the Fetch row. */
+  const [looked, setLooked] = useState<core.LookupCounts | null>(null);
+
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -108,25 +125,41 @@ export function Settings() {
   // and asking the backend twice for one answer is how two numbers on one
   // screen end up disagreeing.
   const refresh = useCallback(async () => {
-    const [s, d] = await Promise.allSettled([
+    const [s, d, l] = await Promise.allSettled([
       core.analysisStatus(),
       core.duplicateCount(),
+      core.lookupCounts(),
     ]);
     if (s.status === "fulfilled") {
       setStatus(s.value);
       if (s.value.running) setStarted(true);
     }
     if (d.status === "fulfilled") setDupes(d.value);
+    // Left alone on failure rather than zeroed — a row that reports "0 of 0"
+    // because a call failed is the rails' bug in a different place.
+    if (l.status === "fulfilled") setLooked(l.value);
   }, []);
+
+  // The lookup row's subtitle counts what has been fetched, and lookups happen
+  // as tracks load rather than on a press — so the count moves while somebody
+  // listens, not only when this screen acts.
+  useEffect(() => {
+    const timer = setInterval(() => void refresh(), 4000);
+    return () => clearInterval(timer);
+  }, [refresh]);
 
   useEffect(() => {
     core
       .settings()
       .then((s) => {
+        // Prefilled where nothing is configured yet, so the shape of the answer
+        // is visible before it is typed. A placeholder cannot do this: it
+        // vanishes the moment someone starts typing, which is exactly when the
+        // "https://" or the leading "/dav/" would have been useful.
         setSettings(s);
-        setUrl(s.remote.url);
+        setUrl(s.remote.url || "https://");
         setUsername(s.remote.username);
-        setFolder(s.remote.folder);
+        setFolder(s.remote.folder || "/dav/");
         void checkStored(s.remote.username);
       })
       // Loading the settings themselves failed, which belongs beside the
@@ -327,10 +360,6 @@ export function Settings() {
 
       <section className="settings__card glass">
         <h2 className="settings__section">Where your music lives</h2>
-        <p className="settings__hint">
-          A WebDAV address — Nextcloud, Koofr, Proton Drive or your own server.
-          Vapor reads it; nothing is uploaded anywhere.
-        </p>
 
         <Field
           label="Server address"
@@ -343,7 +372,7 @@ export function Settings() {
             placeholder="https://example.com/dav"
             autoComplete="off"
             spellCheck={false}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => setUrl(withoutDoubledScheme(e.target.value))}
           />
         </Field>
 
@@ -446,256 +475,152 @@ export function Settings() {
         )}
       </section>
 
-      <section className="settings__card glass">
-        <h2 className="settings__section">Listening to your library</h2>
-        <p className="settings__hint">
-          Tempo, key and cue points, worked out on this device, once — the
-          results are kept. Every track has to be fetched from your server
-          before it can be listened to, and on a large library that download is
-          effectively the whole wait: the listening itself is under a second.
-          Several are fetched at a time, but a slow connection is still a slow
-          connection, and hundreds of tracks will take hours rather than
-          minutes.
-        </p>
+      <SettingGroup title="library">
+        {/*
+          One row, not a card of caveats.
 
-        {status && (
-          <p className="settings__stat numeric">
-            {status.analysed.toLocaleString()} of{" "}
-            {status.total.toLocaleString()} analysed
-          </p>
-        )}
+          The card explained that every track has to be fetched before it can be
+          listened to, that the download dominates, and that hundreds of tracks
+          take hours — all true, and all of it read as discouragement rather than
+          as information. The progress line says the same thing while it happens,
+          which is when it matters.
+        */}
+        <SettingRow
+          title="Analyse"
+          subtitle={
+            status?.running
+              ? `${(progress?.done ?? status.analysed).toLocaleString()} of ${(
+                  progress?.total ?? status.total
+                ).toLocaleString()} — ${status.current || "working…"}`
+              : status
+                ? `${status.analysed.toLocaleString()} of ${status.total.toLocaleString()} done — let Vibe DJ find tempo, key and cue points, and more`
+                : "Let Vibe DJ find tempo, key and cue points, and more"
+          }
+        >
+          {/*
+            One button that changes what it does, rather than two.
 
-        {/* Shown whenever a pass is running, not only when this screen started
-            one. Analysis begins by itself after a scan, and the meter used to
-            key off `busy` — which is set by pressing the button — so the
-            automatic pass ran invisibly and the only sign was a number that
-            crept up if you happened to reload. */}
-        {status?.running && (
-          <>
-            <div
-              className="settings__meter"
-              role="progressbar"
-              aria-valuenow={progress?.done ?? status.analysed}
-              aria-valuemin={0}
-              aria-valuemax={progress?.total ?? status.total}
-            >
-              <div
-                className="settings__meter-fill"
-                style={{
-                  width: `${
-                    ((progress?.done ?? status.analysed) /
-                      Math.max(progress?.total ?? status.total, 1)) *
-                    100
-                  }%`,
-                }}
-              />
-            </div>
-            <p className="settings__stat numeric" aria-live="polite">
-              {/* The design's Loading screen words it exactly this way, and
-                  naming the track answers "what is it doing" rather than only
-                  "how far has it got". */}
-              Listening… {progress?.done ?? status.analysed} of{" "}
-              {progress?.total ?? status.total}
-              {status.current ? ` · ${status.current}` : ""} · on this device
-            </p>
-          </>
-        )}
-
-        <div className="settings__actions">
-          <button
-            className="settings__button"
-            onClick={() => void analyse()}
-            disabled={busy !== "idle" || status?.running === true || !status?.total}
-          >
-            Analyse
-          </button>
-          {/* Stoppable whoever started it — a pass the app began by itself
-              is exactly the one a person most wants to be able to stop. */}
-          {status?.running && (
+            "Make it just one button" cannot mean losing the ability to stop:
+            a library-wide pass runs for hours, and a run you cannot call off
+            is worse than a second button. So the row's single control starts
+            the pass and stops it — which is also how the transport's play
+            control behaves, and for the same reason.
+          */}
+          {status?.running ? (
             <button
-              className="settings__button"
+              className="settings__rowbutton settings__rowbutton--quiet"
               onClick={() => {
-                // Awaited and read back, so the card reflects the press rather
-                // than waiting for a progress event that is not coming.
-                void core.cancelAnalysis().then(() => refresh());
-                setStarted(false);
-                setProgress(null);
-                setBusy("idle");
+                void core.cancelAnalysis().finally(() => void refresh());
               }}
             >
               Stop
             </button>
+          ) : (
+            <button
+              className="settings__rowbutton"
+              disabled={busy === "analysing"}
+              onClick={() => void analyse()}
+            >
+              Analyse
+            </button>
           )}
-        </div>
+        </SettingRow>
 
         {error?.card === "analysis" && (
-          <ErrorNotice error={error.text} onDismiss={() => setError(null)} />
+          <ErrorNotice
+            error={error.text}
+            onDismiss={() => setError(null)}
+          />
         )}
-        {/*
-          A pass that gave up says so. It used to return without a word and
-          without clearing its own "running" flag, so the screen showed a pass
-          in flight for ever with the Analyse button disabled — which from the
-          outside is analysis stopping by itself.
-        */}
-        {status?.stoppedBecause && (
-          <p className="settings__hint">{status.stoppedBecause}</p>
-        )}
-
-        {note?.card === "analysis" && (
-          <p className="settings__note">{note.text}</p>
-        )}
-      </section>
+      </SettingGroup>
 
       <SyncPanel />
 
-      <section className="settings__card glass">
-        <h2 className="settings__section">Duplicates</h2>
-        <p className="settings__hint">
-          {dupes === null
-            ? "Counting the copies in your library…"
-            : dupes === 0
-              ? "Nothing is in your library twice."
-              : dupes === 1
-                ? "One track is in your library twice."
-                : `${dupes.toLocaleString()} tracks are in your library twice.`}
-        </p>
-
+      <SettingGroup title="library">
         {/*
-          Off by default, and it hides rather than deletes.
+          Hides, never deletes.
 
           These are the person's own files. A library quietly showing fewer
           tracks than are on disk is one you cannot trust to tell you what you
-          have, so this is a view you switch on — the copies stay where they
-          are, to be tidied by hand.
+          have, so the copies stay where they are, to be tidied by hand.
+
+          The Vibe DJ excludes duplicates whatever this says: two copies of one
+          track share a tempo, key and intensity, so a set free to use both
+          mixes a record into itself.
         */}
-        <label className="settings__switch">
-          <input
-            type="checkbox"
-            checked={settings?.hideDuplicates ?? false}
-            disabled={!settings}
-            onChange={(e) => {
-              const on = e.target.checked;
-              void core
-                .setHideDuplicates(on)
-                .then(setSettings)
-                .then(() =>
-                  setNote({
-                    card: "dupes",
-                    text: on
-                      ? "Extra copies are hidden from the library. Nothing has been deleted — they are still on disk."
-                      : "Every copy is showing again.",
-                  }),
-                )
-                .catch((e: unknown) =>
-                  setNote({ card: "dupes", text: messageOf(e) }),
-                );
-            }}
-          />
-          <span>Hide extra copies of a track</span>
-        </label>
+        <SettingRow
+          title="Hide duplicates"
+          subtitle={
+            dupes === null
+              ? "Counting…"
+              : dupes === 0
+                ? "Nothing is in your library twice"
+                : settings?.hideDuplicates
+                  ? `${dupes.toLocaleString()} hidden`
+                  : `${dupes.toLocaleString()} extra ${dupes === 1 ? "copy" : "copies"} — still showing`
+          }
+        >
+          <label className="settings__switch settings__switch--bare">
+            <input
+              type="checkbox"
+              aria-label="Hide duplicates"
+              checked={settings?.hideDuplicates ?? false}
+              disabled={!settings}
+              onChange={(e) => {
+                void core
+                  .setHideDuplicates(e.target.checked)
+                  .then(setSettings)
+                  .catch((err: unknown) =>
+                    setNote({ card: "dupes", text: messageOf(err) }),
+                  );
+              }}
+            />
+          </label>
+        </SettingRow>
+
+        {/*
+          One switch, one pass — they used to be two features that looked like
+          one. Lyrics were fetched per track on demand and artwork in a
+          library-wide pass, so "look things up" meant different work depending
+          on where you pressed it. The subtitle counts tracks that have been
+          *asked about*, which is what decides whether pressing again does
+          anything: a track LRCLIB has never heard of has still been asked.
+        */}
+        <SettingRow
+          title="Fetch lyrics and artwork"
+          subtitle={
+            !settings?.metadataLookupEnabled
+              ? "Off — nothing about your library leaves this device"
+              : looked === null
+                ? "On — fetched as you play"
+                : `${looked.fetched.toLocaleString()} of ${looked.total.toLocaleString()} fetched, as you play`
+          }
+        >
+          <label className="settings__switch settings__switch--bare">
+            <input
+              type="checkbox"
+              aria-label="Allow looking things up"
+              checked={settings?.metadataLookupEnabled ?? false}
+              disabled={!settings}
+              onChange={(e) => {
+                void core
+                  .setMetadataLookup(e.target.checked)
+                  .then(setSettings)
+                  .catch((err: unknown) =>
+                    setNote({ card: "data", text: messageOf(err) }),
+                  );
+              }}
+            />
+          </label>
+
+        </SettingRow>
 
         {note?.card === "dupes" && (
-          <p className="settings__hint">{note.text}</p>
+          <p className="settings__note">{note.text}</p>
         )}
-
-        {/*
-          Said here rather than left implied: the DJ's exclusion is not this
-          switch, and someone who leaves this off should not think their sets
-          are affected.
-        */}
-        <p className="settings__hint">
-          The Vibe DJ never mixes into a second copy either way. Two copies of
-          one track share a tempo, a key and an intensity, so a set free to use
-          both will mix a record into itself.
-        </p>
-      </section>
-
-      <section className="settings__card glass">
-        {/*
-          This card used to be headed "Your data" and opened with a cache
-          summary and a path. Your Data itself is at the bottom of this screen
-          now and reports both properly, so all this card still owns is the one
-          decision on it — and a second "Your data" heading on one page is two
-          headings claiming to be the same place.
-        */}
-        <h2 className="settings__section">Looking things up</h2>
-        <p className="settings__hint">
-          Everything is a plain file here. No account, nothing shared, nothing
-          leaves unless you move it.
-        </p>
-
-        {/*
-          The one exception to the line above, so it sits directly under it
-          rather than somewhere the claim cannot be read against it.
-
-          Off by default. Tempo, key, energy and cue points are worked out on
-          this device from the audio; lyrics and artist portraits cannot be,
-          because they are not in the audio. Fetching them means telling
-          someone what is being listened to, and that is a decision for the
-          person listening.
-        */}
-        <label className="settings__switch">
-          <input
-            type="checkbox"
-            checked={settings?.metadataLookupEnabled ?? false}
-            disabled={!settings}
-            onChange={(e) => {
-              const on = e.target.checked;
-              void core
-                .setMetadataLookup(on)
-                .then(setSettings)
-                .then(() =>
-                  setNote({
-                    card: "data",
-                    text: on
-                      ? "Lyrics and artwork can now be looked up, one track at a time, from Liner Notes."
-                      : "Lookups are off, and everything already found has been forgotten.",
-                  }),
-                )
-                .catch((e: unknown) =>
-                  setNote({ card: "data", text: messageOf(e) }),
-                );
-            }}
-          />
-          <span>Look up lyrics and artwork</span>
-        </label>
-        <p className="settings__hint">
-          Sends the artist and title of a track to LRCLIB and Deezer when you
-          ask for its words on the Liner Notes screen — never automatically, and
-          never for anything else. Turning it off forgets what was found.
-        </p>
         {note?.card === "data" && <p className="settings__note">{note.text}</p>}
-        <div className="settings__actions">
-          <button
-            className="settings__button settings__button--danger"
-            onClick={() => {
-              // Irreversible and outward-looking enough to deserve a question,
-              // and the wording says what actually goes.
-              if (
-                !window.confirm(
-                  "Delete the local index, analysis, playlists, cached audio and the saved password? Your music on the server is untouched.",
-                )
-              ) {
-                return;
-              }
-              void core.deleteAllData().then(refresh);
-            }}
-            disabled={busy !== "idle"}
-          >
-            Delete everything stored here
-          </button>
-        </div>
-      </section>
+      </SettingGroup>
 
-      {/*
-        Attribution, because it is a licence condition rather than a courtesy.
-
-        The transport icons are CC BY, which requires credit "in any reasonable
-        manner" *to the people using the work* — a line in a repository file
-        does not reach them. THIRD_PARTY_NOTICES.md has carried this since the
-        Godot build and flagged the gap; shipping the icons in this app is what
-        makes closing it overdue rather than optional. See docs/LICENSING.md.
-      */}
       <section className="settings__card glass">
         <h2 className="settings__section">About Vapor</h2>
         {/*

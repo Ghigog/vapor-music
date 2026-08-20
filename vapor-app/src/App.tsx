@@ -44,6 +44,7 @@ import "./screens/vibe.css";
 import "./screens/settings.css";
 import "./screens/nowplaying.css";
 import "./components/lyrics.css";
+import "./components/setrow.css";
 import "./screens/onboarding.css";
 import "./screens/liner.css";
 import "./screens/yourdata.css";

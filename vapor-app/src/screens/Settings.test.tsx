@@ -430,7 +430,7 @@ describe("Settings — analysis after a scan", () => {
     const user = userEvent.setup();
     render(<Settings />);
 
-    expect(await screen.findByText(/0 of 0 analysed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/0 of 0 done/i)).toBeInTheDocument();
 
     await user.type(
       await screen.findByLabelText("Server address"),
@@ -448,7 +448,7 @@ describe("Settings — analysis after a scan", () => {
 
     // Described, and nobody pressed Analyse to make it happen.
     await waitFor(() =>
-      expect(screen.getByText(/4 of 4 analysed/i)).toBeInTheDocument(),
+      expect(screen.getByText(/4 of 4 done/i)).toBeInTheDocument(),
     );
     expect(backend.called("analyse_library")).toBe(false);
   });
@@ -467,7 +467,12 @@ describe("Settings — analysis in progress", () => {
     useBackend({ connected: true, analysing: { title: "Space Time" } });
     render(<Settings />);
 
-    expect(await screen.findByRole("progressbar")).toBeInTheDocument();
+    // The meter is gone with the card it sat in — the row's subtitle reports
+    // the pass, and offers Stop, which is what the meter was there to
+    // accompany.
+    expect(
+      await screen.findByRole("button", { name: /^stop$/i }),
+    ).toBeInTheDocument();
   });
 
   it("names the track it is working on", async () => {
@@ -487,12 +492,14 @@ describe("Settings — analysis in progress", () => {
     await waitFor(() => expect(backend.called("cancel_analysis")).toBe(true));
   });
 
-  it("shows no meter when nothing is running", async () => {
+  it("offers no way to stop a pass that is not running", async () => {
     useBackend({ connected: true });
     render(<Settings />);
 
-    await screen.findByText(/4 of 4 analysed/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    await screen.findByText(/4 of 4 done/i);
     expect(screen.queryByRole("button", { name: /^stop$/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^analyse$/i }),
+    ).toBeInTheDocument();
   });
 });
