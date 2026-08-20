@@ -121,9 +121,9 @@ users "Tempo and key detection use Essentia" and `README.md` explains the AGPL
 as a consequence of Essentia and Rubber Band. Neither has shipped since the Rust
 rewrite. The Settings line is user-facing.
 
-**Still outstanding:** CC BY requires attribution *visible to users*, and the
-icon credit currently lives only in a repository file. An About → Licences
-screen would settle it, and would be the natural home for the MPL notice too.
+**Still outstanding:** CC BY requires attribution *visible to users*, which a
+repository file does not provide. An About → Licences screen would settle it,
+and would be the natural home for the MPL notice too.
 
 > This is an engineering summary of publicly declared licence metadata, not
 > legal advice. Confirm with a lawyer before commercial distribution.
@@ -149,7 +149,7 @@ Keeping them off by default is the right shipping posture and should stay.
 
 ---
 
-## 4. What has never been exercised
+## 4. Where the coverage stops
 
 Recorded so nobody assumes coverage that does not exist.
 
@@ -158,7 +158,7 @@ Recorded so nobody assumes coverage that does not exist.
 | **macOS desktop** | The only genuinely exercised target. |
 | **Android** | Compiles, installs, launches. Barely used. Audio path unvalidated on device — TD-24. |
 | **iOS** | Never built, never run. `cpal` unvalidated there. TD-24. |
-| **Sync between devices** | 46 tests, all in one process. Nothing has crossed a real network. TD-55. |
+| **Sync between devices** | Exercised only in-process. Nothing has crossed a real network. TD-55. |
 
 The sync gap has a specific shape worth restating: both sides are compiled from
 the same enum, so the one bug class the tests cannot catch is a **wire-format
@@ -190,7 +190,7 @@ Decisions, not oversights. Each is recorded where it was made.
 
 ## 6. Mechanics
 
-* **Version lives in three files** and they are currently all `2.0.0`:
+* **Version lives in three files** which must agree:
   `vapor-app/package.json`, `vapor-app/src-tauri/tauri.conf.json`,
   `vapor-app/src-tauri/Cargo.toml`. Nothing enforces that they agree. A release
   that disagrees with itself is confusing in a way that surfaces weeks later.

@@ -143,7 +143,7 @@ distributed, and there are no outside contributors.
 
 Seven declarations, and they have to agree or the position is incoherent:
 
-| Where | Currently says |
+| Where | Declaration |
 |---|---|
 | `LICENSE` | Full AGPL-3.0 text, 661 lines |
 | `vapor-app/src-tauri/tauri.conf.json` | `"copyright": "Vapor Music. Licensed AGPL-3.0-or-later."` |
