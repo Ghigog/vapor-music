@@ -65,7 +65,17 @@ pub struct Analysis {
     pub intro_key: String,
     #[serde(default)]
     pub outro_key: String,
-    /// Perceived energy, 0–1 — loudness, brightness and tempo (TD-42b).
+    /// Dynamics, 0–1: the mean of a one-second RMS envelope over that
+    /// envelope's peak. See `vapor_dsp::loudness::energy_level`.
+    ///
+    /// Neither brightness nor tempo is in it, whatever the name suggests. It
+    /// measures how *consistent* a track is — relentless scores high, a track
+    /// with a breakdown scores low — so it is not intensity, and since
+    /// 2026-08-17 nothing wanting intensity reads it: `TrackMeta::energy_level`
+    /// is `vapor_library::intensity_from_lufs(lufs)` instead, which separated
+    /// drum & bass from ballads by 0.256 against this measure's 0.031
+    /// (docs/FINDINGS.md). Still reading this field: `has_vocal_presence`,
+    /// which thresholds it for the mix's mid cut, and the library row.
     #[serde(default)]
     pub energy: f32,
     /// Where the intro ends and the outro begins, in seconds (TD-21).
