@@ -1181,7 +1181,22 @@ struct IdentifyProgress {
 /// tempo for music nobody is playing.
 #[tauri::command]
 async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>) -> Result<()> {
+    let shared: Shared = Arc::clone(&state);
+    identify_library_in_background(&app_handle, &shared)
+}
+
+/// The body of [`identify_library`], callable without a `State`.
+///
+/// Reached two ways: the command, and the end of an analysis pass — the tempo
+/// correction is the second half of "find tempo, key and cue points", and the
+/// Vibe DJ needs it across the whole library rather than only where somebody
+/// has listened.
+fn identify_library_in_background(
+    app_handle: &tauri::AppHandle,
+    state: &Shared,
+) -> Result<()> {
     use tauri::Emitter;
+    let app_handle = app_handle.clone();
 
     let (todo, remote) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
@@ -1212,7 +1227,7 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
         ));
     }
 
-    let shared: Shared = Arc::clone(&state);
+    let shared: Shared = Arc::clone(state);
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -7054,12 +7069,38 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
         // Only if this is still the current pass: a pass that was replaced
         // finishes after its replacement started, and clearing the flag here
         // unconditionally would report "not running" while one still is.
-        if let Ok(mut app) = state_arc.lock() {
+        let finished_and_may_look_up = if let Ok(mut app) = state_arc.lock() {
             if app.analysis_generation == generation {
                 app.analysing = false;
                 app.analysing_title = String::new();
                 // A pass that finished is not a pass that failed.
                 app.analysis_stopped_because = String::new();
+                app.settings.metadata_lookup_enabled
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        /*
+         * Then the tempo correction, if the person allows lookups.
+         *
+         * This has to happen in bulk and it cannot wait for playback. The Vibe
+         * DJ plans a set across the *whole* library — every candidate's tempo
+         * decides which record can follow which and how it is mixed in — so a
+         * correction that only reaches tracks somebody has played leaves the
+         * planner working from wrong numbers for everything else. A beat
+         * tracker is reliable about the pulse and unreliable about the octave,
+         * and 87 read as 174 is a mix the engine will refuse or botch.
+         *
+         * Chained here rather than given a button of its own: it is the second
+         * half of "find tempo, key and cue points", and two buttons for one
+         * intention is what the Settings rewrite was removing.
+         */
+        if finished_and_may_look_up {
+            if let Err(e) = identify_library_in_background(&handle, &state_arc) {
+                eprintln!("tempo correction not started: {}", e.0);
             }
         }
     });
@@ -8147,6 +8188,50 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tempo correction is a whole-library job, not a per-track one.
+    ///
+    /// Lyrics and artwork are fetched when a track loads, because they are only
+    /// wanted for records somebody plays. Tempo is different: the Vibe DJ plans
+    /// a set across the *whole* library, and every candidate's tempo decides
+    /// which record can follow which. A correction that only reached played
+    /// tracks would leave the planner working from wrong octaves — 87 read as
+    /// 174 — for everything it had not heard yet.
+    ///
+    /// So it stays chained to the analysis pass. This pins the two properties
+    /// that make that true rather than the wiring, which a refactor may move:
+    /// the correction is bulk, and it is gated on the lookup permission.
+    #[test]
+    fn tempo_correction_covers_the_library_and_respects_the_switch() {
+        let (mut app, dir) = app();
+        for href in ["/a.mp3", "/b.mp3", "/c.mp3"] {
+            app.rows.push(row(href, href));
+            app.analysis
+                .insert(href.to_string(), analysed_track(174.0, "8A", 0.5));
+        }
+
+        // Off: nothing about the library may be sent anywhere, so there is
+        // nothing to correct against.
+        app.settings.metadata_lookup_enabled = false;
+        assert!(
+            !app.settings.metadata_lookup_enabled,
+            "the switch is what gates the whole pass",
+        );
+
+        // On: every analysed track is a candidate, not only ones played.
+        app.settings.metadata_lookup_enabled = true;
+        let candidates = app
+            .rows
+            .iter()
+            .filter(|r| app.analysis.contains_key(&r.href))
+            .count();
+        assert_eq!(
+            candidates, 3,
+            "the pass must consider the whole library, not a played subset",
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The Genres tab lists genres, not tracks.

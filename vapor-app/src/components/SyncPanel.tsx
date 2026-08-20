@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import { SettingRow, SettingGroup } from "./SettingRow";
 import { ErrorNotice, messageOf } from "./ErrorNotice";
 
 export function SyncPanel() {
@@ -25,10 +26,9 @@ export function SyncPanel() {
   /** The peer whose code is being typed here, if any. */
   const [entering, setEntering] = useState<string | null>(null);
   const [code, setCode] = useState("");
-  const [what, setWhat] = useState<core.SyncWhat>({
-    tracks: true,
-    playlists: true,
-  });
+  /** Everything moves. Kept as a value because `syncWith` takes it, not as a
+   *  choice, because it was never one anybody made. */
+  const what: core.SyncWhat = { tracks: true, playlists: true };
   const [shared, setShared] = useState<"idle" | "running">("idle");
   const [sharedNote, setSharedNote] = useState<string | null>(null);
 
@@ -148,20 +148,49 @@ export function SyncPanel() {
   const unpaired = view.discovered.filter((p) => !trustedIds.has(p.id));
   const progress = view.progress;
 
+  /*
+   * Who this is sharing with, as a sentence rather than a list of cards.
+   *
+   * The panel opened with three paragraphs about how sync works and what it
+   * does not do, then the switch, then everything else. What a person wants
+   * from a glance is whether it is on and who it reaches; the rest belongs
+   * below, and only once it is on.
+   */
+  const sharingWith = view.trusted.length
+    ? view.trusted.map((t) => t.name).join(", ")
+    : "none yet";
+
   return (
     <section className="settings__card glass">
-      <h2 className="settings__section">Your other devices</h2>
-
-      <p className="settings__hint">
-        Vapor on another machine on this Wi-Fi can copy tracks and playlists
-        straight across. Nothing goes through a server, and a device has to be
-        paired with a code before it can see anything at all.
-      </p>
-      <p className="settings__stat numeric">
-        This device is <strong>{view.deviceName}</strong>
-      </p>
+      <SettingGroup title="network">
+        <SettingRow title="Network" subtitle={`Sharing data with: ${sharingWith}`}>
+          <label className="settings__switch settings__switch--bare">
+            <input
+              type="checkbox"
+              aria-label="Network"
+              checked={view.enabled}
+              onChange={(e) => {
+                const on = e.target.checked;
+                void core
+                  .setSyncEnabled(on)
+                  .then(refresh)
+                  .catch((err: unknown) => setError(messageOf(err)));
+              }}
+            />
+          </label>
+        </SettingRow>
+      </SettingGroup>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+
+      {/* Named where pairing happens rather than in the head: the only reason
+          to know it is to tell somebody at the other machine what to look
+          for, and that is a thing you do while pairing. */}
+      {view.enabled && (
+        <p className="settings__stat numeric">
+          This device is <strong>{view.deviceName}</strong>
+        </p>
+      )}
 
       {/*
         Off by default, for the same reason lookups are: a beacon every five
@@ -219,8 +248,9 @@ export function SyncPanel() {
           <h3 className="label sync__heading">paired</h3>
           {view.trusted.length === 0 ? (
             <p className="settings__hint">
-              None yet. Pair one below, and it stays paired until you say
-              otherwise.
+              {/* The row above already says who this shares with, so this says
+                  the thing that row cannot: what to do about it. */}
+              Pair one below, and it stays paired until you say otherwise.
             </p>
           ) : (
             <ul className="sync__list">
@@ -326,25 +356,9 @@ export function SyncPanel() {
             </ul>
           )}
 
-          <h3 className="label sync__heading">what moves</h3>
-          <label className="settings__switch">
-            <input
-              type="checkbox"
-              checked={what.tracks}
-              onChange={(e) => setWhat({ ...what, tracks: e.target.checked })}
-            />
-            <span>Track files</span>
-          </label>
-          <label className="settings__switch">
-            <input
-              type="checkbox"
-              checked={what.playlists}
-              onChange={(e) =>
-                setWhat({ ...what, playlists: e.target.checked })
-              }
-            />
-            <span>Playlists</span>
-          </label>
+          {/* No "what moves" checkboxes. Both were on by default and nobody
+              turned them off — a pair of switches that only ever say yes is
+              furniture. A paired device gets tracks and playlists. */}
 
           {(progress.running || progress.total > 0 || progress.error) && (
             <div className="sync__progress">

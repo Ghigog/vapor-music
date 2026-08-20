@@ -39,6 +39,30 @@ function trusted(over: Partial<core.TrustedDevice> = {}): core.TrustedDevice {
 }
 
 describe("Sync panel", () => {
+  /**
+   * The row says the two things a glance is for: whether it is on, and who it
+   * reaches. The panel used to open with three paragraphs about how sync works
+   * before either.
+   */
+  it("says who it is sharing with", async () => {
+    useBackend({ syncEnabled: true, trustedPeers: [trusted()] });
+    render(<SyncPanel />);
+
+    // The name appears in the paired list too, so assert on the row's own
+    // subtitle rather than on the name alone.
+    const sub = await screen.findByText(/sharing data with:/i);
+    expect(sub).toHaveTextContent(trusted().name);
+  });
+
+  it("says so plainly when it is sharing with nobody", async () => {
+    useBackend({ syncEnabled: true, trustedPeers: [] });
+    render(<SyncPanel />);
+
+    expect(
+      await screen.findByText(/sharing data with: none yet/i),
+    ).toBeInTheDocument();
+  });
+
   it("names this device, so the other end can be told what to look for", async () => {
     useBackend({ syncEnabled: true });
     render(<SyncPanel />);
@@ -128,17 +152,24 @@ describe("Sync panel", () => {
   });
 
   /** The filters are the point of having them: they reach the backend. */
-  it("passes what to move through to the sync", async () => {
+  /**
+   * A paired device gets everything.
+   *
+   * There used to be two checkboxes — track files, playlists — both on by
+   * default, and turning one off was a choice nobody made. A pair of switches
+   * that only ever say yes is furniture, so pairing is now the decision and
+   * this is what follows from it.
+   */
+  it("moves both tracks and playlists, without asking", async () => {
     const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
-    await user.click(await screen.findByRole("checkbox", { name: /track files/i }));
-    await user.click(screen.getByRole("button", { name: /sync now/i }));
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
 
     await waitFor(() => expect(backend.called("sync_with")).toBe(true));
     expect(backend.lastArgs("sync_with")?.what).toEqual({
-      tracks: false,
+      tracks: true,
       playlists: true,
     });
   });
