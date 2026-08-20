@@ -63,6 +63,28 @@ export interface VaporMarkProps {
   state?: MarkState;
   /** 0–1 amplitude drive, used while playing. */
   energy?: number;
+  /**
+   * Track-reactive drives, all `playing`-only and all optional.
+   *
+   * Omitted, the mark behaves exactly as it did before they existed — a steady
+   * turn on the brand hue. That is deliberate: every screen that shows the mark
+   * as a LOGO rather than as a readout passes none of these, and only the
+   * screens wired to playback pass any.
+   */
+  /** 0–1 fraction of output energy above 1500 Hz. Sets the resting turn rate. */
+  brightness?: number | undefined;
+  /** Seconds between beats, from the tracked grid. 0 or absent = no pulse. */
+  beatPeriod?: number | undefined;
+  /**
+   * `performance.now()` timestamp of the next beat.
+   *
+   * A timestamp on the browser's own clock rather than a countdown or a track
+   * position: the element extrapolates from it every frame, so the pulse runs
+   * at frame rate off a value refreshed once a second.
+   */
+  beatAt?: number | undefined;
+  /** 0–1 target energy of the set at this point in the curve. Sets the hue. */
+  setEnergy?: number | undefined;
   speed?: number;
   /** Render a single frame and stop — for print and export. */
   still?: boolean;
@@ -88,6 +110,10 @@ export function VaporMark({
   theme = "light",
   state = "idle",
   energy,
+  brightness,
+  beatPeriod,
+  beatAt,
+  setEnergy,
   speed,
   still = false,
   pose,
@@ -114,6 +140,18 @@ export function VaporMark({
     el.setAttribute("dispersion", String(dispersion));
     el.setAttribute("hue", String(hue));
     if (energy !== undefined) el.setAttribute("energy", String(energy));
+    // Removed rather than zeroed when absent: zero is a legitimate brightness
+    // and a legitimate set energy, so "no signal" has to be the missing
+    // attribute rather than a value the element cannot tell apart from data.
+    for (const [name, value] of [
+      ["brightness", brightness],
+      ["beat-period", beatPeriod],
+      ["beat-at", beatAt],
+      ["set-energy", setEnergy],
+    ] as const) {
+      if (value !== undefined) el.setAttribute(name, String(value));
+      else el.removeAttribute(name);
+    }
     if (speed !== undefined) el.setAttribute("speed", String(speed));
     if (pose !== undefined) el.setAttribute("pose", String(pose));
     else el.removeAttribute("pose");
@@ -124,6 +162,10 @@ export function VaporMark({
     theme,
     state,
     energy,
+    brightness,
+    beatPeriod,
+    beatAt,
+    setEnergy,
     speed,
     still,
     pose,

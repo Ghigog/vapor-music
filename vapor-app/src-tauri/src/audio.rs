@@ -80,6 +80,29 @@ const COMMAND_CAPACITY: usize = 32;
 /// the music stopping.
 const LEVEL_DECAY: f32 = 0.86;
 
+/// Where the brightness split sits, in Hz.
+///
+/// The same 1500 Hz `vapor_dsp::spectrum` splits at, and for the same reason —
+/// above it is mostly harmonics, cymbals and consonants. Kept numerically equal
+/// on purpose: this is the realtime cousin of that offline measurement and the
+/// two should not disagree about what "bright" means.
+const BRIGHTNESS_SPLIT_HZ: f32 = 1_500.0;
+
+/// How much of the previous brightness reading survives a block.
+///
+/// Symmetric, unlike [`LEVEL_DECAY`]: brightness is a ratio rather than a peak,
+/// so there is no transient to catch and no reason to attack faster than it
+/// releases. Slow enough that a single snare does not swing it.
+const BRIGHTNESS_SMOOTH: f32 = 0.90;
+
+/// Output energy below which brightness is held rather than recomputed.
+///
+/// The ratio is undefined in silence. `vapor_dsp::spectrum::brightness` returns
+/// zero there, which is right for a measurement written to a file; held is
+/// right for a meter, because snapping to zero in the gap between tracks would
+/// read as the mark lurching rather than as the music stopping.
+const BRIGHTNESS_FLOOR: f32 = 1e-9;
+
 /// What the audio thread is doing.
 ///
 /// Loading is deliberately absent: fetching and decoding a track is the shell's
@@ -192,6 +215,15 @@ pub struct Link {
     /// mixer and before master volume, so turning the volume down does not make
     /// the mark go still while music is plainly playing.
     level: AtomicU32,
+    /// Fraction of output energy above [`BRIGHTNESS_SPLIT_HZ`], 0–1, as `f32`
+    /// bits.
+    ///
+    /// Published beside `level` because the mark reads both: loudness says how
+    /// much is going on and brightness says what kind, and a ribbon driven by
+    /// loudness alone moves the same way for a wall of bass as for a cymbal
+    /// wash. Measured on the same post-mixer, pre-volume signal, so the answer
+    /// is about the music rather than about the volume knob.
+    brightness: AtomicU32,
     /// Callbacks that could not take the command lock. A health signal, not an
     /// error: see the module docs.
     commands_deferred: AtomicU64,
@@ -232,6 +264,7 @@ pub struct Snapshot {
     pub duration: f64,
     pub volume: f32,
     pub level: f32,
+    pub brightness: f32,
     pub commands_deferred: u64,
     pub starved_blocks: u64,
     pub limiter_steps: u64,
@@ -260,6 +293,7 @@ impl Link {
             transition_armed: AtomicBool::new(false),
             volume: AtomicU32::new(1.0f32.to_bits()),
             level: AtomicU32::new(0),
+            brightness: AtomicU32::new(0),
             commands_deferred: AtomicU64::new(0),
             starved_blocks: AtomicU64::new(0),
             limiter_steps: AtomicU64::new(0),
@@ -414,6 +448,7 @@ impl Link {
             duration: f64::from_bits(self.duration.load(Ordering::Relaxed)),
             volume: f32::from_bits(self.volume.load(Ordering::Relaxed)),
             level: f32::from_bits(self.level.load(Ordering::Relaxed)),
+            brightness: f32::from_bits(self.brightness.load(Ordering::Relaxed)),
             commands_deferred: self.commands_deferred.load(Ordering::Relaxed),
             starved_blocks: self.starved_blocks.load(Ordering::Relaxed),
             limiter_steps: self.limiter_steps.load(Ordering::Relaxed),
@@ -533,6 +568,14 @@ pub struct Engine {
     scratch: Vec<[f32; 2]>,
     /// Last block's limiter reduction, for spotting a jump between blocks.
     last_limiter_db: f32,
+    /// One-pole low-pass state for the brightness split, and the smoothed
+    /// ratio it feeds. Audio-thread-local: filter state is not shared, only
+    /// the result is.
+    bright_lp: f32,
+    bright_sm: f32,
+    /// Low-pass coefficient for [`BRIGHTNESS_SPLIT_HZ`] at this device's rate.
+    /// Precomputed because it is a transcendental and the block is hot.
+    bright_k: f32,
     intent: Intent,
     /// Volume at the end of the previous block, so the next one can ramp from
     /// it rather than step.
@@ -547,6 +590,12 @@ impl Engine {
             mixer: Mixer::new(link.sample_rate as f32, MAX_BLOCK),
             scratch: vec![[0.0f32; 2]; MAX_BLOCK],
             last_limiter_db: 0.0,
+            bright_lp: 0.0,
+            bright_sm: 0.0,
+            bright_k: {
+                let fc = BRIGHTNESS_SPLIT_HZ / link.sample_rate.max(1) as f32;
+                1.0 - (-std::f32::consts::TAU * fc).exp()
+            },
             intent: Intent::Idle,
             gain,
             channels,
@@ -749,6 +798,39 @@ impl Engine {
         self.link
             .level
             .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+
+        /*
+         * Brightness: what fraction of this block's energy sits above the
+         * split.
+         *
+         * A complementary one-pole pair rather than an FFT. `lp` tracks the low
+         * band; whatever the signal has that `lp` does not is the high band, so
+         * the two sum back to the input by construction and no window, no
+         * buffer and no allocation are involved. That matters more than the
+         * skirt being gentle — this drives a logo, not a crossover, and the
+         * offline `vapor_dsp::spectrum::brightness` remains the measurement of
+         * record.
+         *
+         * Mono sum: a ribbon has one twist rate, and paying twice to average
+         * two nearly identical numbers would be paying for nothing.
+         */
+        let mut low_energy = 0.0f32;
+        let mut total_energy = 0.0f32;
+        for frame in &self.scratch[..frames] {
+            let mono = (frame[0] + frame[1]) * 0.5;
+            self.bright_lp += self.bright_k * (mono - self.bright_lp);
+            let high = mono - self.bright_lp;
+            low_energy += self.bright_lp * self.bright_lp;
+            total_energy += self.bright_lp * self.bright_lp + high * high;
+        }
+        if total_energy > BRIGHTNESS_FLOOR {
+            let ratio = ((total_energy - low_energy) / total_energy).clamp(0.0, 1.0);
+            self.bright_sm =
+                self.bright_sm * BRIGHTNESS_SMOOTH + ratio * (1.0 - BRIGHTNESS_SMOOTH);
+            self.link
+                .brightness
+                .store(self.bright_sm.to_bits(), Ordering::Relaxed);
+        }
     }
 
     /// Drain and apply pending commands. Never blocks; never allocates.

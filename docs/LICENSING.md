@@ -1,8 +1,20 @@
 # Vapor Music — Licensing & Compliance
 
 **Version:** 1.1
-**Status:** Living Document — **Option A chosen (AGPL-3.0)**, rollout in progress
+**Status:** ⚠️ **STALE — describes the Godot build.** See `docs/RELEASE.md` §2.
 **Last reviewed:** 2026-07-31
+
+> [!WARNING]
+> The inventory below is the **Godot** dependency set. The conclusion — AGPL-3.0
+> — follows from Essentia (AGPL) and Rubber Band (GPL-2.0-or-later), and
+> **neither ships any more**: analysis is `vapor-dsp` on `symphonia` and
+> `rustfft`, and the stretcher is Signalsmith (MIT), which TD-22 chose over
+> Rubber Band. The obligation may therefore be materially different from what
+> this document concludes.
+>
+> Whether Vapor Music *should* be AGPL is a separate question from whether it
+> *must* be, and the answer here was inherited from a dependency that is gone.
+> Redo the inventory against the Rust tree before distributing anything.
 
 > What Vapor Music depends on, what those licenses require, and the options for
 > complying. Read alongside `docs/FINDINGS.md`.

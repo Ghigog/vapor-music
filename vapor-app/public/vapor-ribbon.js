@@ -133,6 +133,54 @@
    */
   const ENERGY_TWIST = 0.30;
 
+  /*
+   * Track-reactive drives (playing state only).
+   *
+   * The mark was already a readout of engine state; these make it a readout of
+   * the record. Three signals, three distinct things about the ribbon, chosen
+   * so none of them is a restatement of another:
+   *
+   *   beat       -> a kick to the turn rate, decaying inside the beat
+   *   brightness -> how fast it turns at rest
+   *   level      -> how many turns are in the ribbon at all
+   *
+   * The last one is geometry, not motion, which is why it can sit alongside the
+   * other two without fighting them: `turns` changes the shape being turned,
+   * the other two change how fast it is turned. And it is free of the frame
+   * fit — `buildPath` bounds on the UN-projected half-width `W`, which does not
+   * depend on the twist phase, so winding more turns into the ribbon cannot
+   * change its bounding box and cannot make the logo breathe in size.
+   */
+
+  /** Turn rate with no brightness and no beat, in rad/s. */
+  const TWIST_BASE = 0.55;
+  /** Extra turn rate at full brightness, in rad/s. */
+  const TWIST_BRIGHT = 0.90;
+  /**
+   * Peak extra turn rate on the beat itself, in rad/s.
+   *
+   * Decays across the beat, so the mean contribution is much smaller than this
+   * — ∫exp(-k·f)df over one beat is (1-e^-k)/k, about 0.2 at the decay below,
+   * making the average add ~0.32 rad/s rather than 1.6.
+   */
+  const TWIST_BEAT = 1.60;
+  /** How sharply the beat kick decays across one beat. Higher is snappier. */
+  const BEAT_DECAY = 5.0;
+  /** Extra turns wound into the ribbon at full level. */
+  const TURNS_LEVEL = 0.80;
+  /**
+   * How far set progress may rotate the hue, in degrees either way.
+   *
+   * Deliberately narrow. The mark's identity is a fixed periwinkle→violet→aqua
+   * ramp and `hueShift` rotates the whole of it, so a wide swing does not read
+   * as "further along the set", it reads as a different logo. At ±25° it reads
+   * as warmer or cooler, which is the distinction the curve is making.
+   */
+  const SET_HUE = 25;
+
+  /** Positive remainder. `%` keeps the sign of the dividend, which is wrong here. */
+  const fract = (x) => x - Math.floor(x);
+
   const NODES = 160;
   const NS = NODES - 1;
   const ENV = 40;              // environment texture, ENV×ENV×3
@@ -231,7 +279,8 @@
 
   class VaporRibbon extends HTMLElement {
     static get observedAttributes() {
-      return ['size', 'theme', 'state', 'energy', 'speed', 'hue', 'turns', 'ribbon', 'curl', 'dispersion', 'static', 'pose', 'xscale', 'field'];
+      return ['size', 'theme', 'state', 'energy', 'speed', 'hue', 'turns', 'ribbon', 'curl', 'dispersion', 'static', 'pose', 'xscale', 'field',
+              'brightness', 'beat-period', 'beat-at', 'set-energy'];
     }
 
     constructor() {
@@ -321,6 +370,31 @@
      *
      * Must be called exactly once per channel per frame; twice double-counts.
      */
+    /**
+     * How far into the current beat we are, as a decaying 1→0 pulse.
+     *
+     * `beat-at` is a `performance.now()` timestamp for the NEXT beat, not a
+     * countdown, so it stays true between the polls that set it — a countdown
+     * would be stale the moment it was written. The element runs its own clock
+     * off it, which is what keeps this at frame rate without an IPC call per
+     * frame.
+     *
+     * Before that beat lands the difference is negative, and `fract` folds it
+     * back into the preceding interval rather than clamping, so the pulse is
+     * continuous across the beat instead of restarting at it.
+     *
+     * Zero when frozen: a pose has no clock, and a posed mark must be the same
+     * drawing every time.
+     */
+    _beatPulse(time) {
+      if (this._frozen) return 0;
+      const period = this._num('beat-period', 0);
+      const at = this._num('beat-at', 0);
+      if (!(period > 0) || !(at > 0)) return 0;
+      const nowMs = this._t0 + time * 1000;
+      return Math.exp(-BEAT_DECAY * fract((nowMs - at) / 1000 / period));
+    }
+
     _phase(name, rate, T, dt) {
       if (this._frozen) return T * rate;
       this._ph[name] += rate * dt;
@@ -384,17 +458,34 @@
       let twistRate, wanderRate, zphaseRate, travelRate;
       const shape = {};
       if (state === 'playing') {
-        // Loudness leans on the twist rate; it does not take it over. The
-        // level arrives at 1 Hz and is then eased over about a second, so this
-        // tracks the loudness contour of the track, NOT individual beats —
-        // there is no beat-rate signal on this path to track.
-        twistRate = 0.62 + ENERGY_TWIST * e;
+        /*
+         * Driven by the record, not by a timer. See the constants above.
+         *
+         * `beatPulse` is 1 on the beat and decays to nothing before the next
+         * one, so this adds a kick rather than a sustained tempo — the ribbon
+         * lunges and coasts, which is what a beat does. It comes off the
+         * tracked grid the mixer aligns to, extrapolated locally between polls,
+         * so it stays in phase with the record over a whole track rather than
+         * drifting the way a nominal BPM would.
+         *
+         * Level moved OFF the rate and onto `turns` here: loudness and
+         * brightness both driving speed made them indistinguishable, and the
+         * count of turns is a quantity the ribbon can show that its rate
+         * cannot.
+         */
+        const bright = clamp(this._num('brightness', 0), 0, 1);
+        twistRate = TWIST_BASE + TWIST_BRIGHT * bright + TWIST_BEAT * this._beatPulse(time);
         wanderRate = 0.55; zphaseRate = 0.44; travelRate = 0;
         Object.assign(shape, {
-          amp: 0.31 + 0.10 * e, depth: 0.34 + 0.16 * e,
-          width: 0.062 * this._num('ribbon', 1) * (0.94 + 0.14 * e),
+          // A little life left in the envelope, well under what it was: the
+          // frame fit keys off `amp`, so driving it hard from the level is what
+          // used to make the whole mark change size with the music.
+          amp: 0.32 + 0.04 * e, depth: 0.34 + 0.16 * e,
           chirp: 0.36 + 0.10 * e,
-          hueShift: hue + Math.sin(T * 0.26) * 14,
+          turns: this._num('turns', 1.5) + TURNS_LEVEL * e,
+          // Where the set is along its curve, not a decorative wobble. Absent
+          // (`set-energy` unset, or DJ mode off) this stays on the brand hue.
+          hueShift: hue + SET_HUE * (clamp(this._num('set-energy', 0.5), 0, 1) - 0.5) * 2,
         });
       } else if (state === 'blending') {
         twistRate = 1.15; wanderRate = 0.9; zphaseRate = 0.7; travelRate = 0.45;

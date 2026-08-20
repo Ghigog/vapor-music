@@ -131,6 +131,23 @@ export interface PlaybackState {
   mixing: boolean;
   /** Peak output level, 0–1. Drives the mark's `energy` on Now Playing. */
   level: number;
+  /** Fraction of output energy above 1500 Hz, 0–1. Drives how fast the mark
+   *  turns: bright music turns faster than dark music at the same loudness. */
+  brightness: number;
+  /** Seconds between the beats either side of the playhead. 0 = no usable
+   *  grid, and the mark stays on its steady rate rather than guessing. */
+  beatPeriod: number;
+  /** Track-seconds at which the next beat lands. A position rather than a
+   *  countdown, so it stays true between polls and the UI can run its own
+   *  clock off it. 0 with no usable grid. */
+  nextBeat: number;
+  /** Where the playing track sits in the planned set. `setTotal` 0 means
+   *  nothing is planned — shuffle, or a queue the pathfinder did not build. */
+  setIndex: number;
+  setTotal: number;
+  /** Energy the curve wants the set to be at here, 0–1. Drives the mark's
+   *  hue, so the logo says where the set has got to. */
+  setEnergy: number;
   /** Envelope peaks for the playing track. Empty until it has been analysed
    *  at the current version — draw a plain bar rather than inventing one. */
   waveform: number[];

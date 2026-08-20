@@ -216,6 +216,17 @@ struct AppState {
     /// Bumped by every curve press, so a re-plan that finishes after a newer
     /// press can tell that its route is for a destination nobody chose.
     curve_plan: u64,
+    /// Energy the current plan was seeded from — the intensity of the track
+    /// playing when the route was walked.
+    ///
+    /// Kept because `Curve::target_energy` is relative to where the set
+    /// started, so without it the curve cannot be evaluated after the fact and
+    /// the mark could only show the shape in the abstract rather than the ramp
+    /// the planner actually aimed at. It matters most where the two differ: a
+    /// set already at 0.9 cannot Build much further, `target_energy` clamps,
+    /// and the honest readout is a hue that flattens rather than one that goes
+    /// on promising a climb.
+    curve_start: f32,
     /// True while a track is being fetched and decoded, which can take seconds
     /// on a cold cache. The UI has to be able to say so.
     loading: bool,
@@ -366,6 +377,7 @@ impl AppState {
             playing: None,
             generation: 0,
             curve_plan: 0,
+            curve_start: 0.5,
             loading: false,
             playback_error: None,
             armed_next: None,
@@ -1292,6 +1304,16 @@ fn set_curve(
 
         // Gathered here, searched elsewhere. Building the pool needs the state;
         // walking it does not.
+        // Built once and used twice. This runs under the state lock on a press
+        // that already has history for being slow, and walking the whole
+        // library to answer one lookup and then walking it again to plan the
+        // route would be paying that cost twice for one press.
+        let pool = track_meta_pool(&app);
+        // Where this route starts from, kept so the curve can be evaluated
+        // later — see `AppState::curve_start`.
+        if let Some(playing) = app.playing.clone() {
+            app.curve_start = pool.get(&playing).map_or(0.5, |t| t.energy_level);
+        }
         let plan = app
             .playing
             .clone()
@@ -1299,7 +1321,7 @@ fn set_curve(
             .map(|current| {
                 (
                     current,
-                    track_meta_pool(&app),
+                    pool,
                     skip_penalties(&app),
                     vapor_library::Curve::parse(&app.settings.curve),
                     app.settings.vibe_limit,
@@ -3202,6 +3224,35 @@ struct PlaybackState {
     /// Peak output level, 0–1. Drives the mark's `energy`.
     #[serde(serialize_with = "finite")]
     level: f32,
+    /// Fraction of output energy above 1500 Hz, 0–1. Drives how fast the
+    /// mark's ribbon turns — bright music turns faster than dark music at the
+    /// same loudness.
+    #[serde(serialize_with = "finite")]
+    brightness: f32,
+    /// Seconds between the beats either side of the playhead, or 0 with no
+    /// usable grid.
+    ///
+    /// Local rather than `60 / bpm`: the stored grid is tracked, so it follows
+    /// real tempo drift, and a mark pulsing on a nominal tempo would walk out
+    /// of phase with the record over a few minutes.
+    #[serde(serialize_with = "finite")]
+    beat_period: f32,
+    /// Track-seconds at which the next beat lands, or 0 with no usable grid.
+    ///
+    /// Sent as a position rather than a countdown so the UI can hold its own
+    /// clock between polls: a countdown is stale the instant it is serialised,
+    /// where a position stays true and the difference from `position` is the
+    /// countdown at any moment the caller likes.
+    #[serde(serialize_with = "finite64")]
+    next_beat: f64,
+    /// Where the playing track sits in the planned set, and how long that plan
+    /// is. Zero total means nothing is planned — DJ mode off, or a queue that
+    /// was not built by the pathfinder.
+    set_index: u32,
+    set_total: u32,
+    /// Energy the curve wants the set to be at, right here, 0–1.
+    #[serde(serialize_with = "finite")]
+    set_energy: f32,
     /// Envelope peaks for the playing track, empty until it has been analysed
     /// at the current version.
     waveform: Vec<f32>,
@@ -3445,6 +3496,45 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         .and_then(|href| app.rows.iter().find(|r| r.href == href));
     let analysis = app.playing.as_ref().and_then(|href| app.analysis.get(href));
 
+    let beat = match (analysis, snapshot.as_ref()) {
+        (Some(a), Some(s)) => beat_window(
+            a,
+            s.position,
+            app.settings
+                .bpm_override(app.playing.as_deref().unwrap_or_default())
+                .unwrap_or(a.bpm),
+        ),
+        _ => (0.0, 0.0),
+    };
+
+    /*
+     * Where the set is, along the curve it was planned on.
+     *
+     * Read off the queue rather than kept as its own list: the queue IS the
+     * plan once `generate_mood_path` has appended to it, and a second copy
+     * would be a second thing to keep in step. Off in shuffle, where there is
+     * no curve and a position along one would be fiction.
+     */
+    let set = if app.settings.dj_mode {
+        let total = app.queue.tracks().len();
+        let index = app.queue.current_index().unwrap_or(0);
+        if total > 1 {
+            (
+                index as u32,
+                total as u32,
+                vapor_library::Curve::parse(&app.settings.curve).target_energy(
+                    app.curve_start,
+                    index,
+                    total,
+                ),
+            )
+        } else {
+            (0, 0, app.curve_start)
+        }
+    } else {
+        (0, 0, 0.0)
+    };
+
     Ok(PlaybackState {
         href: app.playing.clone(),
         title: row.map(|r| r.title.clone()).unwrap_or_default(),
@@ -3463,6 +3553,12 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         available: app.player.is_some(),
         mixing: app.player.as_ref().is_some_and(|p| p.transition_armed()),
         level: snapshot.map_or(0.0, |s| s.level),
+        brightness: snapshot.map_or(0.0, |s| s.brightness),
+        beat_period: beat.0,
+        next_beat: beat.1,
+        set_index: set.0,
+        set_total: set.1,
+        set_energy: set.2,
         waveform: analysis.map(|a| a.waveform.clone()).unwrap_or_default(),
         next_title: next.map(|r| r.title.clone()).unwrap_or_default(),
         next_artist: next
@@ -3710,6 +3806,39 @@ const ARTIST_JUMP: f32 = 28.0;
 /// exists because detection put the track at half or double time, and mixing
 /// on the uncorrected value would beat-match to a tempo the person has already
 /// said is wrong.
+/// The beat either side of `position`, as (period, next-beat), in seconds.
+///
+/// This is the whole of what beat-reactive UI needs, and it is deliberately
+/// derived from the same stored grid mixing aligns to rather than from a
+/// nominal tempo. A synthesised grid is refused: `beats_are_for` false means
+/// the tracked beats belong to a tempo that has since been corrected, and
+/// pulsing a logo on beats known to be wrong is worse than not pulsing it.
+///
+/// Returns zeros past the last beat and for an unanalysed track. The caller
+/// reads zero as "no grid" and leaves the mark on its steady rate.
+fn beat_window(analysis: &analysis::Analysis, position: f64, bpm: f32) -> (f32, f64) {
+    if !analysis.beats_are_for(bpm) || analysis.beats.len() < 2 {
+        return (0.0, 0.0);
+    }
+    let t = position as f32;
+    let next = analysis.beats.partition_point(|&b| b < t);
+    if next >= analysis.beats.len() {
+        return (0.0, 0.0);
+    }
+    // The period around the playhead, not the nominal one. At the very first
+    // beat there is nothing before it to measure against, so the pair after it
+    // stands in.
+    let period = if next == 0 {
+        analysis.beats[1] - analysis.beats[0]
+    } else {
+        analysis.beats[next] - analysis.beats[next - 1]
+    };
+    if !period.is_finite() || period <= 0.0 {
+        return (0.0, 0.0);
+    }
+    (period, analysis.beats[next] as f64)
+}
+
 fn beat_grid(analysis: &analysis::Analysis, override_bpm: Option<f32>) -> vapor_engine::BeatGrid {
     let bpm = override_bpm.unwrap_or(analysis.bpm);
     // A tracked grid follows real tempo drift and real downbeat phase, and is
@@ -5453,6 +5582,11 @@ fn choose_next(
         app.curve_plan = app.curve_plan.wrapping_add(1);
 
         let pool = track_meta_pool(&app);
+        // The tail is re-planned from the chosen track, so that track is what
+        // the curve is now relative to.
+        if let Some(t) = pool.get(&href) {
+            app.curve_start = t.energy_level;
+        }
         // Unanalysed: it can still play next, there is simply nothing to plan
         // a route from.
         let plan = pool
@@ -7490,6 +7624,46 @@ mod tests {
         }
     }
 
+    /// The pulse has to come off the beat *around* the playhead, because that
+    /// is the one the listener is hearing.
+    #[test]
+    fn the_beat_window_straddles_the_playhead() {
+        let a = analysed_at(128.0, 300.0);
+        let period = 60.0 / 128.0;
+        // Beats sit at 0.31 + n·period. Land between the tenth and eleventh.
+        let position = (0.31 + 10.0 * period + period * 0.4) as f64;
+        let (measured, next) = beat_window(&a, position, 128.0);
+        assert!(
+            (measured - period).abs() < 1e-4,
+            "period {measured} should be the local one, {period}"
+        );
+        assert!(
+            next > position && next - position < period as f64,
+            "next beat {next} should be inside one period of {position}"
+        );
+    }
+
+    /// A grid tracked at a tempo since corrected is the exact case
+    /// `beats_are_for` exists to catch — pulsing on beats known to be wrong is
+    /// worse than not pulsing at all.
+    #[test]
+    fn a_stale_grid_yields_no_beat() {
+        let a = analysed_at(256.0, 300.0);
+        assert_eq!(beat_window(&a, 10.0, 128.0), (0.0, 0.0));
+    }
+
+    /// Past the last beat, and with nothing analysed, there is no answer and
+    /// the caller is told so rather than handed an extrapolation.
+    #[test]
+    fn the_beat_window_is_empty_where_the_grid_is() {
+        let a = analysed_at(128.0, 300.0);
+        assert_eq!(beat_window(&a, 10_000.0, 128.0), (0.0, 0.0));
+        assert_eq!(
+            beat_window(&analysis::Analysis::default(), 10.0, 128.0),
+            (0.0, 0.0)
+        );
+    }
+
     /// The tracked grid is what mixing wants, and it is used when it applies.
     #[test]
     fn an_uncorrected_track_mixes_on_its_tracked_grid() {
@@ -9219,6 +9393,7 @@ mod tests {
             duration: 70.0,
             volume: 1.0,
             level: 0.0,
+            brightness: 0.0,
             commands_deferred: 0,
             starved_blocks: 0,
             limiter_steps: 0,

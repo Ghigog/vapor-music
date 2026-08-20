@@ -76,6 +76,17 @@ export function Vibe({
   onOpen?: ((href: string) => void) | undefined;
 } = {}) {
   const [playback, setPlayback] = useState<core.PlaybackState | null>(null);
+  /**
+   * The beat the mark is pulsing on, on the browser's own clock.
+   *
+   * Converted here rather than passed through as track-seconds because the
+   * mark has no idea where the playhead is: the backend says "the next beat is
+   * at 91.4s and we are at 91.1s", and what the renderer can use is "that beat
+   * lands 300ms from now". Recomputed on every poll, which is also the drift
+   * correction — a tracked grid follows real tempo, so a mark extrapolating
+   * from one beat forever would walk out of phase with the record.
+   */
+  const [beat, setBeat] = useState<{ period: number; at: number } | null>(null);
   const [blend, setBlend] = useState<core.BlendPreview | null>(null);
   const [curve, setCurve] = useState<core.Curve>("build");
   /** True while the planner is re-running, which is a visible pause. */
@@ -90,7 +101,18 @@ export function Vibe({
       core.blendPreview(),
       core.mixCandidates(),
     ]);
-    if (p.status === "fulfilled") setPlayback(p.value);
+    if (p.status === "fulfilled") {
+      setPlayback(p.value);
+      const v = p.value;
+      setBeat(
+        v.beatPeriod > 0 && v.nextBeat > v.position
+          ? {
+              period: v.beatPeriod,
+              at: performance.now() + (v.nextBeat - v.position) * 1000,
+            }
+          : null,
+      );
+    }
     if (b.status === "fulfilled") setBlend(b.value);
     if (c.status === "fulfilled") setCandidates(c.value);
   }, []);
@@ -239,6 +261,16 @@ export function Vibe({
             // and swirls through a blend, both of which are real states.
             state={planning ? "thinking" : mixing ? "blending" : "playing"}
             energy={playback?.level ?? 0}
+            // And the record, not just the engine. Loudness winds turns into
+            // the ribbon, brightness sets how fast it turns, the beat kicks it,
+            // and the hue says how far along the curve the set has got.
+            brightness={playback?.brightness}
+            beatPeriod={beat?.period}
+            beatAt={beat?.at}
+            // Absent in shuffle, where there is no curve to be partway along.
+            setEnergy={
+              playback && playback.setTotal > 0 ? playback.setEnergy : undefined
+            }
           />
         </div>
         <div className="vibe__heading">
