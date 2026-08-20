@@ -30,6 +30,8 @@
       "tinted": "srgb:0.20000,0.20000,0.20000,1.00000"
     },
     "layerBoostLight": "saturate(0.55) brightness(1.55) contrast(0.95)",
-    "$layerBoostLight": "Boost for the layer used by the Dark and Tinted appearances, which sit on a dark base and need a light mark."
+    "$layerBoostLight": "Boost for the layer used by the Dark and Tinted appearances, which sit on a dark base and need a light mark.",
+    "androidSafe": 0.58,
+    "$androidSafe": "Fraction of the 108dp adaptive-icon canvas the mark's bounding box may span. The guaranteed-visible circle is 66/108 = 0.61; 0.58 keeps the mark whole under every launcher mask."
   }
 }
