@@ -105,13 +105,21 @@ vendored sources and their declared licences read:
 
 `docs/LICENSING.md` v2.0 and `THIRD_PARTY_NOTICES.md` are rebuilt accordingly.
 
-**What is left is a decision, not a task.** `LICENSE` is AGPL-3.0 and
-`tauri.conf.json` says so; nothing now forces that. Staying AGPL is coherent and
-needs no action, but it obliges offering complete corresponding source to every
-recipient of a binary — and the repository is private, so handing a `.dmg` to
-one friend triggers it. Relicensing is equally available and is hard to reverse.
-Either way the four places that state a licence must keep agreeing: `LICENSE`,
-the `copyright` string, `THIRD_PARTY_NOTICES.md`, and `LICENSING.md`.
+**Direction decided, not yet applied.** Move to **all rights reserved before
+anything is distributed**, then choose an open licence later if wanted. The
+reasoning is ordering, not ideology: reserved → open is always available,
+distributed-under-AGPL → proprietary never is. Nothing forces AGPL now, and a
+donation tier is under consideration, so the reversible order is taken first.
+
+The code still says AGPL in **seven places** — `LICENSE`, both `Cargo.toml`s,
+`tauri.conf.json`, `README.md`, `Settings.tsx` and `THIRD_PARTY_NOTICES.md` —
+and they have to move together, in one commit, or a build ships contradicting
+itself. `docs/LICENSING.md` §"The direction" holds the list and the route back.
+
+**Two of those are wrong today regardless of the licence:** `Settings.tsx` tells
+users "Tempo and key detection use Essentia" and `README.md` explains the AGPL
+as a consequence of Essentia and Rubber Band. Neither has shipped since the Rust
+rewrite. The Settings line is user-facing.
 
 **Still outstanding:** CC BY requires attribution *visible to users*, and the
 icon credit currently lives only in a repository file. An About → Licences
@@ -206,8 +214,10 @@ Decisions, not oversights. Each is recorded where it was made.
 
 - [x] ~~Redo the licence inventory against the Rust tree.~~ Done 2026-08-20;
       `LICENSING.md` v2.0 and `THIRD_PARTY_NOTICES.md` rebuilt.
-- [ ] Decide whether to stay AGPL-3.0 now that nothing compels it, and make the
-      four licence statements agree with the answer.
+- [ ] Apply the licence direction: all rights reserved across all seven
+      declarations, in one commit. See `LICENSING.md` §"The direction".
+- [ ] Correct the Essentia claims in `Settings.tsx` and `README.md` — wrong
+      today, user-facing, and independent of the licence decision.
 - [ ] An About → Licences screen, for the CC BY icons and the MPL notice.
 - [ ] Apple Developer ID, `signingIdentity`, notarisation, hardened runtime
       tested against real audio output.

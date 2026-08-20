@@ -1,7 +1,7 @@
 # Vapor Music — Licensing & Compliance
 
-**Version:** 2.0
-**Status:** Rebuilt against the Rust tree
+**Version:** 2.1
+**Status:** Direction decided (§ The direction) — **not yet applied to the code**
 **Last reviewed:** 2026-08-20
 
 > What Vapor Music depends on, what those licences require, and what is
@@ -116,29 +116,115 @@ On distribution, the shipped tree requires:
 
 ---
 
-## The open decision
+## The direction (decided 2026-08-20)
 
-`LICENSE` in the repo root is AGPL-3.0, and `tauri.conf.json` declares
-`"copyright": "Vapor Music. Licensed AGPL-3.0-or-later."`. Both are still the
-stated position. Neither is now forced by a dependency.
+**Move to all rights reserved, before anything is distributed.** Not a rejection
+of open source — a decision about *ordering*, taken because only one direction
+is reversible.
 
-**Staying AGPL-3.0** is a coherent choice — it is what the project has said
-publicly, it needs no action, and it keeps the work copyleft on purpose rather
-than by accident. The cost is real and worth stating: AGPL obliges you to offer
-complete corresponding source to **every recipient of a binary**, and the
-repository is currently private. Handing a `.dmg` to one friend triggers that.
+| From | To | Possible? |
+|---|---|---|
+| All rights reserved | Any open licence | Always. Nothing granted, nothing to revoke. |
+| AGPL, distributed | Proprietary | **No.** Every version already shipped stays free, for ever. |
 
-**Relicensing** to something permissive, or to a weaker copyleft, is equally
-available now that nothing compels AGPL. It is a decision with consequences that
-are hard to reverse — code released under a permissive licence cannot be
-recalled — and it is Dylan's to make, not one to be inherited from a dependency
-that was removed a phase ago.
+Nothing forces AGPL any more (see the inventory above), and monetisation is
+under consideration. Distributing under AGPL first would close the paid door
+permanently while the reverse costs nothing — so the reserved position is taken
+first and the open licence stays available whenever it is wanted.
 
-**Either way, the four places that state a licence must agree**: `LICENSE`,
-`tauri.conf.json`'s copyright string, `THIRD_PARTY_NOTICES.md`, and this
-document. They currently do.
+The window for this is **now**, and it closes quietly: the moment a pull request
+is accepted under an open licence, that contributor's copyright cannot be
+unilaterally relicensed. Today the repository is private, nothing is
+distributed, and there are no outside contributors.
+
+> Not legal advice. Confirm with a lawyer before commercial distribution.
+
+### What has to change, when it is done
+
+Seven declarations, and they have to agree or the position is incoherent:
+
+| Where | Currently says |
+|---|---|
+| `LICENSE` | Full AGPL-3.0 text, 661 lines |
+| `vapor-app/src-tauri/tauri.conf.json` | `"copyright": "Vapor Music. Licensed AGPL-3.0-or-later."` |
+| `vapor-app/src-tauri/Cargo.toml` | `license = "AGPL-3.0-or-later"` |
+| `vapor-core/Cargo.toml` | `license = "AGPL-3.0-or-later"` |
+| `README.md` | A licensing section explaining the AGPL consequence |
+| `vapor-app/src/screens/Settings.tsx` | User-facing: "free software under the AGPL-3.0" |
+| `THIRD_PARTY_NOTICES.md` | Header note |
+
+There is also a stale copy under `.claude/worktrees/`, which is not the working
+tree and should be ignored.
+
+> [!IMPORTANT]
+> **Two of those are factually wrong today, regardless of the licence.**
+> `Settings.tsx` tells users "Tempo and key detection use Essentia", and
+> `README.md` says the AGPL follows from linking Essentia and Rubber Band.
+> Neither library has shipped since the Rust rewrite. The Settings line is
+> user-facing and should be corrected whether or not the licence moves.
 
 ---
+
+## The route back to open source
+
+Kept deliberately, so the reserved position reads as a pause rather than a door
+that was welded shut.
+
+**Preconditions — decide these first, not during:**
+
+1. **Is there a paid tier, and does it need the licence to hold it up?** If the
+   answer is "no, it is a thank-you" — which is the current intent, see below —
+   then copyleft costs almost nothing and this route is short.
+2. **Which licence.** AGPL-3.0 is the position this project already understood
+   and documented; GPL-3.0 is the same without the network clause, which is
+   irrelevant to a local app; MIT/Apache-2.0 gives the work away entirely,
+   including to anyone who wants to sell it.
+3. **Contributors.** Until this is settled, either keep the repository closed to
+   outside contributions or take a CLA. A single accepted PR under one licence
+   makes the other unavailable without that person's agreement.
+
+**Then, in order:**
+
+1. Confirm the dependency inventory still holds — re-run the method above
+   against `Cargo.lock`. A new dependency can reintroduce copyleft silently.
+2. Change all seven declarations in one commit, so no build ever ships with them
+   disagreeing.
+3. Make the repository public, or publish source alongside binaries. AGPL
+   obliges complete corresponding source to **every recipient of a binary**, so
+   a private repository plus a shared `.dmg` is a breach — this is the specific
+   trap the current arrangement would have walked into.
+4. Add the About → Licences screen (see below). It is required for CC BY under
+   any licence, and it is where the MPL notice belongs too.
+
+---
+
+## Donations and customisation
+
+The intended model, recorded so the licence choice can be checked against it
+rather than guessed at later:
+
+**Customisation options sit behind a donation.** They are a *thank-you for
+paying*, not a product being sold and not a right being withheld.
+
+**The enforcement is deliberately weak, and that is accepted.** Vapor Music is a
+local application with no server, so any "has donated" check runs on the user's
+machine and is a boolean somebody can flip. Anyone sufficiently motivated can
+compile the features themselves. **That is fine** — the model is honour-system
+by design, and treating it as one avoids building DRM into a music player.
+
+What the licence changes here is narrower than it looks:
+
+* Under **all rights reserved**, patching the check is not *licensed*, even
+  though it is trivially possible. Redistribution of a patched build is not
+  permitted.
+* Under **AGPL**, the same patch is explicitly a right, and redistributing the
+  result is too. Ardour runs precisely this model on purpose — GPL source, paid
+  binaries, free if you compile it yourself — and it works.
+
+Since the paywall is an honour system either way, this is not the argument for
+the reserved position. The argument is ordering: reserved first keeps both
+models available, and the choice can be made once there is any evidence about
+whether people donate.
 
 ## History
 
@@ -147,3 +233,7 @@ document. They currently do.
 * **v2.0 (2026-08-20)** — Rebuilt against the Rust tree from `Cargo.lock`.
   Strong copyleft is gone; MPL-2.0 is the strongest remaining obligation and is
   file-level. AGPL becomes a choice.
+* **v2.1 (2026-08-20)** — Direction decided: all rights reserved before any
+  distribution, on ordering grounds, with the route back to open source and the
+  donation model written down. **Not yet applied** — the seven declarations
+  still say AGPL.
