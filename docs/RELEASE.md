@@ -88,43 +88,37 @@ apps and it converts the worst case into a support ticket.
 
 ---
 
-## 2. Licensing — the existing document is out of date
+## 2. Licensing — resolved 2026-08-20
 
-`docs/LICENSING.md` is dated 2026-07-31 and describes the **Godot build**. It
-concludes AGPL-3.0 because Essentia (AGPL) and Rubber Band (GPL-2.0-or-later)
-were linked in. Neither is in the Rust tree:
+`docs/LICENSING.md` v1.1 concluded AGPL-3.0, correctly, from Essentia (AGPL) and
+Rubber Band (GPL). **Neither ships since the Rust rewrite.** The inventory has
+been redone against `Cargo.lock` — 620 of 624 packages resolved to their
+vendored sources and their declared licences read:
 
-* Essentia is gone — analysis is `vapor-dsp`, built on `symphonia` and `rustfft`.
-* Rubber Band was **rejected** in favour of Signalsmith Stretch, which is MIT.
-  TD-22 records that it was rejected on its build system rather than its sound.
+* **No GPL, AGPL or LGPL-only dependency remains.**
+* The strongest obligation is **MPL-2.0** — thirteen `symphonia` crates plus
+  four Servo-derived CSS crates from Tauri. Weak copyleft at file granularity;
+  none of them is modified, so it requires a notice and a source pointer and
+  nothing more.
+* Everything else is MIT, Apache-2.0, BSD-3-Clause, Zlib, Unicode-3.0 or
+  Unlicense.
 
-So the conclusion that document reaches may no longer follow from the
-dependencies that actually ship. `tauri.conf.json` still declares
-`"copyright": "Vapor Music. Licensed AGPL-3.0-or-later."`, and there is a
-`LICENSE` file in the repo root, so the *stated* position is still AGPL.
+`docs/LICENSING.md` v2.0 and `THIRD_PARTY_NOTICES.md` are rebuilt accordingly.
 
-**Before distributing anything, redo the inventory against the Rust tree.** The
-direct dependencies are `tauri`, `serde`, `reqwest`, `image`, `chrono`, `tokio`,
-`base64`, `cpal`, `lofty`, `souvlaki`, `symphonia`, `rustfft`, `regex`, `sha2`
-and `signalsmith-stretch`. Most of that is MIT/Apache-2.0; `symphonia` is
-MPL-2.0, which is weak copyleft at file level and a materially different
-obligation from AGPL.
+**What is left is a decision, not a task.** `LICENSE` is AGPL-3.0 and
+`tauri.conf.json` says so; nothing now forces that. Staying AGPL is coherent and
+needs no action, but it obliges offering complete corresponding source to every
+recipient of a binary — and the repository is private, so handing a `.dmg` to
+one friend triggers it. Relicensing is equally available and is hard to reverse.
+Either way the four places that state a licence must keep agreeing: `LICENSE`,
+the `copyright` string, `THIRD_PARTY_NOTICES.md`, and `LICENSING.md`.
 
-Two things follow, and they are separate:
+**Still outstanding:** CC BY requires attribution *visible to users*, and the
+icon credit currently lives only in a repository file. An About → Licences
+screen would settle it, and would be the natural home for the MPL notice too.
 
-1. **The obligation.** What the shipped dependencies actually require.
-2. **The intent.** Whether Vapor Music *wants* to be AGPL regardless. That is a
-   choice, not a consequence, and it should be made on purpose rather than
-   inherited from a dependency that was removed.
-
-`THIRD_PARTY_NOTICES.md` currently lists only the Noun Project icons. It needs
-the real dependency set before shipping.
-
-> This is an engineering summary of publicly documented terms, not legal advice.
-> Confirm with a lawyer before commercial distribution — the same caveat the
-> existing document carries, and it still applies.
-
----
+> This is an engineering summary of publicly declared licence metadata, not
+> legal advice. Confirm with a lawyer before commercial distribution.
 
 ## 3. Third-party services
 
@@ -210,9 +204,11 @@ Decisions, not oversights. Each is recorded where it was made.
 
 ## 7. Before the first build goes out
 
-- [ ] Redo the licence inventory against the Rust tree; update `LICENSING.md`,
-      `THIRD_PARTY_NOTICES.md`, the `LICENSE` file and the `copyright` string so
-      all four agree.
+- [x] ~~Redo the licence inventory against the Rust tree.~~ Done 2026-08-20;
+      `LICENSING.md` v2.0 and `THIRD_PARTY_NOTICES.md` rebuilt.
+- [ ] Decide whether to stay AGPL-3.0 now that nothing compels it, and make the
+      four licence statements agree with the answer.
+- [ ] An About → Licences screen, for the CC BY icons and the MPL notice.
 - [ ] Apple Developer ID, `signingIdentity`, notarisation, hardened runtime
       tested against real audio output.
 - [ ] Android keystore created, backed up, gitignored; release APK built and its

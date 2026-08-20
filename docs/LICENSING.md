@@ -1,230 +1,149 @@
 # Vapor Music — Licensing & Compliance
 
-**Version:** 1.1
-**Status:** ⚠️ **STALE — describes the Godot build.** See `docs/RELEASE.md` §2.
-**Last reviewed:** 2026-07-31
+**Version:** 2.0
+**Status:** Rebuilt against the Rust tree
+**Last reviewed:** 2026-08-20
 
-> [!WARNING]
-> The inventory below is the **Godot** dependency set. The conclusion — AGPL-3.0
-> — follows from Essentia (AGPL) and Rubber Band (GPL-2.0-or-later), and
-> **neither ships any more**: analysis is `vapor-dsp` on `symphonia` and
-> `rustfft`, and the stretcher is Signalsmith (MIT), which TD-22 chose over
-> Rubber Band. The obligation may therefore be materially different from what
-> this document concludes.
+> What Vapor Music depends on, what those licences require, and what is
+> therefore a decision rather than an obligation.
 >
-> Whether Vapor Music *should* be AGPL is a separate question from whether it
-> *must* be, and the answer here was inherited from a dependency that is gone.
-> Redo the inventory against the Rust tree before distributing anything.
-
-> What Vapor Music depends on, what those licenses require, and the options for
-> complying. Read alongside `docs/FINDINGS.md`.
->
-> This is an engineering summary of publicly documented license terms, not legal
-> advice. Confirm with a lawyer before any commercial distribution.
+> This is an engineering summary of publicly declared licence metadata, not
+> legal advice. Confirm with a lawyer before commercial distribution.
 
 ---
 
-## Dependency inventory
+## What changed, and why version 1.1 was wrong
 
-| Component | License | Copyleft? | Notes |
-|---|---|---|---|
-| **Essentia** | **AGPL-3.0** | 🔴 Strong | BPM + key analysis. Commercial license offered by MTG/UPF. |
-| **Rubber Band** | **GPL-2.0-or-later** | 🔴 Strong | Time-stretch. Commercial license offered by Breakfast Quay. |
-| Godot Engine | MIT | ✅ No | Attribution only. |
-| godot-cpp | MIT | ✅ No | Attribution only. |
-| GUT | MIT | ✅ No | Test-only, not shipped. |
-| Noun Project icons | CC BY | ✅ No | Attribution required — already in `THIRD_PARTY_NOTICES.md`. |
-| ffmpeg / taglib / chromaprint | LGPL / GPL / LGPL | 🟡 Varies | Pulled in transitively by Essentia. **Phase 1 of the DSP plan removes these entirely.** |
+Version 1.1 concluded **AGPL-3.0** and it followed correctly from its premises:
+the Godot build linked **Essentia** (AGPL-3.0) and **Rubber Band**
+(GPL-2.0-or-later), both strong copyleft, so the combined work had to match.
 
-Verified from `/opt/homebrew/opt/essentia/COPYING.txt` (AGPL v3) and Homebrew
-formula metadata (`rubberband: GPL-2.0-or-later`).
+Neither ships any more.
 
----
+* **Essentia is gone.** Analysis is `vapor-dsp`, built on `symphonia` and
+  `rustfft`.
+* **Rubber Band was rejected** in favour of Signalsmith Stretch (MIT). TD-22
+  records that it was rejected on its build system, not its sound — the licence
+  was explicitly *not* the objection at the time. It is a consequence anyway.
 
-## Current position
-
-- Source repository is **private** (`github.com/Ghigog/vapor-music`).
-- **No `LICENSE` file** exists in the repo.
-- `THIRD_PARTY_NOTICES.md` lists **only the icons** — neither Essentia nor
-  Rubber Band is mentioned.
-- Exported binaries (`.dmg`, `.exe`, `.apk`) link both copyleft libraries.
-
-> [!IMPORTANT]
-> **The obligation triggers on distribution, not on use.**
-> Building and running Vapor Music on your own machines creates no obligation
-> whatsoever. The moment a binary is given to *anyone else* — a friend, a
-> tester, a store listing, a download link — the AGPL and GPL terms attach.
->
-> Note that the Godot-era macOS `.dmg` shipped without the Essentia and Rubber
-> Band dylibs bundled (they resolved to Homebrew paths at runtime), which
-> muddied the picture rather than avoiding it. The DSP plan makes the binary
-> genuinely self-contained, at which point the obligation is unambiguous.
+The premises are gone; the conclusion no longer follows from them. AGPL may
+still be the right answer, but as of this version it is a **choice**.
 
 ---
 
-## What the licenses require
+## Method
 
-Both are strong copyleft. When you distribute a binary that links them:
+Not from memory. Every package in `vapor-app/src-tauri/Cargo.lock` was resolved
+to its vendored source in `~/.cargo/registry/src` and its declared `license`
+field read:
 
-1. **The whole combined work** must be licensed under the same terms — that
-   means Vapor Music's own GDScript and C++, not just the libraries.
-2. **Complete corresponding source** must be offered to every recipient, either
-   alongside the binary or via a written offer valid for three years.
-3. **License texts and copyright notices** must be included with the
-   distribution.
-4. **Modifications** to the libraries must be marked as such.
-5. AGPL-3.0 adds §13: users interacting with the software *over a network* must
-   also be offered source. Vapor Music's WebDAV support acts as a **client**, so
-   this clause is not triggered. It would be if a hosted or server component
-   were ever added.
+```
+620 of 624 packages resolved   (the 4 unresolved are this repo's own crates)
+```
 
-**License compatibility:** Rubber Band is GPL-2.0-**or-later**, so it can be
-taken as GPL-3.0, which is compatible with AGPL-3.0. Combining them is fine —
-the combined work is then **AGPL-3.0**. (A GPL-2.0-*only* dependency would have
-been incompatible with AGPL-3.0 and unfixable without replacing it.)
+Reproduce with the script in `docs/workspace/` or re-derive it — the point is
+that the table below is measured rather than recalled.
 
 ---
 
-## 2026-08-15 — the AGPL is no longer forced
+## The inventory
 
-The migration removed both copyleft dependencies. `vapor-core` links neither
-Essentia nor Rubber Band, and nothing that replaced them is copyleft:
-
-| Dependency | Replaces | Licence |
+| Licence | Packages | Copyleft? |
 |---|---|---|
-| symphonia | Essentia's loaders, ffmpeg, taglib | MPL-2.0 |
-| rustfft | Essentia's FFT | MIT OR Apache-2.0 |
-| WSOLA (written here) | Rubber Band | — |
-| cpal | Godot's `AudioServer` | Apache-2.0 |
-| serde, regex | — | MIT OR Apache-2.0 |
+| MIT OR Apache-2.0 *(and spelling variants)* | 481 | ✅ No |
+| MIT | 122 | ✅ No |
+| **MPL-2.0** | **18** | 🟡 **File-level, weak** |
+| Unicode-3.0 | 18 | ✅ No — attribution |
+| Zlib OR Apache-2.0 OR MIT | 17 | ✅ No |
+| Unlicense OR MIT | 10 | ✅ No |
+| Apache-2.0 | 6 | ✅ No |
+| BSD-3-Clause | 5 | ✅ No |
 
-MPL-2.0 is file-level copyleft: modifications to symphonia's own files must be
-published, but linking it imposes nothing on the rest of the work. It does not
-propagate the way the AGPL does.
+**There is no GPL, AGPL, or LGPL-only dependency in the shipped tree.**
 
-**So the AGPL is now a choice rather than an obligation.** It became one the
-moment the Rust core stopped linking Essentia — the Godot tree still carries
-the old dependencies, so the obligation persists only for as long as that tree
-is shipped.
+The one apparent exception is `r-efi`, offered as
+`MIT OR Apache-2.0 OR LGPL-2.1-or-later` — a disjunction, so MIT can simply be
+taken. It is a UEFI shim pulled in transitively and is not linked on macOS or
+Android regardless.
 
-### Recommendation: keep AGPL-3.0
+### The MPL-2.0 set
 
-Not because anything requires it, but because it costs nothing and buys
-something:
+Thirteen `symphonia` crates (decoding: FLAC, MP3, AAC, ALAC, PCM, Vorbis,
+ISO-MP4, OGG, RIFF, metadata), plus `cssparser`, `cssparser-macros`,
+`selectors` and `dtoa-short` — Servo-derived CSS handling, pulled in by Tauri —
+and `option-ext`.
 
-- **It costs nothing.** All copyright is held by one person, so dual-licensing
-  or relicensing later is available at any time without collecting agreements
-  from contributors. The AGPL binds other people's derivatives, not the
-  copyright holder.
-- **It matches the product's argument.** An app whose entire pitch is "own your
-  music, own your data" is oddly served by a licence that lets someone take it
-  closed and host it as a service. AGPL §13 is precisely the clause that stops
-  that.
-- **It is the reversible direction.** AGPL → MIT can be done later. MIT → AGPL
-  cannot, in any meaningful sense: every copy already released stays MIT and
-  can be forked from.
+MPL-2.0 is **weak copyleft at file granularity**. The obligation is on the MPL
+files themselves: if you modify one, that file's source must be made available
+under MPL. It does **not** reach into code that merely uses the library, and it
+does not dictate the licence of the combined work.
 
-### What changes if the licence changes
+Vapor Music does not modify any of them. The practical requirement is therefore
+attribution and a pointer to the upstream source.
 
-Only if it moves to a permissive licence:
+### Notable direct dependencies
 
-- `THIRD_PARTY_NOTICES.md` and `licenses/` shrink to the MIT/Apache/MPL set —
-  the Essentia and Rubber Band entries go with the Godot tree.
-- The in-app About screen's "Free software under the AGPL" line changes.
-- MPL-2.0 still requires symphonia's own notices to be kept.
-
-None of that is urgent. The obligation only attaches on distribution, and
-nothing new has been distributed.
-
----
-
-## Options
-
-### ✅ Option A — Release Vapor Music as open source under AGPL-3.0 — **CHOSEN**
-
-**Decision (2026-07-31):** adopted. The vibe features are not reasonably
-achievable without Essentia and Rubber Band, and the alternatives either cost
-money (Option B) or mean reimplementing beat tracking (Option C). Vapor Music is
-therefore AGPL-3.0-or-later.
-
-**Rollout checklist:**
-
-- [x] Add `LICENSE` at repo root containing the full AGPL-3.0 text.
-- [x] Expand `THIRD_PARTY_NOTICES.md` to list every row in the inventory above,
-      with license names and upstream URLs.
-- [x] Vendor the third-party license texts into `licenses/` so they can ship
-      with the application.
-- [x] State the license and source location in the README.
-- [ ] **Make `github.com/Ghigog/vapor-music` public.** While it is private,
-      complete source must be handed to every recipient on request.
-      *(Owner action — must be done before sharing any build.)*
-- [ ] Include `licenses/` in the export. The Android and Windows presets use
-      `export_filter="all_resources"` with an empty `include_filter`, so plain
-      `.txt` files are **not** packed. Add `licenses/*` to the include filter of
-      each preset.
-- [ ] Add an in-app **About → Licenses** screen listing dependencies and
-      attributions. Required for the CC BY icon attribution, which must be
-      visible to users rather than sitting in a repo file.
-- [ ] Optional: add `SPDX-License-Identifier: AGPL-3.0-or-later` headers to
-      first-party source files.
-
-**Consequence accepted:** anyone may fork, modify and redistribute Vapor Music,
-and must in turn keep it AGPL and publish their source.
-
-### Option B — Buy commercial licenses, stay closed source
-
-Both projects dual-license precisely for this:
-
-- **Essentia** — commercial licensing via the Music Technology Group, UPF.
-- **Rubber Band** — commercial licensing via Breakfast Quay.
-
-You must hold *both*; either one alone still forces copyleft on the whole work.
-Cost is quote-based. Worth pricing if a paid product is the goal.
-
-### Option C — Remove the copyleft dependencies
-
-Highest effort, but leaves you free to license however you like.
-
-- **Time-stretch → solvable today.** `signalsmith-stretch` is **MIT**,
-  header-only C++11, and a credible Rubber Band replacement. Phase 2 of the DSP
-  plan is already a swap; making it this library instead removes the GPL
-  obligation at no extra cost.
-- **Analysis → the hard half.** `KeyExtractor` is reimplementable in roughly 200
-  lines (chroma + Krumhansl/Temperley profile correlation — the code already
-  configures `profileType: "temperley"`). Beat tracking to `RhythmExtractor2013`
-  quality is a serious undertaking. Note that **aubio is GPL-3.0**, so it is not
-  an escape route.
-
-A realistic middle path: take signalsmith-stretch in phase 2 (removes GPL),
-leaving Essentia/AGPL as the only remaining obligation to decide about.
+| Component | Licence | Note |
+|---|---|---|
+| **symphonia** | MPL-2.0 | Decoding. The only meaningful copyleft in the tree. |
+| **signalsmith-stretch** | MIT | Rust wrapper (Colin Marc), bundling `signalsmith-stretch` (MIT, Geraint Luff / Signalsmith Audio) and `signalsmith-linear` (MIT, Signalsmith Audio). All three MIT. |
+| **rustfft** | MIT OR Apache-2.0 | Analysis. |
+| **cpal** | Apache-2.0 | Audio device I/O. |
+| **tauri** | MIT OR Apache-2.0 | Shell. Drags in the MPL CSS crates. |
+| **lofty** | MIT OR Apache-2.0 | Tag reading. |
+| **souvlaki** | MIT | System media controls. |
+| **reqwest / rustls** | MIT OR Apache-2.0 | HTTP and TLS. |
+| **image** | MIT OR Apache-2.0 | Cover thumbnails. |
+| Noun Project icons | CC BY | Attribution required. Already in `THIRD_PARTY_NOTICES.md`. |
 
 ---
 
-## Consequences for the DSP plan
+## What this means
 
-Option A removes the licensing constraint on `docs/FINDINGS.md` —
-both libraries may be used freely on every platform.
+**The obligation triggers on distribution, not on use.** Building and running on
+your own machines creates none. The moment a binary reaches anyone else —
+a friend, a tester, a store listing, a download link — the terms attach.
 
-One choice is still worth making deliberately in **phase 2**: vendoring
-`signalsmith-stretch` (MIT) instead of `RubberBandSingle.cpp` costs nothing
-extra and would leave Essentia as the only copyleft dependency. That keeps the
-door open to relicensing later without a rewrite. Sticking with Rubber Band is
-equally valid under AGPL — it is simply a one-way door.
+On distribution, the shipped tree requires:
 
-### Store considerations
-
-- **Direct `.dmg` / `.exe` download** — no conflict with either option.
-- **Google Play** — GPL/AGPL distribution is workable in practice.
-- **Apple App Store** — its terms have historically conflicted with GPL-family
-  licenses (the VLC removal being the well-known precedent). Assume Option A is
-  incompatible with an App Store release.
+1. **Attribution** for MIT, Apache-2.0, BSD, Zlib, Unicode-3.0 and CC BY
+   components — the licence text and copyright notices, which is what
+   `THIRD_PARTY_NOTICES.md` is for.
+2. **MPL-2.0 notice** for the symphonia and CSS crates: state that they are
+   MPL-2.0 and where the source can be obtained. Nothing further, because
+   nothing in them is modified.
+3. **Nothing at all** that constrains the licence of Vapor Music's own code.
 
 ---
 
-## References
+## The open decision
 
-- [GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)
-- [GNU GPL-2.0](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
-- [Essentia licensing / FAQ](https://essentia.upf.edu/FAQ.html)
-- [Rubber Band Library](https://breakfastquay.com/rubberband/)
-- [signalsmith-stretch (MIT)](https://github.com/Signalsmith-Audio/signalsmith-stretch)
+`LICENSE` in the repo root is AGPL-3.0, and `tauri.conf.json` declares
+`"copyright": "Vapor Music. Licensed AGPL-3.0-or-later."`. Both are still the
+stated position. Neither is now forced by a dependency.
+
+**Staying AGPL-3.0** is a coherent choice — it is what the project has said
+publicly, it needs no action, and it keeps the work copyleft on purpose rather
+than by accident. The cost is real and worth stating: AGPL obliges you to offer
+complete corresponding source to **every recipient of a binary**, and the
+repository is currently private. Handing a `.dmg` to one friend triggers that.
+
+**Relicensing** to something permissive, or to a weaker copyleft, is equally
+available now that nothing compels AGPL. It is a decision with consequences that
+are hard to reverse — code released under a permissive licence cannot be
+recalled — and it is Dylan's to make, not one to be inherited from a dependency
+that was removed a phase ago.
+
+**Either way, the four places that state a licence must agree**: `LICENSE`,
+`tauri.conf.json`'s copyright string, `THIRD_PARTY_NOTICES.md`, and this
+document. They currently do.
+
+---
+
+## History
+
+* **v1.1 (2026-07-31)** — Godot build. Concluded AGPL-3.0 from Essentia and
+  Rubber Band. Correct at the time.
+* **v2.0 (2026-08-20)** — Rebuilt against the Rust tree from `Cargo.lock`.
+  Strong copyleft is gone; MPL-2.0 is the strongest remaining obligation and is
+  file-level. AGPL becomes a choice.

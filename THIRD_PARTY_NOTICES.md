@@ -3,70 +3,90 @@
 Vapor Music incorporates the following third-party components.
 
 > [!NOTE]
-> Two of these are strong-copyleft licensed (Essentia — AGPL-3.0, Rubber Band —
-> GPL-2.0-or-later), which is why Vapor Music itself is licensed **AGPL-3.0**
-> (see `LICENSE`). License texts ship in `licenses/`. Remaining compliance steps
-> are tracked in `docs/LICENSING.md`.
+> Rebuilt 2026-08-20 against the Rust tree. The previous version listed
+> Essentia (AGPL-3.0) and Rubber Band (GPL-2.0-or-later), which the Godot build
+> linked and **which no longer ship** — see `docs/LICENSING.md` v2.0. No
+> strong-copyleft component remains. Licence texts ship in `licenses/`.
 
 ---
 
-## Native audio analysis and processing
+## Audio
 
-Linked into the `AudioDSP` GDExtension (`bin/libaudio_dsp.*`).
+### symphonia — MPL-2.0
 
-### Essentia — AGPL-3.0
+Container demuxing and audio decoding: FLAC, MP3, AAC, ALAC, PCM, Vorbis,
+ISO-MP4, OGG and RIFF, with metadata. Thirteen crates, all MPL-2.0.
 
-Audio analysis library from the Music Technology Group, Universitat Pompeu
-Fabra. Used for BPM and beat-grid extraction (`RhythmExtractor2013`) and musical
-key detection (`KeyExtractor`).
+<https://github.com/pdeljanov/Symphonia>
 
-<https://essentia.upf.edu> — <https://github.com/MTG/essentia>
+> MPL-2.0 is weak copyleft at file granularity: the obligation attaches to the
+> MPL-licensed files themselves, not to code that uses them. Vapor Music does
+> not modify any of them, so the requirement here is this notice and the pointer
+> to upstream source above.
 
-Commercial licensing is available from the MTG/UPF as an alternative to the
-AGPL.
+### Signalsmith Stretch — MIT
 
-### Rubber Band Library — GPL-2.0-or-later
+Time-stretching for beat-matched transitions. Three MIT components:
 
-Audio time-stretching and pitch-shifting library by Breakfast Quay. Used for
-pitch-independent tempo adjustment during transitions.
+| Part | Copyright |
+|---|---|
+| `signalsmith-stretch` Rust wrapper | Copyright 2024 Colin Marc |
+| `signalsmith-stretch` C++ | Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd. |
+| `signalsmith-linear` C++ | Copyright (c) 2025 Signalsmith Audio |
 
-<https://breakfastquay.com/rubberband/>
+<https://github.com/colinmarc/signalsmith-stretch-rs> —
+<https://signalsmith-audio.co.uk/code/stretch/>
 
-Commercial licensing is available from Breakfast Quay as an alternative to the
-GPL.
+### cpal — Apache-2.0
 
-### Transitive dependencies of Essentia
+Cross-platform audio device I/O. <https://github.com/RustAudio/cpal>
 
-The current macOS build links these via Essentia's audio-loading and metadata
-algorithms: **FFmpeg** (libavformat, libavcodec, libavutil, libswresample —
-LGPL-2.1-or-later, some builds GPL), **TagLib** (LGPL-2.1 / MPL-1.1),
-**Chromaprint** (LGPL-2.1-or-later), **libsamplerate** (BSD-2-Clause),
-**FFTW3** (GPL-2.0-or-later), **libyaml** (MIT).
+### rustfft — MIT OR Apache-2.0
 
-Phase 1 of `docs/FINDINGS.md` removes this entire set by replacing
-Essentia's file loaders with self-contained decoders.
+FFT behind tempo and key analysis. <https://github.com/ejmahler/RustFFT>
+
+### lofty — MIT OR Apache-2.0
+
+Embedded tag and artwork reading. <https://github.com/Serial-ATA/lofty-rs>
+
+### souvlaki — MIT
+
+System media controls. <https://github.com/Sinono3/souvlaki>
 
 ---
 
-## Engine and framework
+## Shell and platform
 
-### Godot Engine — MIT
+### Tauri — MIT OR Apache-2.0
 
-<https://godotengine.org> — Copyright (c) 2014-present Godot Engine
-contributors; (c) 2007-2014 Juan Linietsky, Ariel Manzur.
+Application shell and webview host. <https://tauri.app>
 
-### godot-cpp — MIT
+Tauri brings in Servo-derived CSS crates that are **MPL-2.0** — `cssparser`,
+`cssparser-macros`, `selectors`, `dtoa-short` — under the same file-level terms
+described above, and likewise unmodified.
 
-GDExtension C++ bindings. Copyright (c) 2017-present Godot Engine contributors.
+### The wider Rust dependency tree
 
-<https://github.com/godotengine/godot-cpp>
+620 packages resolved from `Cargo.lock` and checked against their vendored
+sources on 2026-08-20. Beyond the MPL-2.0 crates named above, every one is
+permissive: MIT, Apache-2.0, BSD-3-Clause, Zlib, Unicode-3.0 or Unlicense, in
+that rough order of frequency. Notable members include `reqwest` and `rustls`
+(HTTP and TLS), `image` (cover thumbnails), `serde`, `tokio` and `chrono`.
 
-### GUT (Godot Unit Test) — MIT
+Their licences require attribution, which this file provides, and nothing else.
+The full per-package breakdown and the method used to derive it are in
+`docs/LICENSING.md`.
 
-Test framework, `addons/gut/`. Development-only; not included in exported
-builds.
+---
 
-<https://github.com/bitwes/Gut>
+## Historical — not shipped
+
+The Godot tree in this repository is archived, not built or distributed. It
+linked **Essentia** (AGPL-3.0), **Rubber Band** (GPL-2.0-or-later) and their
+transitive dependencies (FFmpeg, TagLib, Chromaprint, FFTW3, libsamplerate,
+libyaml), and used the **Godot Engine**, **godot-cpp** and **GUT**, all MIT.
+Their licence texts remain in `licenses/` for the record. None of them is part
+of any binary produced today.
 
 ---
 
@@ -106,9 +126,12 @@ repository rather than transcribed.
 
 ### Icons — CC BY (Creative Commons Attribution)
 
-The icons in `assets/icon/` (library, vibe, playlist, settings, group, play,
-pause, stop, song, artist) are by **Gregor Cresnar**, from
-[the Noun Project](https://thenounproject.com).
+The icons are by **Gregor Cresnar**, from
+[the Noun Project](https://thenounproject.com). They ship in the Tauri app as
+`vapor-app/public/icons/` — library, vibe, playlist, settings, group, play,
+pause, next, song, artist — and are masked to `currentColor` rather than drawn
+as images, which changes nothing about the attribution owed. The Godot-era
+copies under `assets/icon/` are the same set and are not distributed.
 
 > [!NOTE]
 > CC BY requires attribution **visible to users of the work**, not only in a
