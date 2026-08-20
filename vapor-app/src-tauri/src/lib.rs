@@ -23,9 +23,12 @@ mod android;
 /// device. Nothing outside the crate uses it.
 pub mod audio;
 mod cache;
+mod covers;
 /// Public for the same reason as `audio`: the real-time test drives a real
 /// streaming deck rather than a stand-in for one.
 pub mod decoder;
+/// A blocking HTTP client that survives being dropped on a runtime thread.
+mod http;
 mod media;
 mod metadata;
 mod peers;
@@ -79,6 +82,31 @@ struct AppState {
     /// person which is which.
     looked: metadata::Cache,
     queue: Queue,
+    /// The three exits as last offered, and what was playing then.
+    ///
+    /// The cards used to be recomputed on every read, a second apart. Choosing
+    /// one made it the queued track, so it moved into the Follow slot and Stay
+    /// refilled with something else — the board reshuffled under the press.
+    /// They also drifted on their own as the planner re-ran behind the screen.
+    ///
+    /// So the offer is made once per playing track and held. The three tracks
+    /// and their slots stay put; only the selection ring moves. It is a
+    /// deliberate shift in what the Follow card means — "the exit the plan
+    /// offered", not "whatever is queued right now" — which is the price of a
+    /// board that holds still long enough to choose from.
+    offered: Option<Offered>,
+    /// What the DJ is conducting over — the set the queue was started from.
+    ///
+    /// `audio_manager.gd` had this as `current_playlist`: the DJ chose its
+    /// next track from whatever list you pressed play in, so playing an album
+    /// kept the set inside that album and playing from All Songs let it roam.
+    /// The port planned from `app.rows` unconditionally, which quietly made
+    /// every scope the whole library — press play on a twelve-track record and
+    /// the second track was from somewhere else entirely.
+    ///
+    /// `None` is the library itself, which is both the default and what
+    /// playing from an unfiltered list means.
+    scope: Option<Scope>,
     /// The library table's rows, rebuilt on scan.
     rows: Vec<Row>,
     /// Analysis results, keyed by href. Persisted so a library is analysed
@@ -103,6 +131,8 @@ struct AppState {
     /// Persisted beside the analysis and for the same reason: reading them
     /// costs a file open, and the answer does not change unless the file does.
     tags: std::collections::HashMap<String, StoredTags>,
+    /// Cover art, on disk rather than in `tags`. See [`covers`].
+    covers: covers::Covers,
     /// Tracks that were read and could not be used, and why (TD-12).
     ///
     /// Persisted, because the answer does not change between launches and the
@@ -123,14 +153,6 @@ struct AppState {
     /// automatic pass was invisible.
     analysing: bool,
     analysing_title: String,
-    /// Which exit a person took by hand, until the set actually reaches it.
-    ///
-    /// Follow is *whatever is queued*, so choosing Switch and then re-reading
-    /// the screen showed the chosen track relabelled FOLLOW — the set had
-    /// silently agreed with you and the departure you asked for was no longer
-    /// visible anywhere. The label is held here until the track starts, so the
-    /// card keeps saying which way the set was sent.
-    chosen_exit: Option<Exit>,
     /// Why the last pass ended early, if it did. Empty otherwise.
     analysis_stopped_because: String,
     /// Where the four-step choice cycle has got to (§3 of the workflow doc).
@@ -191,6 +213,9 @@ struct AppState {
     /// a race with a newer one and must discard its result rather than
     /// interrupt the track a person actually asked for.
     generation: u64,
+    /// Bumped by every curve press, so a re-plan that finishes after a newer
+    /// press can tell that its route is for a destination nobody chose.
+    curve_plan: u64,
     /// True while a track is being fetched and decoded, which can take seconds
     /// on a cold cache. The UI has to be able to say so.
     loading: bool,
@@ -262,7 +287,34 @@ impl AppState {
         let device_id: String = quarantined!("device_id").unwrap_or_else(|| new_id("device"));
         let analysis = quarantined!("analysis").unwrap_or_default();
         let failures = quarantined!("failures").unwrap_or_default();
-        let tags = quarantined!("tags").unwrap_or_default();
+        let mut tags: std::collections::HashMap<String, StoredTags> =
+            quarantined!("tags").unwrap_or_default();
+        let covers = covers::Covers::new(store.dir().join("covers"));
+        // Covers used to be stored inline. Move any that still are out to
+        // disk, once. A cover whose write fails stays inline rather than being
+        // dropped — `StoredTags` still serialises the field when it is set, so
+        // the next launch tries again.
+        let mut moved = 0usize;
+        for (href, tagged) in tags.iter_mut() {
+            let Some(cover) = tagged.cover.as_ref() else {
+                continue;
+            };
+            match covers.put(href, cover) {
+                Ok(()) => {
+                    tagged.cover = None;
+                    moved += 1;
+                }
+                Err(e) => eprintln!("cover for {href} could not be moved out of tags.json: {e}"),
+            }
+        }
+        if moved > 0 {
+            match store.save("tags", &tags) {
+                Ok(()) => eprintln!("moved {moved} covers out of tags.json"),
+                // The covers are on disk either way; the shrink just has not
+                // landed yet, and the same pass runs again next launch.
+                Err(e) => eprintln!("tags.json could not be rewritten after moving covers: {e}"),
+            }
+        }
         let skips = quarantined!("skips").unwrap_or_default();
         // The scanned index. Without this the library was rebuilt from the
         // server on every launch: the app opened on "0 tracks" and stayed
@@ -288,18 +340,20 @@ impl AppState {
             digests,
             sync: SyncProgress::default(),
             queue: Queue::default(),
+            offered: None,
+            scope: None,
             rows,
             last_mix: None,
             last_mix_ended: None,
             analysis,
             skips,
             tags,
+            covers,
             failures,
             cancel: analysis::Cancel::new(),
             analysis_generation: 0,
             analysing: false,
             analysis_stopped_because: String::new(),
-            chosen_exit: None,
             analysing_title: String::new(),
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
@@ -311,6 +365,7 @@ impl AppState {
             player: None,
             playing: None,
             generation: 0,
+            curve_plan: 0,
             loading: false,
             playback_error: None,
             armed_next: None,
@@ -359,6 +414,21 @@ impl AppState {
     fn save_skips(&self) -> Result<()> {
         self.store.save("skips", &self.skips)?;
         Ok(())
+    }
+
+    /// Record a file's tags, sending its artwork to disk.
+    ///
+    /// The one way in. Artwork must not enter `self.tags`: that map is
+    /// serialised whole on every write and held in memory for the life of the
+    /// process, which is how `tags.json` reached 155 MB and how the phone ran
+    /// out of heap. See [`covers`].
+    fn set_tags(&mut self, href: &str, tags: tags::Tags) {
+        if let Some(cover) = &tags.cover {
+            if let Err(e) = self.covers.put(href, cover) {
+                eprintln!("cover for {href} could not be saved: {e}");
+            }
+        }
+        self.tags.insert(href.to_string(), tags.into());
     }
 
     fn save_tags(&self) -> Result<()> {
@@ -523,7 +593,13 @@ struct StoredTags {
     year: Option<u32>,
     #[serde(default)]
     comment: Option<String>,
-    #[serde(default)]
+    /// Legacy only.
+    ///
+    /// Artwork lives in [`covers`] now. This field is still read so that a
+    /// `tags.json` written by an older build can be migrated on load, and
+    /// still written when it is set so that a cover whose move to disk failed
+    /// is not lost — but nothing puts one here any more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     cover: Option<String>,
 }
 
@@ -536,7 +612,9 @@ impl From<tags::Tags> for StoredTags {
             genre: t.genre,
             year: t.year,
             comment: t.comment,
-            cover: t.cover,
+            // Not `t.cover`: artwork goes to [`covers`], through
+            // `AppState::set_tags`, and never into `tags.json`.
+            cover: None,
         }
     }
 }
@@ -790,7 +868,27 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
 #[tauri::command]
 fn track_cover(href: String, state: State<'_, Shared>) -> Result<Option<String>> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.tags.get(&href).and_then(|t| t.cover.clone()))
+    Ok(app.covers.get(&href))
+}
+
+/// The same cover at row size (PERF-004).
+///
+/// A table row draws artwork at 48 px, and handing it the full stored cover is
+/// what made opening Songs pause — see `Covers::thumb` for the measurements.
+/// Now Playing and Liner Notes still ask for the full one, which is the only
+/// place the resolution is wanted.
+#[tauri::command]
+fn track_thumb(href: String, state: State<'_, Shared>) -> Result<Option<String>> {
+    // The lock is taken to find *where* covers live and dropped before any
+    // image is touched. Generating one is about 38 ms — measured — and a
+    // screenful of rows asks for 26 at once; holding the state across that
+    // would freeze the transport and every other command for a second, which
+    // is the fault this change removes rather than one to move somewhere else.
+    let dir = {
+        let app = state.lock().map_err(|e| Error(e.to_string()))?;
+        app.covers.dir().to_path_buf()
+    };
+    Ok(covers::Covers::new(dir).thumb(&href))
 }
 
 // ---------------------------------------------------------------------------
@@ -1173,20 +1271,84 @@ fn startup_problems(state: State<'_, Shared>) -> Result<Vec<String>> {
 /// destination and the tracks queued behind it were routes to a different one.
 /// What is playing, and what is mixing into it right now, are left alone.
 #[tauri::command]
-fn set_curve(curve: String, state: State<'_, Shared>) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.curve = vapor_library::Curve::parse(&curve).as_str().to_string();
-    app.save_settings()?;
+fn set_curve(
+    curve: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, Shared>,
+) -> Result<Settings> {
+    let (settings, generation, plan) = {
+        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+        app.settings.curve = vapor_library::Curve::parse(&curve).as_str().to_string();
+        app.save_settings()?;
+        app.curve_plan = app.curve_plan.wrapping_add(1);
 
-    // Everything after the track playing is a route to the old destination.
-    let keep = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
-    let head: Vec<String> = app.queue.tracks().iter().take(keep).cloned().collect();
-    if !head.is_empty() {
-        let playing = app.playing.clone();
-        app.queue.set_tracks(head, playing.as_deref());
-        extend_set(&mut app);
+        // Everything after the track playing is a route to the old destination.
+        let keep = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
+        let head: Vec<String> = app.queue.tracks().iter().take(keep).cloned().collect();
+        if !head.is_empty() {
+            let playing = app.playing.clone();
+            app.queue.set_tracks(head, playing.as_deref());
+        }
+
+        // Gathered here, searched elsewhere. Building the pool needs the state;
+        // walking it does not.
+        let plan = app
+            .playing
+            .clone()
+            .filter(|_| app.settings.dj_mode)
+            .map(|current| {
+                (
+                    current,
+                    track_meta_pool(&app),
+                    skip_penalties(&app),
+                    vapor_library::Curve::parse(&app.settings.curve),
+                    app.settings.vibe_limit,
+                )
+            });
+        (app.settings.clone(), app.curve_plan, plan)
+    };
+
+    // The search runs off the command thread, and off the lock.
+    //
+    // It used to run right here: an A* over the whole library, seconds of work,
+    // with the state lock held for all of it. So the press did not return until
+    // the set had been re-planned — the button appeared dead for five seconds
+    // and then caught up — and every poll that wanted the same lock stalled
+    // behind it, which is why the screen froze rather than just the control.
+    // The setting itself is saved above and returned at once; the route
+    // arrives when it arrives, and says so with an event.
+    if let Some((current, pool, penalties, chosen, limit)) = plan {
+        let shared: Shared = Arc::clone(&state);
+        tauri::async_runtime::spawn_blocking(move || {
+            use tauri::Emitter as _;
+            if !pool.contains_key(&current) {
+                return;
+            }
+            let planned =
+                vapor_library::generate_mood_path(&pool, &current, chosen, limit, &penalties);
+
+            let Ok(mut app) = shared.lock() else {
+                return;
+            };
+            // A newer press is already on its way somewhere else.
+            if app.curve_plan != generation {
+                return;
+            }
+            // Skip the head: `generate_mood_path` starts from the track playing.
+            let added = planned
+                .iter()
+                .skip(1)
+                .take(PLAN_AHEAD)
+                .filter(|href| app.queue.append(href))
+                .count();
+            drop(app);
+            if added > 0 {
+                let _ = app_handle.emit("playback-changed", ());
+            }
+        });
     }
-    Ok(app.settings.clone())
+
+    Ok(settings)
 }
 
 /// Turn the DJ on or off.
@@ -1332,7 +1494,7 @@ fn looked_up_image(url: String, state: State<'_, Shared>) -> Result<Option<Strin
 /// on a record nobody was looking at.
 fn resolve_album_cover(app: &AppState, album: &str, lead: &str) -> Option<String> {
     let cached = |url: &str| metadata::image_data_uri(&metadata::image_path(app.store.dir(), url));
-    let embedded = || app.tags.get(lead).and_then(|t| t.cover.clone());
+    let embedded = || app.covers.get(lead);
     let looked = || {
         app.looked
             .get(lead)
@@ -1408,17 +1570,40 @@ async fn find_album_art(
         app.store.dir().to_path_buf()
     };
 
-    // Outside the lock: this is a network call, and holding the state across it
-    // would freeze playback control and every other command behind it.
-    let lookup = metadata::Lookup::new().map_err(Error)?;
-    let (url, _genre) = lookup.album(&artist, &album);
+    /*
+     * On a blocking thread, not in the async body.
+     *
+     * Two faults in one line. `Lookup::new` builds a
+     * `reqwest::blocking::Client`, which cannot be constructed on a runtime
+     * worker without panicking the process — see `crate::http`. And the calls
+     * themselves are blocking network I/O run directly on the runtime, which
+     * is what the comment this replaced claimed to have avoided by dropping
+     * the lock: the lock was released and the *runtime* was held instead, so
+     * every other command queued behind this one regardless.
+     *
+     * `crate::http` makes the first survivable wherever it happens. This is
+     * what stops it happening here, and gives the runtime its worker back for
+     * the seconds the lookup spends on the network.
+     */
+    let (query_album, query_artist) = (album.clone(), artist.clone());
+    let url = tauri::async_runtime::spawn_blocking(move || {
+        let lookup = metadata::Lookup::new()?;
+        let (url, _genre) = lookup.album(&query_artist, &query_album);
+        if !url.is_empty() {
+            lookup.download_image(&url, &dir);
+        }
+        Ok::<String, String>(url)
+    })
+    .await
+    .map_err(|e| Error(e.to_string()))?
+    .map_err(Error)?;
+
     if url.is_empty() {
         return Err(Error(format!(
             "Nothing came back for “{album}”. The album or artist may be \
              spelled differently on the service than in your tags."
         )));
     }
-    lookup.download_image(&url, &dir);
 
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     app.settings.set_album_art(&album, &lead, &url);
@@ -2884,17 +3069,47 @@ fn needs_analysis_soon(app: &AppState, lookahead: usize) -> bool {
         .any(|href| needs_analysis(app, href))
 }
 
+/// The three exits as offered to the screen, held while one track plays.
+#[derive(Clone, Debug)]
+struct Offered {
+    /// The track that was playing when these were chosen.
+    playing: String,
+    /// Href and exit per card, in the order the screen lays them out.
+    cards: Vec<(String, Exit)>,
+}
+
+/// What the DJ is conducting over.
+///
+/// The name is for reading — "Nocturnes", "Aphex Twin", "Late Night" — and the
+/// tracks are the pool the pathfinder is allowed to choose from. They are kept
+/// apart from the queue because the queue *moves*: the DJ appends to it as it
+/// plans, so by the third track the queue is no longer the list you pressed
+/// play in and deriving the pool from it would let the set drift out of the
+/// record you chose, one track at a time.
+#[derive(Clone, Debug)]
+struct Scope {
+    name: String,
+    tracks: std::collections::HashSet<String>,
+}
+
 #[tauri::command]
 fn play_tracks(
     app_handle: tauri::AppHandle,
     hrefs: Vec<String>,
     start: Option<String>,
+    scope: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<()> {
     let shared: Shared = Arc::clone(&state);
 
     let jump_the_queue = {
         let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
+        // A named scope confines the set to what was played from; no name is
+        // the library, which is what an unfiltered list means.
+        app.scope = scope.filter(|n| !n.trim().is_empty()).map(|name| Scope {
+            name,
+            tracks: hrefs.iter().cloned().collect(),
+        });
         app.queue.set_tracks(hrefs, start.as_deref());
         let current = app.queue.current().map(str::to_string);
         if let Some(current) = current.clone() {
@@ -2992,9 +3207,19 @@ struct PlaybackState {
     waveform: Vec<f32>,
     /// What plays after this, so Now Playing can say so without a second call.
     next_title: String,
+    next_artist: String,
+    next_album: String,
+    /// The next track's href, so the screen can ask for its artwork the same
+    /// way a row does — through `track_thumb`, which is sized for a tile.
+    /// Carrying the cover itself here would put a 300 KB data URI on a
+    /// four-times-a-second poll.
+    next_href: String,
     /// Cover art for the playing track as a data URI, when the file carried
     /// one (TD-39).
     cover: Option<String>,
+    /// What the DJ is conducting over, for the Vibe screen to name. Empty is
+    /// the whole library — the screen supplies the wording, not this.
+    scope: String,
 }
 
 /// Fetch, decode and start a track.
@@ -3003,7 +3228,7 @@ struct PlaybackState {
 /// bounded: a cold cache means a download, and decoding a five-minute track is
 /// seconds of CPU. Doing either on the command thread would freeze the window,
 /// and doing it on the audio thread is unthinkable.
-/// Open a track that is not on disk yet.
+/// Open a track that is not on disk yet, decoding from frame `from`.
 ///
 /// Streams it by range when the server allows, and falls back to fetching the
 /// whole file when it does not — which is what playback did before this
@@ -3013,11 +3238,16 @@ struct PlaybackState {
 /// is `keeps_audio`'s question, and the window fetcher answers it separately;
 /// storing a copy here as a side effect of playing once is how the cache filled
 /// up in the first place.
+///
+/// `from` is zero for a track being played and the aligned cue position for one
+/// being cued for a mix — a transition starts minutes into the incoming record,
+/// and fetching the run-up to it is the whole cost this avoids.
 fn stream_from_server(
     remote: &vapor_library::RemoteConfig,
     cache: &cache::Cache,
     href: &str,
     rate: u32,
+    from: u64,
 ) -> std::result::Result<decoder::Streamer, String> {
     use remote_source::RangeFetch as _;
 
@@ -3031,7 +3261,7 @@ fn stream_from_server(
         let path = cache
             .store(href, || track.whole())
             .map_err(|e| e.to_string())?;
-        return decoder::Streamer::start(&path, rate, 0);
+        return decoder::Streamer::start(&path, rate, from);
     }
 
     // Shared between every open of this track, so the mix cueing into it does
@@ -3051,7 +3281,7 @@ fn stream_from_server(
             ))
         }),
         rate,
-        0,
+        from,
     )
 }
 
@@ -3079,10 +3309,10 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     app.loading = true;
     app.playback_error = None;
     app.playing = Some(href.clone());
-    // The set has arrived. Whichever exit was taken to get here has been taken,
-    // so the label goes back to describing what is queued rather than what was
-    // asked for.
-    app.chosen_exit = None;
+    // A new track is a new set of exits. Without this the board would hold the
+    // previous track's three for ever — the opposite failure to the one that
+    // made it reshuffle under a press.
+    app.offered = None;
     // A mix arranged before this choice is now for the wrong track. The engine
     // cancels its own side when the load lands; this is the shell's half.
     app.armed_next = None;
@@ -3118,7 +3348,7 @@ fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
          */
         let outcome = match cache.get(&href) {
             Some(path) => decoder::Streamer::start(&path, rate, 0),
-            None => stream_from_server(&remote, &cache, &href, rate),
+            None => stream_from_server(&remote, &cache, &href, rate, 0),
         };
 
         let Ok(mut app) = shared.lock() else {
@@ -3175,6 +3405,31 @@ fn player(app: &AppState) -> Result<&audio::Player> {
         .ok_or_else(|| Error("No audio output device is available.".to_string()))
 }
 
+/// How long the playing track is, from whichever of the two knows.
+///
+/// The deck is the live answer and normally the right one: it is the length of
+/// the audio actually loaded. But a container is allowed to declare no length —
+/// a fragmented MP4 keeps its sample tables in the fragments, so there is
+/// nothing to read at the front — and then the deck can only report how much
+/// has been decoded so far, which grows as it plays and is exact only once the
+/// song is over. A seek bar cannot be drawn against a number like that.
+///
+/// The analysis pass decoded the whole file to its end, so its duration is the
+/// finished measurement of the same thing. Preferring it costs nothing when the
+/// container was honest — the two agree — and is the only correct answer when
+/// it was not.
+/// `analysis` is the one for the track the shell is showing, so this says
+/// nothing about a length when nothing is playing.
+fn playing_duration(
+    snapshot: Option<&audio::Snapshot>,
+    analysis: Option<&analysis::Analysis>,
+) -> f64 {
+    match analysis.map(|a| a.duration) {
+        Some(measured) if measured > 0.0 => measured,
+        _ => snapshot.map_or(0.0, |s| s.duration),
+    }
+}
+
 #[tauri::command]
 fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
@@ -3184,6 +3439,11 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         .playing
         .as_ref()
         .and_then(|href| app.rows.iter().find(|r| &r.href == href));
+    let next = app
+        .queue
+        .peek_next(None)
+        .and_then(|href| app.rows.iter().find(|r| r.href == href));
+    let analysis = app.playing.as_ref().and_then(|href| app.analysis.get(href));
 
     Ok(PlaybackState {
         href: app.playing.clone(),
@@ -3197,29 +3457,25 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         status: snapshot.map_or(audio::Status::Idle, |s| s.status),
         loading: app.loading,
         position: snapshot.map_or(0.0, |s| s.position),
-        duration: snapshot.map_or(0.0, |s| s.duration),
+        duration: playing_duration(snapshot.as_ref(), analysis),
         volume: snapshot.map_or(1.0, |s| s.volume),
         error: app.playback_error.clone(),
         available: app.player.is_some(),
         mixing: app.player.as_ref().is_some_and(|p| p.transition_armed()),
         level: snapshot.map_or(0.0, |s| s.level),
-        waveform: app
-            .playing
-            .as_ref()
-            .and_then(|href| app.analysis.get(href))
-            .map(|a| a.waveform.clone())
+        waveform: analysis.map(|a| a.waveform.clone()).unwrap_or_default(),
+        next_title: next.map(|r| r.title.clone()).unwrap_or_default(),
+        next_artist: next
+            .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
+            .map(|r| r.artist.clone())
             .unwrap_or_default(),
-        next_title: app
-            .queue
-            .peek_next(None)
-            .and_then(|href| app.rows.iter().find(|r| r.href == href))
-            .map(|r| r.title.clone())
+        next_album: next
+            .filter(|r| r.album_source.is_known())
+            .map(|r| r.album.clone())
             .unwrap_or_default(),
-        cover: app
-            .playing
-            .as_ref()
-            .and_then(|href| app.tags.get(href))
-            .and_then(|t| t.cover.clone()),
+        next_href: next.map(|r| r.href.clone()).unwrap_or_default(),
+        cover: app.playing.as_deref().and_then(|href| app.covers.get(href)),
+        scope: app.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
     })
 }
 
@@ -3710,14 +3966,30 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
 
     // Both of these are pure and live in the engine; running them here is what
     // keeps beat grids off the audio thread entirely.
-    let ratio = vapor_engine::Mixer::tempo_ratio(&out_grid, &in_grid).ok()?;
-    let incoming_pos = vapor_engine::Mixer::aligned_incoming_position(
-        &out_grid,
-        &in_grid,
-        start_at as f32,
-        incoming.cue_in,
-    )
-    .ok()?;
+    //
+    // Only for the moves that are beat-matching. `tempo_ratio` refuses a
+    // stretch past ±6%, and asking for one unconditionally meant that any pair
+    // further apart than that — 87 BPM into 139, say — planned no transition at
+    // all and the records simply followed each other. `choose_transition` had
+    // already picked an Echo Out or a Reverb Freeze for exactly that gap,
+    // saying in its own comment to "let the outgoing track dissolve rather than
+    // collide"; the dissolve was then thrown away by a beat-match test it was
+    // chosen for failing. A dissolve does not care what the tempi are.
+    let (ratio, incoming_pos) = if kind.beat_matched() {
+        (
+            vapor_engine::Mixer::tempo_ratio(&out_grid, &in_grid).ok()?,
+            vapor_engine::Mixer::aligned_incoming_position(
+                &out_grid,
+                &in_grid,
+                start_at as f32,
+                incoming.cue_in,
+            )
+            .ok()?,
+        )
+    } else {
+        // Its own tempo, from its own cue point.
+        (1.0, incoming.cue_in)
+    };
 
     // A Tempo Morph meets in the middle, so both decks are stretched; every
     // other transition leaves the outgoing track alone.
@@ -3769,17 +4041,40 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
 
     tauri::async_runtime::spawn_blocking(move || {
         let cache = cache::Cache::new(cache_dir, cache_max);
-        let outcome = cache
-            .store(&mix.next, || webdav::fetch_blocking(&remote, &mix.next))
-            .map_err(|e| e.to_string())
-            .and_then(|path| {
-                // Decoded from where the mix will actually start, not from the
-                // top of the track. A transition cues the incoming track
-                // minutes in, and decoding the run-up to it would be the whole
-                // cost that streaming exists to avoid.
-                let from = (mix.incoming_pos as f64 * rate as f64).max(0.0) as u64;
-                decoder::Streamer::start(&path, rate, from)
-            });
+        // Decoded from where the mix will actually start, not from the top of
+        // the track. A transition cues the incoming track minutes in, and
+        // decoding the run-up to it would be the whole cost streaming avoids.
+        let from = (mix.incoming_pos as f64 * rate as f64).max(0.0) as u64;
+        /*
+         * Streamed, not downloaded.
+         *
+         * This used to `cache.store` the incoming track — a blocking fetch of
+         * the *whole file* — and only then open a decoder on it. That runs in
+         * the last thirty seconds of the outgoing record (`TRANSITION_ARM_LEAD`),
+         * which is exactly when the outgoing deck may itself be a live
+         * range-fetch off the same server with five seconds of window ahead of
+         * it. Ten megabytes pulled at whatever rate the link allows, against a
+         * deck with a five-second margin, and the margin loses.
+         *
+         * What that sounds like is not a dropout. A starved deck emits silence
+         * *and does not advance its playhead* (`Deck::render_additive`), so the
+         * music stutters and falls behind at once — which is how it was
+         * described: mixes going "really slow and super stuttery", on some
+         * tracks and not others. The ones already on disk never did it.
+         *
+         * Streaming from the cue point fetches the seconds the mix actually
+         * needs instead of the minutes it does not. Both decks then want about
+         * one times realtime for the length of a transition, which is a far
+         * smaller ask than a burst download beside a starving reader.
+         *
+         * A track already in the cache still opens straight off the disk, and a
+         * server that refuses ranges still falls back to fetching the file —
+         * there is nothing else to do with one.
+         */
+        let outcome = match cache.get(&mix.next) {
+            Some(path) => decoder::Streamer::start(&path, rate, from),
+            None => stream_from_server(&remote, &cache, &mix.next, rate, from),
+        };
 
         let Ok(mut app) = shared.lock() else {
             return;
@@ -3806,32 +4101,48 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
                 // Correct the incoming deck's drift for the length of the mix
                 // (TD-21). Needs both decks' windows, so it can only start once
                 // the incoming one exists.
-                app.drift = app.playing_stream.as_ref().and_then(|outgoing| {
-                    sync::DriftCorrection::start(sync::Inputs {
-                        link: Arc::clone(&link),
-                        outgoing_grid: mix.out_grid,
-                        incoming_grid: mix.in_grid,
-                        outgoing_window: outgoing.window(),
-                        incoming_window: streamer.window(),
-                        ratio: mix.ratio,
-                        start_time_out: mix.start_at as f32,
-                        cue_in: mix.cue_in,
-                        // A Tempo Morph is deliberately bending both decks, so
-                        // a loop chasing phase through the first half would be
-                        // fighting the transition rather than helping it.
-                        delay_secs: if mix.kind.morphs_tempo() {
-                            (mix.duration * 0.5).min(vapor_engine::pll::MORPH_DELAY_CAP_SECS)
-                        } else {
-                            0.0
-                        },
-                    })
-                });
+                //
+                // Beat-matched moves only. A dissolve has no shared grid to
+                // drift from, and a loop chasing phase between two tracks that
+                // were never in step would pull the incoming deck around for
+                // the length of the transition to no purpose.
+                app.drift = app
+                    .playing_stream
+                    .as_ref()
+                    .filter(|_| mix.kind.beat_matched())
+                    .and_then(|outgoing| {
+                        sync::DriftCorrection::start(sync::Inputs {
+                            link: Arc::clone(&link),
+                            outgoing_grid: mix.out_grid,
+                            incoming_grid: mix.in_grid,
+                            outgoing_window: outgoing.window(),
+                            incoming_window: streamer.window(),
+                            ratio: mix.ratio,
+                            start_time_out: mix.start_at as f32,
+                            cue_in: mix.cue_in,
+                            // A Tempo Morph is deliberately bending both decks, so
+                            // a loop chasing phase through the first half would be
+                            // fighting the transition rather than helping it.
+                            delay_secs: if mix.kind.morphs_tempo() {
+                                (mix.duration * 0.5).min(vapor_engine::pll::MORPH_DELAY_CAP_SECS)
+                            } else {
+                                0.0
+                            },
+                        })
+                    });
                 app.next_stream = Some(streamer);
             }
-            // Not surfaced. A mix that cannot be arranged is not a failure a
-            // person needs to see — the track simply plays to its end and the
-            // next one follows, which is what would have happened anyway.
-            _ => {
+            // Not surfaced to the person: the track plays to its end and the
+            // next one follows, which is what would have happened anyway. It is
+            // still reported, because "some tracks mix and some do not" is
+            // otherwise a fault with no evidence anywhere — this branch used to
+            // say nothing at all, and diagnosing it meant reading the planner
+            // and guessing.
+            other => {
+                match other {
+                    Err(e) => eprintln!("mix into {} not arranged: {e}", mix.next),
+                    Ok(_) => eprintln!("mix into {} not arranged: decoded silence", mix.next),
+                }
                 app.armed_next = None;
                 app.next_stream = None;
                 app.drift = None;
@@ -3850,6 +4161,50 @@ const PREFETCH_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 /// Wait after a failed fetch, doubling up to [`PREFETCH_BACKOFF_MAX`].
 const PREFETCH_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
 const PREFETCH_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Where the audio-fault log is written, beside the app's own data.
+///
+/// Two kinds of line so far: a deck running dry, and the master limiter
+/// stepping. Both are "something the ear caught and nothing recorded".
+pub const AUDIO_FAULT_LOG: &str = "audio-faults.log";
+
+/// Append one fault line to the log, with the time it happened.
+///
+/// Truncated on the first write of each run: this answers "did the decks run
+/// dry during *this* session", and a file that accumulates across every launch
+/// buries that under history. Failures are ignored on purpose — a diagnostic
+/// that cannot be written is not a reason to disturb playback.
+fn note_audio_fault(dir: &std::path::Path, line: &str) {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    let first = !STARTED.swap(true, Ordering::Relaxed);
+
+    let path = dir.join(AUDIO_FAULT_LOG);
+    let opened = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(first)
+        .append(!first)
+        .open(&path);
+
+    if let Ok(mut f) = opened {
+        let _ = writeln!(f, "{} {line}", clock_time());
+    }
+}
+
+/// Local wall-clock `HH:MM:SS`.
+///
+/// Enough to line a log entry up against "that mix sounded wrong", which is the
+/// only thing it is for. **Local**, not UTC: this was UTC to avoid adding a
+/// dependency, and the result was a log whose lines all appeared to be five
+/// hours in the past to the person reading them against what they had just
+/// heard. The clock has to match the clock on the wall or it is not a
+/// timestamp, it is a puzzle.
+fn clock_time() -> String {
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
 
 /// Download the queue's lookahead before it is needed (TD-08).
 ///
@@ -3936,93 +4291,164 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
 
     let spawned = std::thread::Builder::new()
         .name("vapor-playback-supervisor".to_string())
-        .spawn(move || loop {
-            std::thread::sleep(SUPERVISOR_POLL);
+        .spawn(move || {
+            /*
+             * Blocks in which a deck ran dry, as of the last look.
+             *
+             * The counter has always existed and nothing ever read it, so "the
+             * audio path is starving" was a thing the app knew and never said —
+             * which is how a stutter got diagnosed by listening to it. Reported as
+             * a rate rather than a total: a handful of blocks after a seek is
+             * normal, and a total that only grows cannot tell that apart from a
+             * transition running dry the whole way through.
+             *
+             * `eprintln!` on a control thread, four times a second at most, and
+             * only when the number moved.
+             */
+            let mut starved_seen: u64 = 0;
+            let mut limiter_steps_seen: u64 = 0;
+            loop {
+                std::thread::sleep(SUPERVISOR_POLL);
 
-            let Ok(mut app) = shared.lock() else {
-                return;
-            };
+                let Ok(mut app) = shared.lock() else {
+                    return;
+                };
 
-            // The one place that already knows, four times a second, what is
-            // playing and whether it still is. `publish_from` drops anything
-            // that has not meaningfully changed, so this is not four round
-            // trips a second — see `media::worth_sending` — and it hops to the
-            // main thread, which is where the media APIs have to be called
-            // from and where this was not calling them.
-            let showing = now_playing(&app);
-            controls.publish_from(&app_handle, showing);
+                if let Some(player) = app.player.as_ref() {
+                    let snap = player.snapshot();
+                    let now = snap.starved_blocks;
+                    if now > starved_seen {
+                        let blocks = now - starved_seen;
+                        starved_seen = now;
+                        let line = format!(
+                            "audio starved for {blocks} block(s) in the last {}ms{}",
+                            SUPERVISOR_POLL.as_millis(),
+                            if player.transition_armed() {
+                                " (during a mix)"
+                            } else {
+                                ""
+                            },
+                        );
+                        eprintln!("{line}");
+                        // And to a file beside the app's own data.
+                        //
+                        // stderr goes wherever the process was launched from: a
+                        // terminal nobody is watching, or — for the bundled
+                        // build — no terminal at all. A diagnostic you can only
+                        // read if you happened to start the app the right way is
+                        // one you will not have on the day you need it, which is
+                        // exactly how an afternoon went.
+                        note_audio_fault(app.store.dir(), &line);
+                    }
 
-            // A mix completed, so the decks have changed roles: what was cued
-            // is now what is playing. Nothing needs loading — the audio is
-            // already running — the queue just has to agree about where it is.
-            if app.player.as_ref().is_some_and(|p| p.take_swapped()) {
-                let from = app.playing.clone();
-                app.queue.next(None);
-                // The set has moved, so the window has moved with it.
-                prune_audio(&app);
-                app.playing = app.armed_next.take();
-                // The decoders change roles with the decks. Assigning here also
-                // drops the one feeding the track that just ended, which joins
-                // its thread — on this thread, which is allowed to wait for it.
-                app.playing_stream = app.next_stream.take();
-                // The mix is over, so the correction has nothing left to
-                // correct. Dropping it here joins its thread and returns the
-                // deck to its own tempo.
-                app.drift = None;
-                // Remember what was blended into what, so a skip in the next
-                // ten seconds can be attributed to this pair (TD-14).
-                if let (Some(from), Some(to)) = (from, app.playing.clone()) {
-                    app.last_mix = Some((from, to));
-                    app.last_mix_ended = Some(std::time::Instant::now());
+                    // The limiter's own discontinuities (LIM-001), reported the
+                    // same way and for the same reason: a click during a mix is
+                    // otherwise only visible to whoever is listening.
+                    let steps = snap.limiter_steps;
+                    if steps > limiter_steps_seen {
+                        let jumps = steps - limiter_steps_seen;
+                        limiter_steps_seen = steps;
+                        let line = format!(
+                            "limiter stepped {jumps} time(s) in the last {}ms, deepest {:.1} dB{}",
+                            SUPERVISOR_POLL.as_millis(),
+                            player.take_limiter_depth(),
+                            if player.transition_armed() {
+                                " (during a mix)"
+                            } else {
+                                ""
+                            },
+                        );
+                        eprintln!("{line}");
+                        note_audio_fault(app.store.dir(), &line);
+                    }
+                }
+
+                // The one place that already knows, four times a second, what is
+                // playing and whether it still is. `publish_from` drops anything
+                // that has not meaningfully changed, so this is not four round
+                // trips a second — see `media::worth_sending` — and it hops to the
+                // main thread, which is where the media APIs have to be called
+                // from and where this was not calling them.
+                let showing = now_playing(&app);
+                controls.publish_from(&app_handle, showing);
+
+                // A mix completed, so the decks have changed roles: what was cued
+                // is now what is playing. Nothing needs loading — the audio is
+                // already running — the queue just has to agree about where it is.
+                if app.player.as_ref().is_some_and(|p| p.take_swapped()) {
+                    let from = app.playing.clone();
+                    app.queue.next(None);
+                    // The set has moved, so the window has moved with it.
+                    prune_audio(&app);
+                    app.playing = app.armed_next.take();
+                    // The other way the playing track changes — a mix finishing
+                    // rather than something being started. Both have to drop the
+                    // held exits, or the screen keeps offering the previous
+                    // track's three.
+                    app.offered = None;
+                    // The decoders change roles with the decks. Assigning here also
+                    // drops the one feeding the track that just ended, which joins
+                    // its thread — on this thread, which is allowed to wait for it.
+                    app.playing_stream = app.next_stream.take();
+                    // The mix is over, so the correction has nothing left to
+                    // correct. Dropping it here joins its thread and returns the
+                    // deck to its own tempo.
+                    app.drift = None;
+                    // Remember what was blended into what, so a skip in the next
+                    // ten seconds can be attributed to this pair (TD-14).
+                    if let (Some(from), Some(to)) = (from, app.playing.clone()) {
+                        app.last_mix = Some((from, to));
+                        app.last_mix_ended = Some(std::time::Instant::now());
+                    }
+                    drop(app);
+                    let _ = app_handle.emit("playback-changed", ());
+                    continue;
+                }
+
+                // Consumed here, so one ending advances the queue exactly once.
+                if !app.player.as_ref().is_some_and(|p| p.take_ended()) {
+                    // Nothing ended, so this is the moment to look ahead: can the
+                    // next track be mixed into rather than merely followed?
+                    let position = app.player.as_ref().map_or(0.0, |p| p.snapshot().position);
+                    let idle = app.loading
+                        || app.armed_next.is_some()
+                        || app.player.as_ref().is_none_or(|p| {
+                            p.transition_armed() || p.snapshot().status != audio::Status::Playing
+                        });
+                    if !idle {
+                        // Feed the set before looking for a mix: `plan_mix` reads
+                        // `peek_next`, so with nothing queued there is nothing to
+                        // plan and the track simply ends.
+                        if extend_set(&mut app) {
+                            drop(app);
+                            let _ = app_handle.emit("playback-changed", ());
+                            continue;
+                        }
+                        if let Some(mix) = plan_mix(&app, position) {
+                            arm_mix(&shared, &mut app, mix);
+                        }
+                    }
+                    continue;
+                }
+
+                // Something is already on its way to the deck — almost always
+                // because a person pressed next or picked a track while the
+                // outgoing one was still running. Advancing now would skip past it:
+                // the ending belongs to the track they just left, not to a queue
+                // that ran out. Consuming the flag and doing nothing is the whole
+                // fix; the pending load will start on its own.
+                if app.loading {
+                    continue;
+                }
+
+                match app.queue.next(None).map(str::to_string) {
+                    Some(href) => begin_playback(&shared, &mut app, href),
+                    None => app.playing = None,
                 }
                 drop(app);
+
                 let _ = app_handle.emit("playback-changed", ());
-                continue;
             }
-
-            // Consumed here, so one ending advances the queue exactly once.
-            if !app.player.as_ref().is_some_and(|p| p.take_ended()) {
-                // Nothing ended, so this is the moment to look ahead: can the
-                // next track be mixed into rather than merely followed?
-                let position = app.player.as_ref().map_or(0.0, |p| p.snapshot().position);
-                let idle = app.loading
-                    || app.armed_next.is_some()
-                    || app.player.as_ref().is_none_or(|p| {
-                        p.transition_armed() || p.snapshot().status != audio::Status::Playing
-                    });
-                if !idle {
-                    // Feed the set before looking for a mix: `plan_mix` reads
-                    // `peek_next`, so with nothing queued there is nothing to
-                    // plan and the track simply ends.
-                    if extend_set(&mut app) {
-                        drop(app);
-                        let _ = app_handle.emit("playback-changed", ());
-                        continue;
-                    }
-                    if let Some(mix) = plan_mix(&app, position) {
-                        arm_mix(&shared, &mut app, mix);
-                    }
-                }
-                continue;
-            }
-
-            // Something is already on its way to the deck — almost always
-            // because a person pressed next or picked a track while the
-            // outgoing one was still running. Advancing now would skip past it:
-            // the ending belongs to the track they just left, not to a queue
-            // that ran out. Consuming the flag and doing nothing is the whole
-            // fix; the pending load will start on its own.
-            if app.loading {
-                continue;
-            }
-
-            match app.queue.next(None).map(str::to_string) {
-                Some(href) => begin_playback(&shared, &mut app, href),
-                None => app.playing = None,
-            }
-            drop(app);
-
-            let _ = app_handle.emit("playback-changed", ());
         });
 
     if let Err(e) = spawned {
@@ -4124,7 +4550,12 @@ fn now_playing(app: &AppState) -> media::NowPlaying {
         title: row.as_ref().map(|r| r.title.clone()).unwrap_or_default(),
         artist: row.as_ref().map(|r| r.artist.clone()).unwrap_or_default(),
         album: row.as_ref().map(|r| r.album.clone()).unwrap_or_default(),
-        duration: snapshot.as_ref().map_or(0.0, |s| s.duration),
+        // The lock screen's scrubber is the same control as the transport's,
+        // and gets its length the same way.
+        duration: playing_duration(
+            snapshot.as_ref(),
+            app.playing.as_ref().and_then(|href| app.analysis.get(href)),
+        ),
         playing: snapshot
             .as_ref()
             .is_some_and(|s| s.status == audio::Status::Playing),
@@ -4141,9 +4572,13 @@ fn now_playing(app: &AppState) -> media::NowPlaying {
 #[serde(rename_all = "camelCase")]
 struct QueueEntry {
     href: String,
+    // No `cover`. A queue is routinely the whole library, and a cover runs to
+    // 2 MB, so carrying one per entry sent ~155 MB through IPC on the phone —
+    // the WebView allocates that as a Java string and the process died with an
+    // OutOfMemoryError against the 256 MB heap. The screen draws one cover, for
+    // the current track, and fetches it by href with `track_cover`.
     title: String,
     artist: String,
-    cover: Option<String>,
     bpm: f32,
     key: String,
     /// True for the track currently playing.
@@ -4167,6 +4602,11 @@ struct QueueView {
 #[tauri::command]
 fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(queue_view_for(&app))
+}
+
+/// The body of [`queue_view`], reachable from a test.
+fn queue_view_for(app: &AppState) -> QueueView {
     let current = app.queue.current_index();
 
     let entries: Vec<QueueEntry> = app
@@ -4179,7 +4619,6 @@ fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
             let analysis = app.analysis.get(href);
             QueueEntry {
                 href: href.clone(),
-                cover: app.tags.get(href).and_then(|t| t.cover.clone()),
                 title: row
                     .map(|r| r.title.clone())
                     // A track queued from a playlist whose scan has since been
@@ -4211,7 +4650,7 @@ fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
         .map(|a| a.duration)
         .sum();
 
-    Ok(QueueView {
+    QueueView {
         entries,
         repeat: match app.queue.repeat() {
             vapor_library::Repeat::Off => "off",
@@ -4222,7 +4661,7 @@ fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
         shuffled: app.queue.is_shuffled(),
         current,
         remaining_secs,
-    })
+    }
 }
 
 #[tauri::command]
@@ -4424,6 +4863,15 @@ fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMet
     let pool: std::collections::HashMap<String, TrackMeta> = app
         .rows
         .iter()
+        // Confined to what is being conducted (see `AppState::scope`). Without
+        // this the planner reads the whole library whatever was played from,
+        // so pressing play on an album gave you one track of it and then the
+        // library — the fault `current_playlist` existed to prevent.
+        .filter(|row| {
+            app.scope
+                .as_ref()
+                .is_none_or(|scope| scope.tracks.contains(&row.href))
+        })
         .filter_map(|row| {
             let analysis = app.analysis.get(&row.href)?;
             let genre = genre_of(app, &row.href);
@@ -4746,22 +5194,40 @@ struct MixCandidate {
 /// overall, because the point is to offer three genuinely different exits.
 #[tauri::command]
 fn mix_candidates(state: State<'_, Shared>) -> Result<Vec<MixCandidate>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(mix_candidates_for(&app))
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(mix_candidates_for(&mut app))
 }
 
 /// The body of [`mix_candidates`], reachable from a test.
 ///
 /// A `#[tauri::command]` takes `State`, which cannot be built outside a running
 /// app, so logic left in a command body is logic no test can see.
-fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
+fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
     let Some(current) = app.playing.clone() else {
         return Vec::new();
     };
     let pool = track_meta_pool(app);
+
     let Some(from) = pool.get(&current) else {
         return Vec::new();
     };
+
+    // Already offered for this track: hand back the same three, in the same
+    // slots. Only `selected` moves. See `AppState::offered`.
+    if let Some(held) = app.offered.clone() {
+        if held.playing == current && held.cards.iter().all(|(h, _)| pool.contains_key(h)) {
+            let queued = app.queue.peek_next(None).map(str::to_string);
+            return held
+                .cards
+                .iter()
+                .filter_map(|(href, exit)| pool.get(href).map(|to| (to, *exit)))
+                .map(|(to, exit)| {
+                    let selected = queued.as_deref() == Some(to.href.as_str());
+                    card_for(app, &current, from, to, exit, selected)
+                })
+                .collect();
+        }
+    }
 
     // Everything analysed except the track playing and what it has already
     // been through: offering the track you just heard is not an option.
@@ -4884,57 +5350,85 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
                 })
         });
     /*
-     * The queued card keeps the label of the exit that put it there.
+     * The queued card is the Follow card, whatever put it there.
      *
-     * Follow means "whatever is queued", so taking the Switch exit made the
-     * chosen track the Follow card on the next read — the set quietly agreed
-     * with you and the departure you had asked for stopped being visible. The
-     * label now holds until the set actually reaches the track, so the screen
-     * goes on saying which way it was sent.
+     * It used to keep the label of the exit that was taken, so that choosing
+     * Switch went on saying SWITCH — the reasoning being that otherwise the
+     * set quietly agreed with you and the departure stopped being visible.
      *
-     * Only while it is still the queued one: `chosen_exit` is cleared when the
-     * track starts, and any other choice replaces it.
+     * What that actually produced was a screen reading Stay / Switch / Switch,
+     * with no Follow card at all: the third slot still offers a departure, so
+     * the held label collided with it and the three exits stopped being three
+     * distinct things. And the premise was wrong anyway — once the tail has
+     * been re-planned from the chosen track, that track *is* what follows.
+     *
+     * The provenance is not lost. The queued card carries the selection ring
+     * and the beat-match line, which is what says "this is the one" — a word
+     * that duplicates a neighbouring card's is a worse way to say it.
      */
-    let queued_exit = app
-        .chosen_exit
-        .filter(|_| follow.is_some_and(|f| queued.as_deref() == Some(f.href.as_str())))
-        .unwrap_or(Exit::Follow);
-
     let chosen: Vec<(&TrackMeta, Exit)> = [
         stay.map(|t| (t, Exit::Stay)),
-        follow.map(|t| (t, queued_exit)),
+        follow.map(|t| (t, Exit::Follow)),
         switch.map(|t| (t, Exit::Switch)),
     ]
     .into_iter()
     .flatten()
     .collect();
 
-    chosen
-        .into_iter()
+    let cards: Vec<MixCandidate> = chosen
+        .iter()
         .map(|(to, exit)| {
-            let row = app.rows.iter().find(|r| r.href == to.href);
-            MixCandidate {
-                href: to.href.clone(),
-                title: row.map(|r| r.title.clone()).unwrap_or_default(),
-                artist: row
-                    .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
-                    .map(|r| r.artist.clone())
-                    .unwrap_or_default(),
-                bpm: to.bpm,
-                key: to.musical_key.clone(),
-                exit,
-                label: exit.label().to_string(),
-                transition: transition_name(choose_transition(
-                    &from.musical_key,
-                    &to.musical_key,
-                    (from.bpm - to.bpm).abs(),
-                    same_genre(app, &current, &to.href),
-                )),
-                selected: queued.as_deref() == Some(to.href.as_str()),
-                cover: app.tags.get(&to.href).and_then(|t| t.cover.clone()),
-            }
+            let selected = queued.as_deref() == Some(to.href.as_str());
+            card_for(app, &current, from, to, *exit, selected)
         })
-        .collect()
+        .collect();
+
+    // Held until this track is over, so the board does not move under a press.
+    app.offered = Some(Offered {
+        playing: current,
+        cards: chosen
+            .iter()
+            .map(|(to, exit)| (to.href.clone(), *exit))
+            .collect(),
+    });
+
+    cards
+}
+
+/// One exit card, from the pair of tracks it sits between.
+///
+/// Shared by the two ways the screen is answered — freshly chosen, and held
+/// from a previous read — so a card cannot describe itself differently
+/// depending on which path produced it.
+fn card_for(
+    app: &AppState,
+    current: &str,
+    from: &TrackMeta,
+    to: &TrackMeta,
+    exit: Exit,
+    selected: bool,
+) -> MixCandidate {
+    let row = app.rows.iter().find(|r| r.href == to.href);
+    MixCandidate {
+        href: to.href.clone(),
+        title: row.map(|r| r.title.clone()).unwrap_or_default(),
+        artist: row
+            .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
+            .map(|r| r.artist.clone())
+            .unwrap_or_default(),
+        bpm: to.bpm,
+        key: to.musical_key.clone(),
+        exit,
+        label: exit.label().to_string(),
+        transition: transition_name(choose_transition(
+            &from.musical_key,
+            &to.musical_key,
+            (from.bpm - to.bpm).abs(),
+            same_genre(app, current, &to.href),
+        )),
+        selected,
+        cover: app.covers.get(&to.href),
+    }
 }
 
 /// Take one of the three exits, and re-plan the set behind it.
@@ -4944,53 +5438,79 @@ fn mix_candidates_for(app: &AppState) -> Vec<MixCandidate> {
 /// from the chosen track along the same curve. Being 60% through a Build stays
 /// 60% through a Build — the route changes, not where it is going.
 #[tauri::command]
-fn choose_next(href: String, curve: String, state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+fn choose_next(
+    href: String,
+    curve: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, Shared>,
+) -> Result<()> {
+    let (generation, plan) = {
+        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
 
-    // Which of the three this was, before the queue changes and the answer
-    // becomes "Follow" by definition.
-    let taken = mix_candidates_for(&app)
-        .into_iter()
-        .find(|c| c.href == href)
-        .map(|c| c.exit);
+        if !app.queue.set_next(&href) {
+            return Err(Error("That track is no longer in the queue.".to_string()));
+        }
+        app.curve_plan = app.curve_plan.wrapping_add(1);
 
-    if !app.queue.set_next(&href) {
-        return Err(Error("That track is no longer in the queue.".to_string()));
-    }
-    app.chosen_exit = taken;
-
-    let pool = track_meta_pool(&app);
-    if !pool.contains_key(&href) {
+        let pool = track_meta_pool(&app);
         // Unanalysed: it can still play next, there is simply nothing to plan
         // a route from.
+        let plan = pool
+            .contains_key(&href)
+            .then(|| (pool, skip_penalties(&app), app.settings.vibe_limit));
+        (app.curve_plan, plan)
+    };
+
+    // The exit takes effect above; the route behind it is planned off the lock.
+    //
+    // Same reason as `set_curve`: `generate_mood_path` is an A* over the whole
+    // library and it used to run with the state lock held, so pressing Stay or
+    // Switch did nothing visible for several seconds. The queue's next track is
+    // already set by the time this returns — which is the part the press was
+    // actually asking for.
+    let Some((pool, penalties, limit)) = plan else {
         return Ok(());
-    }
+    };
+    let shared: Shared = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter as _;
+        let tail = vapor_library::generate_mood_path(
+            &pool,
+            &href,
+            Curve::parse(&curve),
+            limit,
+            &penalties,
+        );
 
-    let tail = vapor_library::generate_mood_path(
-        &pool,
-        &href,
-        Curve::parse(&curve),
-        app.settings.vibe_limit,
-        &skip_penalties(&app),
-    );
-
-    // Everything up to and including the track playing is history and stays
-    // put; the tail is what the DJ is still free to arrange.
-    let played: Vec<String> = app
-        .queue
-        .tracks()
-        .iter()
-        .take(app.queue.current_index().unwrap_or(0) + 1)
-        .cloned()
-        .collect();
-    let mut next: Vec<String> = played;
-    for h in tail {
-        if !next.contains(&h) {
-            next.push(h);
+        let Ok(mut app) = shared.lock() else {
+            return;
+        };
+        // Something else has been chosen since; this route starts in the wrong
+        // place.
+        if app.curve_plan != generation {
+            return;
         }
-    }
-    let current = app.queue.current().map(str::to_string);
-    app.queue.set_tracks(next, current.as_deref());
+
+        // Everything up to and including the track playing is history and stays
+        // put; the tail is what the DJ is still free to arrange.
+        let played: Vec<String> = app
+            .queue
+            .tracks()
+            .iter()
+            .take(app.queue.current_index().unwrap_or(0) + 1)
+            .cloned()
+            .collect();
+        let mut next: Vec<String> = played;
+        for h in tail {
+            if !next.contains(&h) {
+                next.push(h);
+            }
+        }
+        let current = app.queue.current().map(str::to_string);
+        app.queue.set_tracks(next, current.as_deref());
+        drop(app);
+        let _ = app_handle.emit("playback-changed", ());
+    });
     Ok(())
 }
 
@@ -5194,7 +5714,7 @@ fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails>
         href_path: href.clone(),
         cached: app.cache.contains(&href),
         unplayable: app.failures.get(&href).cloned(),
-        cover: app.tags.get(&href).and_then(|t| t.cover.clone()),
+        cover: app.covers.get(&href),
         notes: app.tags.get(&href).and_then(|t| t.comment.clone()),
         tagged: app.tags.contains_key(&href),
     })
@@ -6124,7 +6644,7 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                         if let Some(path) = cache.get(&progress.href) {
                             let tags = tags::read(&path);
                             if !tags.is_empty() {
-                                app.tags.insert(progress.href.clone(), tags.into());
+                                app.set_tags(&progress.href, tags);
                                 let _ = app.save_tags();
                             }
                         }
@@ -6382,6 +6902,21 @@ fn data_breakdown(state: State<'_, Shared>) -> Result<Vec<DataRow>> {
             label: "Offline cache".to_string(),
             path: app.cache.dir().display().to_string(),
             bytes: app.cache.size(),
+            local: true,
+        },
+        // Artwork, separate from the catalogue. It used to be inside
+        // `tags.json` and therefore invisible on this screen, which is how a
+        // 155 MB file went unnoticed until it killed the phone.
+        DataRow {
+            label: "Cover art".to_string(),
+            path: app.covers.dir().display().to_string(),
+            bytes: app.covers.size(),
+            local: true,
+        },
+        DataRow {
+            label: "Track tags".to_string(),
+            path: dir.join("tags.json").display().to_string(),
+            bytes: size_of("tags.json"),
             local: true,
         },
         DataRow {
@@ -6727,6 +7262,7 @@ pub fn run() {
             mix_candidates,
             choose_next,
             track_cover,
+            track_thumb,
             analysis_status,
             cache_status,
             set_cache_max_bytes,
@@ -6756,6 +7292,166 @@ mod tests {
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         (AppState::load(Store::new(dir.clone())), dir)
+    }
+
+    /// A dissolve is planned even when the tempi are nowhere near each other.
+    ///
+    /// `tempo_ratio` refuses a stretch past ±6%, and `plan_mix` used to ask for
+    /// one whatever transition had been chosen. So 87 BPM into 139 planned
+    /// nothing and the two records simply followed each other with no mix — the
+    /// case an Echo Out exists for.
+    #[test]
+    fn a_wide_tempo_gap_still_gets_a_transition() {
+        use crate::analysis::{Analysis, ANALYSIS_VERSION};
+
+        let analysed = |bpm: f32, key: &str| Analysis {
+            bpm,
+            key: key.to_string(),
+            version: ANALYSIS_VERSION,
+            duration: 300.0,
+            cue_out: 290.0,
+            cue_in: 0.0,
+            beats: (0..600)
+                .map(|i| i as f32 * (60.0 / bpm))
+                .collect::<Vec<f32>>(),
+            ..Default::default()
+        };
+
+        let (mut app, dir) = app();
+        app.analysis.insert("/a.mp3".into(), analysed(87.0, "8B"));
+        app.analysis.insert("/b.mp3".into(), analysed(139.0, "8A"));
+        app.rows.push(row("/a.mp3", "A"));
+        app.rows.push(row("/b.mp3", "B"));
+        app.playing = Some("/a.mp3".into());
+        app.queue
+            .set_tracks(vec!["/a.mp3".into(), "/b.mp3".into()], Some("/a.mp3"));
+
+        // The engine would refuse to beat-match this pair, which is the point.
+        let far = (87.0f32 / 139.0) as f64 - 1.0;
+        assert!(
+            far.abs() > vapor_engine::mixer::MAX_STRETCH,
+            "the fixture is supposed to be unmatchable"
+        );
+
+        // Somewhere inside the arming window before the transition starts.
+        let planned = (0..290)
+            .map(|secs| plan_mix(&app, secs as f64))
+            .find(|m| m.is_some())
+            .flatten();
+
+        let mix = planned.expect("no transition was planned for a wide tempo gap");
+        assert!(
+            !mix.kind.beat_matched(),
+            "a pair this far apart should be dissolved, not beat-matched"
+        );
+        assert_eq!(mix.ratio, 1.0, "a dissolve plays the incoming track as cut");
+        assert_eq!(mix.next, "/b.mp3");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Artwork must not reach `tags.json`. It used to: 516 covers made that
+    /// file 155 MB, parsed into memory on every launch and held for the life of
+    /// the process, on a device with a 256 MB heap.
+    #[test]
+    fn tags_hold_no_artwork() {
+        let (mut app, dir) = app();
+        app.set_tags(
+            "/music/a.mp3",
+            tags::Tags {
+                title: Some("Title".into()),
+                cover: Some("data:image/jpeg;base64,AAAA".into()),
+                ..Default::default()
+            },
+        );
+        app.save_tags().unwrap();
+
+        let json = std::fs::read_to_string(dir.join("tags.json")).unwrap();
+        assert!(json.contains("Title"), "the text half is still stored");
+        assert!(
+            !json.contains("base64"),
+            "tags.json is carrying artwork again"
+        );
+        // And the cover is not lost — it is on disk, reachable by href.
+        assert_eq!(
+            app.covers.get("/music/a.mp3").as_deref(),
+            Some("data:image/jpeg;base64,AAAA")
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A `tags.json` written by an older build carries its covers inline. They
+    /// move out on the next load rather than being read into memory forever.
+    #[test]
+    fn a_legacy_tags_file_migrates_on_load() {
+        let (app, dir) = app();
+        let store = Store::new(dir.clone());
+        drop(app);
+
+        let legacy = serde_json::json!({
+            "/music/a.mp3": { "title": "Title", "cover": "data:image/jpeg;base64,AAAA" },
+            "/music/b.mp3": { "title": "Other" },
+        });
+        store.save("tags", &legacy).unwrap();
+
+        let app = AppState::load(Store::new(dir.clone()));
+        assert_eq!(
+            app.covers.get("/music/a.mp3").as_deref(),
+            Some("data:image/jpeg;base64,AAAA"),
+            "the inline cover was not moved to disk"
+        );
+        assert_eq!(app.tags.get("/music/a.mp3").unwrap().cover, None);
+        assert_eq!(
+            app.tags.get("/music/a.mp3").unwrap().title.as_deref(),
+            Some("Title"),
+            "the text half survived the migration"
+        );
+        // The file itself shrank, not just the copy in memory.
+        let json = std::fs::read_to_string(dir.join("tags.json")).unwrap();
+        assert!(!json.contains("base64"), "tags.json was not rewritten");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A queue is routinely the whole library, and an embedded cover runs to
+    /// megabytes. Carrying one per entry killed the phone: 563 tracks came to
+    /// ~155 MB of JSON, which the Android WebView allocates as a Java string
+    /// against a 256 MB heap, and the process died with an OutOfMemoryError the
+    /// moment a track was played. The screen draws exactly one cover, for the
+    /// current track, and asks for it by href with `track_cover`.
+    #[test]
+    fn queue_view_carries_no_artwork() {
+        let (mut app, _dir) = app();
+        let cover = "COVERDATA".repeat(128);
+        let hrefs: Vec<String> = (0..200).map(|i| format!("/music/{i}.mp3")).collect();
+        for href in &hrefs {
+            app.rows.push(row(href, "Title"));
+            app.tags.insert(
+                href.clone(),
+                StoredTags {
+                    cover: Some(cover.clone()),
+                    ..Default::default()
+                },
+            );
+        }
+        app.queue.set_tracks(hrefs.clone(), Some(&hrefs[0]));
+
+        let view = queue_view_for(&app);
+        assert_eq!(view.entries.len(), 200, "the queue itself is still whole");
+
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(
+            !json.contains(&cover),
+            "queue_view is carrying cover art again"
+        );
+        // Cover-free, 200 entries come to a few tens of kilobytes. With covers
+        // this is over 200 KB here and hundreds of megabytes on a real library.
+        assert!(
+            json.len() < 100_000,
+            "queue_view is {} bytes for 200 tracks",
+            json.len()
+        );
     }
 
     fn row(href: &str, title: &str) -> Row {
@@ -7034,6 +7730,88 @@ mod tests {
         app.queue.set_tracks(vec!["/a.mp3".to_string()], None);
         app.playing = Some("/a.mp3".to_string());
         (app, dir)
+    }
+
+    /// The starvation log is written, and starts empty each run.
+    ///
+    /// Without this, "the log file is not there" means either "nothing
+    /// starved" or "the writer is broken", and those look identical from
+    /// outside — which is the trap this whole diagnostic exists to avoid.
+    #[test]
+    fn an_audio_fault_is_written_and_each_run_starts_clean() {
+        let dir = std::env::temp_dir().join(format!("vapor-starve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let path = dir.join(AUDIO_FAULT_LOG);
+
+        // A line from a previous run, which must not survive into this one.
+        std::fs::write(&path, "stale\n").expect("write");
+
+        note_audio_fault(&dir, "audio starved for 3 block(s)");
+        note_audio_fault(&dir, "audio starved for 1 block(s) (during a mix)");
+
+        let written = std::fs::read_to_string(&path).expect("the log");
+        assert!(
+            !written.contains("stale"),
+            "last run's log survived into this one: {written}"
+        );
+        assert_eq!(
+            written.lines().count(),
+            2,
+            "both lines should be kept, got: {written}"
+        );
+        assert!(written.contains("(during a mix)"), "got: {written}");
+        // Each line is stamped, or it cannot be lined up against what was heard.
+        assert!(
+            written.lines().all(|l| l.split_whitespace().next().is_some_and(
+                |t| t.len() == 8 && t.matches(':').count() == 2
+            )),
+            "a line had no clock time: {written}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The DJ conducts within what was played from, not the library.
+    ///
+    /// `audio_manager.gd` planned out of `current_playlist` — press play on an
+    /// album and the set stayed in that album. The port read `app.rows`
+    /// unconditionally, so every scope was the whole library: opening a record
+    /// and pressing play gave you one track of it and then wherever the
+    /// pathfinder felt like going.
+    #[test]
+    fn a_scoped_set_is_conducted_inside_its_scope() {
+        let (mut app, dir) = conducting();
+        app.scope = Some(Scope {
+            name: "A Record".to_string(),
+            tracks: ["/a.mp3", "/b.mp3"].iter().map(|s| s.to_string()).collect(),
+        });
+
+        assert!(extend_set(&mut app), "the DJ added nothing");
+
+        for href in app.queue.tracks() {
+            assert!(
+                href == "/a.mp3" || href == "/b.mp3",
+                "the set left its scope: queued {href}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// No scope is the library, which is what playing from an unfiltered list
+    /// means — and the case that must keep working unchanged.
+    #[test]
+    fn an_unscoped_set_may_use_the_whole_library() {
+        let (mut app, dir) = conducting();
+        assert!(app.scope.is_none());
+
+        assert!(extend_set(&mut app), "the DJ added nothing");
+        assert!(
+            app.queue.tracks().iter().any(|h| h != "/a.mp3" && h != "/b.mp3"),
+            "the planner stayed inside two tracks with the library available"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The bug, stated plainly: a set of one track never grew, so the track
@@ -7334,7 +8112,7 @@ mod tests {
             .peek_next(None)
             .expect("a planned next")
             .to_string();
-        let follow = mix_candidates_for(&app)
+        let follow = mix_candidates_for(&mut app)
             .into_iter()
             .find(|c| c.exit == Exit::Follow)
             .expect("a Follow card");
@@ -7418,7 +8196,7 @@ mod tests {
         app.queue.set_tracks(vec!["/keem-a.mp3".to_string()], None);
         app.playing = Some("/keem-a.mp3".to_string());
 
-        let stay = mix_candidates_for(&app)
+        let stay = mix_candidates_for(&mut app)
             .into_iter()
             .find(|c| c.exit == Exit::Stay)
             .expect("a Stay card");
@@ -7429,35 +8207,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Choosing an exit does not silently become Follow.
+    /// Choosing an exit does not move the board (2026-08-20).
     ///
-    /// Follow is "whatever is queued", so taking the Switch exit made the
-    /// chosen track the Follow card the moment the screen re-read — the set
-    /// agreed with you and the departure stopped being visible anywhere.
+    /// The three cards were recomputed on every read. Choosing one made it the
+    /// queued track, so it slid into the Follow slot and Stay refilled with
+    /// something else — press Stay and the record you picked jumps sideways
+    /// while a stranger takes its place. They also drifted on their own as the
+    /// planner re-ran behind the screen.
+    ///
+    /// This supersedes an earlier rule that the queued card is always labelled
+    /// Follow. That existed to stop two cards reading SWITCH at once, and
+    /// holding the board fixes the same thing better: the slots do not move, so
+    /// nothing collides.
     #[test]
-    fn a_chosen_switch_keeps_saying_switch() {
+    fn choosing_an_exit_leaves_the_cards_where_they_were() {
         let (mut app, dir) = conducting();
         extend_set(&mut app);
 
-        let switch = mix_candidates_for(&app)
-            .into_iter()
-            .find(|c| c.exit == Exit::Switch)
-            .expect("a Switch card");
+        let before = mix_candidates_for(&mut app);
+        assert!(before.len() > 1, "need more than one card to test a move");
 
-        app.chosen_exit = Some(Exit::Switch);
-        assert!(app.queue.set_next(&switch.href));
-
-        let after = mix_candidates_for(&app);
-        let queued = after
+        let switch_href = before
             .iter()
-            .find(|c| c.href == switch.href)
-            .expect("the chosen track is still offered");
+            .find(|c| c.exit == Exit::Switch)
+            .expect("a Switch card")
+            .href
+            .clone();
+        let slot = before
+            .iter()
+            .position(|c| c.href == switch_href)
+            .expect("the card it came from");
+
+        assert!(app.queue.set_next(&switch_href));
+
+        let after = mix_candidates_for(&mut app);
         assert_eq!(
-            queued.exit,
-            Exit::Switch,
-            "the chosen departure was relabelled as the set agreeing with it",
+            after.iter().map(|c| &c.href).collect::<Vec<_>>(),
+            before.iter().map(|c| &c.href).collect::<Vec<_>>(),
+            "the offered tracks changed after a press",
         );
-        assert!(queued.selected, "and it is what happens if nobody acts");
+        assert_eq!(
+            after[slot].exit,
+            Exit::Switch,
+            "the chosen card changed slot or label",
+        );
+        assert!(after[slot].selected, "the ring did not land on the choice");
+        assert_eq!(
+            after.iter().filter(|c| c.selected).count(),
+            1,
+            "more than one card claims to be what happens next",
+        );
+
+        // And a new track is a new offer, or the board would freeze for ever.
+        app.playing = Some("/c.mp3".to_string());
+        app.offered = None;
+        let fresh = mix_candidates_for(&mut app);
+        assert!(
+            fresh.iter().all(|c| c.href != "/c.mp3"),
+            "the exits offered the track that is playing",
+        );
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -7758,7 +8567,7 @@ mod tests {
     /// first, which is exactly why this never showed up.
     #[test]
     fn three_exits_are_offered_before_the_set_has_been_planned() {
-        let (app, dir) = conducting();
+        let (mut app, dir) = conducting();
         // Not `peek_next().is_none()`: a one-track queue wraps under repeat-all
         // and answers with the track playing, which is precisely the state that
         // used to produce a Follow card offering the current record back.
@@ -7768,7 +8577,7 @@ mod tests {
             "the fixture is meant to have no real next track",
         );
 
-        let cards = mix_candidates_for(&app);
+        let cards = mix_candidates_for(&mut app);
         let exits: Vec<Exit> = cards.iter().map(|c| c.exit).collect();
         assert_eq!(
             exits,
@@ -7804,7 +8613,7 @@ mod tests {
         let (mut app, dir) = conducting();
         extend_set(&mut app);
 
-        let cards = mix_candidates_for(&app);
+        let cards = mix_candidates_for(&mut app);
         let exits: Vec<Exit> = cards.iter().map(|c| c.exit).collect();
         assert_eq!(
             exits,
@@ -8392,5 +9201,38 @@ mod tests {
         let to = meta(128.0, "8A", 0.5);
 
         assert_eq!(exit_between(&from, &to, false), Exit::Switch);
+    }
+
+    /// The seek bar's length, when the container would not say.
+    ///
+    /// A fragmented MP4 declares no length, so the deck can only report what it
+    /// has decoded so far — a number that grows for the whole song and is right
+    /// only once it is over. The analysis pass already decoded the file to its
+    /// end, and its measurement is what the transport should be drawn against.
+    #[test]
+    fn an_undeclared_length_falls_back_to_the_measured_one() {
+        let deck = audio::Snapshot {
+            status: audio::Status::Playing,
+            position: 67.0,
+            // A minute in, and the deck has decoded seventy seconds of a track
+            // whose length nothing declared.
+            duration: 70.0,
+            volume: 1.0,
+            level: 0.0,
+            commands_deferred: 0,
+            starved_blocks: 0,
+            limiter_steps: 0,
+            limiter_deepest_db: 0.0,
+        };
+        let measured = analysed_at(87.0, 327.0);
+
+        assert_eq!(playing_duration(Some(&deck), Some(&measured)), 327.0);
+
+        // Nothing analysed it, so the growing answer is the only one there is —
+        // and still beats the zero this used to report.
+        assert_eq!(playing_duration(Some(&deck), None), 70.0);
+
+        // Nothing playing: no length, rather than the last track's.
+        assert_eq!(playing_duration(None, None), 0.0);
     }
 }

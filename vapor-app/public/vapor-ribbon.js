@@ -124,6 +124,15 @@
   const HL = Math.hypot(lx, ly, lz + 1);
   const hx = lx / HL, hy = ly / HL, hz = (lz + 1) / HL;
 
+  /**
+   * How hard the playing level leans on the twist rate, in rad/s at full scale.
+   *
+   * The resting rate is 0.62, so at 0.30 a loud passage turns about 1.5x as
+   * fast as a quiet one. It was 0.55 (1.9x) while the phase bug was in place,
+   * where it was never the thing anyone was actually seeing.
+   */
+  const ENERGY_TWIST = 0.30;
+
   const NODES = 160;
   const NS = NODES - 1;
   const ENV = 40;              // environment texture, ENV×ENV×3
@@ -237,6 +246,9 @@
       this._t0 = performance.now();
       this._raf = 0; this._visible = true; this._energySm = 0.5;
       this._skip = 0; this._tick = 0;
+      // Running phases, integrated per frame. See `_phase`.
+      this._ph = { twist: 0, wander: 0, zphase: 0, travel: 0 };
+      this._lastT = 0;
       this._field = document.createElement('canvas');
       this._fctx = this._field.getContext('2d');
       this._bed = document.createElement('canvas');
@@ -278,6 +290,42 @@
     }
 
     get _frozen() { return this.hasAttribute('static') || this.hasAttribute('pose') || this._reduced; }
+
+    /**
+     * Integrate a rate into a running phase.
+     *
+     * Multiplying elapsed time by the CURRENT rate is not the same as
+     * integrating that rate, and the difference is the whole bug this replaced.
+     * For a phase written as T·r(t), the angular velocity is
+     *
+     *     d/dt [T·r(t)] = r + T·(dr/dt)
+     *
+     * The second term is spurious and it scales with elapsed time. `playing`
+     * drives the twist rate from the smoothed level, so every level poll moved
+     * r and whipped the accumulated angle by T·Δr. Measured on the old code:
+     * an intended 0.62–1.17 rad/s ran at 58 rad/s a minute in, and went
+     * NEGATIVE — the ribbon counter-spun whenever the music got quieter. That
+     * is the "turbo twist, slow down, turbo twist" read, and it got worse the
+     * longer the screen stayed open.
+     *
+     * The same error made every state change pop: `playing` and `blending`
+     * differ by ~0.3 rad/s of rate, but as phases they differ by T·0.3 — two
+     * and a half whole turns, applied in one frame, a minute in. Integrating
+     * makes the rate change and leaves the angle where it was, which is what a
+     * ribbon that is already turning does.
+     *
+     * Frozen renders take the closed form instead. They have no history to
+     * integrate, and `_energySm` is pinned to its target so every rate is
+     * constant, making ∫₀ᵗ r dt = r·t exactly. A given `pose` is the same
+     * drawing it always was — the icon masters do not move.
+     *
+     * Must be called exactly once per channel per frame; twice double-counts.
+     */
+    _phase(name, rate, T, dt) {
+      if (this._frozen) return T * rate;
+      this._ph[name] += rate * dt;
+      return this._ph[name];
+    }
     get _size() { return parseFloat(this.getAttribute('size')) || 200; }
     _num(n, d) { const v = parseFloat(this.getAttribute(n)); return isFinite(v) ? v : d; }
 
@@ -318,45 +366,81 @@
       else this._energySm += (target - this._energySm) * 0.06;
       const e = this._energySm;
       const T = time * speed;
+      // Frame step, in the same scaled seconds as T. Clamped because the loop
+      // stops while the element is off-screen or the tab is hidden, and coming
+      // back to a ten-second dt would spin the ribbon on the first frame.
+      const dt = clamp(T - this._lastT, 0, 0.05);
+      this._lastT = T;
       const hue = this._num('hue', 0);
-      const base = {
+
+      /*
+       * Rates, not phases.
+       *
+       * Every quantity that used to be written `T * k` is a rate here and goes
+       * through `_phase` exactly once, which integrates it. Bounded wobbles
+       * (the `Math.sin` terms) stay closed-form: they cannot accumulate error
+       * and they are the same drawing either way.
+       */
+      let twistRate, wanderRate, zphaseRate, travelRate;
+      const shape = {};
+      if (state === 'playing') {
+        // Loudness leans on the twist rate; it does not take it over. The
+        // level arrives at 1 Hz and is then eased over about a second, so this
+        // tracks the loudness contour of the track, NOT individual beats —
+        // there is no beat-rate signal on this path to track.
+        twistRate = 0.62 + ENERGY_TWIST * e;
+        wanderRate = 0.55; zphaseRate = 0.44; travelRate = 0;
+        Object.assign(shape, {
+          amp: 0.31 + 0.10 * e, depth: 0.34 + 0.16 * e,
+          width: 0.062 * this._num('ribbon', 1) * (0.94 + 0.14 * e),
+          chirp: 0.36 + 0.10 * e,
+          hueShift: hue + Math.sin(T * 0.26) * 14,
+        });
+      } else if (state === 'blending') {
+        twistRate = 1.15; wanderRate = 0.9; zphaseRate = 0.7; travelRate = 0.45;
+        Object.assign(shape, {
+          amp: 0.35 + Math.sin(T * 1.6) * 0.04, f0: 0.62 + Math.sin(T * 0.8) * 0.09,
+          depth: 0.44, hueShift: hue + T * 24,
+        });
+      } else if (state === 'thinking') {
+        twistRate = 0.9; wanderRate = 0.7; zphaseRate = 0.6; travelRate = 0.95;
+        Object.assign(shape, {
+          amp: 0.33, chirp: 0.38 + Math.sin(T * 0.7) * 0.12,
+          depth: 0.40, hueShift: hue + T * 36,
+        });
+      } else {                                            // idle — a slow drift
+        twistRate = 0.30; wanderRate = 0.30; zphaseRate = 0.22; travelRate = 0;
+        Object.assign(shape, {
+          amp: 0.34 + Math.sin(T * 0.31) * 0.020,
+          hueShift: hue + Math.sin(T * 0.16) * 10,
+        });
+      }
+
+      // The bounded part of the travel phase, added on top of the integrated
+      // part. `playing` and `idle` sway about their current angle rather than
+      // ramping away from it.
+      const travelOsc =
+        state === 'playing' ? Math.sin(T * 0.6) * 0.10
+        : state === 'idle' ? Math.sin(T * 0.19) * 0.07
+        : 0;
+      const twistOsc = state === 'idle' ? Math.sin(T * 0.23) * 0.10 : 0;
+
+      return {
         f0: 0.62, chirp: 0.38, damping: 0.10, tilt: -3, amp: 0.34,
         width: 0.062 * this._num('ribbon', 1),
         xscale: this._num('xscale', 0.82),
-        phase: 0, wander: T * 0.30, zphase: T * 0.22, depth: 0.36,
-        turns: this._num('turns', 1.5), twist: T * 0.34,
+        depth: 0.36,
+        turns: this._num('turns', 1.5),
         curl: this._num('curl', 0.85), disp: this._num('dispersion', 1),
-        hueShift: hue, flow: T * 0.7, light: (this.getAttribute('theme') || 'light') === 'light',
+        hueShift: hue,
+        flow: T * 0.7,
+        light: (this.getAttribute('theme') || 'light') === 'light',
+        ...shape,
+        phase: this._phase('travel', travelRate, T, dt) + travelOsc,
+        twist: this._phase('twist', twistRate, T, dt) + twistOsc,
+        wander: this._phase('wander', wanderRate, T, dt),
+        zphase: this._phase('zphase', zphaseRate, T, dt),
       };
-      if (state === 'playing') {
-        return Object.assign(base, {
-          amp: 0.31 + 0.10 * e, depth: 0.34 + 0.16 * e,
-          width: base.width * (0.94 + 0.14 * e),
-          chirp: 0.36 + 0.10 * e, phase: Math.sin(T * 0.6) * 0.10,
-          twist: T * (0.62 + 0.55 * e), hueShift: hue + Math.sin(T * 0.26) * 14,
-          wander: T * 0.55, zphase: T * 0.44,
-        });
-      }
-      if (state === 'blending') {
-        return Object.assign(base, {
-          amp: 0.35 + Math.sin(T * 1.6) * 0.04, f0: 0.62 + Math.sin(T * 0.8) * 0.09,
-          depth: 0.44, twist: T * 1.15, phase: T * 0.45,
-          hueShift: hue + T * 24, wander: T * 0.9, zphase: T * 0.7,
-        });
-      }
-      if (state === 'thinking') {
-        return Object.assign(base, {
-          amp: 0.33, chirp: 0.38 + Math.sin(T * 0.7) * 0.12,
-          depth: 0.40, twist: T * 0.9, phase: T * 0.95,
-          hueShift: hue + T * 36, wander: T * 0.7, zphase: T * 0.6,
-        });
-      }
-      return Object.assign(base, {                        // idle — a slow drift
-        amp: 0.34 + Math.sin(T * 0.31) * 0.020,
-        phase: Math.sin(T * 0.19) * 0.07,
-        twist: T * 0.30 + Math.sin(T * 0.23) * 0.10,
-        hueShift: hue + Math.sin(T * 0.16) * 10,
-      });
     }
 
     _draw(time) {

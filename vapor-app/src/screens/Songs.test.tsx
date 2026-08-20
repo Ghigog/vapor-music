@@ -24,6 +24,51 @@ function rows() {
 }
 
 describe("Songs — showing the library", () => {
+  it("draws each track's own artwork, one request per track", async () => {
+    const backend = useBackend({ covers: true });
+    render(<Songs />);
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+
+    // The rows carry pictures, not just the placeholder tile.
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll(".songrow__art-image").length,
+      ).toBeGreaterThan(0),
+    );
+
+    // Asked for by href, one at a time. The library view must never carry
+    // covers itself: at ~2 MB each a 563-row response is hundreds of
+    // megabytes through IPC, which is what killed the phone.
+    const asked = backend.calls.filter((c) => c.cmd === "track_thumb");
+    expect(asked.length).toBeGreaterThan(0);
+    expect(new Set(asked.map((c) => c.args.href)).size).toBe(asked.length);
+    expect(backend.calls.some((c) => c.cmd === "library_view")).toBe(true);
+
+    /*
+     * And the *small* one (PERF-004).
+     *
+     * A row draws at 48 px. Handing it the stored original — median 281 KB on
+     * the library this was measured against — meant a screenful of ~26 rows
+     * cost about 7 MB through IPC, which is the second-long pause on opening
+     * this tab. Lazy loading was already right; the size was not.
+     */
+    expect(backend.calls.some((c) => c.cmd === "track_cover")).toBe(false);
+  });
+
+  it("shows the placeholder for a track with no artwork", async () => {
+    useBackend({ covers: false });
+    render(<Songs />);
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+
+    // Settled: the rows are up and their covers have come back empty.
+    await waitFor(() =>
+      expect(document.querySelectorAll(".songrow__art").length).toBeGreaterThan(
+        0,
+      ),
+    );
+    expect(document.querySelectorAll(".songrow__art-image").length).toBe(0);
+  });
+
   it("lists what the backend returned", async () => {
     useBackend();
     render(<Songs />);

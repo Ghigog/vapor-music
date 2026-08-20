@@ -11,7 +11,7 @@
  * to play, and a disabled transport on a first run is clutter posing as
  * consistency.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
@@ -19,6 +19,7 @@ import { Library, type Opened } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
 import { TabMenu, type TabMenuItem } from "./components/TabMenu";
+import { GroupRail, groupsChanged } from "./components/GroupRail";
 import { DragLayer } from "./components/DragLayer";
 import { Vibe } from "./screens/Vibe";
 import { NowPlaying } from "./screens/NowPlaying";
@@ -42,6 +43,7 @@ import "./screens/queue.css";
 import "./screens/vibe.css";
 import "./screens/settings.css";
 import "./screens/nowplaying.css";
+import "./components/lyrics.css";
 import "./screens/onboarding.css";
 import "./screens/liner.css";
 import "./screens/yourdata.css";
@@ -167,6 +169,18 @@ export function App() {
   /** Read from settings, not invented here. The backend is the half that
    *  decides what plays next, so it has to be the one that knows. */
   const [djMode, setDjMode] = useState(true);
+  /**
+   * Switch the DJ, optimistically.
+   *
+   * The press should feel immediate and the backend is what acts on it, so
+   * the local state moves first and reverts if the write fails. Defined once
+   * because the transport is now the only thing that calls it, and putting it
+   * inline there would put app state in a component that has none.
+   */
+  const setDjModePersisted = useCallback((on: boolean) => {
+    setDjMode(on);
+    void core.setDjMode(on).catch(() => setDjMode(!on));
+  }, []);
 
   /**
    * Where the app is, in the webview's own history.
@@ -416,6 +430,9 @@ export function App() {
           {/* Always on screen, because it is the drop target for tracks
               dragged out of the Songs table on another screen (TD-31). */}
           <PlaylistRail activeId={playlist} onOpen={openPlaylist} />
+          {/* Smart groups lived only in the mobile tab bar, which left them
+              with no way in at all on a desktop window. */}
+          <GroupRail activeId={group} onOpen={openGroup} />
         </nav>
 
         <main className="shell__content">
@@ -454,18 +471,7 @@ export function App() {
                 />
               )}
               {screen === "playing" && <NowPlaying />}
-              {screen === "vibe" && (
-                <Vibe
-                  djMode={djMode}
-                  onDjModeChange={(on) => {
-                    // Optimistic, then persisted: the switch should feel
-                    // immediate, and the backend is what acts on it.
-                    setDjMode(on);
-                    void core.setDjMode(on).catch(() => setDjMode(!on));
-                  }}
-                  onOpen={openLiner}
-                />
-              )}
+              {screen === "vibe" && <Vibe djMode={djMode} onOpen={openLiner} />}
               {screen === "data" && <YourData />}
               {screen === "settings" && <Settings />}
             </>
@@ -475,7 +481,11 @@ export function App() {
 
         {/* Outside the content column: the shell grid spans it across both, and
             playback outlives whichever screen started it. */}
-        <Transport onOpenNowPlaying={() => go("playing")} />
+        <Transport
+          onOpenNowPlaying={() => go("playing")}
+          djMode={djMode}
+          onDjModeChange={setDjModePersisted}
+        />
 
         {/*
           Settings, from anywhere.
@@ -593,7 +603,12 @@ export function App() {
             onCreate={() => {
               void core
                 .createGroup("New group")
-                .then((g) => openGroup(g.id))
+                .then((g) => {
+                  // The mobile tab bar and the desktop rail show the same
+                  // groups; one making a group has to tell the other.
+                  groupsChanged();
+                  openGroup(g.id);
+                })
                 .catch(() => setMenu(null));
             }}
             onPick={openGroup}

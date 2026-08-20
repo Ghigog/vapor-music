@@ -114,7 +114,18 @@ impl PlaybackStream {
         // the track's length from the first frame rather than growing one as it
         // plays. `None` is possible and handled: a stream whose length is not
         // declared simply is not finished until the decoder says so.
-        let total = opened.n_frames.map(|n| resampler.output_len_for(n));
+        //
+        // A declared zero is that same "not declared", written down. A
+        // fragmented MP4 carries an `mdhd` duration of 0 and an empty sample
+        // table, because its samples live in the `moof` boxes that follow — so
+        // `n_frames` is `Some(0)` for a track that is minutes long. Taken at
+        // face value it is worse than no answer at all: `Some` says the length
+        // is known, so nothing ever looks again, and the deck reports a
+        // duration of zero for the whole song.
+        let total = opened
+            .n_frames
+            .filter(|&n| n > 0)
+            .map(|n| resampler.output_len_for(n));
 
         Ok(PlaybackStream {
             reopen,
@@ -365,6 +376,30 @@ mod tests {
         assert!(
             streamed == whole,
             "rate-converted streaming differs from the loaded path"
+        );
+    }
+
+    /// A declared zero is not a length.
+    ///
+    /// The case in the library is a fragmented MP4, whose `mdhd` says zero and
+    /// whose sample table is empty because the samples are in the fragments —
+    /// five and a half minutes of music that announces itself as nothing. A
+    /// zero-length WAV is the same claim in a container a test can write.
+    ///
+    /// It has to come back as `None` rather than `Some(0)`, because the two are
+    /// read differently everywhere downstream: `None` means "ask again once
+    /// something has been decoded", and `Some` means "stop asking".
+    #[test]
+    fn a_declared_length_of_zero_is_no_declaration() {
+        let path = wav_file(44_100, 0.0);
+        let declared = PlaybackStream::open(&path, 44_100)
+            .expect("open")
+            .total_frames();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            declared, None,
+            "a container declaring no frames was taken as a track of length zero"
         );
     }
 

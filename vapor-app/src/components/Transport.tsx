@@ -26,9 +26,22 @@ const POLL_MS = 250;
 
 export function Transport({
   onOpenNowPlaying,
+  djMode = false,
+  onDjModeChange,
 }: {
   /** Opens the full Now Playing screen. Omitted, the title is plain text. */
   onOpenNowPlaying?: (() => void) | undefined;
+  /**
+   * Whether the DJ is conducting.
+   *
+   * This is where it is switched, because it is a playback control and not a
+   * screen setting: it changes what the player does with the queue, so it
+   * belongs beside the buttons that do the same. It was a checkbox on the
+   * Vibe screen, which meant the one thing that turns the app's headline
+   * feature on lived somewhere you had to already be.
+   */
+  djMode?: boolean;
+  onDjModeChange?: ((on: boolean) => void) | undefined;
 } = {}) {
   const [state, setState] = useState<core.PlaybackState | null>(null);
   /** Set while a seek is being dragged, so incoming polls do not yank the
@@ -127,6 +140,24 @@ export function Transport({
           by one person, and they are masks rather than `<img>` so each one takes
           the colour of the control it sits in. */}
       <div className="transport__controls">
+        {/* The mark, as a switch. A toggle rather than a checkbox: it has two
+            states and the icon already says which one, so a tick beside it
+            would be a second control for the same fact. `aria-pressed` is
+            what carries that to a screen reader. */}
+        {onDjModeChange && (
+          <button
+            className={
+              "transport__button transport__dj" +
+              (djMode ? " transport__dj--on" : "")
+            }
+            onClick={() => onDjModeChange(!djMode)}
+            aria-pressed={djMode}
+            aria-label={djMode ? "Turn Vibe DJ off" : "Turn Vibe DJ on"}
+            title={djMode ? "Vibe DJ is conducting" : "Vibe DJ is off"}
+          >
+            <span className="icon icon--vibe" aria-hidden="true" />
+          </button>
+        )}
         <button
           className="transport__button"
           onClick={() => void act(core.previousTrack)}

@@ -1,5 +1,21 @@
 /*
- * The help sheet. Values come from tokens.css; only layout lives here.
+ * The help sheet.
+ *
+ * This is the one place in the app that asks someone to *read* — several
+ * hundred words, not a label — so it is set as a document rather than as UI
+ * chrome: full-contrast ink, a body size well above the app's 14px default,
+ * a measure that stops lines running the full width of the panel, and an
+ * opaque surface.
+ *
+ * ## Why it declares its own typography instead of inheriting
+ *
+ * It was mounted inside the Vibe screen's `<h1>`, and `letter-spacing` set in
+ * `em` resolves against the font size *where it is declared* and then inherits
+ * as an absolute length. The title's `-0.03em` at 46px reached this sheet as
+ * `-1.38px` and set fourteen-pixel body copy at display tracking — letters
+ * touching, for a wall of text. The mount point is fixed, but a sheet that can
+ * be opened from anywhere should not be legible only from some places, so the
+ * three inherited properties that can do this are pinned here.
  */
 
 .help__backdrop {
@@ -10,9 +26,14 @@
   align-items: center;
   justify-content: center;
   padding: 32px 20px;
-  background: rgba(20, 22, 26, 0.32);
+  background: rgba(20, 22, 26, 0.45);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
+  /* See above. Not decoration — this is what stops an ancestor's display
+     tracking reaching the body copy. */
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  letter-spacing: normal;
 }
 
 .help__panel {
@@ -24,6 +45,18 @@
   flex-direction: column;
   border-radius: var(--r-lg);
   overflow: hidden;
+  /*
+   * Opaque, where every other panel in the app is glass.
+   *
+   * At `--glass-a` the album art behind showed through the paragraphs, so the
+   * text sat on whatever the sleeves happened to be — light grey on a bright
+   * cover in places. Glass is right for a control surface you look past and
+   * wrong for one you read.
+   */
+  background: var(--page);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow-lg);
 }
 
 .help__head {
@@ -31,8 +64,10 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--glass-rim);
+  padding: 20px 28px;
+  /* An ink rule, not a glass rim: the panel is opaque now, and a white-alpha
+     border on an opaque ground is nearly invisible. */
+  border-bottom: 1px solid rgba(var(--ink-3-rgb), 0.28);
 }
 
 .help__title {
@@ -41,26 +76,28 @@
   min-width: 0;
   font-family: var(--font-display);
   font-weight: var(--fw-light);
-  font-size: 24px;
+  font-size: 26px;
   letter-spacing: -0.02em;
   color: var(--ink);
 }
 
 .help__close {
   flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 16px;
-  border: 1px solid var(--glass-rim);
-  background: rgba(255, 255, 255, 0.7);
+  /* 40px, not 32: this is the only way out of a full-screen sheet, and the
+     hit target should not be the smallest thing on it. */
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  border: 1px solid rgba(var(--ink-3-rgb), 0.35);
+  background: transparent;
   color: var(--ink-2);
-  font-size: 18px;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
 }
 
 .help__close:hover {
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(var(--ink-3-rgb), 0.18);
   color: var(--ink);
 }
 
@@ -73,66 +110,105 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 22px 24px;
-  font-size: var(--fs-body);
-  line-height: 1.6;
-  color: var(--ink-2);
+  padding: 20px 28px 28px;
+  /*
+   * 17px, against the app's 14px.
+   *
+   * 14 is right for a table cell and a control label, where the words are
+   * scanned. This is prose, and it was set at the density of chrome: small,
+   * grey, and tight. Prose gets read.
+   */
+  font-size: 17px;
+  line-height: 1.65;
+  /* Full-contrast ink. It was `--ink-2` — a grey meant for secondary labels,
+     used here for every word in the document. */
+  color: var(--ink);
   text-wrap: pretty;
+}
+
+/* A measure, not the panel's full width.
+ *
+ * At 720px wide, 17px lines run past 90 characters, and losing your place on
+ * the return sweep is the thing that makes a long page tiring. This holds the
+ * lines to a readable length while the headings and rules keep the full
+ * width, so the column still reads as a document rather than as a narrow
+ * box floating in a wide one. */
+.help__body p,
+.help__list {
+  max-width: 68ch;
 }
 
 .help__body h2,
 .help__body h3,
 .help__body h4 {
-  margin: 22px 0 8px;
+  /* Space above, not below: a heading belongs to what comes after it, and
+     equal margins on both sides make it float between two sections. */
+  margin: 32px 0 10px;
   font-family: var(--font-ui);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-semibold);
   color: var(--ink);
   letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+/* Nothing should push the first line of the document down. */
+.help__body > :first-child {
+  margin-top: 0;
 }
 
 .help__body h2 {
-  font-size: 19px;
+  font-size: 23px;
 }
 
 .help__body h3 {
-  font-size: 16px;
+  font-size: 19px;
 }
 
 .help__body h4 {
-  font-size: var(--fs-body);
+  font-size: 17px;
 }
 
 .help__body p {
-  margin: 0 0 10px;
+  margin: 0 0 14px;
 }
 
 .help__list {
-  margin: 0 0 12px;
-  padding-left: 20px;
+  margin: 0 0 18px;
+  padding-left: 24px;
 }
 
 .help__list li {
-  margin-bottom: 6px;
+  margin-bottom: 10px;
+  /* The marker was the same grey as the text and vanished into it. */
+  padding-left: 4px;
+}
+
+.help__list li::marker {
+  color: var(--accent);
 }
 
 .help__body strong {
   color: var(--ink);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-semibold);
 }
 
 .help__code {
   font-family: var(--font-mono);
-  font-size: 0.88em;
-  padding: 1px 5px;
+  /* 0.88em of a monospace face beside 17px text reads a full step smaller than
+     it is — mono x-heights run short. */
+  font-size: 0.94em;
+  padding: 2px 6px;
   border-radius: 5px;
-  background: rgba(20, 22, 26, 0.06);
+  /* Ink-based, so it is a visible tint in dark mode too rather than a
+     near-black patch on a near-black ground. */
+  background: rgba(var(--ink-3-rgb), 0.22);
   color: var(--ink);
   /* Paths and identifiers are long; let them wrap rather than widen the sheet. */
   overflow-wrap: anywhere;
 }
 
 .help__rule {
-  margin: 18px 0;
+  margin: 28px 0;
   border: 0;
-  border-top: 1px solid var(--glass-rim);
+  border-top: 1px solid rgba(var(--ink-3-rgb), 0.28);
 }

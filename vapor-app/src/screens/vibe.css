@@ -1,11 +1,19 @@
 /* Vibe DJ. Layout only. */
 
+/* A column, not a canvas.
+   The screen is three cards, a row of four curves and a queue, and stretched
+   across a wide window none of that gets better: the cards drift apart until
+   comparing them is a head-turn, and the curve buttons become metre-wide
+   letterboxes with a hairline in them. Held to a phone-ish column and centred,
+   the layout is the same at every window size and the desktop reads as the
+   design's mockup rather than as the mockup pulled apart. */
 .vibe {
   display: flex;
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  width: 100%;
+  max-width: 640px;
+  margin-inline: auto;
   padding-bottom: 16px;
 }
 
@@ -125,10 +133,16 @@
 }
 
 /* Colour and shape instead of a sentence.
-   Each swatch is the curve's own colour — warm for the ones that climb, cool
-   for the one that falls — with the actual `Curve::target_energy` drawn across
-   it. The prose said "Energy +0.4, tempo +15 BPM across the set", which is
-   accurate and is not what anyone is choosing between. */
+   Each curve is drawn as its own `Curve::target_energy` — the prose said
+   "Energy +0.4, tempo +15 BPM across the set", which is accurate and is not
+   what anyone is choosing between.
+
+   Only the chosen one is filled. Every card used to carry its own colour as a
+   tint, so the row read as four coloured swatches and the selected one was a
+   slightly stronger version of a colour nothing else was competing with — with
+   Build chosen and Wave's blue simply being a louder hue than Build's amber,
+   the eye picked Wave. The colour is in the line, which is the label; the fill
+   is the selection, and it now belongs to exactly one card. */
 .vibe__curve {
   --curve: var(--accent-rgb);
   display: flex;
@@ -136,9 +150,9 @@
   align-items: stretch;
   gap: 6px;
   padding: 10px;
-  border: 1px solid rgba(var(--curve), 0.3);
+  border: 1px solid rgba(var(--ink-3-rgb), 0.35);
   border-radius: var(--r-md);
-  background: rgba(var(--curve), 0.09);
+  background: transparent;
   cursor: pointer;
   font-family: inherit;
   transition:
@@ -148,7 +162,8 @@
 }
 
 .vibe__curve:hover:not(:disabled) {
-  background: rgba(var(--curve), 0.16);
+  background: rgba(var(--curve), 0.1);
+  border-color: rgba(var(--curve), 0.45);
 }
 
 .vibe__curve:disabled {
@@ -156,10 +171,15 @@
   cursor: default;
 }
 
-.vibe__curve--on {
+/* The chosen curve. A filled card against three empty ones, rather than a
+   slightly deeper tint against three lighter ones. */
+.vibe__curve--on,
+.vibe__curve--on:hover:not(:disabled) {
   border-color: rgb(var(--curve));
-  background: rgba(var(--curve), 0.22);
-  box-shadow: inset 0 0 0 1px rgb(var(--curve));
+  background: rgba(var(--curve), 0.28);
+  box-shadow:
+    inset 0 0 0 2px rgb(var(--curve)),
+    0 2px 8px rgba(var(--curve), 0.3);
 }
 
 .vibe__curve-shape {
@@ -169,15 +189,23 @@
   overflow: visible;
 }
 
+/* Unchosen lines are drawn back so the filled card is the loudest thing in
+   the row, but not so far back that the shape stops being readable — the shape
+   is the only name these buttons have. */
 .vibe__curve-shape path {
   fill: none;
-  stroke: rgb(var(--curve));
+  stroke: rgba(var(--curve), 0.55);
   stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
   /* Drawn in a 100x32 box stretched to the swatch, so the stroke has to be
      told not to stretch with it. */
   vector-effect: non-scaling-stroke;
+}
+
+.vibe__curve--on .vibe__curve-shape path {
+  stroke: rgb(var(--curve));
+  stroke-width: 3;
 }
 
 .vibe__curve-label {
@@ -228,26 +256,41 @@
 /* ---- Help ------------------------------------------------------------ */
 
 /*
- * Pushed to the right of the header, so the title keeps the left edge it
- * shares with every other screen.
+ * A pip against the title, not a button in the corner.
+ *
+ * It was a pill reading "Help", pushed to the far right of the header, where
+ * it sat level with the DJ switch and read as an equal action. What it does is
+ * annotate the heading — "what is this screen" — so it is set against the
+ * heading, at the size punctuation would be.
  */
 .vibe__help {
-  margin-left: auto;
-  align-self: flex-start;
-  height: 34px;
-  padding: 0 16px;
-  border-radius: 17px;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 10px;
+  padding: 0;
+  border-radius: 50%;
+  vertical-align: middle;
+  /* Lifted off the display face's baseline, which sits low against a circle. */
+  transform: translateY(-0.18em);
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
+  line-height: 1;
   color: var(--ink-2);
-  background: rgba(255, 255, 255, 0.7);
+  /* Theme tokens, not a hardcoded white: at 70% white this was a near-solid
+     disc in dark mode with grey ink on it, so the "?" was invisible. */
+  background: var(--glass-fill);
   border: 1px solid var(--glass-rim);
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 
 .vibe__help:hover {
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(var(--ink-3-rgb), 0.22);
   color: var(--ink);
 }
 
@@ -256,61 +299,95 @@
   outline-offset: 2px;
 }
 
-/* With nothing playing the screen is only the empty state, so the button
-   needs a row of its own to sit in. */
+/* With nothing playing the screen is only the empty state, so the pip needs a
+   row of its own to sit in. */
 .vibe__help-row {
   display: flex;
   justify-content: flex-end;
 }
 
-/* ---- DJ toggle ------------------------------------------------------- */
-
-.vibe__head-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  align-self: flex-start;
-}
-
-/* The head's help button is inside the actions row now, so it no longer needs
-   to push itself over. */
-.vibe__head-actions .vibe__help {
+.vibe__help-row .vibe__help {
   margin-left: 0;
+  transform: none;
 }
 
-.vibe__dj {
+/* The title block takes the rest of the row: nothing sits to its right any
+   more, because the DJ switch moved to the transport. */
+.vibe__heading {
+  min-width: 0;
+}
+
+/* ---- Switched off ----------------------------------------------------
+ *
+ * The DJ's controls stay on screen with the DJ off, dimmed and covered. They
+ * were removed outright, which left the screen named after a feature with no
+ * sign the feature exists — and no clue where its switch had gone.
+ */
+
+.vibe__dj-panel {
+  position: relative;
   display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.vibe__dj-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.vibe__dj-panel--off .vibe__dj-controls {
+  /* Greyed, not hidden: the shapes still say what is on offer. Saturation
+     rather than opacity alone, so the exit cards' artwork goes quiet too —
+     three full-colour sleeves at 40% still read as the liveliest thing on the
+     screen. */
+  filter: grayscale(1) opacity(0.35);
+  /* `inert` already blocks the pointer; this covers browsers that have the
+     attribute but not the cursor behaviour. */
+  pointer-events: none;
+  user-select: none;
+}
+
+.vibe__dj-off {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 7px;
-  height: 34px;
-  padding: 0 14px;
-  border-radius: 17px;
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--fs-label);
-  letter-spacing: var(--ls-label);
-  text-transform: uppercase;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  /* A wash rather than a panel. The message has to be legible over three
+     album sleeves, and a solid card here would be a fourth card competing
+     with the ones it is explaining — this lifts the contrast without drawing
+     an edge anywhere. */
+  background: radial-gradient(
+    ellipse at center,
+    rgba(var(--page-rgb), 0.85) 0%,
+    rgba(var(--page-rgb), 0.66) 45%,
+    rgba(var(--page-rgb), 0) 75%
+  );
+}
+
+/* The same mark as the switch that fixes this, at a size that reads as a
+   symbol rather than as a bullet. `.icon` sizes in `em` and wins on source
+   order, so this needs the extra class to hold. */
+.vibe__dj-off .vibe__dj-off-mark {
+  width: 40px;
+  height: 40px;
   color: var(--ink-2);
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid var(--glass-rim);
 }
 
-.vibe__dj input {
-  accent-color: var(--accent);
-  cursor: pointer;
+.vibe__dj-off-text {
   margin: 0;
-}
-
-.vibe__dj:has(input:checked) {
-  color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.4);
-  background: rgba(var(--accent-rgb), 0.08);
-}
-
-.vibe__dj:focus-within {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  max-width: 22ch;
+  font-family: var(--font-ui);
+  font-size: var(--fs-lg, var(--fs-md));
+  font-weight: var(--fw-medium);
+  line-height: 1.35;
+  color: var(--ink);
 }
 
 /* ---- The three exits (Stay / Follow / Switch) -------------------------

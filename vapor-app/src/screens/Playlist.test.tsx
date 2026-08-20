@@ -126,6 +126,10 @@ describe("Playlist — acting on one", () => {
       "/dav/Koofr/Music/xtal.m4a",
     );
     expect((backend.lastArgs("play_tracks")?.hrefs as string[]).length).toBe(3);
+    // And conducted within the playlist rather than out of it: the DJ plans
+    // past the end of the queue, so without a scope a playlist ran out after
+    // its own tracks and the set wandered into the library.
+    expect(backend.lastArgs("play_tracks")?.scope).toBe(playlist().name);
   });
 
   it("renames on a double-click", async () => {

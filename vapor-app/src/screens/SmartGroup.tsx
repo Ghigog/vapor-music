@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import { groupsChanged } from "../components/GroupRail";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { DownloadButton } from "../components/DownloadButton";
 
@@ -54,6 +55,9 @@ export function SmartGroup({
     try {
       await core.renameGroup(id, next);
       await refresh();
+      // The sidebar lists these by name, so a rename it never hears about
+      // leaves the old one on screen until something else reloads it.
+      groupsChanged();
     } catch (e: unknown) {
       setError(messageOf(e));
     }
@@ -63,6 +67,8 @@ export function SmartGroup({
     try {
       await core.removeFromGroup(id, entityType, value);
       await refresh();
+      // The rail shows how many entities a group holds.
+      groupsChanged();
     } catch (e: unknown) {
       setError(messageOf(e));
     }
@@ -153,7 +159,14 @@ export function SmartGroup({
           <li key={t.href}>
             <button
               className="group__track"
-              onClick={() => void core.playTracks(tracks.map((r) => r.href), t.href)}
+              onClick={() =>
+                // Scoped to the group, so the DJ conducts inside it.
+                void core.playTracks(
+                  tracks.map((r) => r.href),
+                  t.href,
+                  group.name,
+                )
+              }
               onDoubleClick={() => onOpen?.(t.href)}
             >
               <span className="group__track-title">{t.title}</span>

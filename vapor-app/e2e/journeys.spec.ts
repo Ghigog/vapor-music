@@ -286,8 +286,19 @@ test.describe("Screen layout", () => {
     await openSongs(page);
     await page.getByText("Windowlicker", { exact: true }).click();
 
+    /*
+     * Vibe is exempt, deliberately.
+     *
+     * It is three cards to compare, four curve buttons and a queue, and across
+     * a wide window the cards drift far enough apart that comparing them is a
+     * head-turn and the buttons become metre-wide letterboxes. It is held to a
+     * 640px column and centred, so it does not share a left edge with anything
+     * — which is the point rather than a regression.
+     */
+    const flush = screens.filter((s) => s !== "Vibe DJ");
+
     const lefts: { name: string; x: number }[] = [];
-    for (const name of screens) {
+    for (const name of flush) {
       await goTo(page, name);
       const root = page.getByRole("main").locator("> *").first();
       await expect(root).toBeVisible();
@@ -413,13 +424,18 @@ test.describe("Navigation", () => {
     await page.getByText("Windowlicker", { exact: true }).click();
     await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
 
-    await page.getByRole("checkbox", { name: /dj/i }).uncheck();
+    // Switched from the transport, where the switch now lives — it is a
+    // playback control, so it sits with the playback controls.
+    await page.getByRole("button", { name: /turn vibe dj off/i }).click();
 
     // The tab renames itself, exactly as the design's nav does.
     await expect(page.getByRole("button", { name: "Shuffle", exact: true })).toBeVisible();
     await expect(page.getByText(/standard shuffle/i)).toBeVisible();
-    // The DJ's own controls are gone; the queue is not.
-    await expect(page.getByRole("button", { name: /conduct from here/i })).toHaveCount(0);
+    // The DJ's controls are covered rather than removed, and the cover says
+    // where the switch is. The queue below stays live either way.
+    await expect(
+      page.getByText(/please enable vibe dj in your player/i),
+    ).toBeVisible();
     await expect(page.locator(".queue__row-title", { hasText: "Xtal" })).toBeVisible();
   });
 });
@@ -459,12 +475,15 @@ test.describe("Going back", () => {
   test("walks back through several screens in order", async ({ page }) => {
     await boot(page);
 
-    await page.getByRole("button", { name: "Vibe DJ" }).click();
+    // `exact`, because the transport's DJ switch is labelled "Turn Vibe DJ
+    // on" and Playwright matches names by substring — without it this reaches
+    // for two buttons and takes neither.
+    await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText(/where your music lives/i)).toBeVisible();
 
     await page.goBack();
-    await expect(page.getByRole("button", { name: /^help$/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /how the dj chooses/i })).toBeVisible();
 
     await page.goBack();
     await expect(page.getByRole("heading", { name: /your library/i })).toBeVisible();

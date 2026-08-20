@@ -54,13 +54,34 @@ function inline(text: string, keyBase: string): ReactNode[] {
  * Only the constructs `ai_dj_workflow.md` actually uses. An unknown construct
  * renders as a paragraph rather than disappearing — help text that silently
  * drops a line is worse than help text with a stray hyphen in it.
+ *
+ * ## Runs of lines are one block, which is what markdown means
+ *
+ * This used to emit a `<p>` per source line. The document is hard-wrapped at
+ * about eighty columns, so every sentence that crossed a wrap was rendered as
+ * two paragraphs with a gap between them — "…and were" / "measured against a
+ * real 534-track library" — and every bullet with a continuation line was
+ * broken into a bullet plus a stray paragraph beneath the list, which is where
+ * the lone "in." on the Vibe help sheet came from.
+ *
+ * Consecutive non-blank lines are therefore joined, and a line indented under
+ * a bullet continues that bullet. A blank line is what ends a block, exactly
+ * as markdown says.
  */
 function render(markdown: string): ReactNode[] {
   const out: ReactNode[] = [];
   const lines = markdown.split("\n");
   let bullets: string[] = [];
+  let paragraph: string[] = [];
 
-  const flush = () => {
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    const text = paragraph.join(" ");
+    paragraph = [];
+    out.push(<p key={`p-${out.length}`}>{inline(text, `p-${out.length}`)}</p>);
+  };
+
+  const flushList = () => {
     if (bullets.length === 0) return;
     const items = bullets;
     bullets = [];
@@ -73,7 +94,12 @@ function render(markdown: string): ReactNode[] {
     );
   };
 
-  lines.forEach((raw, index) => {
+  const flush = () => {
+    flushParagraph();
+    flushList();
+  };
+
+  lines.forEach((raw) => {
     const line = raw.trim();
 
     if (line === "") {
@@ -82,22 +108,34 @@ function render(markdown: string): ReactNode[] {
     }
 
     if (line.startsWith("- ")) {
+      flushParagraph();
       bullets.push(line.slice(2));
       return;
     }
 
-    flush();
+    // A wrapped bullet: indented in the source, and belonging to the item
+    // above rather than starting anything of its own.
+    if (bullets.length > 0 && /^\s/.test(raw)) {
+      bullets[bullets.length - 1] += ` ${line}`;
+      return;
+    }
 
     if (line.startsWith("### ")) {
-      out.push(<h4 key={index}>{inline(line.slice(4), `h${index}`)}</h4>);
+      flush();
+      out.push(<h4 key={`h-${out.length}`}>{inline(line.slice(4), `h-${out.length}`)}</h4>);
     } else if (line.startsWith("## ")) {
-      out.push(<h3 key={index}>{inline(line.slice(3), `h${index}`)}</h3>);
+      flush();
+      out.push(<h3 key={`h-${out.length}`}>{inline(line.slice(3), `h-${out.length}`)}</h3>);
     } else if (line.startsWith("# ")) {
-      out.push(<h2 key={index}>{inline(line.slice(2), `h${index}`)}</h2>);
+      flush();
+      out.push(<h2 key={`h-${out.length}`}>{inline(line.slice(2), `h-${out.length}`)}</h2>);
     } else if (/^-{3,}$/.test(line)) {
-      out.push(<hr className="help__rule" key={index} />);
+      flush();
+      out.push(<hr className="help__rule" key={`hr-${out.length}`} />);
     } else {
-      out.push(<p key={index}>{inline(line, `p${index}`)}</p>);
+      // Ordinary prose. A list ends where unindented prose begins.
+      flushList();
+      paragraph.push(line);
     }
   });
 

@@ -24,6 +24,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
 import { startTrackDrag } from "../components/PlaylistRail";
+import { useThumb } from "../lib/artwork";
 import { TrackSheet } from "../components/TrackSheet";
 import { useLongPress } from "../lib/longPress";
 import { useDrag } from "../components/DragLayer";
@@ -91,6 +92,7 @@ export function Songs({
   onOpen,
   query: externalQuery,
   filter,
+  scope,
 }: {
   onOpen?: ((href: string) => void) | undefined;
   query?: string | undefined;
@@ -103,6 +105,14 @@ export function Songs({
    * means.
    */
   filter?: { album?: string; artist?: string } | undefined;
+  /**
+   * What playing from this table is conducting over — an album or artist name
+   * when the table is embedded in one, absent when it is the whole library.
+   *
+   * The DJ plans within it, so this is what keeps an opened record from
+   * turning into the library after one track.
+   */
+  scope?: string | undefined;
 }) {
   const embedded = externalQuery !== undefined;
   const [ownQuery, setOwnQuery] = useState("");
@@ -318,6 +328,7 @@ export function Songs({
     await core.playTracks(
       rows.map((r) => r.href),
       href,
+      scope,
     );
   }
 
@@ -697,6 +708,7 @@ function SongRow({
   onCommit: (raw: string) => void;
   onCancel: () => void;
 }) {
+  const cover = useThumb(row.href);
   const artist = row.artistSource === "unknown" ? "—" : row.artist;
   const album = row.albumSource === "unknown" ? "—" : row.album;
   /*
@@ -713,6 +725,9 @@ function SongRow({
   return (
     <>
       <div className="songrow__art" aria-hidden="true">
+        {cover && <img className="songrow__art-image" src={cover} alt="" />}
+        {/* Over the artwork as well as over the placeholder: it is the same
+            highlight the album cards carry. */}
         <div className="songrow__art-sheen" />
       </div>
       <div className="songrow__names">

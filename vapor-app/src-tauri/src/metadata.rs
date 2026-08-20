@@ -454,11 +454,15 @@ pub struct Lookup {
 
 impl Lookup {
     pub fn new() -> Result<Self, String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(TIMEOUT)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| e.to_string())?;
+        // Through `crate::http`: `Lookup::new` is reached from Tauri commands,
+        // and building a blocking client on a runtime worker panics.
+        let client = crate::http::build_blocking(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(TIMEOUT)
+                .user_agent(USER_AGENT)
+                .build()
+                .map_err(|e| e.to_string())
+        })?;
         Ok(Lookup { client })
     }
 
@@ -608,6 +612,26 @@ fn encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real path behind the crash, not a stand-in for it.
+    ///
+    /// `look_up_track` and `find_album_art` are Tauri commands, Tauri runs
+    /// commands on its async runtime's workers, and both call `Lookup::new`.
+    /// Building a `reqwest::blocking::Client` there took the process down —
+    /// so opening Liner Notes could kill the app, and at shutdown the corpse
+    /// survived `tauri dev`'s attempt to replace it.
+    #[test]
+    fn a_lookup_can_be_built_from_a_runtime_thread() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("a runtime");
+
+        rt.block_on(async {
+            Lookup::new().expect("a lookup, rather than a panicked worker");
+        });
+    }
 
     #[test]
     fn a_plain_lrc_line_lands_at_its_timestamp() {

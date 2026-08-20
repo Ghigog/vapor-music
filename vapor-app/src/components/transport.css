@@ -92,6 +92,35 @@
   cursor: default;
 }
 
+/* ---- The DJ switch ---------------------------------------------------
+ *
+ * A toggle, not a checkbox. It sits before the previous button because it acts
+ * on the whole set rather than on one track — the transport reads left to
+ * right as "what is playing / what is it doing / where in it are we".
+ *
+ * Its own state is carried by colour and a filled ground, the way the app
+ * marks every other pressed control. A tick beside it would be a second
+ * control saying the same thing.
+ */
+.transport__dj {
+  color: var(--ink-3, var(--ink-2));
+}
+
+.transport__dj .icon {
+  width: 1.35em;
+  height: 1.35em;
+}
+
+.transport__dj--on {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.transport__dj--on:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.2);
+  color: var(--accent);
+}
+
 .transport__button--primary {
   width: 40px;
   height: 40px;

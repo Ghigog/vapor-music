@@ -84,6 +84,9 @@ use crate::stretch::{to_f32, Rendered};
 /// silent no-op wearing the costume of a correction.
 const MAX_BLOCK: usize = 4096;
 
+/// Samples spent crossfading out of the stretcher. See [`Signalsmith::hand_over`].
+const FADE: usize = 256;
+
 /// Signalsmith's own recommendation for music, at 44.1 kHz.
 const SAMPLE_RATE: u32 = 44_100;
 
@@ -144,6 +147,12 @@ impl Signalsmith {
     /// paying for an FFT or be coloured by one.
     pub fn process(&mut self, src: &SourceView<'_>, ratio: f64, out: &mut [[f32; 2]]) -> Rendered {
         if (ratio - 1.0).abs() < 1e-6 {
+            // Primed means the vocoder is mid-stream and its output is not
+            // sample-aligned with the source, so handing straight over to a raw
+            // copy is a step in the waveform. See `hand_over`.
+            if self.primed {
+                return self.hand_over(src, out);
+            }
             return self.passthrough(src, out);
         }
 
@@ -272,6 +281,77 @@ impl Signalsmith {
             self.input[i * 2 + 1] = to_f32(frame[1]);
         }
         true
+    }
+
+    /// Leave the stretcher for the pass-through, over a short crossfade.
+    ///
+    /// ## The click this removes
+    ///
+    /// `TEMPO_GLIDE_SECS` walks the playing deck's ratio back to 1.0 over six
+    /// seconds after every beat-matched mix. The instant it arrives, `process`
+    /// used to switch to copying raw source samples — and a phase vocoder's
+    /// output is a reconstruction, not a copy, so it does not line up with the
+    /// source sample for sample. Measured with a 220 Hz tone
+    /// (`tests/glide_splice.rs`): a step of 0.304 against the 0.0157 the tone
+    /// itself moves between neighbouring samples, **19x**, at full volume, six
+    /// seconds after every mix.
+    ///
+    /// ## Why a crossfade rather than staying stretched
+    ///
+    /// The alternative is to keep running the vocoder at unity for the rest of
+    /// the track. That has no seam, but it pays an FFT per block for ever and
+    /// keeps a reconstruction where a copy would do — the pass-through exists
+    /// because a deck that is not stretching should be bit-exact.
+    ///
+    /// [`FADE`] samples is under six milliseconds: long enough that a step
+    /// becomes a ramp, short enough that nothing is audibly faded.
+    fn hand_over(&mut self, src: &SourceView<'_>, out: &mut [[f32; 2]]) -> Rendered {
+        let n = out.len().min(FADE);
+
+        // What the vocoder would have said next, at unity.
+        let mut stretched = [[0.0f32; 2]; FADE];
+        if !self.block(src, n, 1.0, Some(&mut stretched[..n])) {
+            // The source cannot serve the fade yet. Stay as we are and try
+            // again next block rather than splicing without one.
+            return Rendered {
+                frames: 0,
+                ended: src.is_complete(),
+            };
+        }
+
+        // And what the source itself holds there.
+        let base = self.read_pos.floor().max(0.0) as u64;
+        for i in 0..n {
+            let Some(raw) = src.get(base + i as u64) else {
+                return Rendered {
+                    frames: 0,
+                    ended: src.is_complete(),
+                };
+            };
+            let w = i as f32 / n as f32;
+            out[i] = [
+                stretched[i][0] * (1.0 - w) + to_f32(raw[0]) * w,
+                stretched[i][1] * (1.0 - w) + to_f32(raw[1]) * w,
+            ];
+        }
+
+        self.read_pos += n as f64;
+        self.feed_pos = self.read_pos;
+        self.inner.reset();
+        self.primed = false;
+
+        // Whatever is left of the block is already the plain copy.
+        if n < out.len() {
+            let rest = self.passthrough(src, &mut out[n..]);
+            return Rendered {
+                frames: n + rest.frames,
+                ended: rest.ended,
+            };
+        }
+        Rendered {
+            frames: n,
+            ended: false,
+        }
     }
 
     /// Unity ratio: copy, and cost nothing.

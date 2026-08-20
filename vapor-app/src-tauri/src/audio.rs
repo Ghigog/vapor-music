@@ -60,6 +60,13 @@ use vapor_engine::{Mixer, TrackSource, TransitionType};
 /// growing a buffer on the audio thread.
 const MAX_BLOCK: usize = 4096;
 
+/// A change in limiter reduction bigger than this counts as a step.
+///
+/// 0.5 dB is about 6% of amplitude arriving in one sample. Below that the
+/// release's per-block creep dominates and counting it would report a number
+/// with no defect behind it.
+const LIMITER_STEP_DB: f32 = 0.5;
+
 /// How many commands may be in flight.
 ///
 /// Generous — commands come from human actions, not a loop. The bound exists so
@@ -195,6 +202,24 @@ pub struct Link {
     /// honest way to hold that trade is to count how often it does not rather
     /// than to assume it always does. Nonzero means audible dropouts.
     starved_blocks: AtomicU64,
+    /// Blocks where the master limiter's gain jumped between one block and the
+    /// next (LIM-001).
+    ///
+    /// The limiter applies one gain to a whole block and attacks instantly, so
+    /// a change between blocks is a step discontinuity in the waveform. One is
+    /// a click; a run of them at the block rate is a buzz. Counting them is how
+    /// "a weird scratch during that mix" stops being a thing only the person
+    /// listening can see.
+    limiter_steps: AtomicU64,
+    /// Deepest reduction the limiter has reached since anyone last looked, in
+    /// dB (negative).
+    ///
+    /// Reset by the reader, not by this side. It used to be a run-wide minimum
+    /// that only ever ratcheted, which reads in a log line as though it were
+    /// that window's depth: a flat value looked like a sustained deep
+    /// reduction and a rising one looked like a single window deepening. It
+    /// cost real confusion while diagnosing LIM-001.
+    limiter_deepest_db: AtomicU32,
     sample_rate: u32,
 }
 
@@ -209,6 +234,8 @@ pub struct Snapshot {
     pub level: f32,
     pub commands_deferred: u64,
     pub starved_blocks: u64,
+    pub limiter_steps: u64,
+    pub limiter_deepest_db: f32,
 }
 
 impl Link {
@@ -235,6 +262,8 @@ impl Link {
             level: AtomicU32::new(0),
             commands_deferred: AtomicU64::new(0),
             starved_blocks: AtomicU64::new(0),
+            limiter_steps: AtomicU64::new(0),
+            limiter_deepest_db: AtomicU32::new(0f32.to_bits()),
             sample_rate,
         }
     }
@@ -364,6 +393,20 @@ impl Link {
             .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
+    /// The deepest limiter reduction since this was last called, in dB.
+    ///
+    /// Taking rather than reading is the point: the caller gets *its* window's
+    /// depth rather than the worst since the app started. Deliberately not part
+    /// of [`Self::snapshot`], which the transport polls four times a second —
+    /// a consuming read there would drain the value before the one place that
+    /// reports it ever saw it.
+    pub fn take_limiter_depth(&self) -> f32 {
+        f32::from_bits(
+            self.limiter_deepest_db
+                .swap(0f32.to_bits(), Ordering::Relaxed),
+        )
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             status: Status::from_u8(self.status.load(Ordering::Acquire)),
@@ -373,6 +416,10 @@ impl Link {
             level: f32::from_bits(self.level.load(Ordering::Relaxed)),
             commands_deferred: self.commands_deferred.load(Ordering::Relaxed),
             starved_blocks: self.starved_blocks.load(Ordering::Relaxed),
+            limiter_steps: self.limiter_steps.load(Ordering::Relaxed),
+            limiter_deepest_db: f32::from_bits(
+                self.limiter_deepest_db.load(Ordering::Relaxed),
+            ),
         }
     }
 
@@ -484,6 +531,8 @@ pub struct Engine {
     mixer: Mixer,
     /// Where the mixer renders before interleaving. Sized once, here.
     scratch: Vec<[f32; 2]>,
+    /// Last block's limiter reduction, for spotting a jump between blocks.
+    last_limiter_db: f32,
     intent: Intent,
     /// Volume at the end of the previous block, so the next one can ramp from
     /// it rather than step.
@@ -497,6 +546,7 @@ impl Engine {
         Engine {
             mixer: Mixer::new(link.sample_rate as f32, MAX_BLOCK),
             scratch: vec![[0.0f32; 2]; MAX_BLOCK],
+            last_limiter_db: 0.0,
             intent: Intent::Idle,
             gain,
             channels,
@@ -554,10 +604,6 @@ impl Engine {
         // queue has to catch up, and only the supervisor can do that — the
         // audio thread does not know what a queue is.
         if was_transitioning && !self.mixer.is_transitioning() {
-            self.link.duration.store(
-                self.mixer.outgoing().duration_seconds().to_bits(),
-                Ordering::Relaxed,
-            );
             self.link.swapped.store(true, Ordering::Release);
         }
 
@@ -591,9 +637,50 @@ impl Engine {
         // reporting it as one would advance the queue mid-song because a disk
         // read was slow.
         let starved = self.mixer.outgoing().is_starved();
-        if starved {
+
+        /*
+         * Counted for *either* deck, not just the one playing.
+         *
+         * The metric existed to answer "is the audio path running dry", and it
+         * asked only the outgoing deck — so the case it most needed to catch
+         * was the one it could not see. During a mix the incoming deck is the
+         * one being time-stretched and the one whose decoder was most recently
+         * asked for a cold seek minutes into a track; if anything starves in a
+         * transition it is that one, and the counter stayed at zero through it.
+         *
+         * Deliberately separate from `starved` below. That one gates the
+         * end-of-track detection and must go on meaning "the deck that is
+         * playing has run dry", or a starving *cued* deck would be read as the
+         * current song finishing and advance the queue mid-track.
+         */
+        if starved || self.mixer.incoming().is_starved() {
             self.link.starved_blocks.fetch_add(1, Ordering::Relaxed);
         }
+
+        /*
+         * Limiter steps (LIM-001).
+         *
+         * The limiter attacks instantly and applies one gain to the whole
+         * block, so a change from one block to the next is a step in the
+         * waveform — a click, or at the block rate a buzz. Counted here rather
+         * than in the limiter because the shell is where diagnostics live and
+         * the DSP should stay a pure function of its input.
+         *
+         * The threshold is in dB and deliberately not zero: the release ramps
+         * the gain back toward unity a little every block, and those steps are
+         * tiny and continuous. What matters is a jump.
+         */
+        let reduction = self.mixer.limiter_reduction_db();
+        if (reduction - self.last_limiter_db).abs() > LIMITER_STEP_DB {
+            self.link.limiter_steps.fetch_add(1, Ordering::Relaxed);
+        }
+        self.last_limiter_db = reduction;
+        if reduction < f32::from_bits(self.link.limiter_deepest_db.load(Ordering::Relaxed)) {
+            self.link
+                .limiter_deepest_db
+                .store(reduction.to_bits(), Ordering::Relaxed);
+        }
+
         if self.intent == Intent::Playing && produced == 0 && frames > 0 && !starved {
             self.intent = Intent::Idle;
             self.link
@@ -606,8 +693,42 @@ impl Engine {
             self.mixer.outgoing().position_seconds().to_bits(),
             Ordering::Relaxed,
         );
+        /*
+         * Published beside the position, and for the same reason.
+         *
+         * It used to be written once, when the track was loaded, on the
+         * assumption that a length is a fact the container hands over at the
+         * start. For most files it is. For a track whose length is not declared
+         * it is not known then at all — the deck answers with how much has been
+         * decoded, which grows, and is exact only once the decoder reaches the
+         * end. Stored once, that early answer was the only one the shell ever
+         * saw: a transport that showed no duration and a seek bar that could
+         * not move, for a song that was plainly playing.
+         *
+         * Two atomic loads, from the same deck the position came from, so the
+         * two cannot disagree about which track they describe.
+         */
         self.link.incoming_position.store(
             self.mixer.incoming().position_seconds().to_bits(),
+            Ordering::Relaxed,
+        );
+        /*
+         * Published beside the position, and for the same reason.
+         *
+         * It used to be written once, when the track was loaded, on the
+         * assumption that a length is a fact the container hands over at the
+         * start. For most files it is. For a track whose length is not declared
+         * it is not known then at all — the deck answers with how much has been
+         * decoded, which grows, and is exact only once the decoder reaches the
+         * end. Stored once, that early answer was the only one the shell ever
+         * saw: a transport that showed no duration and a seek bar that could
+         * not move, for a song that was plainly playing.
+         *
+         * Two atomic loads, from the same deck the position came from, so the
+         * two cannot disagree about which track they describe.
+         */
+        self.link.duration.store(
+            self.mixer.outgoing().duration_seconds().to_bits(),
             Ordering::Relaxed,
         );
 
@@ -1037,5 +1158,44 @@ mod tests {
                 pair[1] - pair[0]
             );
         }
+    }
+
+    /// A length that is not known at load must still reach the shell.
+    ///
+    /// The bug this pins down: `duration` was published once, when the track
+    /// was loaded. A container that declares no length — a fragmented MP4, in
+    /// the library that found this — has none to publish at that moment, so the
+    /// shell was told zero and never told anything else. What that looks like
+    /// is a transport with no duration and a seek bar that will not move, under
+    /// a position that is plainly counting up.
+    #[test]
+    fn a_duration_learned_after_the_load_still_reaches_the_shell() {
+        use vapor_engine::source::Window;
+
+        let link = Arc::new(Link::new(44_100));
+        let mut engine = Engine::new(Arc::clone(&link), 2);
+        let window = Arc::new(Window::for_seconds(44_100, 8.0));
+
+        // What a decoder has managed in the moment before playback starts.
+        // Nothing has declared a total, so this is all anyone knows.
+        window.write_frames(&vec![[0i16; 2]; 44_100]);
+        assert!(link.load(TrackSource::Stream(Arc::clone(&window)), true));
+
+        let mut out = vec![0.0f32; 512 * 2];
+        engine.render(&mut out);
+        let first = link.snapshot().duration;
+        assert!(
+            (first - 1.0).abs() < 0.1,
+            "a second of decoded audio was reported as {first} seconds"
+        );
+
+        // The decoder keeps going, as it does for the whole song.
+        window.write_frames(&vec![[0i16; 2]; 44_100 * 2]);
+        engine.render(&mut out);
+        let second = link.snapshot().duration;
+        assert!(
+            second > first + 1.0,
+            "the duration stayed at {first} after two more seconds were decoded"
+        );
     }
 }

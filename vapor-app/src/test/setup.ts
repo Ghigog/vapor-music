@@ -7,6 +7,7 @@
  * mocking it late means the real one is already bound.
  */
 import "@testing-library/jest-dom/vitest";
+import { forgetCovers } from "../lib/artwork";
 import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { FakeBackend, type FakeOptions } from "./ipc";
@@ -75,6 +76,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // The cover cache is module state and outlives a test. Left alone, one test's
+  // artwork answers the next one's rows and a fetch that should have happened
+  // never does.
+  forgetCovers();
   // `cleanup` unmounts, which runs each effect's teardown and so unregisters
   // the listeners it registered. Clearing anyway: a listener surviving into the
   // next test would fire on its events and be very hard to explain.

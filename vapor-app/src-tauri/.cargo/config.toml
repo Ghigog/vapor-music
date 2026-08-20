@@ -1,0 +1,44 @@
+# Sign the dev binary with a stable identity before running it (macOS).
+#
+# ## Why
+#
+# Keychain ACLs are bound to the requesting binary's code signature. `cargo`
+# ad-hoc signs, and an ad-hoc signature is a hash of the binary — so every
+# rebuild is a new identity, the "Always Allow" granted last time no longer
+# matches, and macOS asks for the login password again. On a tight edit-run
+# loop that is a prompt every couple of minutes, and it trained at least one
+# person to click through keychain dialogs without reading them.
+#
+# `tauri dev` shells out to `cargo run`, and cargo runs the binary through this
+# runner, so this is the one hook that catches the dev loop. It catches test
+# binaries too, which is what stops `webdav::tests` flaking on the first run
+# after every rebuild for exactly the same reason.
+#
+# ## What it needs
+#
+# A self-signed Code Signing certificate called "Vapor Dev" in the login
+# keychain (Keychain Access → Certificate Assistant → Create a Certificate,
+# Self Signed Root, Code Signing). Anything stable will do; the identity only
+# has to stop changing.
+#
+# ## Why `-i` matters more than the certificate does
+#
+# The keychain matches on the binary's *designated requirement*, which for an
+# identity-signed binary is `identifier "X" and certificate leaf = H"..."`.
+# Stable — unless the identifier moves. Left alone, `codesign` inherits the one
+# cargo's ad-hoc signature carries, which looks like `vapor_app-28350d2eba817ae1`
+# and whose suffix is cargo's metadata hash: a function of the crate's
+# dependencies, features and profile. Adding a dependency therefore changed the
+# identifier, changed the requirement, and brought the prompts straight back —
+# which is exactly what happened after `chrono` and `image` went in.
+#
+# So the identifier is pinned here and does not move for any reason.
+#
+# Best-effort on purpose. A machine without that certificate — a colleague's, a
+# CI runner that somehow lands here — signs nothing, says nothing, and runs the
+# binary anyway.
+[target.aarch64-apple-darwin]
+runner = ["/bin/sh", "-c", 'codesign -s "Vapor Dev" -i com.dylangrowcoot.vapormusic.dev -f "$0" >/dev/null 2>&1 || true; exec "$0" "$@"']
+
+[target.x86_64-apple-darwin]
+runner = ["/bin/sh", "-c", 'codesign -s "Vapor Dev" -i com.dylangrowcoot.vapormusic.dev -f "$0" >/dev/null 2>&1 || true; exec "$0" "$@"']

@@ -85,10 +85,12 @@ impl Limiter {
 
         let needed = if peak > CEILING { CEILING / peak } else { 1.0 };
 
-        // Attack is instantaneous — a limiter that eases into reduction lets
-        // the transient it is supposed to catch straight through.
-        if needed < self.gain {
-            self.gain = needed;
+        // Where the gain has to be by the end of this block. Attack is still
+        // immediate in the sense that matters — the ceiling is enforced per
+        // sample below, so a transient cannot slip through while the ramp is
+        // still on its way down.
+        let target = if needed < self.gain {
+            needed
         } else {
             // Release toward unity, but never above what this block allows.
             //
@@ -96,15 +98,56 @@ impl Limiter {
             // `needed` is 1.0, and taking the maximum would snap the gain
             // straight back to unity and cancel the release entirely — which is
             // exactly the pumping this time constant exists to avoid.
-            self.gain = (self.gain / self.release_coef).min(1.0).min(needed);
+            (self.gain / self.release_coef).min(1.0).min(needed)
+        };
+
+        // Nothing over the ceiling and no reduction left to release: the
+        // common case, and it should cost a comparison rather than a pass.
+        if self.gain >= 1.0 && peak <= CEILING {
+            self.gain = target;
+            return;
         }
 
-        if self.gain < 1.0 {
-            for s in block.iter_mut() {
-                s[0] *= self.gain;
-                s[1] *= self.gain;
-            }
+        /*
+         * Ramped across the block, not applied flat to it (LIM-001).
+         *
+         * This used to multiply the whole block by one number. The number
+         * changes between blocks, so every change landed as a step
+         * discontinuity in the waveform at a block boundary — one is a click,
+         * and a run of them at the block rate is a buzz. Heard as "pops and
+         * scratches" during mixes, which is when the limiter has most to do:
+         * the stretcher outputs above full scale at beat-matching ratios
+         * (measured +0.57 dB at 1.06), so a transition is exactly when this
+         * engages. `write_out` has always ramped the master volume across a
+         * block for this reason; this was the one gain stage that did not.
+         *
+         * The per-sample term is what keeps the ramp honest. Ramping *into* a
+         * reduction would let the first samples of a transient through, which
+         * is the property `the_first_sample_of_a_transient_is_already_limited`
+         * exists to hold — so where a sample would clear the ceiling it is
+         * scaled to sit exactly on it. That term follows the signal's own
+         * envelope, so where it takes over it does so continuously, and it
+         * cannot introduce a step of its own.
+         */
+        let start = self.gain;
+        let step = (target - start) / block.len() as f32;
+        for (i, s) in block.iter_mut().enumerate() {
+            let ramp = start + step * i as f32;
+            let mag = s[0].abs().max(s[1].abs());
+            let gain = if mag * ramp > CEILING {
+                CEILING / mag
+            } else {
+                ramp
+            };
+            s[0] *= gain;
+            s[1] *= gain;
         }
+
+        // The ramp ended here, so the next block starts from it. Without this
+        // the limiter holds no state at all between blocks and the release
+        // never happens — which the release tests catch, but which is worth
+        // saying out loud next to the thing that depends on it.
+        self.gain = target;
     }
 }
 
@@ -178,8 +221,54 @@ mod tests {
         );
     }
 
+    /// The defect this file was rewritten for (LIM-001).
+    ///
+    /// The gain used to be one number per block, multiplied across the whole
+    /// block, so every change between blocks landed as a step discontinuity in
+    /// the waveform at the block edge. A single one is a click; at the block
+    /// rate it is a buzz. In the field: nineteen steps in 250 ms during a mix,
+    /// reported as "pops and scratches".
+    ///
+    /// Measured as the largest change in *applied gain* between two adjacent
+    /// samples. A ramp spreads a block's worth of change over its 512 samples;
+    /// a flat per-block gain puts all of it at one edge.
+    #[test]
+    fn the_gain_ramps_across_the_block_rather_than_stepping_at_its_edge() {
+        let mut l = Limiter::new(RATE, BLOCK);
+        // Engage it hard, then release over quiet blocks — the release is where
+        // the gain moves every block and the steps were audible.
+        l.process(&mut block_of(2.0));
+
+        const BODY: f32 = 0.3;
+        let mut applied = Vec::new();
+        for _ in 0..8 {
+            let mut q = block_of(BODY);
+            l.process(&mut q);
+            // Well under the ceiling, so what is left is the gain itself.
+            applied.extend(q.iter().map(|s| s[0] / BODY));
+        }
+
+        let worst = applied
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+
+        // Release moves a few percent of gain per block; spread over 512
+        // samples that is well under 1e-3 each. Flat-per-block would show the
+        // whole per-block jump — about 0.02 — at a single sample.
+        assert!(
+            worst < 1e-3,
+            "applied gain jumped {worst:.5} between adjacent samples, which is \
+             a step in the waveform rather than a ramp",
+        );
+        // And it really did move, or the test proves nothing.
+        let travelled = (applied[applied.len() - 1] - applied[0]).abs();
+        assert!(travelled > 0.05, "gain barely moved ({travelled:.3}); the test \
+             would pass on a limiter that does nothing at all");
+    }
+
     /// Release must not be so fast that each block jumps back to unity — that
-    /// is what makes a limiter audibly pump.
+    /// is what makes a limiter audibly pump."""
     #[test]
     fn release_is_gradual_not_instant() {
         let mut l = Limiter::new(RATE, BLOCK);

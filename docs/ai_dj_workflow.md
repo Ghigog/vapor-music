@@ -1,169 +1,150 @@
 # AI DJ Smart Mixing Workflow
 
-This guide details the matching algorithms, sequence logic, and interface controls of the AI DJ "Smart Mixing" engine in Vapor Music.
+Vapor Music can play your records the way a DJ would: choosing what comes next,
+and blending one track into the other rather than stopping and starting.
+
+This is what it does, and how to steer it.
 
 ---
 
-## 1. Mixing Mode Toggle
-- **Smart Mixing OFF**: Sequential playback down the active playlist in order (`(current_track_index + 1) % playlist.size()`).
-- **Smart Mixing ON**: Automated playback managed by the AI DJ's calculated mood path, unless overridden by manual selection.
+## 1. Turning the DJ on and off
+
+The switch is on the player bar at the bottom of the window, next to the skip
+buttons. It carries the Vapor mark, and it lights up when the DJ is conducting.
+
+**Off**, your music plays in the order it is listed, one track after another.
+Nothing is chosen for you.
+
+**On**, the DJ picks what comes next and mixes into it. You can overrule any
+choice it makes, and it will fit your choice into the plan rather than argue
+with it.
 
 ---
 
 ## 2. The three exits
 
-Every transition is one of three, judged from the track playing to a candidate.
-The thresholds are in `exit_between` in `vapor-app/src-tauri/src/lib.rs` and were
-measured against a real 534-track library rather than chosen:
+There are three ways out of the track that is playing, and the Vibe screen shows
+one record for each. Press one to send the set that way.
 
-- **Stay** — hold this level. Intensity within 0.15 and tempo within 8 BPM, in a
-  similar genre. The engine has an easy time here: the transition is a Bass Swap
-  or a Filter Sweep.
-- **Follow** — carry on. This is not a classification at all: it is whatever the
-  planner (§7) has queued next, which is the whole point of the shape.
-- **Switch** — leave this level. A different genre, or intensity 0.30 apart, or
-  45 BPM apart. Key compatibility matters less because the transition is masked
-  by an effect (Echo Out / Reverb Freeze).
+- **Stay** — more of this. A track at about the same energy and about the same
+  speed, usually in a similar style. The two records have an easy time together,
+  so the blend is a smooth one.
+- **Follow** — carry on. This is simply the next track the DJ has already
+  planned, so pressing it changes nothing. It is what happens on its own.
+- **Switch** — somewhere else. A different style, or noticeably louder, quieter,
+  faster or slower. The two records are further apart, so the blend leans on an
+  effect to cover the join.
 
-The original's classes were Match / Fresh / Switch, where Fresh meant "similar
-genre, deliberately about 15 BPM and 0.25 energy away". Fresh has become Follow
-because the two were doing the same job badly: Fresh proposed a track the set
-had not planned, so the suggestion and the queue could disagree about what was
-coming next, and the screen showed a badge for one and a highlight for the
-other.
-
-### Filling the three
-
-Stay and Switch are searched in that order, over everything analysed except the
-track playing, what has already played, and the Follow track.
-
-Stay is asked of *every* candidate — "how little does the level move", with
-transition cost breaking ties — not only of the ones inside the band above. A
-library holding nothing within 8 BPM still has a closest track, and offering two
-cards because the third missed a threshold is the screen withholding an answer
-it has. Switch is then taken from what Stay left: among the genuine departures
-if there are any, and otherwise the furthest remaining track.
-
-So the screen shows three cards whenever there are three tracks to fill them.
+The screen always shows three, as long as there are three records to show. If
+nothing in your library sits close to what is playing, the nearest one is still
+offered — an empty space is not a more honest answer than a near miss.
 
 ---
 
-## 3. What happens if nobody presses anything
+## 3. What happens if you do nothing
 
-Follow. The set carries on.
+The set carries on. **Follow** is the answer, and the DJ has already planned
+several tracks past it.
 
-The original cycled Match → Fresh → Match → Switch and called whichever step it
-was on the "AI Choice". That cycle is gone. It made the default answer depend on
-a hidden counter, so the same pair of tracks got a different verdict depending on
-when you arrived, and the counter advanced on manual overrides too — which meant
-overruling one transition silently changed the next one.
+You never have to press anything. The three exits are there for when you want
+something other than what was planned.
 
 ---
 
-## 4. UI denotations
+## 4. What the cards show you
 
-- **One mark, on the queued track.** The card that is queued next carries a ring
-  in its own colour. There is no second mark.
-- **Taking an exit folds it into the set.** Pressing Stay or Switch queues that
-  track and re-plans the tail from it, so on the next render it *is* the Follow
-  card.
-- **Colour carries the exit.** Stay is the sovereignty green, Follow the app
-  accent, Switch amber. The word is on the sleeve as well, because colour alone
-  is not an accessible signal.
+Each record shows its artwork, its title and artist, and one line of detail: its
+speed in beats per minute, its musical key, and the kind of blend the DJ would
+use to get there. Where the two tempos are close enough to lock together, it also
+says how far the incoming track has to bend to match — and where they are too far
+apart, it says so plainly instead of promising a beat match it cannot make.
 
-There used to be a `🤖 AI Choice` badge that stayed on the DJ's own pick while
-the highlight moved to a manual override. Two marks answering one question is a
-screen disagreeing with itself, and it is gone with the cycle that fed it.
+**The record that is queued next has a ring around it.** That is the only mark on
+the screen, and it moves when you choose differently.
 
----
+**Choosing an exit folds it into the set.** Press Stay or Switch and that record
+is queued, the rest of the plan is worked out again from there, and it becomes
+the Follow card — because it is now what follows.
 
-## 5. Transition Effects
-The AI DJ automatically selects from 6 transition types based on the BPM difference and the key relationship (harmonic, modulated, or clashing) to mimic how a real DJ plays. Transition durations are phrase-adaptive: if outro/intro segment metadata is available for both tracks, the duration is dynamically set as the overlap of the segments, quantized to standard musical phrase boundaries (16, 8, or 4 bars) based on the outgoing track's BPM, and clamped between `4.0s` and `16.0s` (falling back to `4.0s` if no standard phrase fits). Otherwise, it falls back to the transition type's default duration.
-
-Transition loading is triggered `duration + 4.0` seconds before the track ends, and begins exactly at `duration` seconds remaining:
-
-- **Bass Swap** (BPM diff < 3.0, Harmonic or Modulated): 6.0s blend. Low EQ frequencies crossfade smoothly around the midpoint to prevent abrupt energy cuts.
-- **Filter Sweep** (BPM diff 3.0–8.0, Harmonic): 4.0s blend. Outgoing lowpass and incoming highpass sweeps.
-- **Tempo Morph** (BPM diff 3.0–8.0, Modulated/Clashing): 6.0s blend. Syncs tempos during crossfade, then ramps to native tempo.
-- **Reverb Freeze** (BPM diff < 8.0, Clashing / Switch): 5.0s blend. Outgoing reverb freezes at midpoint to wash out the clashing frequencies and mask the transition.
-- **Echo Out** (BPM diff >= 8.0, Clashing/Modulated or Fresh/Switch): 5.0s blend. Outgoing delay rings out from midpoint to mask key clashes and major BPM jumps.
-- **Standard Crossfade** (BPM diff >= 8.0, Harmonic): 3.0s blend. Fast linear volume crossfade.
+**Each exit has its own colour**: green for Stay, blue for Follow, amber for
+Switch. The word is written on the artwork as well, so the colour is never the
+only thing telling you which is which.
 
 ---
 
-## 6. Mix Tuner & Vibe Limit
-- **Vibe Limit**: Sets the maximum energy difference allowed between consecutive tracks.
-- **Strict (Low Value)**: Restricts the AI DJ to very smooth transitions with consistent energy, keeping the overall vibe stable.
-- **Loose (High Value)**: Permits larger energy shifts between tracks, allowing for dramatic drops and climbs in set intensity.
+## 5. How tracks are blended together
+
+The DJ chooses between six kinds of blend, based on how far apart the two records
+are in speed and how well their keys sit together. It is trying to do what a
+person at the decks would do.
+
+- **Bass Swap** — for two records at almost the same speed whose keys agree. The
+  bass is handed from one to the other around the middle, so the floor never
+  drops out. About six seconds.
+- **Filter Sweep** — for a small difference in speed with keys that agree. The
+  outgoing record loses its top end while the incoming one loses its bottom, and
+  they cross. About four seconds.
+- **Tempo Morph** — for a small difference in speed with keys that do not quite
+  agree. Both records bend towards a speed between them, then the new one eases
+  back to its own. About six seconds.
+- **Reverb Freeze** — for keys that clash. The outgoing record is washed out in
+  reverb, which covers the clash. About five seconds.
+- **Echo Out** — for a large difference in speed. The outgoing record rings out
+  in echo and the new one arrives underneath it. About five seconds.
+- **Standard Crossfade** — for a large difference in speed with keys that agree.
+  One fades down as the other fades up. About three seconds.
+
+**How long a blend lasts depends on the two records.** Where the app knows where
+a track's intro and outro sit, the blend is stretched to fill the overlap between
+them and snapped to a musical length — sixteen, eight or four bars — so it ends
+on the beat rather than wherever the clock ran out. It is never shorter than four
+seconds or longer than sixteen. Where a track has not been examined closely
+enough for that, the blend falls back to the standard length for its kind.
 
 ---
 
-## 7. Conduct a Set (the Mood Path)
+## 6. The Vibe Limit
 
-This is the other half of the DJ, and it was never reachable from the Godot UI —
-`play_harmonic_shuffle()` called `DJPathfinder.generate_mood_path()` with two
-arguments, so `target_curve` always fell to its default of `"build"`. The other
-three curves were implemented and unreachable. The Vibe screen exposes all four.
+One setting, which decides how far the DJ is allowed to move between one record
+and the next.
 
-Where §2–§4 decide **which track comes next**, this decides **where the whole
-set is going**. It plans the running order in advance with an A\* search over
-the Camelot wheel, scoring each candidate on two things at once:
+- **Strict** keeps the energy steady. The set holds a level and stays there.
+- **Loose** lets the DJ take bigger steps, so the set can climb and drop.
 
-- **Transition cost** — the same harmonic and tempo distance used everywhere
-  else, so consecutive tracks stay mixable.
-- **Curve cost** — how far a candidate sits from where the set is *supposed* to
-  be by that point.
+---
 
-### The curves
+## 7. Conduct a set
 
-For step `i` of `N`, with `t = i / (N - 1)`, the target is:
+The three exits decide **which record comes next**. This decides **where the
+whole evening is going**, and the DJ plans the running order in advance to get
+there.
 
-| Curve | Target energy | Target tempo |
-|---|---|---|
-| **Build Vibe** | start → start + 0.4 | start → start + 15 BPM |
-| **Chill Down** | start → start − 0.4 | start → start − 15 BPM |
-| **Wave** | start + 0.3·sin(2πt) | start + 10·sin(2πt) |
-| **Hold Steady** | start, unchanged | start, unchanged |
+Four shapes, chosen on the Vibe screen. The drawing on each button is the shape
+it makes.
 
-Build and Chill are linear ramps across the set. Wave completes one full cycle —
-up, back through the middle, down, and home. Hold Steady sets a flat target, so
-only transition cost decides the order.
+- **Build Vibe** — starts where you are and climbs, getting louder and faster
+  across the set.
+- **Chill Down** — the opposite. Winds down from where you are.
+- **Wave** — up, back through the middle, down, and home again.
+- **Hold Steady** — stays at the level you are at. Only the quality of the blends
+  decides the order.
 
-Energy is integrated loudness, mapped to 0–1 over −30 to −5 LUFS.
+**The two work together.** The shape owns the destination; the exits own the next
+step. The DJ plans ten records ahead along the shape you chose, and the Follow
+card is the first of them.
 
-It was a dynamics ratio — mean RMS over peak RMS — until 2026-08-17. That
-measures how *consistent* a track is rather than how hard it goes: one that sits
-at a single level scores high and one with a breakdown scores low. Measured on a
-real 534-track library it put drum & bass at 0.661 against 0.629 for ballads,
-ranges overlapping completely, with the quietest records at the top. It was
-deciding the curves, the energy term in the transition cost, and whether two
-tracks count as a match.
+If you overrule one step by hand, the rest is planned again from your choice
+along the same shape — so the set still arrives where it was going. Being
+two-thirds of the way through a Build keeps you two-thirds of the way through a
+Build. The route changes; the arc does not.
 
-Loudness separates the same two groups by 0.256 instead of 0.031. The spec used
-to claim energy was "loudness, brightness and tempo in equal parts"; it never
-was, and the sentence outlived the code it described.
+Choosing a different shape does the same thing to everything ahead of you. What
+was queued was a route to the old destination, so it is thrown away and worked
+out again.
 
-Tracks with no analysis are not placed, because the cost model has no tempo or
-key to place them by. They are appended at the end and the screen says how many.
+There is no button to press to start any of this. The DJ keeps the set going
+whether or not you are looking at the screen.
 
-### How it works with the three exits
-
-The two are layers, not alternatives:
-
-- The **curve** owns the destination — where the set should be at step `i`.
-- The **exit** owns the next step — which specific track, and how it is mixed
-  in.
-
-The planner queues ten tracks ahead, and the Follow card is the head of that
-queue, so the default answer for every transition is simply "carry on". Choosing
-Stay or Switch by hand overrides that one step; the remaining plan is then
-re-searched from the new track against the same curve, so the set still arrives
-where it was going. Being 60% through a Build stays 60% through a Build — the
-arc is preserved, the route to it changes.
-
-Choosing a curve does the same thing to the whole tail: everything after the
-track playing was a route to the old destination, so it is discarded and
-re-planned. There is no "Conduct" button, because there is nothing left for it
-to do — the playback thread extends the set along the saved curve whether or not
-the screen is open. It used to be the only thing that ever ran the planner,
-which is why a set was something you had to know to ask for.
+**Records the app has not examined yet cannot be placed**, because it does not
+know their speed or key. They are added at the end, and the screen says how many
+are waiting.

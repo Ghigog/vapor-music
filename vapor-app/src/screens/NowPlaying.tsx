@@ -25,6 +25,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { VaporMark, type MarkState } from "../components/VaporMark";
 import * as core from "../lib/core";
+import { useThumb } from "../lib/artwork";
+import { LyricsPanel } from "../components/LyricsPanel";
 
 const POLL_MS = 250;
 
@@ -54,6 +56,10 @@ export function NowPlaying() {
       void unlisten.then((f) => f());
     };
   }, [refresh]);
+
+  // Before the early return: a hook cannot be called conditionally, and the
+  // empty state below returns before the tile is rendered.
+  const nextArt = useThumb(state?.nextHref ?? "");
 
   if (!state) return null;
 
@@ -186,7 +192,19 @@ export function NowPlaying() {
       {/* Up next. The design puts the mark in this card precisely because this
           is where blending is announced. */}
       <div className="np__next glass">
-        <VaporMark size={42} theme="light" state={markState} energy={level} />
+        {/* The record, not the app's logo.
+            This drew a `VaporMark` — the same mark as the header, at 42px —
+            which told you the app was running rather than what was coming. A
+            sleeve is the thing anyone recognises a track by. The mark stays as
+            the fallback, since a queue can hold a track whose file carries no
+            artwork. */}
+        <span className="np__next-art" aria-hidden="true">
+          {nextArt ? (
+            <img src={nextArt} alt="" />
+          ) : (
+            <VaporMark size={42} theme="light" state={markState} energy={level} />
+          )}
+        </span>
         <div className="np__next-text">
           <span className="label">
             {mixing ? "blending · crossfade" : "up next"}
@@ -194,8 +212,20 @@ export function NowPlaying() {
           <span className="np__next-title">
             {state.nextTitle || "Nothing queued"}
           </span>
+          {/* Artist and album, on one line and only where they are known —
+              a dash for each would be two dashes under every title. */}
+          {(state.nextArtist || state.nextAlbum) && (
+            <span className="np__next-sub">
+              {[state.nextArtist, state.nextAlbum].filter(Boolean).join(" · ")}
+            </span>
+          )}
         </div>
       </div>
+
+      {/* Below the tile, as asked. The playhead is passed in rather than the
+          panel keeping its own clock: seeks, pauses and crossfades all move
+          the position, and only the engine knows where it really is. */}
+      <LyricsPanel href={state.href ?? ""} position={position} />
     </div>
   );
 }

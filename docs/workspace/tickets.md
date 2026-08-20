@@ -2382,3 +2382,44 @@ cargo test --lib live_services -- --ignored --nocapture
 
 **Waiting for:** Real work, and the one item that would unblock another. Generating audio with known tempo and key that is representative of real recordings is a research problem.
 
+
+
+### PERF-004 : (done)
+
+**Opening Songs freezes the app for about a second, because a screenful of rows
+pulls a screenful of full-resolution album covers.**
+
+Measured 2026-08-20 on the 563-track library:
+
+```
+516 cover files, 149 MB total
+median 281 KB   largest 954 KB   (base64 text, as stored)
+```
+
+The table is virtualised and artwork is already lazy — `lib/artwork.ts` fetches
+per href with an LRU, and `library_view` deliberately carries no covers, both of
+which were done for exactly this reason. The remaining cost is that each of the
+~26 rows that mount (20 visible + `overscan: 6`) asks for a **full-resolution**
+cover to draw at **48 px**. That is ~7 MB at the median and ~23 MB on a run of
+large ones, read from disk, pushed through IPC, JSON-parsed in the webview and
+decoded into 26 images, per open.
+
+**Fix:** a thumbnail. 96 px covers a 48 px slot at 2× DPR and encodes to about
+4 KB, so a screenful becomes ~130 KB rather than ~7 MB — roughly 55× less.
+Generate on first request, cache beside the full cover in `covers.rs`, expose as
+`track_thumb`, and point `artwork.ts`'s row path at it. Now Playing and Liner
+Notes keep the full-resolution cover, which is the one place it is wanted.
+
+Needs the `image` crate (jpeg + png features only); nothing in the workspace
+decodes images today.
+
+**Done 2026-08-20.** 128 px thumbnails, generated once and cached beside the
+full cover. Measured against the real library: 301 KB average down to 8.1 KB,
+37x smaller; all 516 generated and now 3.8 MB total against 149 MB. Two things
+the first attempt got wrong and measurement caught: unoptimised generation was
+330 ms a cover, so a first open would have been *worse* than the freeze (fixed
+by `[profile.dev.package."*"] opt-level = 2`); and `track_thumb` held the state
+mutex across that work, which would have moved the freeze onto the transport
+rather than removing it.
+
+**Waiting for:** Nothing.

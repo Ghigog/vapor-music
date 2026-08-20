@@ -231,30 +231,35 @@ impl Fetcher {
                 base64::engine::general_purpose::STANDARD
                     .encode(format!("{}:{}", remote.username, password))
             ),
-            client: reqwest::blocking::Client::builder()
-                .user_agent("VaporMusic/2.0")
-                // reqwest waits for ever by default, and the analysis pass
-                // fetches every track in the library through this one client on
-                // one thread. A socket that goes away without saying so — a
-                // phone changing network, a radio sleeping, a server dropping
-                // the connection — therefore stopped the pass dead: the fetch
-                // never returned, no further track was described, and the
-                // screen showed a run in flight with its own button disabled
-                // for as long as the app stayed open.
-                //
-                // A whole-request ceiling rather than a per-read one: the
-                // blocking builder in this reqwest has no `read_timeout`, which
-                // is the narrower question worth asking. Five minutes is
-                // therefore deliberately generous — it has to clear a large
-                // track on a bad connection without cutting it off — and it is
-                // a backstop against hanging for ever, not a performance
-                // budget. A track that trips it is recorded as a failure and
-                // the pass moves on to the next, which is the behaviour that
-                // was missing.
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(FETCH_TIMEOUT)
-                .build()
-                .map_err(|e| e.to_string())?,
+            // Built through `crate::http`, which is what keeps this off a
+            // runtime worker: `Fetcher::new` is reached from Tauri commands,
+            // and building a blocking client there panics the process.
+            client: crate::http::build_blocking(|| {
+                reqwest::blocking::Client::builder()
+                    .user_agent("VaporMusic/2.0")
+                    // reqwest waits for ever by default, and the analysis pass
+                    // fetches every track in the library through this one client on
+                    // one thread. A socket that goes away without saying so — a
+                    // phone changing network, a radio sleeping, a server dropping
+                    // the connection — therefore stopped the pass dead: the fetch
+                    // never returned, no further track was described, and the
+                    // screen showed a run in flight with its own button disabled
+                    // for as long as the app stayed open.
+                    //
+                    // A whole-request ceiling rather than a per-read one: the
+                    // blocking builder in this reqwest has no `read_timeout`, which
+                    // is the narrower question worth asking. Five minutes is
+                    // therefore deliberately generous — it has to clear a large
+                    // track on a bad connection without cutting it off — and it is
+                    // a backstop against hanging for ever, not a performance
+                    // budget. A track that trips it is recorded as a failure and
+                    // the pass moves on to the next, which is the behaviour that
+                    // was missing.
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(FETCH_TIMEOUT)
+                    .build()
+                    .map_err(|e| e.to_string())
+            })?,
         })
     }
 

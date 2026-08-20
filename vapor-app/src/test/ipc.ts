@@ -199,6 +199,8 @@ export class FakeBackend {
   }
   private queue: string[] = [];
   private current: string | null = null;
+  /** What the DJ is conducting over — the name `play_tracks` was given. */
+  private scope = "";
   private status: core.PlaybackStatus = "idle";
   private analysed = 0;
   private nextId = 1;
@@ -655,7 +657,12 @@ export class FakeBackend {
         return null;
       }
 
-      case "track_cover": {
+      // Both sizes answer the same way here. The real difference is bytes —
+      // 128 px against the stored original (PERF-004) — and a fixture has no
+      // bytes to speak of, so what a test can check is that rows ask for the
+      // small one at all.
+      case "track_cover":
+      case "track_thumb": {
         const href = String(a.href ?? "");
         return this.rows.some((r) => r.href === href) && this.covers
           ? A_SLEEVE
@@ -1201,6 +1208,7 @@ export class FakeBackend {
       case "play_tracks": {
         this.queue = (a.hrefs ?? []) as string[];
         this.current = (a.start as string | null) ?? this.queue[0] ?? null;
+        this.scope = (a.scope as string | null) ?? "";
         this.status = this.current ? "playing" : "idle";
         return null;
       }
@@ -1261,6 +1269,10 @@ export class FakeBackend {
 
       case "playback_state": {
         const row = this.rows.find((r) => r.href === this.current);
+        const nextHref = this.current
+          ? (this.queue[this.queue.indexOf(this.current) + 1] ?? null)
+          : null;
+        const nextRow = this.rows.find((r) => r.href === nextHref);
         return {
           href: this.current,
           title: row?.title ?? "",
@@ -1275,8 +1287,12 @@ export class FakeBackend {
           mixing: false,
           level: 0,
           waveform: [],
-          nextTitle: "",
+          nextTitle: nextRow?.title ?? "",
+          nextArtist: nextRow?.artist ?? "",
+          nextAlbum: nextRow?.album ?? "",
+          nextHref: nextRow?.href ?? "",
           cover: null,
+          scope: this.scope,
         };
       }
 
@@ -1297,7 +1313,6 @@ export class FakeBackend {
               href,
               title: row?.title ?? href,
               artist: row?.artist ?? "",
-              cover: null,
               bpm: row?.bpm ?? 0,
               key: row?.key ?? "",
               current: href === this.current,

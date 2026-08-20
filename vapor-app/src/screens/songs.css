@@ -192,6 +192,16 @@
     0 3px 9px -3px rgba(38, 58, 104, 0.32);
 }
 
+.songrow__art-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 15px;
+  display: block;
+}
+
 .songrow__art-sheen {
   position: absolute;
   inset: 0;

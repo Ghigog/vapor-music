@@ -111,6 +111,21 @@ impl TransitionType {
     pub fn morphs_tempo(&self) -> bool {
         matches!(self, TransitionType::TempoMorph)
     }
+
+    /// Whether the transition depends on the two decks sharing a tempo.
+    ///
+    /// A Bass Swap and a Tempo Morph *are* beat-matching: the effect is two
+    /// grids running as one, and decks out of step is the fault the move is
+    /// made of. The rest are dissolves — an echo tail, a reverb wash, a plain
+    /// crossfade — and they work between any two records at any two tempi.
+    ///
+    /// Which is the whole reason a chooser reaches for them when the tempi are
+    /// too far apart to stretch. A planner that demands a beat-match before it
+    /// will arrange *any* transition throws those away and cuts instead, which
+    /// is the case they exist for.
+    pub fn beat_matched(&self) -> bool {
+        matches!(self, TransitionType::BassSwap | TransitionType::TempoMorph)
+    }
 }
 
 /// Everything the mixer applies to one deck at one instant.

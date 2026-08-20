@@ -20,6 +20,15 @@ serde_json = "1"
 # WebDAV transport. rustls rather than the system TLS stack so the same code
 # builds on every desktop target without a platform TLS dependency.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+# Row thumbnails only (PERF-004). Default features pull in every decoder there
+# is; covers embedded in music files are JPEG or PNG, and nothing else here
+# touches an image.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Local wall-clock for the audio-fault log. Already in the tree via tauri, so
+# this costs nothing to compile; `clock` is the feature that knows the local
+# offset, which is the whole reason for it — a UTC stamp is five hours off the
+# clock of the person reading it.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 base64 = "0.22"
 # keyring's platform backends are opt-in features, and with none of them
@@ -89,3 +98,17 @@ keyring = { version = "3", features = ["windows-native"] }
 # dependency, matching the rustls choice made for reqwest above.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
+# Optimise dependencies even in a debug build.
+#
+# `image` decodes, resizes and re-encodes an album cover, and unoptimised that
+# is ~330 ms per cover — measured, on the 563-track library. A screenful of
+# rows would then spend several seconds generating thumbnails the first time,
+# which is worse than the freeze the thumbnails exist to remove (PERF-004).
+# `tauri dev` builds debug, so that cost is what a person developing this
+# actually feels.
+#
+# Dependencies only. This crate keeps its own debug profile, so an edit here
+# still rebuilds in seconds; the cost is a one-off longer first build.
+[profile.dev.package."*"]
+opt-level = 2

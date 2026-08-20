@@ -122,6 +122,8 @@ export function Playlist({
       .playTracks(
         rows.map((r) => r.href),
         startHref,
+        // The DJ conducts within the playlist, not out of it.
+        meta?.name,
       )
       .catch(setError);
   }

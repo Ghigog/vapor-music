@@ -1,0 +1,73 @@
+/*
+ * Lyrics on Now Playing.
+ *
+ * Set to be read from across a room rather than scanned: the line being sung
+ * is full-contrast and a step larger, lines already sung fade back, and lines
+ * to come sit between the two. That gradient is what lets the eye find its
+ * place without hunting for a highlight.
+ */
+
+.lyrics {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lyrics__lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* Tall enough to hold a verse, short enough that the transport stays on
+     screen. Scrolls itself; the sung line is kept in view. */
+  max-height: 260px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lyrics__line {
+  font-family: var(--font-ui);
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--ink-3);
+  transition:
+    color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+/* Already sung. Present, so you can look back a line, but out of the way. */
+.lyrics__line--past {
+  opacity: 0.45;
+}
+
+.lyrics__line--now {
+  font-size: 19px;
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  opacity: 1;
+}
+
+/* An instrumental break. */
+.lyrics__rest {
+  color: var(--ink-3);
+}
+
+.lyrics__plain {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.lyrics__note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}

@@ -136,8 +136,26 @@ export interface PlaybackState {
   waveform: number[];
   /** What plays after this, so Now Playing needs no second call. */
   nextTitle: string;
+  nextArtist: string;
+  nextAlbum: string;
+  /**
+   * The next track's href, for its artwork.
+   *
+   * The cover is fetched separately, through the same tile-sized path a row
+   * uses — carrying a 300 KB data URI on a four-times-a-second poll is the
+   * mistake `trackThumb` exists to avoid.
+   */
+  nextHref: string;
   /** Cover art as a data URI, when the file carried one. */
   cover: string | null;
+  /**
+   * What the DJ is conducting over — a playlist, album, artist, genre or
+   * smart group name. Empty means the whole library.
+   *
+   * Set by whatever list `playTracks` was called from, and it is the pool the
+   * planner actually chooses within, not a caption. See `AppState::scope`.
+   */
+  scope: string;
 }
 
 export interface TrackMeta {
@@ -323,6 +341,19 @@ export function libraryEntities(view: LibraryView = {}): Promise<LibraryEntity[]
  */
 export function trackCover(href: string): Promise<string | null> {
   return invoke<string | null>("track_cover", { href });
+}
+
+/**
+ * The same cover at tile size (PERF-004).
+ *
+ * A song row draws artwork at 48 px and the queue's tile at 56 px, and handing
+ * either the full stored cover is what made opening Songs pause: 516 covers
+ * averaging 281 KB, a screenful of which is about 7 MB through IPC to draw
+ * postage stamps. This is a 128 px version, generated once and cached beside
+ * the original.
+ */
+export function trackThumb(href: string): Promise<string | null> {
+  return invoke<string | null>("track_thumb", { href });
 }
 
 /**
@@ -843,8 +874,23 @@ export function queueState(): Promise<QueueState> {
  * has to be fetched and decoded, which is seconds on a cold cache. Watch
  * `playbackState().loading` for that.
  */
-export function playTracks(hrefs: string[], start?: string): Promise<void> {
-  return invoke<void>("play_tracks", { hrefs, start: start ?? null });
+/**
+ * Play `hrefs`, starting at `start`, and conduct within them.
+ *
+ * `scope` names the list this came from and is what confines the DJ to it —
+ * an album, a playlist, a genre. Omitted, the set is the library and the DJ
+ * may roam it, which is what playing from an unfiltered list means.
+ */
+export function playTracks(
+  hrefs: string[],
+  start?: string,
+  scope?: string,
+): Promise<void> {
+  return invoke<void>("play_tracks", {
+    hrefs,
+    start: start ?? null,
+    scope: scope ?? null,
+  });
 }
 
 export function nextTrack(): Promise<string | null> {
@@ -894,7 +940,6 @@ export interface QueueEntry {
   href: string;
   title: string;
   artist: string;
-  cover: string | null;
   /** 0 when unknown — not "0 BPM". */
   bpm: number;
   key: string;

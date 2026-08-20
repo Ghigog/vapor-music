@@ -158,11 +158,24 @@ export function Library({
    * handling at all — the cards were an `<article>` with no interaction, so
    * the home screen, the first thing anyone sees, could not start a track.
    */
-  async function play(href: string) {
-    const visible =
-      load.kind === "ready" ? load.sections.flatMap((s) => s.rows.map((r) => r.href)) : [];
+  async function play(href: string, section?: LibrarySection) {
+    /*
+     * A grouped tab queues the group, not the screen.
+     *
+     * Genres are the case: the cards are laid out under a heading per genre,
+     * and queueing everything visible meant pressing a house record and
+     * getting the whole library behind it, conducted across all of it. The
+     * heading is the scope, so it is what goes in.
+     */
+    const source =
+      section ??
+      (load.kind === "ready" ? { header: "", rows: load.sections.flatMap((s) => s.rows) } : null);
     try {
-      await core.playTracks(visible, href);
+      await core.playTracks(
+        source?.rows.map((r) => r.href) ?? [],
+        href,
+        source?.header || undefined,
+      );
     } catch (e: unknown) {
       setPlayError(messageOf(e));
     }
@@ -183,7 +196,7 @@ export function Library({
         ...(groupBy === "album" ? { album: entity.name } : { artist: entity.name }),
       });
       const hrefs = sections[0]?.rows.map((r) => r.href) ?? [];
-      await core.playTracks(hrefs, entity.lead);
+      await core.playTracks(hrefs, entity.lead, entity.name);
     } catch (e: unknown) {
       setPlayError(messageOf(e));
     }
@@ -267,6 +280,8 @@ export function Library({
                 ? { album: opened.name }
                 : { artist: opened.name }
             }
+            // Playing from inside an opened record conducts within it.
+            scope={opened.name}
           />
         </div>
       ) : groupBy === "none" ? (
@@ -329,7 +344,11 @@ export function Library({
                 )}
                 <div className="library__grid">
                   {section.rows.map((row) => (
-                    <Card key={row.href} row={row} onPlay={() => void play(row.href)} />
+                    <Card
+                      key={row.href}
+                      row={row}
+                      onPlay={() => void play(row.href, section)}
+                    />
                   ))}
                 </div>
               </section>

@@ -376,3 +376,140 @@ before it, not with it — the value usually came off disk.
 **Grep before building.** The port carried parameters across without their
 behaviour *and* carried behaviour across that nothing ever called. Both
 directions have the same tell: an argument nobody varies.
+
+## The DJ workflow document, split (2026-08-19)
+
+`docs/ai_dj_workflow.md` was two documents in one file. It is the help sheet the
+Vibe screen renders verbatim — and it also carried file paths, function names,
+the changelog of what each rule used to be, and the measurements behind them.
+Rendered at 17px in a modal, that reads as an engineering note somebody left on
+a user's screen: `(current_track_index + 1) % playlist.size()`, "the thresholds
+are in `exit_between` in `vapor-app/src-tauri/src/lib.rs`", "§2–§4".
+
+The document is now the help text, in plain words. What follows is what came out
+of it, which is the half worth keeping and the wrong half to show a listener.
+
+**The three exits replaced Match / Fresh / Switch.** Fresh meant "similar genre,
+deliberately about 15 BPM and 0.25 energy away" — it proposed a track the set had
+not planned, so the suggestion and the queue could disagree about what was coming
+next, and the screen showed a badge for one and a highlight for the other. Follow
+is defined as *whatever is queued*, which is what makes those two agree by
+construction.
+
+**The four-step choice cycle is gone.** The original cycled Match → Fresh →
+Match → Switch and called whichever step it was on the "AI Choice". The default
+answer depended on a hidden counter, so the same pair of tracks got a different
+verdict depending on when you arrived — and the counter advanced on manual
+overrides too, so overruling one transition silently changed the next.
+
+**The `🤖 AI Choice` badge is gone with it.** It stayed on the DJ's own pick
+while the highlight moved to a manual override: two marks answering one question
+is a screen disagreeing with itself.
+
+**Three of the four curves were unreachable.** `play_harmonic_shuffle()` called
+`DJPathfinder.generate_mood_path()` with two arguments, so `target_curve` always
+fell to its default of `"build"`. Build, Chill, Wave and Hold Steady were all
+implemented; one of them could be chosen.
+
+**Energy was a dynamics ratio — mean RMS over peak RMS — until 2026-08-17.** That
+measures how *consistent* a track is rather than how hard it goes: one that sits
+at a single level scores high, one with a breakdown scores low. On the 534-track
+library it put drum & bass at 0.661 against 0.629 for ballads, ranges overlapping
+completely, with the quietest records at the top. Integrated loudness mapped over
+−30 to −5 LUFS separates the same two groups by 0.256 instead of 0.031. It was
+deciding the curves, the energy term in the transition cost, and whether two
+tracks count as a match.
+
+**The spec claimed energy was "loudness, brightness and tempo in equal parts".**
+It never was. The sentence outlived the code it described.
+
+**Exit thresholds live in `exit_between` in `vapor-app/src-tauri/src/lib.rs`**
+and were measured against that same 534-track library rather than chosen.
+
+**Stay is asked of every candidate, not only of the ones inside its band.** A
+library holding nothing within 8 BPM still has a closest track, and showing two
+cards because the third missed a threshold is the screen withholding an answer it
+has. Switch is then taken from what Stay left.
+
+## The mix "pops and scratches" (2026-08-20)
+
+Reported as a stutter first, then as "record scratch" and "interference static".
+Three theories were asserted before any were measured; two were wrong. What the
+instrumentation actually showed:
+
+**Nothing starves.** `audio-faults.log` recorded no deck starvation across an
+afternoon of playback including transitions. The decoder, the prefetcher and the
+WebDAV path are not involved, which retires the original bandwidth theory —
+`arm_mix` blocking on a full download was real but was never this.
+
+**The stretcher outputs above full scale at beat-matching ratios.** Measured
+against a 0.99 tone at 44.1 kHz:
+
+```
+ratio 1.00 -> 0.9900   (passthrough, bit-exact)
+ratio 1.02 -> 1.0272   (+0.23 dB)
+ratio 1.03 -> 1.0362
+ratio 1.06 -> 1.0676   (+0.57 dB)
+ratio 0.97 -> 0.9987
+```
+
+Overlapping windows interfere constructively; a phase vocoder is expected to do
+this and it is not a defect. The limiter catching it is correct.
+
+**The limiter is what makes the noise.** `Limiter::process` computes one gain
+per block from the block peak, attacks instantaneously, and multiplies the whole
+block by it — so every change lands as a step discontinuity at a block boundary.
+One step is a click; a run of them at the block rate is a buzz. Observed in the
+field as five consecutive 250 ms windows with steps, deepening to −1.7 dB, at
+the moment the noise was heard.
+
+`write_out` already ramps the master volume across the block for exactly this
+reason, and says so in its own comment. The limiter was the one gain stage that
+did not.
+
+**Untagged as a mix, but caused by one.** The post-transition tempo glide
+(`TEMPO_GLIDE_SECS`, 6 s) keeps the stretcher running after the transition has
+completed, so `transition_armed()` is already false while the deck is still
+being stretched. Faults logged during the glide carry no "(during a mix)" tag
+and look like ordinary playback.
+
+**`webdav::tests::a_changed_password_is_not_served_from_before` flakes on the
+first run after a rebuild, on macOS.** It writes to the real keychain, and
+keychain ACLs are bound to the requesting binary's code signature. Test binaries
+are ad-hoc signed, so the signature is a hash of the binary — every rebuild is a
+new identity, "Always Allow" no longer matches, and macOS asks again. Unanswered,
+the write fails and the test fails; run it again against the same binary and it
+passes. Observed 2026-08-20 on the first run after a full dependency recompile.
+Not a product defect and not a race: the same reason `npm run app` re-asks for
+the keychain on every build.
+
+**LIM-001 confirmed fixed in the field (2026-08-20).** Ramping the limiter's
+gain across the block removed the noise without touching how much it reduces.
+Same listener, same library, both directions measured:
+
+```
+before   run max -5.4 dB, windows up to 19 steps   -> "pops and scratches"
+after    run max -8.3 dB, 30 windows over 11 s     -> "completely clean"
+```
+
+The confirming case is the one that matters: a beat-matched Bass Swap between
+two loud masters (Power Glove, 128.1/4A into Vancouver Beatdown, 128/4A), which
+drove the limiter *deeper* than anything recorded before the fix and was
+inaudible. A quieter result would have proved nothing, since three earlier clean
+mixes turned out to be dissolves that never engaged the limiter at all.
+
+**Two warts in the instrumentation that wrote this finding**, recorded because
+they cost real confusion at the time:
+
+* `limiter_deepest_db` is a **run-wide** minimum that only ratchets. Read as a
+  per-window depth — which it looks like in the log line — it makes a flat value
+  seem like a sustained deep reduction, and a rising one seem like a single
+  window deepening. The per-window figure that is honest is the step count.
+* `clock_time` stamps **UTC** while the person reading the log is on local time,
+  so lines appear to be five hours in the past.
+
+**Dissolves cannot produce this.** Echo Out and Reverb Freeze run at ratio 1.0,
+which is the stretcher's passthrough path — a bit-exact copy. Only a
+beat-matched move (Bass Swap, Tempo Morph) runs the vocoder, and only the
+vocoder manufactures gain. When every exit on the Vibe screen reads "echo out",
+no pair reachable from that track can reproduce it.

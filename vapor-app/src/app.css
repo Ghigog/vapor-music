@@ -563,6 +563,14 @@
   mask-image: url("/icons/group.png");
 }
 
+/* The Vibe DJ mark, as a control glyph. Same silhouette as the app's own
+   logo, masked so it takes the colour of whatever it sits in — which is what
+   lets the transport's DJ switch go accent-coloured when it is on. */
+.icon--vibe {
+  -webkit-mask-image: url("/icons/vibe.png");
+  mask-image: url("/icons/vibe.png");
+}
+
 /* Previous is next, mirrored. */
 .icon--flip {
   transform: scaleX(-1);

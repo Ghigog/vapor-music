@@ -109,6 +109,40 @@ describe("Library", () => {
   });
 
   /**
+   * Playing a record conducts within it.
+   *
+   * Queueing only the album was never enough on its own: the DJ plans past the
+   * end of the queue, and with no scope it planned out of the whole library —
+   * so the second track was from somewhere else and the record you pressed
+   * play on lasted one song.
+   */
+  it("conducts within the album that was played", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /play selected ambient works/i }),
+    );
+
+    await waitFor(() => expect(backend.state.status).toBe("playing"));
+    expect(backend.lastArgs("play_tracks")?.scope).toBe("Selected Ambient Works");
+  });
+
+  /** An unfiltered list is the library, and says so by naming no scope. */
+  it("names no scope when the whole library was played from", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await openSongsTab(user);
+    await user.click(await screen.findByText("Windowlicker"));
+
+    await waitFor(() => expect(backend.state.status).toBe("playing"));
+    expect(backend.lastArgs("play_tracks")?.scope ?? null).toBeNull();
+  });
+
+  /**
    * TD-53. A looked-up portrait was fetched, cached and shown on exactly one
    * screen. An artist tile falling back to the artwork of whichever album its
    * lead track came from looked like the app knew who the artist was.
@@ -439,7 +473,7 @@ describe("Vibe DJ", () => {
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(await screen.findByRole("button", { name: /^help$/i }));
+    await user.click(await screen.findByRole("button", { name: /how the dj chooses/i }));
 
     const sheet = await screen.findByRole("dialog");
     expect(sheet).toHaveTextContent(/bass swap/i);
@@ -458,12 +492,44 @@ describe("Vibe DJ", () => {
     expect(sheet.textContent).not.toMatch(/Perfect Match/i);
   });
 
+  /**
+   * A hard-wrapped source line is not a paragraph break.
+   *
+   * The renderer emitted one `<p>` per line of the markdown, and the document
+   * is wrapped at about eighty columns — so sentences were cut in half with a
+   * paragraph gap through the middle, and a bullet with a continuation line
+   * became a bullet plus a stray fragment beneath the list ("in." on its own).
+   */
+  it("renders a wrapped sentence as one paragraph", async () => {
+    await playing();
+    const user = userEvent.setup();
+    render(<Vibe />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /how the dj chooses/i }),
+    );
+    const sheet = await screen.findByRole("dialog");
+
+    // This sentence crosses a wrap in `docs/ai_dj_workflow.md`. Split, no
+    // single element holds it.
+    const whole =
+      "There are three ways out of the track that is playing, and the Vibe screen shows one record for each. Press one to send the set that way.";
+    const paragraphs = Array.from(sheet.querySelectorAll("p"));
+    expect(paragraphs.some((p) => p.textContent === whole)).toBe(true);
+
+    // And a wrapped bullet stays inside its own item.
+    const items = Array.from(sheet.querySelectorAll("li"));
+    expect(
+      items.some((li) => /^Follow — carry on\..*on its own\.$/.test(li.textContent ?? "")),
+    ).toBe(true);
+  });
+
   it("closes the help sheet with Escape", async () => {
     await playing();
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(await screen.findByRole("button", { name: /^help$/i }));
+    await user.click(await screen.findByRole("button", { name: /how the dj chooses/i }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
@@ -476,8 +542,65 @@ describe("Vibe DJ", () => {
     render(<Vibe />);
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^help$/i })).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /how the dj chooses/i })).toBeInTheDocument(),
     );
+  });
+
+  /**
+   * The label named the hardware.
+   *
+   * "Conducting on this device" said where the sound comes out, which is not
+   * a question anyone was asking and read the same whatever you pressed play
+   * in. What matters is the set being conducted — and it has to be the real
+   * one, because the planner is confined to it.
+   */
+  it("names the set it is conducting over", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK],
+      start: A_TRACK,
+      scope: "Windowlicker EP",
+    });
+    render(<Vibe />);
+
+    expect(
+      await screen.findByText(/conducting on windowlicker ep/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/this device/i)).toBeNull();
+  });
+
+  /** Playing from an unfiltered list is the library, and says so. */
+  it("says the library when nothing narrower was played from", async () => {
+    await playing();
+    render(<Vibe />);
+
+    expect(
+      await screen.findByText(/conducting on your library/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The switch is not on this screen any more, so this screen has to say
+   * where it went. It used to render nothing at all with the DJ off, which
+   * left the feature's own screen with no sign the feature existed.
+   */
+  it("points at the player when the DJ is switched off", async () => {
+    await playing();
+    render(<Vibe djMode={false} />);
+
+    expect(
+      await screen.findByText(/please enable vibe dj in your player/i),
+    ).toBeInTheDocument();
+    // Dimmed and covered, not removed: the curves are still there.
+    expect(screen.getByRole("button", { name: /chill down/i })).toBeInTheDocument();
+  });
+
+  it("carries no DJ checkbox of its own", async () => {
+    await playing();
+    render(<Vibe />);
+
+    await screen.findByRole("button", { name: /chill down/i });
+    expect(screen.queryByRole("checkbox", { name: /dj/i })).toBeNull();
   });
 
   it("reports a failure to plan", async () => {
@@ -890,6 +1013,45 @@ describe("Transport", () => {
 
     await user.click(screen.getByRole("button", { name: /next track/i }));
     await waitFor(() => expect(backend.called("next_track")).toBe(true));
+  });
+
+  /**
+   * The DJ switch lives here now.
+   *
+   * It was a checkbox on the Vibe screen, which meant the control that turns
+   * the app's headline feature on was inside the screen that only makes sense
+   * once it is on. It acts on playback, so it sits with the playback controls.
+   */
+  it("toggles the DJ on and off", async () => {
+    useBackend();
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Transport djMode={false} onDjModeChange={onChange} />,
+    );
+
+    const button = await screen.findByRole("button", { name: /turn vibe dj on/i });
+    // A toggle, not a checkbox — pressed state, not a tick.
+    expect(button).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(button);
+    expect(onChange).toHaveBeenCalledWith(true);
+
+    rerender(<Transport djMode={true} onDjModeChange={onChange} />);
+    const on = await screen.findByRole("button", { name: /turn vibe dj off/i });
+    expect(on).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(on);
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
+  /** Nothing to switch means no switch, rather than one that does nothing. */
+  it("omits the DJ switch when there is nothing to switch", async () => {
+    useBackend();
+    render(<Transport />);
+
+    await screen.findByText(/nothing playing/i);
+    expect(screen.queryByRole("button", { name: /vibe dj/i })).toBeNull();
   });
 
   it("says when there is no audio device at all", async () => {

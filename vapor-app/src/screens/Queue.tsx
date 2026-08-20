@@ -21,6 +21,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
+import { upNextOf } from "../lib/queue";
+import { useThumb } from "../lib/artwork";
 import { Empty } from "../components/States";
 
 export function Queue({
@@ -65,6 +67,14 @@ export function Queue({
     };
   }, [refresh]);
 
+  // Entries carry no artwork: a queue is routinely the whole library and a
+  // cover runs to megabytes, so sending one per entry put the phone's WebView
+  // past its heap and killed the process. One tile draws one cover, so one
+  // cover is fetched — through the same cache the song rows use, which is why
+  // opening this screen off a list usually has it already.
+  const currentHref = view?.entries.find((e) => e.current)?.href ?? "";
+  const cover = useThumb(currentHref);
+
   async function move(from: number, to: number) {
     if (from === to) return;
     // Optimistic: the drop should land where it was dropped, not a round trip
@@ -100,7 +110,7 @@ export function Queue({
   }
 
   const current = view.entries.find((e) => e.current);
-  const upNext = view.entries.filter((e) => !e.current);
+  const { first: firstUpNext, entries: upNext } = upNextOf(view);
 
   return (
     <div className="queue">
@@ -162,7 +172,7 @@ export function Queue({
       {current && (
         <section className="queue__now glass">
           <span className="queue__now-art" aria-hidden="true">
-            {current.cover && <img src={current.cover} alt="" />}
+            {cover && <img src={cover} alt="" />}
           </span>
           <span className="queue__now-text">
             <span className="label">now playing</span>
@@ -175,8 +185,8 @@ export function Queue({
       <h2 className="label queue__heading">up next</h2>
 
       <ul className="queue__list">
-        {view.entries.map((entry, index) => {
-          if (entry.current) return null;
+        {upNext.map((entry, offset) => {
+          const index = firstUpNext + offset;
           return (
             <li
               key={entry.href}
@@ -217,11 +227,24 @@ export function Queue({
                 className="queue__row"
                 onDoubleClick={() => onOpen?.(entry.href)}
                 onClick={() => {
-                  // Play from here, keeping the rest of the order intact.
+                  /*
+                   * Play from here, keeping the rest of the order intact —
+                   * and keeping what the DJ is conducting over.
+                   *
+                   * `playTracks` sets the scope from what it is given, so
+                   * without passing the current one back, jumping down the
+                   * queue would silently widen the set to the whole library.
+                   * Re-entering the queue is not a change of what you are
+                   * listening to.
+                   */
                   void core
-                    .playTracks(
-                      view.entries.map((x) => x.href),
-                      entry.href,
+                    .playbackState()
+                    .then((s) =>
+                      core.playTracks(
+                        view.entries.map((x) => x.href),
+                        entry.href,
+                        s.scope || undefined,
+                      ),
                     )
                     .then(refresh);
                 }}
