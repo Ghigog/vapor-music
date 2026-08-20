@@ -6,11 +6,11 @@
 //! Signalsmith Stretch, élastique, and a phase vocoder you wrote yourself.
 //!
 //! * **Rubber Band** is the reference implementation and sounds it. It is
-//!   GPL-2.0-or-later or a paid commercial licence. GPL is compatible with this
-//!   app's AGPL, so that is not the objection — the objection is that it is a
-//!   substantial C++ library with its own build system, and the migration's
-//!   entire reason for existing was to stop maintaining a C++ dependency tail
-//!   that only built on one machine.
+//!   GPL-2.0-or-later or a paid commercial licence. GPL was compatible with the
+//!   app's licence when this was chosen, so that was never the objection — the
+//!   objection is that it is a substantial C++ library with its own build
+//!   system, and the migration's entire reason for existing was to stop
+//!   maintaining a C++ dependency tail that only built on one machine.
 //! * **élastique** is proprietary and priced per title.
 //! * **Signalsmith Stretch** is MIT, is a handful of header files, is written
 //!   by a DSP engineer for exactly this application, and holds up at the large

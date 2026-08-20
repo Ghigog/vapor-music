@@ -715,8 +715,14 @@ export function Settings() {
           .
         </p>
         <p className="settings__hint">
-          Vapor Music is free software under the AGPL-3.0. Tempo and key
-          detection use Essentia; time-stretching uses Signalsmith Stretch.
+          {/* Two things were wrong here, both user-facing. It claimed the
+              AGPL, which the project has moved away from (see
+              docs/LICENSING.md), and it credited Essentia for analysis —
+              which has not shipped since the Rust rewrite. Tempo and key are
+              worked out on this device by `vapor-dsp`. */}
+          Vapor Music is © 2026 Dylan Growcoot, all rights reserved. Tempo and
+          key are worked out on this device; audio decoding uses Symphonia and
+          time-stretching uses Signalsmith Stretch.
         </p>
       </section>
 

@@ -4,7 +4,9 @@ members = ["crates/vapor-dsp", "crates/vapor-engine", "crates/vapor-library"]
 
 [workspace.package]
 edition = "2021"
-license = "AGPL-3.0-or-later"
+# Proprietary; see LICENSE and docs/LICENSING.md. A `LicenseRef-`
+# identifier is the SPDX way to say "not one of the standard ones".
+license = "LicenseRef-Proprietary"
 
 # Analysis runs over a whole library at import time; debug-speed DSP makes the
 # validation harness unusable, so optimise dependencies even in dev builds.

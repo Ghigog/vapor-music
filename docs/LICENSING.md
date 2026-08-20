@@ -1,7 +1,7 @@
 # Vapor Music — Licensing & Compliance
 
-**Version:** 2.1
-**Status:** Direction decided (§ The direction) — **not yet applied to the code**
+**Version:** 2.2
+**Status:** Applied — Vapor Music is proprietary; see `LICENSE`
 **Last reviewed:** 2026-08-20
 
 > What Vapor Music depends on, what those licences require, and what is
@@ -116,7 +116,7 @@ On distribution, the shipped tree requires:
 
 ---
 
-## The direction (decided 2026-08-20)
+## The direction (decided and applied 2026-08-20)
 
 **Move to all rights reserved, before anything is distributed.** Not a rejection
 of open source — a decision about *ordering*, taken because only one direction
@@ -139,29 +139,34 @@ distributed, and there are no outside contributors.
 
 > Not legal advice. Confirm with a lawyer before commercial distribution.
 
-### What has to change, when it is done
+### Where it is declared
 
-Seven declarations, and they have to agree or the position is incoherent:
+Seven places, changed together on 2026-08-20 so no build could ship
+contradicting itself:
 
-| Where | Declaration |
+| Where | Now says |
 |---|---|
-| `LICENSE` | Full AGPL-3.0 text, 661 lines |
-| `vapor-app/src-tauri/tauri.conf.json` | `"copyright": "Vapor Music. Licensed AGPL-3.0-or-later."` |
-| `vapor-app/src-tauri/Cargo.toml` | `license = "AGPL-3.0-or-later"` |
-| `vapor-core/Cargo.toml` | `license = "AGPL-3.0-or-later"` |
-| `README.md` | A licensing section explaining the AGPL consequence |
-| `vapor-app/src/screens/Settings.tsx` | User-facing: "free software under the AGPL-3.0" |
-| `THIRD_PARTY_NOTICES.md` | Header note |
+| `LICENSE` | All rights reserved, with third-party components carved out |
+| `vapor-app/src-tauri/tauri.conf.json` | `"copyright": "Copyright (c) 2026 Dylan Growcoot. All rights reserved."` |
+| `vapor-app/src-tauri/Cargo.toml` | `license = "LicenseRef-Proprietary"` |
+| `vapor-core/Cargo.toml` | the same, on `workspace.package` |
+| `README.md` | Proprietary, with why the AGPL went and where the route back is |
+| `vapor-app/src/screens/Settings.tsx` | User-facing copyright line |
+| `THIRD_PARTY_NOTICES.md` | Header: the app is proprietary, its components are not |
 
-There is also a stale copy under `.claude/worktrees/`, which is not the working
-tree and should be ignored.
+`LicenseRef-Proprietary` is the SPDX form for "not one of the standard
+identifiers". Neither crate is published to crates.io, so nothing validates it
+beyond being well-formed.
 
-> [!IMPORTANT]
-> **Two of those are factually wrong today, regardless of the licence.**
-> `Settings.tsx` tells users "Tempo and key detection use Essentia", and
-> `README.md` says the AGPL follows from linking Essentia and Rubber Band.
-> Neither library has shipped since the Rust rewrite. The Settings line is
-> user-facing and should be corrected whether or not the licence moves.
+The copy under `.claude/worktrees/` is a stale worktree, not the working tree,
+and was deliberately left alone.
+
+> [!NOTE]
+> **Two of these were also factually wrong, independently of the licence.**
+> `Settings.tsx` told users "Tempo and key detection use Essentia" and
+> `README.md` explained the AGPL as a consequence of Essentia and Rubber Band.
+> Neither had shipped since the Rust rewrite. Both are corrected: analysis is
+> `vapor-dsp` on this device, decoding is Symphonia, stretching is Signalsmith.
 
 ---
 
@@ -235,5 +240,6 @@ whether people donate.
   file-level. AGPL becomes a choice.
 * **v2.1 (2026-08-20)** — Direction decided: all rights reserved before any
   distribution, on ordering grounds, with the route back to open source and the
-  donation model written down. **Not yet applied** — the seven declarations
-  still say AGPL.
+  donation model written down.
+* **v2.2 (2026-08-20)** — Applied across all seven declarations, and the stale
+  Essentia claims in Settings and the README corrected with it.

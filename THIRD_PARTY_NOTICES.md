@@ -3,10 +3,15 @@
 Vapor Music incorporates the following third-party components.
 
 > [!NOTE]
+> Vapor Music itself is proprietary — see `LICENSE`. The components below are
+> **not**: each remains under its own licence, and this file is where the
+> attributions they require are given. Licence texts ship in `licenses/`.
+>
 > Rebuilt 2026-08-20 against the Rust tree. The previous version listed
 > Essentia (AGPL-3.0) and Rubber Band (GPL-2.0-or-later), which the Godot build
-> linked and **which no longer ship** — see `docs/LICENSING.md` v2.0. No
-> strong-copyleft component remains. Licence texts ship in `licenses/`.
+> linked and **which no longer ship**. No strong-copyleft component remains; the
+> strongest obligation is MPL-2.0, and it is file-level. See
+> `docs/LICENSING.md`.
 
 ---
 

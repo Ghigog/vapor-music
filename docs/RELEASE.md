@@ -105,21 +105,16 @@ vendored sources and their declared licences read:
 
 `docs/LICENSING.md` v2.0 and `THIRD_PARTY_NOTICES.md` are rebuilt accordingly.
 
-**Direction decided, not yet applied.** Move to **all rights reserved before
-anything is distributed**, then choose an open licence later if wanted. The
+**Applied 2026-08-20.** Vapor Music is **all rights reserved**; an open licence
+stays available and the route to one is in `LICENSING.md`. The
 reasoning is ordering, not ideology: reserved → open is always available,
 distributed-under-AGPL → proprietary never is. Nothing forces AGPL now, and a
 donation tier is under consideration, so the reversible order is taken first.
 
-The code still says AGPL in **seven places** — `LICENSE`, both `Cargo.toml`s,
-`tauri.conf.json`, `README.md`, `Settings.tsx` and `THIRD_PARTY_NOTICES.md` —
-and they have to move together, in one commit, or a build ships contradicting
-itself. `docs/LICENSING.md` §"The direction" holds the list and the route back.
-
-**Two of those are wrong today regardless of the licence:** `Settings.tsx` tells
-users "Tempo and key detection use Essentia" and `README.md` explains the AGPL
-as a consequence of Essentia and Rubber Band. Neither has shipped since the Rust
-rewrite. The Settings line is user-facing.
+All seven declarations moved in one commit, so no build ships contradicting
+itself. Two of them were also factually wrong — Settings and the README both
+credited Essentia for analysis, which has not shipped since the Rust rewrite —
+and were corrected at the same time.
 
 **Still outstanding:** CC BY requires attribution *visible to users*, which a
 repository file does not provide. An About → Licences screen would settle it,
@@ -214,10 +209,9 @@ Decisions, not oversights. Each is recorded where it was made.
 
 - [x] ~~Redo the licence inventory against the Rust tree.~~ Done 2026-08-20;
       `LICENSING.md` v2.0 and `THIRD_PARTY_NOTICES.md` rebuilt.
-- [ ] Apply the licence direction: all rights reserved across all seven
-      declarations, in one commit. See `LICENSING.md` §"The direction".
-- [ ] Correct the Essentia claims in `Settings.tsx` and `README.md` — wrong
-      today, user-facing, and independent of the licence decision.
+- [x] ~~Apply the licence direction across all seven declarations.~~ Done
+      2026-08-20; Vapor Music is proprietary, see `LICENSE`.
+- [x] ~~Correct the Essentia claims in `Settings.tsx` and `README.md`.~~ Done.
 - [ ] An About → Licences screen, for the CC BY icons and the MPL notice.
 - [ ] Apple Developer ID, `signingIdentity`, notarisation, hardened runtime
       tested against real audio output.

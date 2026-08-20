@@ -386,18 +386,24 @@ The full account of what was measured and decided along the way is in
 
 ## License
 
-Vapor Music is free software, licensed under the
-**GNU Affero General Public License v3.0 or later**. The full text is in
-[`LICENSE`](LICENSE).
+Vapor Music is **proprietary** — © 2026 Dylan Growcoot, all rights reserved.
+The full notice is in [`LICENSE`](LICENSE).
 
-This is a consequence of the audio analysis stack: Vapor Music links
-**Essentia** (AGPL-3.0) for BPM and key detection and the **Rubber Band
-Library** (GPL-2.0-or-later) for pitch-independent time-stretching. Both are
-strong copyleft, so the combined work is AGPL-3.0.
+It was AGPL-3.0 until 2026-08-20, and that was a consequence rather than a
+choice: the Godot build linked **Essentia** (AGPL-3.0) for BPM and key detection
+and the **Rubber Band Library** (GPL-2.0-or-later) for time-stretching, both
+strong copyleft. Neither has shipped since the Rust rewrite — analysis is
+`vapor-dsp`, and the stretcher is Signalsmith Stretch (MIT) — so nothing in the
+dependency tree compels a licence any more.
 
-In practice this means you may use, study, modify and redistribute Vapor Music,
-provided derivative works remain under the AGPL and their source is made
-available.
+The reserved position is a starting point, not a settled one. It is taken first
+because the directions are not equally reversible: rights not yet granted can be
+granted later, and rights already granted cannot be withdrawn from work already
+distributed. The route to an open licence, and what would have to change, is in
+[`docs/LICENSING.md`](docs/LICENSING.md).
+
+Third-party components keep their own licences and are unaffected by any of
+this.
 
 - Third-party components and what they are used for: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - Bundled license texts: [`licenses/`](licenses/)

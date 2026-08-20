@@ -2,7 +2,9 @@
 name = "vapor-app"
 version = "2.0.0"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+# Proprietary; see LICENSE and docs/LICENSING.md. A `LicenseRef-`
+# identifier is the SPDX way to say "not one of the standard ones".
+license = "LicenseRef-Proprietary"
 
 [lib]
 # Tauri 2 builds the app as a library so the mobile targets can link it.
