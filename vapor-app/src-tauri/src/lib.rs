@@ -67,7 +67,7 @@ struct AppState {
     /// eviction. Everything else in the audio cache is there because something
     /// needed to read it once. See `keeps_audio`.
     pinned: std::collections::HashSet<String>,
-    /// Smart groups: saved sets of artists, albums and genres.
+    /// Dynamic groups: saved sets of artists, albums and genres.
     ///
     /// A group holds *entities*, not tracks, which is what makes it different
     /// from a playlist — membership is resolved against the library when it is
@@ -2571,7 +2571,7 @@ fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folde
     Ok(app.folders.all().to_vec())
 }
 
-/* ---- Smart groups ----------------------------------------------------
+/* ---- Dynamic groups ----------------------------------------------------
  *
  * A group is a saved set of artists, albums and genres — not of tracks. That is
  * the whole difference from a playlist: membership is worked out against the
@@ -2633,7 +2633,7 @@ fn collection_tracks(app: &AppState, kind: &str, id: &str) -> Vec<String> {
     }
 }
 
-/// Download every track in a playlist or smart group, and keep them.
+/// Download every track in a playlist or dynamic group, and keep them.
 ///
 /// Reported per track rather than as one long wait: on a slow connection this
 /// is minutes, and a button that goes quiet for minutes has failed as far as
@@ -2853,7 +2853,7 @@ fn add_to_group(
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
     let Some(kind) = vapor_library::EntityType::parse(&entity_type) else {
         return Err(Error(format!(
-            "A smart group holds artists, albums and genres. \"{entity_type}\" is none of those."
+            "A dynamic group holds artists, albums and genres. \"{entity_type}\" is none of those."
         )));
     };
     let value = value.trim();

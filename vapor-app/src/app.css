@@ -248,7 +248,11 @@
 .rail {
   margin-top: 18px;
   padding-top: 14px;
-  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  /* The same rule `.nav__rule` draws. There were two dividers in one sidebar —
+     a white one between the nav groups and a grey `rgba(0, 0, 0, 0.07)` above
+     each rail — which read as two different kinds of separation when they mean
+     the same thing. `--glass-rim` is theme-aware; the hard-coded black was not. */
+  border-top: 1px solid var(--glass-rim);
   /* The rail can outgrow the sidebar; the nav above it must not be pushed off. */
   display: flex;
   flex-direction: column;

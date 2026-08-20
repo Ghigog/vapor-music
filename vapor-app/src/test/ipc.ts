@@ -922,7 +922,7 @@ export class FakeBackend {
         };
       }
 
-      // --- Smart groups ---------------------------------------------------
+      // --- Dynamic groups ---------------------------------------------------
       //
       // A group holds entities and resolves to tracks on read, so the fake
       // resolves them the same way the backend does rather than storing a
@@ -1008,7 +1008,7 @@ export class FakeBackend {
         const kind = String(a.entityType ?? "");
         if (!["artist", "album", "genre"].includes(kind)) {
           throw new Error(
-            `A smart group holds artists, albums and genres. "${kind}" is none of those.`,
+            `A dynamic group holds artists, albums and genres. "${kind}" is none of those.`,
           );
         }
         const value = String(a.value ?? "").trim();

@@ -6,7 +6,7 @@
  * half. It is deliberately only the *input*: the rules about what may be
  * dropped where live in `dropOn` below, and the desktop adapter is meant to
  * call the same function, so the two paths cannot come to different answers
- * about whether a track belongs in a smart group.
+ * about whether a track belongs in a dynamic group.
  *
  * What the browser gives away for free on desktop and has to be built here: the
  * thing that follows the finger, working out what is under it, opening a
@@ -21,7 +21,7 @@ export interface DragPayload {
    * Tracks carry hrefs; the other three carry one name.
    *
    * The distinction is the whole of the drop rules: a playlist is a list of
-   * tracks, and a smart group is a set of entities that resolves to tracks. So
+   * tracks, and a dynamic group is a set of entities that resolves to tracks. So
    * every kind can go to a playlist, and a track cannot go to a group.
    */
   kind: "track" | "artist" | "album" | "genre";
@@ -77,7 +77,7 @@ export function targetAt(x: number, y: number, preview: Element | null): DropTar
 /** Whether this payload may be dropped on this menu at all. */
 export function accepts(payload: DragPayload, menu: "playlist" | "group"): boolean {
   if (menu === "playlist") return true;
-  // A smart group holds artists, albums and genres. A single track is not one
+  // A dynamic group holds artists, albums and genres. A single track is not one
   // of those, and turning it into its album would put something in the set
   // that nobody chose.
   return payload.kind !== "track";
@@ -85,7 +85,7 @@ export function accepts(payload: DragPayload, menu: "playlist" | "group"): boole
 
 /** Why not, for the person holding it. */
 export function refusal(payload: DragPayload): string {
-  return `A smart group holds artists, albums and genres — not single tracks. Drop “${payload.label}” on a playlist instead.`;
+  return `A dynamic group holds artists, albums and genres — not single tracks. Drop “${payload.label}” on a playlist instead.`;
 }
 
 /**

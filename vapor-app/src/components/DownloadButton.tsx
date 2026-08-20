@@ -1,5 +1,5 @@
 /**
- * Keep a playlist or a smart group on the device.
+ * Keep a playlist or a dynamic group on the device.
  *
  * Vapor plays from your server. The audio cache holds a few tracks either side
  * of where the set is and drops the rest, because a file read once is not a

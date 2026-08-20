@@ -1,7 +1,7 @@
 /**
  * A list that opens from a tab, rather than a screen the tab goes to.
  *
- * Playlists and smart groups are collections you pick from, not places the app
+ * Playlists and dynamic groups are collections you pick from, not places the app
  * is — going to a screen to choose one and coming back out is two navigations
  * for a choice. This is the small window that rises from the bar instead.
  *

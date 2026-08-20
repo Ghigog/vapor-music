@@ -311,16 +311,16 @@ test.describe("Playlists and groups open from the bar", () => {
   });
 
   /**
-   * A smart group holds artists, albums and genres, and resolves to tracks when
+   * A dynamic group holds artists, albums and genres, and resolves to tracks when
    * it is read — so it keeps up with the library rather than being maintained.
    */
   test("the groups tab opens a list, and a new group opens empty", async ({ page }) => {
     await boot(page);
 
     await tab(page, "Groups").click();
-    const menu = page.getByRole("dialog", { name: "Smart groups" });
+    const menu = page.getByRole("dialog", { name: "Dynamic groups" });
     await expect(menu).toBeVisible();
-    await expect(menu).toContainText(/no smart groups yet/i);
+    await expect(menu).toContainText(/no dynamic groups yet/i);
 
     await menu.getByRole("button", { name: /new group/i }).click();
 
@@ -341,7 +341,7 @@ test.describe("Playlists and groups open from the bar", () => {
 
     await tab(page, "Groups").click();
     await page
-      .getByRole("dialog", { name: "Smart groups" })
+      .getByRole("dialog", { name: "Dynamic groups" })
       .getByRole("button", { name: /braindance/i })
       .click();
 
@@ -359,7 +359,7 @@ test.describe("Playlists and groups open from the bar", () => {
 
     await tab(page, "Groups").click();
     await page
-      .getByRole("dialog", { name: "Smart groups" })
+      .getByRole("dialog", { name: "Dynamic groups" })
       .getByRole("button", { name: /braindance/i })
       .click();
     await expect(page.getByRole("button", { name: /^braindance$/i })).toBeVisible();
@@ -465,7 +465,7 @@ test.describe("Dragging with a finger", () => {
    * genres, and a drag that silently did nothing would read as a broken
    * gesture rather than an answer.
    */
-  test("a track dropped on a smart group is refused, with a reason", async ({
+  test("a track dropped on a dynamic group is refused, with a reason", async ({
     page,
   }) => {
     await boot(page, {
@@ -476,7 +476,7 @@ test.describe("Dragging with a finger", () => {
 
     const tab = await centreOf(page, '[data-tab="group"]');
     await send(page, "pointermove", tab.x, tab.y);
-    await expect(page.getByRole("dialog", { name: "Smart groups" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Dynamic groups" })).toBeVisible();
 
     const item = await centreOf(page, '[data-drop-id="g1"]');
     await send(page, "pointermove", item.x, item.y);

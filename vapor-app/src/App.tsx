@@ -69,7 +69,7 @@ type Screen =
 /**
  * The two tabs that open a list instead of going somewhere.
  *
- * Playlists and smart groups are collections you pick from, not places the app
+ * Playlists and dynamic groups are collections you pick from, not places the app
  * is, so pressing one raises a window from the bar rather than replacing the
  * screen. They are also the drop targets the drag work aims at.
  */
@@ -149,7 +149,7 @@ export function App() {
   /** The album or artist opened inside Library. Held here, not in Library, so
    *  it lands in the history entry below and the back gesture can leave it. */
   const [opened, setOpened] = useState<Opened | null>(null);
-  /** The smart group being looked at — a drill-down like the others. */
+  /** The dynamic group being looked at — a drill-down like the others. */
   const [group, setGroup] = useState<string | null>(null);
   /** Which tab's list is open, if any. Not a place, so not in the history. */
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -430,7 +430,7 @@ export function App() {
           {/* Always on screen, because it is the drop target for tracks
               dragged out of the Songs table on another screen (TD-31). */}
           <PlaylistRail activeId={playlist} onOpen={openPlaylist} />
-          {/* Smart groups lived only in the mobile tab bar, which left them
+          {/* Dynamic groups lived only in the mobile tab bar, which left them
               with no way in at all on a desktop window. */}
           <GroupRail activeId={group} onOpen={openGroup} />
         </nav>
@@ -557,7 +557,7 @@ export function App() {
 
         {/*
           What the last drop did. A refusal has to say why — dropping a track on
-          a smart group is the one move the rules turn down, and a drag that
+          a dynamic group is the one move the rules turn down, and a drag that
           simply does nothing reads as a broken gesture rather than an answer.
         */}
         {dropSaid && (
@@ -596,9 +596,9 @@ export function App() {
         {menu === "group" && (
           <TabMenu
             menu="group"
-            title="Smart groups"
+            title="Dynamic groups"
             items={groupItems}
-            empty="No smart groups yet. A group holds artists, albums and genres, and keeps up with the library as it grows."
+            empty="No dynamic groups yet. A group holds artists, albums and genres, and keeps up with the library as it grows."
             createLabel="New group"
             onCreate={() => {
               void core

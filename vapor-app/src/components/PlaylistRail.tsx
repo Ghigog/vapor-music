@@ -90,15 +90,34 @@ export function PlaylistRail({
   /** What the last drop did, so a drag that lands has an answer. */
   const [flash, setFlash] = useState<string | null>(null);
 
+  /**
+   * Whether the last read actually reached the backend.
+   *
+   * This used to `.catch(() => setPlaylists([]))`, so a failed call rendered as
+   * "None yet" — a person who had just made a playlist was told they had none.
+   * The app restarts under `tauri dev` on every backend edit, and a call in
+   * flight across a restart fails, which is exactly when someone is most likely
+   * to be looking. Nothing was ever lost; the rail simply reported an error as
+   * an answer.
+   *
+   * On failure the previous list is kept rather than cleared. Stale is a better
+   * lie than empty: it is at least what was true a moment ago, and the next
+   * refresh corrects it.
+   */
+  const [reachable, setReachable] = useState(true);
+
   const refresh = useCallback(() => {
     core
       .playlists()
-      .then(setPlaylists)
-      .catch(() => setPlaylists([]));
+      .then((got) => {
+        setPlaylists(got);
+        setReachable(true);
+      })
+      .catch(() => setReachable(false));
     core
       .playlistFolders()
       .then(setFolders)
-      .catch(() => setFolders([]));
+      .catch(() => {});
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -390,7 +409,9 @@ export function PlaylistRail({
 
       {playlists.length === 0 && folders.length === 0 && !creating && (
         <p className="rail__empty">
-          None yet. Drag tracks here once you make one.
+          {reachable
+            ? "Create a playlist: +"
+            : "Could not read your playlists. They are still on disk."}
         </p>
       )}
 

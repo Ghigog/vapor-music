@@ -1,5 +1,5 @@
 /**
- * One smart group.
+ * One dynamic group.
  *
  * A group holds artists, albums and genres; the tracks are worked out from the
  * library every time this opens, which is the difference from a playlist. So

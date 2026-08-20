@@ -246,7 +246,32 @@ describe("The playlist rail", () => {
     useBackend({ playlists: [] });
     render(<PlaylistRail activeId={null} onOpen={() => {}} />);
 
-    expect(await screen.findByText(/none yet/i)).toBeInTheDocument();
+    // The empty state is an instruction now, not a statement of absence — the
+    // "+" beside it is the thing to press.
+    expect(await screen.findByText(/create a playlist/i)).toBeInTheDocument();
+  });
+
+  /**
+   * A failed read is not an empty library.
+   *
+   * The rail used to `.catch(() => setPlaylists([]))`, so a call that never
+   * reached the backend rendered as "None yet" — someone who had just made a
+   * playlist was told they had none, and the playlist was on disk the whole
+   * time. Under `tauri dev` the app restarts on every backend edit, and a call
+   * in flight across a restart fails, which is exactly when somebody is
+   * looking.
+   */
+  it("does not report a failed read as having none", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    backend.fail("playlists", "the backend went away");
+    render(<PlaylistRail activeId={null} onOpen={() => {}} />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/could not read your playlists/i)).toBeInTheDocument(),
+    );
+    // And it does not sit there inviting a playlist to be made as though the
+    // read had succeeded and found none.
+    expect(screen.queryByText(/create a playlist/i)).toBeNull();
   });
 
   it("creates one and opens it", async () => {

@@ -1,5 +1,5 @@
 /**
- * Smart groups in the sidebar.
+ * Dynamic groups in the sidebar.
  *
  * They existed only in the mobile tab bar, so on a desktop window the feature
  * was unreachable: the rail listed playlists and nothing else, and there was no
@@ -31,11 +31,19 @@ export function GroupRail({
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
 
+  /** Whether the last read reached the backend — see `PlaylistRail`, which had
+   *  the same fault: a failed call rendered as "None yet". */
+  const [reachable, setReachable] = useState(true);
+
   const refresh = useCallback(() => {
     core
       .dynamicGroups()
-      .then(setGroups)
-      .catch(() => setGroups([]));
+      .then((got) => {
+        setGroups(got);
+        setReachable(true);
+      })
+      // Keep what was there. Stale beats claiming the person has none.
+      .catch(() => setReachable(false));
   }, []);
 
   useEffect(() => {
@@ -64,7 +72,7 @@ export function GroupRail({
   return (
     <div className="rail">
       <div className="rail__head">
-        <span className="rail__title label">Smart groups</span>
+        <span className="rail__title label">Dynamic groups</span>
         <span className="rail__actions">
           <button
             className="rail__new"
@@ -116,8 +124,9 @@ export function GroupRail({
 
       {groups.length === 0 && !creating && (
         <p className="rail__empty">
-          None yet. A group holds artists, albums and genres, and keeps up with
-          the library as it grows.
+          {reachable
+            ? "Create a group +"
+            : "Could not read your groups. They are still on disk."}
         </p>
       )}
     </div>

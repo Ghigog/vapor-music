@@ -169,7 +169,7 @@ export interface PlaybackState {
   cover: string | null;
   /**
    * What the DJ is conducting over — a playlist, album, artist, genre or
-   * smart group name. Empty means the whole library.
+   * dynamic group name. Empty means the whole library.
    *
    * Set by whatever list `playTracks` was called from, and it is the pool the
    * planner actually chooses within, not a caption. See `AppState::scope`.
@@ -697,10 +697,10 @@ export function syncSharedDocument(): Promise<SharedSyncResult> {
   return invoke<SharedSyncResult>("sync_shared_document");
 }
 
-// --- Smart groups -----------------------------------------------------------
+// --- Dynamic groups -----------------------------------------------------------
 
 /**
- * What a smart group can hold.
+ * What a dynamic group can hold.
  *
  * Entities, not tracks. That is what makes a group different from a playlist:
  * membership is resolved against the library whenever it is read, so a record
@@ -746,7 +746,7 @@ export function downloadedTracks(): Promise<string[]> {
   return invoke<string[]>("downloaded_tracks");
 }
 
-/** Fetch and keep every track in a playlist or smart group.
+/** Fetch and keep every track in a playlist or dynamic group.
  *
  *  Returns as soon as the work has started; follow `download-progress`. */
 export function downloadCollection(
