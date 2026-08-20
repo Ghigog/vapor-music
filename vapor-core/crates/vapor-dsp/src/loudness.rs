@@ -293,11 +293,16 @@ const ENERGY_WINDOW_SECS: f32 = 1.0;
 /// **Ported from `audio_dsp.cpp`**, which computes it as the mean of a
 /// one-second RMS envelope divided by that envelope's peak.
 ///
-/// It is a dynamics ratio rather than a loudness, and that is the point: a
-/// track that sits near its own peak the whole way through reads as relentless,
-/// while one with quiet verses and a loud chorus reads as varied — at identical
-/// LUFS. That distinction is exactly what a DJ ordering a set needs, and it is
-/// why loudness alone was the wrong measure.
+/// It is a dynamics ratio rather than a loudness: a track that sits near its
+/// own peak the whole way through reads as relentless, while one with quiet
+/// verses and a loud chorus reads as varied — at identical LUFS.
+///
+/// That is a defensible measure of something, but it is not intensity, and it
+/// drove the set ordering on the claim that it was. Measured on 2026-08-17 it
+/// put ballads above drum & bass with the two ranges fully overlapping, and
+/// `vapor_library::intensity_from_lufs` replaced it everywhere intensity was
+/// actually wanted. What still reads it is the mix's mid cut, via
+/// [`has_vocal_presence`].
 ///
 /// Returns 0.5 for a signal too short or too quiet to measure, matching the
 /// original's fallback: an unknown energy sits in the middle rather than at an

@@ -14,6 +14,10 @@
 //! Hence [`TEMPO_WINDOW`]/[`TEMPO_HOP`] and [`KEY_WINDOW`]/[`KEY_HOP`]. The key
 //! spectrogram is not as expensive as it looks: the hop scales with the window,
 //! so the frame count falls as the window grows.
+//!
+//! [`brightness`] also lives here, because it reads a spectrogram rather than
+//! because it serves tempo or key. Nothing in production calls it — read its
+//! own docs before wiring it into anything.
 
 use std::sync::Arc;
 
@@ -108,10 +112,29 @@ const BRIGHTNESS_SPLIT_HZ: f32 = 1_500.0;
 
 /// Fraction of the spectrum's energy above [`BRIGHTNESS_SPLIT_HZ`], 0–1.
 ///
-/// A perceptual ingredient rather than a measurement: at equal loudness, a
-/// bright mix reads as more energetic than a dark one, which is why loudness
-/// alone orders a set badly. Returns 0 for silence, where the ratio is
-/// undefined and any other answer would be invented.
+/// Returns 0 for silence, where the ratio is undefined and any other answer
+/// would be invented.
+///
+/// ## Nothing calls this
+///
+/// Correct and unit-tested, with no production caller — the same state as
+/// [`crate::metre`]. The premise was that at equal loudness a bright mix reads
+/// as more energetic than a dark one, so brightness belonged in the energy
+/// figure; a doc comment on `Analysis::energy` asserted for a long time that it
+/// already was in there. It never was.
+///
+/// When that energy defect was finally measured on 2026-08-17, the fix that
+/// landed was integrated loudness alone (`vapor_library::intensity_from_lufs`),
+/// separating drum & bass from ballads by 0.256 against the old dynamics
+/// ratio's 0.031 — see docs/FINDINGS.md. Brightness was never in that
+/// comparison. So the open question is not restoring something lost, but
+/// whether a brightness term *adds* to a loudness figure that already works;
+/// 0.256 is what it has to beat, on the library rather than on tones.
+///
+/// Unrelated despite the name: `brightness` on the audio thread's Link, in
+/// `vapor-app/src-tauri/src/audio.rs`, is a cheap one-pole realtime estimate at
+/// the same 1500 Hz split that drives the logo's turn rate. It does not call
+/// this, and this does not replace it.
 pub fn brightness(spec: &Spectrogram) -> f32 {
     if spec.frames.is_empty() {
         return 0.0;
