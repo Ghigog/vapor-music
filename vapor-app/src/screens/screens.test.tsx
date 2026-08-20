@@ -18,6 +18,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { Queue } from "./Queue";
+import { Settings } from "./Settings";
 import { Vibe } from "./Vibe";
 import { NowPlaying } from "./NowPlaying";
 import { LinerNotes } from "./LinerNotes";
@@ -612,6 +613,52 @@ describe("Vibe DJ", () => {
     await user.click(await screen.findByRole("button", { name: /chill down/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no analysed/i);
+  });
+});
+
+describe("Licences", () => {
+  /**
+   * CC BY requires attribution **visible to the people using the work**. A
+   * file in the repository does not reach them, so this is an obligation the
+   * app has to discharge rather than a nicety — and it is the reason the sheet
+   * renders `THIRD_PARTY_NOTICES.md` itself instead of a retyped summary that
+   * could drift away from it.
+   */
+  it("shows the attributions the licences require", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /licences and attributions/i }),
+    );
+
+    const sheet = await screen.findByRole("dialog");
+    // CC BY — the icons.
+    expect(sheet).toHaveTextContent(/Gregor Cresnar/);
+    expect(sheet).toHaveTextContent(/Noun Project/i);
+    // MPL-2.0 — Symphonia, with somewhere to get the source.
+    expect(sheet).toHaveTextContent(/symphonia/i);
+    expect(sheet).toHaveTextContent(/MPL-2\.0/);
+    // OFL — the fonts, by name.
+    expect(sheet).toHaveTextContent(/JetBrains Mono/);
+    // And it says the app itself is not open, so the two cannot be confused.
+    expect(sheet).toHaveTextContent(/proprietary/i);
+  });
+
+  /** Tables carry most of the attribution, so they must actually render. */
+  it("renders the attribution tables rather than raw pipes", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /licences and attributions/i }),
+    );
+    const sheet = await screen.findByRole("dialog");
+
+    expect(sheet.querySelectorAll("table").length).toBeGreaterThan(0);
+    expect(sheet.textContent).not.toMatch(/\|---/);
   });
 });
 

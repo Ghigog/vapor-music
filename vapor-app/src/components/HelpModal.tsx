@@ -25,7 +25,10 @@ import type { ReactNode } from "react";
  */
 function inline(text: string, keyBase: string): ReactNode[] {
   const parts: ReactNode[] = [];
-  const pattern = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  // `**bold**`, `` `code` ``, `[text](url)` and bare `<https://…>`. One pass,
+  // so a marker inside another cannot be half-consumed.
+  const pattern =
+    /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:[^)]+)\)|<(https?:[^>]+)>/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let i = 0;
@@ -34,11 +37,26 @@ function inline(text: string, keyBase: string): ReactNode[] {
     if (match.index > last) parts.push(text.slice(last, match.index));
     if (match[1] !== undefined) {
       parts.push(<strong key={`${keyBase}-b${i}`}>{match[1]}</strong>);
-    } else {
+    } else if (match[2] !== undefined) {
       parts.push(
         <code className="help__code" key={`${keyBase}-c${i}`}>
           {match[2]}
         </code>,
+      );
+    } else {
+      // `noreferrer` and a new tab: these are third-party sites, and the sheet
+      // must not navigate the app away from itself.
+      const href = match[4] ?? match[5] ?? "";
+      parts.push(
+        <a
+          className="help__link"
+          key={`${keyBase}-a${i}`}
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {match[3] ?? href}
+        </a>,
       );
     }
     last = match.index + match[0].length;
@@ -94,9 +112,97 @@ function render(markdown: string): ReactNode[] {
     );
   };
 
+  /*
+   * Tables, gathered as rows and emitted whole.
+   *
+   * `THIRD_PARTY_NOTICES.md` states several attributions as tables — which
+   * font, whose copyright, from where — and rendered a line at a time those
+   * arrive as literal pipes. A licence notice that is unreadable is not a
+   * notice, so the renderer had to learn the one construct the document needs.
+   *
+   * The `|---|---|` separator row is dropped rather than drawn; alignment
+   * markers in it are ignored, because nothing here uses them.
+   */
+  let table: string[][] = [];
+
+  const flushTable = () => {
+    if (table.length === 0) return;
+    const rows = table;
+    table = [];
+    const [head, ...body] = rows;
+    out.push(
+      <div className="help__table-wrap" key={`tw-${out.length}`}>
+        <table className="help__table">
+          {head && (
+            <thead>
+              <tr>
+                {head.map((cell, i) => (
+                  <th key={i}>{inline(cell, `th-${out.length}-${i}`)}</th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {body.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, c) => (
+                  <td key={c}>{inline(cell, `td-${out.length}-${r}-${c}`)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>,
+    );
+  };
+
+  /*
+   * Blockquotes, including GitHub's `> [!NOTE]` callouts.
+   *
+   * The notices file uses them for the things a reader most needs to see — the
+   * MPL explanation, the Reserved Font Name reasoning — so dropping the marker
+   * and running them into the body would bury exactly the wrong paragraphs.
+   */
+  // Paragraphs, each a run of wrapped lines — a blockquote is hard-wrapped in
+  // the source exactly as body text is, and a bare `>` is what separates one
+  // paragraph from the next. Splitting per line breaks sentences in half.
+  let quote: string[][] = [];
+  let quoteKind = "";
+
+  const quoteLine = (text: string) => {
+    if (!text.trim()) {
+      if (quote.length && quote[quote.length - 1]?.length) quote.push([]);
+      return;
+    }
+    if (!quote.length) quote.push([]);
+    quote[quote.length - 1]?.push(text.trim());
+  };
+
+  const flushQuote = () => {
+    if (quote.length === 0) return;
+    const body = quote.filter((para) => para.length).map((para) => para.join(" "));
+    const kind = quoteKind;
+    quote = [];
+    quoteKind = "";
+    if (body.length === 0) return;
+    out.push(
+      <blockquote
+        className={"help__quote" + (kind ? ` help__quote--${kind}` : "")}
+        key={`q-${out.length}`}
+      >
+        {kind && <span className="help__quote-kind">{kind}</span>}
+        {body.map((line, i) => (
+          <p key={i}>{inline(line, `q-${out.length}-${i}`)}</p>
+        ))}
+      </blockquote>,
+    );
+  };
+
   const flush = () => {
     flushParagraph();
     flushList();
+    flushTable();
+    flushQuote();
   };
 
   lines.forEach((raw) => {
@@ -107,8 +213,39 @@ function render(markdown: string): ReactNode[] {
       return;
     }
 
+    // A table row. The separator is structure, not content.
+    if (line.startsWith("|") && line.endsWith("|")) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      const cells = line
+        .slice(1, -1)
+        .split("|")
+        .map((c) => c.trim());
+      if (!cells.every((c) => /^:?-{2,}:?$/.test(c))) table.push(cells);
+      return;
+    }
+
+    if (line.startsWith(">")) {
+      flushParagraph();
+      flushList();
+      flushTable();
+      const body = line.replace(/^>\s?/, "");
+      const callout = /^\[!(\w+)\]$/.exec(body);
+      if (callout) {
+        // Opens a new quote, so two callouts in a row do not merge.
+        flushQuote();
+        quoteKind = (callout[1] ?? "").toLowerCase();
+      } else {
+        quoteLine(body);
+      }
+      return;
+    }
+
     if (line.startsWith("- ")) {
       flushParagraph();
+      flushTable();
+      flushQuote();
       bullets.push(line.slice(2));
       return;
     }
@@ -133,8 +270,10 @@ function render(markdown: string): ReactNode[] {
       flush();
       out.push(<hr className="help__rule" key={`hr-${out.length}`} />);
     } else {
-      // Ordinary prose. A list ends where unindented prose begins.
+      // Ordinary prose. A list, table or quote ends where it begins.
       flushList();
+      flushTable();
+      flushQuote();
       paragraph.push(line);
     }
   });

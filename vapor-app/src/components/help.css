@@ -212,3 +212,95 @@
   border: 0;
   border-top: 1px solid rgba(var(--ink-3-rgb), 0.28);
 }
+
+/* ---- Tables ----------------------------------------------------------
+ *
+ * Attribution is often a table — which font, whose copyright, from where —
+ * and the licences sheet is mostly attribution. Scrolls inside its own box
+ * rather than widening the panel, because a copyright line can be long and
+ * the sheet must not gain a horizontal scrollbar of its own.
+ */
+
+.help__table-wrap {
+  margin: 0 0 20px;
+  overflow-x: auto;
+  border: 1px solid rgba(var(--ink-3-rgb), 0.28);
+  border-radius: var(--r-md, 10px);
+}
+
+.help__table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 15px;
+}
+
+.help__table th,
+.help__table td {
+  text-align: left;
+  padding: 9px 14px;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(var(--ink-3-rgb), 0.2);
+}
+
+.help__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.help__table th {
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  background: rgba(var(--ink-3-rgb), 0.12);
+  white-space: nowrap;
+}
+
+.help__table td {
+  color: var(--ink-2);
+}
+
+/* ---- Blockquotes and callouts ---------------------------------------- */
+
+.help__quote {
+  margin: 0 0 20px;
+  padding: 12px 16px;
+  border-left: 3px solid rgba(var(--ink-3-rgb), 0.45);
+  border-radius: 0 var(--r-md, 10px) var(--r-md, 10px) 0;
+  background: rgba(var(--ink-3-rgb), 0.1);
+  color: var(--ink-2);
+}
+
+.help__quote p {
+  margin: 0 0 8px;
+  max-width: none;
+}
+
+.help__quote p:last-child {
+  margin-bottom: 0;
+}
+
+/* `> [!NOTE]` and friends. The word is the point — these mark the paragraphs
+   a reader most needs, so they get a label rather than a colour alone. */
+.help__quote-kind {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.help__quote--important,
+.help__quote--warning {
+  border-left-color: var(--amber-ink);
+  background: rgba(var(--amber-rgb), 0.12);
+}
+
+.help__quote--important .help__quote-kind,
+.help__quote--warning .help__quote-kind {
+  color: var(--amber-ink);
+}
+
+.help__link {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}

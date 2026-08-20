@@ -28,6 +28,12 @@ import { YourData } from "./YourData";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
 import { VaporMark, LOGO_POSE } from "../components/VaporMark";
+import { HelpModal } from "../components/HelpModal";
+// The notices themselves, not a second copy of them. Same reasoning as the
+// Vibe help sheet importing `ai_dj_workflow.md`: a licence notice that is
+// retyped is one that goes stale, and this one is an obligation rather than
+// a convenience — CC BY wants attribution the user can actually see.
+import notices from "../../../THIRD_PARTY_NOTICES.md?raw";
 
 type Busy = "idle" | "saving" | "scanning" | "analysing";
 
@@ -35,6 +41,8 @@ type Busy = "idle" | "saving" | "scanning" | "analysing";
 type Card = "remote" | "analysis" | "data" | "dupes";
 
 export function Settings() {
+  /** Whether the licences sheet is open. */
+  const [licences, setLicences] = useState(false);
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -714,6 +722,13 @@ export function Settings() {
           </a>
           .
         </p>
+        {/* The full notices, in the app rather than only in the repository.
+            CC BY requires attribution visible to the people using the work,
+            and a file on GitHub does not reach them. It is also where the
+            MPL-2.0 notice for Symphonia belongs. */}
+        <button className="settings__licences" onClick={() => setLicences(true)}>
+          Licences and attributions
+        </button>
         <p className="settings__hint">
           {/* Two things were wrong here, both user-facing. It claimed the
               AGPL, which the project has moved away from (see
@@ -734,6 +749,15 @@ export function Settings() {
         already standing.
       */}
       <YourData embedded />
+
+      {/* The full notices, rendered from the file itself. */}
+      {licences && (
+        <HelpModal
+          title="Licences and attributions"
+          markdown={notices}
+          onClose={() => setLicences(false)}
+        />
+      )}
     </div>
   );
 }

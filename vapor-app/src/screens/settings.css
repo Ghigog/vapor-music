@@ -403,3 +403,34 @@
   line-height: 1;
   color: var(--ink);
 }
+
+/* The way into the full notices.
+   A button rather than a link: it opens a sheet in the app, and styling it as
+   a link would promise a navigation that does not happen. */
+.settings__licences {
+  align-self: flex-start;
+  margin-top: 4px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-rim);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.settings__licences:hover {
+  background: rgba(var(--ink-3-rgb), 0.22);
+  color: var(--ink);
+}
+
+.settings__licences:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
