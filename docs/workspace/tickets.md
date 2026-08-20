@@ -2263,11 +2263,26 @@ Worst onset deviation across the transition, from `beat_alignment`:
 **Where:** SYNC-001..006
 
 
-### TD-56 : (blocked)
+### TD-56 : (closed 2026-08-20 — decided)
 
 **A sync moves bytes in clear over the LAN.** Pairing authenticates the *device* — a PIN bound to one peer, three attempts, a two-minute window — and after that the transfer is plain TCP. On a home network, with the library already sitting in plaintext on a WebDAV server, that is a defensible line. On a café network it is the wrong one, and nothing in the UI says which network you are on. The fix is TLS with the pairing establishing a pre-shared key; the reason it is not here is that inventing a handshake is how you get a broken one.
 
-**Waiting for:** A decision about how far a LAN is trusted, then TLS with the pairing as a pre-shared key.
+**Decided 2026-08-20: the home network is trusted, and plain TCP stays.** Not
+an oversight and not a deferral — a deliberate scope line. The library already
+sits in plaintext on a WebDAV server, so encrypting one hop between two of the
+owner's own machines buys little against the cost of getting a handshake right.
+
+**What that accepts, stated plainly:** on an untrusted network — a café, a
+hotel, a shared office — anyone on the same segment can read library metadata
+and audio off the wire while a sync runs, and nothing in the UI says which kind
+of network you are on. Pairing still authenticates the *device*, so this is
+eavesdropping, not impersonation.
+
+**Reopen if** the app is used on networks the owner does not control, or is
+given to anyone else. The fix does not change: TLS with the pairing PIN
+establishing a pre-shared key, via `rustls`, not a hand-rolled handshake.
+
+**Waiting for:** Nothing. Closed as a decision.
 
 **Where:** SYNC-002
 
