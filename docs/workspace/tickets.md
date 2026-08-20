@@ -2423,3 +2423,35 @@ mutex across that work, which would have moved the freeze onto the transport
 rather than removing it.
 
 **Waiting for:** Nothing.
+
+
+### REL-001 : (open)
+
+**There is no release signing, on either platform, so every build is a
+throwaway.** Wanted for later; recorded 2026-08-20 so it is not rediscovered.
+
+**macOS.** `tauri build` produces an ad-hoc signed `.app` — `Identifier=
+com.dylangrowcoot.vapormusic`, `Signature=adhoc`. Locally built it runs, but
+the signature is a hash of the binary, so every release build is a new identity:
+a keychain grant does not survive one, and the app cannot be given to anyone
+else without Gatekeeper refusing it. The dev loop is already fixed — see
+`src-tauri/.cargo/config.toml`, which signs with a stable self-signed identity
+and pins the identifier — and the same identity can be set as `signingIdentity`
+under `bundle.macOS` for release builds. Distribution to another machine needs a
+paid Developer ID and notarisation; that is a separate decision.
+
+**Android.** No keystore, so builds go out `--debug`, which means the package is
+`com.dylangrowcoot.vapormusic.debug` (installs *beside* a release build rather
+than replacing it) and the APK carries full native debug symbols: **591 MB**,
+measured 2026-08-20, against a fraction of that for release. It installs to a
+Pixel 9 over wireless ADB in 58 s, so the size is survivable rather than
+blocking.
+
+**What it needs:** a keystore (`keytool -genkeypair`, or Android Studio), a
+`keystore.properties` kept out of git, and the `signingConfigs` block wired in
+`gen/android/app/build.gradle.kts`. Half an hour, most of it deciding where the
+key lives so it is not lost — a lost upload key cannot be replaced for an app
+already on Play.
+
+**Waiting for:** Nothing technical. Deferred until release builds are actually
+wanted.
