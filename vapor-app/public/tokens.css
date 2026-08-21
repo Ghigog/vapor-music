@@ -62,9 +62,13 @@
 
   /* Each theme's ground in miniature, for the appearance control. These do not
      move between themes either — they name the two themes, so a Lamplight
-     swatch that changed under Lamplight would be labelling nothing. */
+     swatch that changed under Lamplight would be labelling nothing.
+     Lamplight's is its umber ground rather than its lamp: the lamp colour is
+     the accent now, so a lamp-coloured dot on the accent-tinted segment that
+     means "selected" was two different things wearing one colour, and the dot
+     lost. The ground is what the choice actually changes. */
   --swatch-daylight: #e4d6c2;
-  --swatch-lamplight: #d68a4a;
+  --swatch-lamplight: #2b231b;
 
   /* Trouble. Not in either design file — neither draws an error — so these are
      the smallest addition that keeps a failure legible on both grounds. The
@@ -234,31 +238,50 @@
  *   comfort.
  * - **The warmth is a hue, not a filter.** Every surface is a low-chroma
  *   umber — measurably warm beside a neutral grey, never brown enough to read
- *   as sepia — while the one blue accent stays cool, because a room lit
- *   entirely in one hue has no depth and no affordances.
+ *   as sepia.
+ *
+ * ## Why the accent is amber and not the design's blue
+ *
+ * The Lamplight file specifies a cool blue, arguing that a room lit entirely in
+ * one hue has no depth and no affordances. That is a real risk and it is worth
+ * stating, because this file departs from it — measurably, not by taste.
+ *
+ * Daylight builds its accent out of its own ground. In OKLCH its page is
+ * L 0.948 / C 0.005 / h 258, and #007AFF is L 0.603 / C 0.218 / h 257: **the
+ * same hue to within a degree**, with the chroma driven up and the lightness
+ * pushed away from the ground. The sky is the accent, saturated.
+ *
+ * Lamplight's ground is h 67. The design's blue sits at h 245 — 178° away, the
+ * opposite relationship, a complement rather than a member. Applying Daylight's
+ * own rule to this room gives h 67 at high chroma, which is #EC992F.
+ *
+ * The depth objection turns out not to bite, because the separation was never
+ * carried by hue. A 16% accent tint over the base is 1.34:1 against it in
+ * amber and was 1.27:1 in blue — the tint reads *better*, since what separates
+ * it is lightness and chroma. Every ratio below improved with the swap.
  *
  * Contrast against #231D17, the reference background: ink 13.3:1, secondary
- * 7.1:1, tertiary 4.9:1, accent 5.9:1, sovereignty green 7.1:1.
+ * 7.1:1, tertiary 4.9:1, accent 7.3:1, sovereignty green 7.1:1.
  */
 :root[data-theme="dark"],
 :root[data-theme="lamplight"] {
   color-scheme: dark;
 
   /* ---- Brand ------------------------------------------------------- */
-  /* Apple blue, lightness lifted and chroma pulled back so it reads as an
-     affordance on umber rather than as a glowing hole in it. */
-  --accent: #5b9fd6;
-  --accent-rgb: 91, 159, 214;
-  /* The design's filled controls are a #3A79AE → #27608F gradient, and this is
-     its foot. `--accent` itself cannot be the fill here: it is lifted for
-     legibility *as text*, and a warm-white label on it is 2.4:1. On this it is
-     5.6:1 — better than Daylight manages. */
-  --accent-fill: #27608f;
-  --accent-bright: #3a79ae;
+  /* The ground's own hue at full chroma — the lamp, not a colour beside it.
+     See the block comment above for the measurement this comes from. */
+  --accent: #ec992f;
+  --accent-rgb: 236, 153, 47;
+  /* Daylight's fill *is* its accent, pushed away from a light ground into the
+     dark. Away from this ground is the other way, so the fill is the accent
+     itself and the label on it is dark: #17130F on #EC992F is 8.1:1, where the
+     old blue fill under a warm-white label managed 5.6:1. */
+  --accent-fill: #ec992f;
+  --accent-bright: #f7a94a;
   /* On a dark ground the recessive-but-still-legible direction is lighter, not
      darker, so this is the one token that moves the opposite way. */
-  --accent-dim: #8ec1e9;
-  --on-accent: #f5e9da;
+  --accent-dim: #fcb361;
+  --on-accent: #17130f;
 
   /* Warm-shifted moss. Same meaning, but it belongs to this room. */
   --sov: #7fb77e;
@@ -266,8 +289,13 @@
   --sov-ink: #9acb99;
   --sov-quiet: #9acb99;
 
-  --amber-rgb: 216, 164, 90;
-  --amber-ink: #d8a45a;
+  /* A lemon rather than the design's amber, which the accent has now taken:
+     at h 74 it was 7° from #EC992F and read as a second shade of it, and the
+     Vibe curve row draws Build in this and Wave in the accent side by side.
+     h 98 is 31° clear of the accent, 46° from the sovereignty green and 71°
+     from the danger red — the only wide gap left in the warm half. */
+  --amber-rgb: 225, 203, 96;
+  --amber-ink: #e1cb60;
 
   --danger: #e39086;
   --danger-ink: #efb1a6;
@@ -310,7 +338,7 @@
   --fill-raised-hover: rgba(78, 60, 42, 0.66);
   /* Selected is an accent tint rather than "more light". On paper, brighter
      reads as nearer; on umber it reads as a smudge. */
-  --fill-on: rgba(91, 159, 214, 0.16);
+  --fill-on: rgba(236, 153, 47, 0.16);
   --ink-on: var(--accent-dim);
   /* Float, opaque: a drop target during a drag has to be certain. */
   --fill-strong: #2b231b;
@@ -363,20 +391,33 @@
   :root:not([data-theme="light"]):not([data-theme="daylight"]) {
     color-scheme: dark;
 
-    --accent: #5b9fd6;
-    --accent-rgb: 91, 159, 214;
-    --accent-fill: #27608f;
-    --accent-bright: #3a79ae;
-    --accent-dim: #8ec1e9;
-    --on-accent: #f5e9da;
+    /* The ground's own hue at full chroma — the lamp, not a colour beside it.
+       See the block comment above for the measurement this comes from. */
+    --accent: #ec992f;
+    --accent-rgb: 236, 153, 47;
+    /* Daylight's fill *is* its accent, pushed away from a light ground into the
+       dark. Away from this ground is the other way, so the fill is the accent
+       itself and the label on it is dark: #17130F on #EC992F is 8.1:1, where the
+       old blue fill under a warm-white label managed 5.6:1. */
+    --accent-fill: #ec992f;
+    --accent-bright: #f7a94a;
+    /* On a dark ground the recessive-but-still-legible direction is lighter, not
+       darker, so this is the one token that moves the opposite way. */
+    --accent-dim: #fcb361;
+    --on-accent: #17130f;
 
     --sov: #7fb77e;
     --sov-rgb: 127, 183, 126;
     --sov-ink: #9acb99;
     --sov-quiet: #9acb99;
 
-    --amber-rgb: 216, 164, 90;
-    --amber-ink: #d8a45a;
+    /* A lemon rather than the design's amber, which the accent has now taken:
+       at h 74 it was 7° from #EC992F and read as a second shade of it, and the
+       Vibe curve row draws Build in this and Wave in the accent side by side.
+       h 98 is 31° clear of the accent, 46° from the sovereignty green and 71°
+       from the danger red — the only wide gap left in the warm half. */
+    --amber-rgb: 225, 203, 96;
+    --amber-ink: #e1cb60;
 
     --danger: #e39086;
     --danger-ink: #efb1a6;
@@ -401,7 +442,7 @@
     --fill-quiet: rgba(255, 216, 170, 0.06);
     --fill-raised: rgba(62, 47, 34, 0.5);
     --fill-raised-hover: rgba(78, 60, 42, 0.66);
-    --fill-on: rgba(91, 159, 214, 0.16);
+    --fill-on: rgba(236, 153, 47, 0.16);
     --ink-on: var(--accent-dim);
     --fill-strong: #2b231b;
 
