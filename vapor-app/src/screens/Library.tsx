@@ -11,6 +11,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import * as core from "../lib/core";
+import { Cover } from "../components/Cover";
+import { Home, forgetHomeShelves } from "./Home";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Songs } from "./Songs";
 import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
@@ -39,10 +41,16 @@ import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
  * liner notes should return to the tab you left, and when this was local state
  * it could not, because opening liner notes unmounts Library and a remount
  * starts at the default. You left from Songs and came back to Albums.
+ *
+ * "home" is the one that is not a grouping. It is what the screen opens on and
+ * what almost every visit wants — see `Home` — and the four that group the
+ * library are what is left for the rare visit that is looking for a particular
+ * record.
  */
-export type Tab = GroupBy;
+export type Tab = "home" | GroupBy;
 
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
+  { id: "home", label: "Home" },
   { id: "album", label: "Albums" },
   { id: "artist", label: "Artists" },
   { id: "genre", label: "Genres" },
@@ -112,6 +120,11 @@ const entityCache = new Map<string, LibraryEntity[]>();
 export function forgetLibraryReads() {
   viewCache.clear();
   entityCache.clear();
+  // The shelves are a read of the same library and go stale on the same
+  // events. They are remembered in their own screen, so they are dropped from
+  // here rather than kept in the maps above — a `HomeShelves` is not a
+  // `LibrarySection[]` and would need a third cache to pretend otherwise.
+  forgetHomeShelves();
 }
 
 function cacheKey(groupBy: GroupBy, query: string) {
@@ -133,6 +146,8 @@ export function Library({
   onOpenedChange,
   tab: controlledTab,
   onTabChange,
+  onOpenPlaylist,
+  onOpenGroup,
 }: {
   /** Opens a track's liner notes — the table's double-click. */
   onOpen?: ((href: string) => void) | undefined;
@@ -153,6 +168,16 @@ export function Library({
    *  and optional for the same reason: Library still stands alone in a test. */
   tab?: Tab | undefined;
   onTabChange?: ((tab: Tab) => void) | undefined;
+  /**
+   * Open a playlist or a smart group from a home shelf.
+   *
+   * Both are drill-downs App owns, like liner notes — they render in front of
+   * this screen rather than inside it, so Library can only ask. Optional, and
+   * absent the tiles are inert: the shelves still draw, which is what a test
+   * that renders Library on its own gets.
+   */
+  onOpenPlaylist?: ((id: string) => void) | undefined;
+  onOpenGroup?: ((id: string) => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
   /**
@@ -171,13 +196,21 @@ export function Library({
     else setOwnOpened(next);
   };
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
-  const [ownTab, setOwnTab] = useState<Tab>("album");
-  const tab = onTabChange ? (controlledTab ?? "album") : ownTab;
+  const [ownTab, setOwnTab] = useState<Tab>("home");
+  const tab = onTabChange ? (controlledTab ?? "home") : ownTab;
   const setTab = (next: Tab) => {
     if (onTabChange) onTabChange(next);
     else setOwnTab(next);
   };
-  const groupBy: GroupBy = tab;
+  /**
+   * The grouping the reads below use.
+   *
+   * Home is not one, and the two effects that read the library skip it
+   * entirely — a shelf of twelve albums does not need five hundred rows
+   * fetched to draw it. Albums stands in only so this stays a `GroupBy`; on
+   * home nothing looks at it.
+   */
+  const groupBy: GroupBy = tab === "home" ? "album" : tab;
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   /** A failure to start playback belongs on screen, not in the console. */
   const [playError, setPlayError] = useState<string | null>(null);
@@ -208,6 +241,11 @@ export function Library({
   }, [query, settledQuery]);
 
   useEffect(() => {
+    // Home reads its own shelves and nothing else. Without this the front
+    // door would pull the whole index across on every visit to draw four
+    // rows of pictures — and searching from it hands the query to the Songs
+    // table below, which does its own reading.
+    if (tab === "home") return;
     let cancelled = false;
     const key = cacheKey(groupBy, settledQuery);
 
@@ -231,11 +269,11 @@ export function Library({
     return () => {
       cancelled = true;
     };
-  }, [settledQuery, groupBy, nonce]);
+  }, [settledQuery, groupBy, nonce, tab]);
 
   /** The albums or artists for the current tab. */
   useEffect(() => {
-    if (!isEntityTab(groupBy)) {
+    if (tab === "home" || !isEntityTab(groupBy)) {
       setEntities(null);
       return;
     }
@@ -259,7 +297,7 @@ export function Library({
     return () => {
       cancelled = true;
     };
-  }, [settledQuery, groupBy, nonce]);
+  }, [settledQuery, groupBy, nonce, tab]);
 
   /**
    * Play a card, queueing everything currently on screen behind it.
@@ -313,10 +351,21 @@ export function Library({
     }
   }
 
-  const trackCount = useMemo(() => {
+  /**
+   * How big the library is, for the line under the title.
+   *
+   * Two sources because the two views read different things. A grouping tab
+   * has the rows in hand and counts them, which is also why the number narrows
+   * as you type — the count is of what you are looking at. Home never fetches
+   * rows, so its count comes back with the shelves; it is the whole library,
+   * because that is what home is showing you the front of.
+   */
+  const rowCount = useMemo(() => {
     if (load.kind !== "ready") return 0;
     return load.sections.reduce((n, s) => n + s.rows.length, 0);
   }, [load]);
+  const [homeTracks, setHomeTracks] = useState(0);
+  const trackCount = tab === "home" ? homeTracks : rowCount;
 
   return (
     <div className="library">
@@ -375,12 +424,19 @@ export function Library({
           <div className="library__opened-head">
             <div className="library__crumb">
               <button className="library__back" onClick={() => setOpened(null)}>
+                {/* Named for where pressing it lands, not for what is open.
+                    Closing this returns to the tab underneath, and an album
+                    opened from a home shelf goes back to the shelf — a crumb
+                    reading "Albums" there would be pointing at a tab the
+                    press does not visit. */}
                 ‹{" "}
-                {opened.kind === "album"
-                  ? "Albums"
-                  : opened.kind === "artist"
-                    ? "Artists"
-                    : "Genres"}
+                {tab === "home"
+                  ? "Home"
+                  : opened.kind === "album"
+                    ? "Albums"
+                    : opened.kind === "artist"
+                      ? "Artists"
+                      : "Genres"}
               </button>
               <h2 className="library__opened">{opened.name}</h2>
             </div>
@@ -402,6 +458,25 @@ export function Library({
             scope={opened.name}
           />
         </div>
+      ) : tab === "home" ? (
+        /* Typing on home is a search, not a filter of the shelves.
+         *
+         * A shelf holds the first dozen of something ranked by plays, so
+         * narrowing one would answer "you have no such album" for an album
+         * that is right there in the library, thirteenth. Search is its own
+         * result, which is what every other player does with the same field
+         * and the same shelves. The table is the same one the Songs tab
+         * shows, and it does its own reading. */
+        query.trim() ? (
+          <Songs onOpen={onOpen} query={query} />
+        ) : (
+          <Home
+            onOpenPlaylist={onOpenPlaylist ?? (() => {})}
+            onOpenGroup={onOpenGroup ?? (() => {})}
+            onOpenEntity={setOpened}
+            onTracks={setHomeTracks}
+          />
+        )
       ) : groupBy === "none" ? (
         /* The flat list is the table, not an ungrouped grid of cards: the whole
            point of it is the columns — artist, album, tempo, key — and sorting
@@ -656,58 +731,6 @@ function AlbumArtwork({
         </span>
       </button>
       <ErrorNotice error={error} onDismiss={() => setError(null)} />
-    </div>
-  );
-}
-
-function Cover({
-  href,
-  label,
-  artist,
-}: {
-  href: string;
-  label: string;
-  /**
-   * When this tile is an artist, their name — so a looked-up portrait can
-   * stand in where the lead track has no embedded art (TD-53).
-   *
-   * The file's own artwork still wins. An artist tile falling back to a
-   * picture of the *album* the lead track came from is the case this fixes:
-   * it looked like the app knew who the artist was, and it did not.
-   */
-  artist?: string;
-}) {
-  const [src, setSrc] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSrc(null);
-    core
-      .trackCover(href)
-      .then(async (data) => {
-        if (cancelled) return;
-        if (data || !artist) {
-          setSrc(data);
-          return;
-        }
-        const portrait = await core.artistPortrait(artist).catch(() => null);
-        if (!cancelled) setSrc(portrait);
-      })
-      .catch(() => {
-        if (!cancelled) setSrc(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [href, artist]);
-
-  return (
-    <div className="card__art">
-      {src ? (
-        <img className="card__img" src={src} alt={`Cover of ${label}`} />
-      ) : (
-        <div className="card__art-sheen" aria-hidden="true" />
-      )}
     </div>
   );
 }

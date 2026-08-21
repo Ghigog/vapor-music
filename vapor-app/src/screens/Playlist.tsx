@@ -124,6 +124,9 @@ export function Playlist({
         startHref,
         // The DJ conducts within the playlist, not out of it.
         meta?.name,
+        // And the playlist earns the listen. By id rather than by the name
+        // beside it, so renaming a playlist does not reset its count.
+        { kind: "playlist", id },
       )
       .catch(setError);
   }

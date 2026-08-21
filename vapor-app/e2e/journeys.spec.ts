@@ -425,6 +425,7 @@ test.describe("Going back", () => {
   test("leaves an opened album before it leaves the app", async ({ page }) => {
     await boot(page);
 
+    await page.getByRole("tab", { name: "Albums" }).click();
     await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
 
@@ -436,9 +437,95 @@ test.describe("Going back", () => {
   });
 });
 
+/**
+ * The front door.
+ *
+ * The library screen opens on shelves of what someone actually listens to,
+ * because almost nobody arrives at their own music looking for a particular
+ * record — they arrive wanting something on, and the thing they reach for is a
+ * playlist they already have. What the shelves are ranked on is the backend's,
+ * and what they draw is `Home.test.tsx`'s. What is only true in a real browser
+ * is the wiring underneath: a tile on a shelf opens a drill-down App owns, and
+ * the way back out is the history stack.
+ */
+test.describe("The home shelves", () => {
+  test("opens on the shelves, and a playlist tile opens the playlist", async ({
+    page,
+  }) => {
+    await boot(page, {
+      playlists: [
+        {
+          id: "p1",
+          name: "Night Drive",
+          customCoverPath: "",
+          tracks: ["/dav/Koofr/Music/xtal.m4a"],
+          folderId: "",
+        },
+      ],
+    });
+
+    await expect(page.getByRole("heading", { name: "Playlists" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Smart groups" })).toBeVisible();
+
+    await page.getByRole("button", { name: /open the playlist night drive/i }).click();
+    await expect(page.getByRole("heading", { name: "Night Drive" })).toBeVisible();
+
+    // Out again the way the back gesture goes, which is the half that only
+    // exists once App owns the drill-down.
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: "Smart groups" })).toBeVisible();
+  });
+
+  /**
+   * A shelf is a row that scrolls sideways, and the page it sits on must not.
+   *
+   * An overflow container that reports its content width to its parent is how
+   * one row of twelve albums drags the whole window with it, which is worse on
+   * a phone than the thing it was trying to show.
+   */
+  test("scrolls sideways without taking the page with it", async ({ page }) => {
+    // Eight albums, because four fit: a shelf with nothing hanging off the end
+    // proves nothing about what happens when something does. The counts are
+    // the shape `library_entities` answers in — see `makeEntity` in the fake.
+    await boot(page, {
+      albums: Array.from({ length: 8 }, (_, i) => ({
+        name: `Album ${i + 1}`,
+        subtitle: "Aphex Twin",
+        tracks: 1,
+        lead: "/dav/Koofr/Music/xtal.m4a",
+        plays: 0,
+        lastPlayed: 0,
+      })),
+    });
+
+    const row = page.locator(".shelf__row").last();
+    await expect(row).toBeVisible();
+    // Wider than its box, or there is nothing to scroll and this proves
+    // nothing about what happens when there is.
+    const scrollable = await row.evaluate(
+      (el) => el.scrollWidth > el.clientWidth + 1,
+    );
+    expect(scrollable).toBe(true);
+
+    await row.evaluate((el) => el.scrollBy(400, 0));
+    await expect
+      .poll(() => row.evaluate((el) => el.scrollLeft))
+      .toBeGreaterThan(0);
+
+    const page_scrolls = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1,
+    );
+    expect(page_scrolls).toBe(false);
+  });
+});
+
 test.describe("Albums and artists", () => {
   test("the Albums tab lists albums, not tracks", async ({ page }) => {
     await boot(page);
+    // Asked for, because the screen opens on the home shelves — which draw
+    // albums too, so a test that skipped this would pass without ever
+    // reaching the tab it is named after.
+    await page.getByRole("tab", { name: "Albums" }).click();
 
     await expect(page.getByText("Windowlicker EP", { exact: true })).toBeVisible();
     await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
@@ -462,6 +549,7 @@ test.describe("Albums and artists", () => {
    */
   test("opening an album drills in, and back returns", async ({ page }) => {
     await boot(page);
+    await page.getByRole("tab", { name: "Albums" }).click();
 
     await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
 
@@ -474,6 +562,7 @@ test.describe("Albums and artists", () => {
 
   test("an album plays from its card without being opened", async ({ page }) => {
     await boot(page);
+    await page.getByRole("tab", { name: "Albums" }).click();
 
     await page.getByRole("button", { name: /play selected ambient works/i }).click();
 

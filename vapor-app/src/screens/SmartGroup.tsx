@@ -160,11 +160,13 @@ export function SmartGroup({
             <button
               className="group__track"
               onClick={() =>
-                // Scoped to the group, so the DJ conducts inside it.
+                // Scoped to the group, so the DJ conducts inside it, and
+                // credited to it, so the home shelf can rank it.
                 void core.playTracks(
                   tracks.map((r) => r.href),
                   t.href,
                   group.name,
+                  { kind: "group", id },
                 )
               }
               onDoubleClick={() => onOpen?.(t.href)}

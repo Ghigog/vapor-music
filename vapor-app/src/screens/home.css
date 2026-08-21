@@ -1,0 +1,112 @@
+/*
+ * The home shelves. Values come from tokens.css; only layout lives here.
+ *
+ * A tile is a `.card--entity` from library.css — same sleeve, same play badge,
+ * same truncation — so a record looks the same on a shelf as it does in the
+ * album grid. What is here is only the part a shelf does differently: a row
+ * that scrolls sideways instead of a grid that wraps.
+ */
+
+.shelf {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shelf__head {
+  margin: 0;
+}
+
+/*
+ * Sideways, and by whole tiles.
+ *
+ * `grid-auto-columns` is the width arithmetic: `--per` tiles and the gaps
+ * between them fill the row, less a sliver. That sliver is the affordance —
+ * a row ending flush with its last whole tile looks like a row with nothing
+ * more in it, and there are eight more.
+ */
+.shelf__row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc(
+    (100% - (var(--per) - 1) * 14px) / var(--per) - 12px
+  );
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  /* Room for the sleeve's hover lift and its shadow, which a clipped
+     scroller would otherwise shave off. */
+  padding: 4px 0 8px;
+  scrollbar-width: thin;
+  /* A flick that starts slightly off-axis should scroll the shelf rather than
+     the page behind it. */
+  overscroll-behavior-x: contain;
+}
+
+/*
+ * How many are visible, as a class rather than an inline custom property.
+ *
+ * An inline `--per` would win against the narrow layout below — inline styles
+ * outrank a stylesheet, media query or not — so the phone would keep the
+ * desktop's count and the sleeves would come out at 78px.
+ */
+.shelf__row--of-3 {
+  --per: 3;
+}
+
+.shelf__row--of-4 {
+  --per: 4;
+}
+
+.shelf__tile {
+  scroll-snap-align: start;
+  min-width: 0;
+}
+
+/*
+ * The scrollbar is chrome, and a shelf is mostly picture.
+ *
+ * Hidden until the row is hovered on a pointer device; a touch screen has no
+ * hover and no scrollbar to hide. Firefox has no equivalent selector, which is
+ * why `scrollbar-width: thin` above stands on its own.
+ */
+.shelf__row::-webkit-scrollbar {
+  height: 8px;
+}
+
+.shelf__row::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.shelf__row:hover::-webkit-scrollbar-thumb {
+  background: var(--fill-raised-hover);
+}
+
+.shelf__empty {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+
+/* ---- Narrow layout ---------------------------------------------------
+ *
+ * Four album tiles across a 390px phone is a 78px sleeve with a two-word
+ * title under it. The shelf shows fewer and larger instead: the picture is
+ * what makes a tile recognisable, and below about a hundred points it stops
+ * being one.
+ * -------------------------------------------------------------------- */
+
+@media (max-width: 767px) {
+  .shelf__row--of-3 {
+    --per: 2;
+  }
+
+  .shelf__row--of-4 {
+    --per: 3;
+  }
+}

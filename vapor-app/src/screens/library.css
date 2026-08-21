@@ -90,13 +90,35 @@
 
 /* ---- Tabs ------------------------------------------------------------ */
 
+/*
+ * One row, scrolled rather than wrapped.
+ *
+ * Four pills fitted a phone and five do not, which is why Playlists stopped
+ * being one of them — it wrapped the bar onto two rows and pushed the grid
+ * down the screen. Home is a fifth now and cannot be dropped, so the bar
+ * scrolls sideways like the shelves under it instead. There is room for all
+ * five on any desktop window, where this does nothing.
+ */
 .library__tabs {
   display: flex;
   gap: 7px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  /* The pills carry a focus ring and a shadow; a scroller clipped to their
+     exact height would shave both. */
+  padding: 2px 0 4px;
+  scrollbar-width: none;
+}
+
+.library__tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .library__tab {
+  /* A pill in a scrolling row must not be squeezed to fit: without this the
+     row compresses five labels into four widths instead of overflowing. */
+  flex: none;
   height: 36px;
   padding: 0 16px;
   border-radius: 18px;

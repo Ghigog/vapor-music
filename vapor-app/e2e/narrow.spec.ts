@@ -713,4 +713,22 @@ test.describe("The layout fits the screen", () => {
       expect(overflow).toBeLessThanOrEqual(0);
     });
   }
+
+  /**
+   * The tab bar stays one row.
+   *
+   * Four pills fitted a phone and five do not. Playlists stopped being one of
+   * them for exactly this — it wrapped the bar onto two rows and pushed the
+   * grid down the screen — and Home made it five again, so the bar scrolls
+   * sideways instead. Asserted by height, because "wrapped" is not a thing the
+   * DOM will tell you directly: two rows of 36px pills is over 70.
+   */
+  test("the library's five tabs stay on one row", async ({ page }) => {
+    await boot(page);
+
+    const bar = page.locator(".library__tabs");
+    await expect(bar.getByRole("tab")).toHaveCount(5);
+    const height = await bar.evaluate((el) => el.getBoundingClientRect().height);
+    expect(height).toBeLessThan(60);
+  });
 });

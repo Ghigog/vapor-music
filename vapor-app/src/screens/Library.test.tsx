@@ -14,7 +14,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { useBackend } from "../test/setup";
-import { makeRow } from "../test/ipc";
+import { makeEntity, makeRow } from "../test/ipc";
 import type * as core from "../lib/core";
 
 const FOUND =
@@ -47,16 +47,21 @@ function album() {
  */
 function currents(): core.LibraryEntity[] {
   return [
-    {
+    makeEntity({
       name: "Currents",
       subtitle: "Tame Impala",
       tracks: 2,
       lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
-    },
+    }),
   ];
 }
 
 async function openTheAlbum(user: ReturnType<typeof userEvent.setup>) {
+  // Via the Albums tab, because the screen opens on the home shelves now and
+  // those draw albums too — with the same accessible name on the same tile.
+  // Without this the artwork tests below would be exercising `Home` while
+  // saying they are about the grid.
+  await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
   // By the accessible name, as a person reaches it: the tile's cover is the
   // button and the title beside it is a label, not a control.
   await user.click(
@@ -170,12 +175,12 @@ describe("Library — album artwork", () => {
       rows: album(),
       albums: currents(),
       artists: [
-        {
+        makeEntity({
           name: "Tame Impala",
           subtitle: "1 album",
           tracks: 2,
           lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
-        },
+        }),
       ],
       covers: true,
     });
@@ -224,22 +229,22 @@ describe("Library — album identity", () => {
         }),
       ],
       albums: [
-        {
+        makeEntity({
           name: "Greatest Hits",
           subtitle: "Queen",
-          tracks: 1,
           lead: "/dav/Music/Queen/Greatest%20Hits/01.mp3",
-        },
-        {
+        }),
+        makeEntity({
           name: "Greatest Hits",
           subtitle: "Abba",
-          tracks: 1,
           lead: "/dav/Music/Abba/Greatest%20Hits/01.mp3",
-        },
+        }),
       ],
       covers: true,
     });
+    const user = userEvent.setup();
     render(<Library />);
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Greatest Hits")).toHaveLength(2);

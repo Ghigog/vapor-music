@@ -44,12 +44,14 @@ import type { Entity } from "./generated/Entity";
 import type { DynamicGroup } from "./generated/DynamicGroup";
 import type { AlbumArt } from "./generated/AlbumArt";
 import type { AnalysisStatus } from "./generated/AnalysisStatus";
+import type { AnalysisFailure } from "./generated/AnalysisFailure";
 import type { BlendPreview } from "./generated/BlendPreview";
 import type { CacheStatus } from "./generated/CacheStatus";
 import type { DataRow } from "./generated/DataRow";
 import type { DeviceKind } from "./generated/DeviceKind";
 import type { Exit } from "./generated/Exit";
 import type { Facet } from "./generated/Facet";
+import type { HomeShelves } from "./generated/HomeShelves";
 import type { LibraryEntity } from "./generated/LibraryEntity";
 import type { LibrarySection } from "./generated/LibrarySection";
 import type { LookedUp } from "./generated/LookedUp";
@@ -63,6 +65,7 @@ import type { QueueState } from "./generated/QueueState";
 import type { QueueView } from "./generated/QueueView";
 import type { ScanReport } from "./generated/ScanReport";
 import type { SearchResults } from "./generated/SearchResults";
+import type { Shelf } from "./generated/Shelf";
 import type { SharedSyncResult } from "./generated/SharedSyncResult";
 import type { SyncProgress } from "./generated/SyncProgress";
 import type { SyncView } from "./generated/SyncView";
@@ -100,12 +103,14 @@ export type {
   DynamicGroup,
   AlbumArt,
   AnalysisStatus,
+  AnalysisFailure,
   BlendPreview,
   CacheStatus,
   DataRow,
   DeviceKind,
   Exit,
   Facet,
+  HomeShelves,
   LibraryEntity,
   LibrarySection,
   LookedUp,
@@ -119,6 +124,7 @@ export type {
   QueueView,
   ScanReport,
   SearchResults,
+  Shelf,
   SharedSyncResult,
   SyncProgress,
   SyncView,
@@ -228,6 +234,16 @@ export function libraryView(view: LibraryView = {}): Promise<LibrarySection[]> {
 /** The albums or artists in the library, one entry each. */
 export function libraryEntities(view: LibraryView = {}): Promise<LibraryEntity[]> {
   return invoke<LibraryEntity[]>("library_entities", { view });
+}
+
+/**
+ * What the library screen opens on: four shelves, most played first.
+ *
+ * One call rather than one per shelf. They are one screen, and four round
+ * trips is four chances to paint a half-built page.
+ */
+export function homeShelves(): Promise<HomeShelves> {
+  return invoke<HomeShelves>("home_shelves");
 }
 
 /**
@@ -663,16 +679,25 @@ export function queueState(): Promise<QueueState> {
  * `scope` names the list this came from and is what confines the DJ to it —
  * an album, a playlist, a genre. Omitted, the set is the library and the DJ
  * may roam it, which is what playing from an unfiltered list means.
+ *
+ * `collection` says which playlist or group it was, when it was one, and is
+ * what earns that playlist the listen. A name is not enough for this: a
+ * playlist can be renamed without becoming a different playlist, and its count
+ * should follow it. Omitted, nothing is credited — which is correct for an
+ * album, an artist, or the library at large, since there is no gesture that
+ * means "put on Aphex Twin", only playing their records.
  */
 export function playTracks(
   hrefs: string[],
   start?: string,
   scope?: string,
+  collection?: { kind: Collection; id: string },
 ): Promise<void> {
   return invoke<void>("play_tracks", {
     hrefs,
     start: start ?? null,
     scope: scope ?? null,
+    collection: collection ?? null,
   });
 }
 
@@ -891,6 +916,16 @@ export function analyseLibrary(): Promise<void> {
 
 export function analysisStatus(): Promise<AnalysisStatus> {
   return invoke<AnalysisStatus>("analysis_status");
+}
+
+/**
+ * Every track analysis could not describe, permanent failures first.
+ *
+ * Empty for a healthy library. A non-empty list with the count short of the
+ * total is the case this exists for: the tracks in it are the difference.
+ */
+export function analysisFailures(): Promise<AnalysisFailure[]> {
+  return invoke<AnalysisFailure[]>("analysis_failures");
 }
 
 export function cancelAnalysis(): Promise<void> {

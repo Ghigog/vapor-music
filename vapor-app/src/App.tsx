@@ -43,6 +43,7 @@ import "./components/tabmenu.css";
 import "./components/draglayer.css";
 import "./components/download.css";
 import "./screens/library.css";
+import "./screens/home.css";
 import "./screens/songs.css";
 import "./screens/queue.css";
 import "./screens/vibe.css";
@@ -161,7 +162,7 @@ export function App() {
   /** Which library tab is showing. Held here, like `opened`, because Library is
    *  unmounted whenever a drill-down covers it and a remount would otherwise
    *  land on the default tab rather than the one being returned to. */
-  const [libraryTab, setLibraryTab] = useState<LibraryTab>("album");
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("home");
   /** Which tab's list is open, if any. Not a place, so not in the history. */
   const [menu, setMenu] = useState<Menu | null>(null);
   /** What the last drop did, or why it would not. */
@@ -252,7 +253,7 @@ export function App() {
       setGroup(place.group ?? null);
       // Older entries pushed before the tab was a place have none; the default
       // is the same one a fresh Library would have picked anyway.
-      setLibraryTab(place.libraryTab ?? "album");
+      setLibraryTab(place.libraryTab ?? "home");
       // A list is not a place, so walking history closes whichever is open
       // rather than restoring it.
       setMenu(null);
@@ -495,6 +496,11 @@ export function App() {
                   onOpenedChange={setOpened}
                   tab={libraryTab}
                   onTabChange={setLibraryTab}
+                  // The home shelves open playlists and groups, which are
+                  // drill-downs this component owns — same two functions the
+                  // rails beside it call.
+                  onOpenPlaylist={openPlaylist}
+                  onOpenGroup={openGroup}
                 />
               )}
               {screen === "playing" && <NowPlaying />}

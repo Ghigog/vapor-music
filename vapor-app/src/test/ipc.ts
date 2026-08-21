@@ -87,6 +87,8 @@ export interface FakeOptions {
   djMode?: boolean;
   /** The stored theme choice. `auto` by default, as ships. */
   appearance?: "auto" | "daylight" | "lamplight";
+  /** Tracks analysis could not describe. Empty by default, as a sound one is. */
+  analysisFailures?: core.AnalysisFailure[];
   /**
    * Data files the backend could not read at startup, already turned into the
    * sentences it would show. Empty by default, which is every normal launch.
@@ -154,6 +156,45 @@ export function makeRow(over: Partial<core.Row> = {}): core.Row {
 }
 
 /**
+ * An album or artist tile, with the counts a test usually has no opinion about.
+ *
+ * `plays` and `lastPlayed` exist so the home shelves can rank these, and almost
+ * every test that names an entity is about something else entirely. Stating
+ * them at nine call sites to say "zero, as a library nobody has played from"
+ * is nine chances to say it differently.
+ */
+export function makeEntity(
+  over: Partial<core.LibraryEntity> = {},
+): core.LibraryEntity {
+  return {
+    name: "An Album",
+    subtitle: "An Artist",
+    tracks: 1,
+    lead: "/dav/Koofr/Music/track.m4a",
+    plays: 0,
+    lastPlayed: 0n,
+    ...over,
+  };
+}
+
+/** An album or artist as a home shelf draws it. */
+function shelfOf(entity: core.LibraryEntity): core.Shelf {
+  return {
+    id: entity.name,
+    title: entity.name,
+    subtitle: entity.subtitle,
+    lead: entity.lead,
+    tracks: entity.tracks,
+    plays: entity.plays,
+  };
+}
+
+/** "12 tracks", and "1 track" rather than "1 tracks" — as the backend says it. */
+function tracksLine(n: number): string {
+  return `${n} ${n === 1 ? "track" : "tracks"}`;
+}
+
+/**
  * A fake sleeve: a real data URI, so the UI renders an actual `<img>` rather
  * than being tested against a string it never receives.
  */
@@ -217,39 +258,35 @@ const DEFAULT_ROWS: core.Row[] = [
  * from both lists — an unknown artist is not an artist named "unknown".
  */
 const DEFAULT_ALBUMS: core.LibraryEntity[] = [
-  {
+  makeEntity({
     name: "Windowlicker EP",
     subtitle: "Aphex Twin",
-    tracks: 1,
     lead: "/dav/Koofr/Music/windowlicker.m4a",
-  },
-  {
+  }),
+  makeEntity({
     name: "Selected Ambient Works",
     subtitle: "Aphex Twin",
-    tracks: 1,
     lead: "/dav/Koofr/Music/xtal.m4a",
-  },
-  {
+  }),
+  makeEntity({
     name: "Music Has the Right",
     subtitle: "Boards of Canada",
-    tracks: 1,
     lead: "/dav/Koofr/Music/roygbiv.m4a",
-  },
+  }),
 ];
 
 const DEFAULT_ARTISTS: core.LibraryEntity[] = [
-  {
+  makeEntity({
     name: "Aphex Twin",
     subtitle: "2 albums",
     tracks: 2,
     lead: "/dav/Koofr/Music/windowlicker.m4a",
-  },
-  {
+  }),
+  makeEntity({
     name: "Boards of Canada",
     subtitle: "1 album",
-    tracks: 1,
     lead: "/dav/Koofr/Music/roygbiv.m4a",
-  },
+  }),
 ];
 
 /**
@@ -356,6 +393,7 @@ export class FakeBackend {
   private shuffled = false;
   private unreadableFolders: number;
   private keychainSilentlyFails: boolean;
+  private analysisFailures: core.AnalysisFailure[];
   private cacheBytes: number;
   private cacheResistsClearing: boolean;
   private covers: boolean;
@@ -463,6 +501,7 @@ export class FakeBackend {
       djMode: options.djMode ?? true,
       curve: "build",
     };
+    this.analysisFailures = options.analysisFailures ?? [];
     this.damaged = options.damaged ?? [];
     this.albumArtSearch = options.albumArtSearch ?? {};
     this.lyricsFor = options.lyrics ?? {};
@@ -543,6 +582,11 @@ export class FakeBackend {
   /** Whether a command was invoked at all. */
   called(cmd: Command): boolean {
     return this.calls.some((c) => c.cmd === cmd);
+  }
+
+  /** How many times it was invoked — for asking whether a screen re-read. */
+  timesCalled(cmd: Command): number {
+    return this.calls.filter((c) => c.cmd === cmd).length;
   }
 
   /** The arguments of the last invocation of `cmd`. */
@@ -699,6 +743,47 @@ export class FakeBackend {
         if (!this.scanned) return [];
         const view = (a.view ?? {}) as core.LibraryView;
         return view.groupBy === "artist" ? this.artists : this.albums;
+      }
+
+      case "home_shelves": {
+        if (!this.scanned) {
+          return {
+            playlists: [],
+            groups: [],
+            artists: [],
+            albums: [],
+            tracks: 0,
+          } satisfies core.HomeShelves;
+        }
+        // In the order they were given, not in play order. Which of these is
+        // most played is `home_shelves_for` in the backend, ranked on four
+        // keys and tested there; a fake that sorted them a second way would be
+        // a second opinion about the same question. What a screen's test is
+        // about is that four shelves are drawn, in their sections, and that
+        // pressing a tile opens or plays the right thing.
+        return {
+          playlists: this.playlists.map((list) => ({
+            id: list.id,
+            title: list.name,
+            subtitle: tracksLine(list.tracks.length),
+            lead: list.tracks[0] ?? "",
+            tracks: list.tracks.length,
+            plays: 0,
+          })),
+          groups: this.groups.map((group) => ({
+            id: group.id,
+            title: group.name,
+            // A group resolves to the whole library here, as `group_tracks`
+            // above answers, for the reason given there.
+            subtitle: tracksLine(this.rows.length),
+            lead: this.rows[0]?.href ?? "",
+            tracks: this.rows.length,
+            plays: 0,
+          })),
+          artists: this.artists.map(shelfOf),
+          albums: this.albums.map(shelfOf),
+          tracks: this.rows.length,
+        } satisfies core.HomeShelves;
       }
 
       case "mix_candidates": {
@@ -901,6 +986,9 @@ export class FakeBackend {
 
       // Rejects an unknown word exactly as the command does, so a test that
       // types one gets the failure rather than a fake that shrugs.
+      case "analysis_failures":
+        return this.analysisFailures;
+
       case "set_appearance": {
         const choice = String(a.appearance ?? "").trim().toLowerCase();
         if (!["auto", "daylight", "lamplight"].includes(choice)) {

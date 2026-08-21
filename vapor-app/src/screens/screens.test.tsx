@@ -14,7 +14,7 @@
  * own files.
  */
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { Queue } from "./Queue";
@@ -31,10 +31,24 @@ import type * as core from "../lib/core";
 
 const A_TRACK = "/dav/Koofr/Music/windowlicker.m4a";
 
-/** The flat table is a tab now, and the default tab is Albums. */
+/** The flat table is a tab, and the default tab is Home. */
 async function openSongsTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("tab", { name: /^songs$/i });
   await user.click(screen.getByRole("tab", { name: /^songs$/i }));
+}
+
+/**
+ * Leave the home shelves for the album grid.
+ *
+ * Every test below that is about the grid has to ask for it now, and asking is
+ * not optional politeness: the shelves draw albums too, with the same titles
+ * and the same play buttons, so a test that skipped this would go green
+ * against `Home` while claiming to be about `Library`'s grid. Two of them
+ * already were.
+ */
+async function openAlbumsTab() {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
 }
 
 describe("Library", () => {
@@ -49,6 +63,7 @@ describe("Library", () => {
   it("lists albums, not the tracks on them", async () => {
     useBackend();
     render(<Library />);
+    await openAlbumsTab();
 
     expect(await screen.findByText("Windowlicker EP")).toBeInTheDocument();
     expect(screen.getByText("Selected Ambient Works")).toBeInTheDocument();
@@ -61,7 +76,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker EP");
+    await openAlbumsTab();
     await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     expect(await screen.findByText("Aphex Twin")).toBeInTheDocument();
@@ -73,6 +88,7 @@ describe("Library", () => {
   it("names the artist under each album", async () => {
     useBackend();
     render(<Library />);
+    await openAlbumsTab();
 
     await screen.findByText("Windowlicker EP");
     expect(screen.getAllByText("Aphex Twin").length).toBeGreaterThan(0);
@@ -89,6 +105,7 @@ describe("Library", () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
+    await openAlbumsTab();
 
     backend.answers("library_view", [
       { header: "", rows: backend.rowsNamed("Windowlicker") },
@@ -117,6 +134,7 @@ describe("Library", () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
+    await openAlbumsTab();
 
     // What the backend would answer for that album. The card queues what it is
     // given — that it is given the right thing is the backend's half.
@@ -145,6 +163,7 @@ describe("Library", () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
+    await openAlbumsTab();
 
     await user.click(
       await screen.findByRole("button", { name: /play selected ambient works/i }),
@@ -184,7 +203,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker EP");
+    await openAlbumsTab();
     await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     expect(await screen.findByAltText(/cover of aphex twin/i)).toBeInTheDocument();
@@ -196,7 +215,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker EP");
+    await openAlbumsTab();
     await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     await screen.findByAltText(/cover of aphex twin/i);
@@ -206,6 +225,7 @@ describe("Library", () => {
   it("shows a cover when the file carried one", async () => {
     useBackend({ covers: true });
     render(<Library />);
+    await openAlbumsTab();
 
     const art = await screen.findByAltText(/cover of windowlicker ep/i);
     expect(art).toHaveAttribute("src", expect.stringContaining("data:image"));
@@ -215,6 +235,7 @@ describe("Library", () => {
   it("draws a placeholder rather than a broken image when there is no cover", async () => {
     useBackend({ covers: false });
     render(<Library />);
+    await openAlbumsTab();
 
     await screen.findByText("Windowlicker EP");
     expect(screen.queryByAltText(/cover of/i)).not.toBeInTheDocument();
@@ -225,7 +246,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await screen.findByText("Windowlicker EP");
+    await openAlbumsTab();
     await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     await waitFor(() => {
@@ -302,6 +323,7 @@ describe("Library", () => {
     backend.fail("play_tracks", "That file is no longer on the server.");
     const user = userEvent.setup();
     render(<Library />);
+    await openAlbumsTab();
 
     await user.click(
       await screen.findByRole("button", { name: /play windowlicker ep/i }),
@@ -361,6 +383,7 @@ describe("Library", () => {
   it("says the library is empty rather than showing a blank grid", async () => {
     useBackend({ rows: [] });
     render(<Library />);
+    await openAlbumsTab();
 
     expect(await screen.findByText(/no albums yet/i)).toBeInTheDocument();
   });
@@ -1006,36 +1029,35 @@ describe("Your Data", () => {
   it("deletes everything and confirms nothing is left", async () => {
     const user = userEvent.setup();
     useBackend();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    try {
-      render(<YourData />);
+    render(<YourData />);
 
-      await user.click(
-        await screen.findByRole("button", { name: /delete everything stored here/i }),
-      );
+    await user.click(
+      await screen.findByRole("button", { name: /delete everything stored here/i }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: /delete everything/i }),
+    );
 
-      expect(await screen.findByText(/nothing is stored locally/i)).toBeInTheDocument();
-    } finally {
-      confirm.mockRestore();
-    }
+    expect(await screen.findByText(/nothing is stored locally/i)).toBeInTheDocument();
   });
 
   /** The most consequential button on the screen must not fire on a cancel. */
   it("deletes nothing when the confirmation is declined", async () => {
     const backend = useBackend();
     const user = userEvent.setup();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    try {
-      render(<YourData />);
+    render(<YourData />);
 
-      await user.click(
-        await screen.findByRole("button", { name: /delete everything stored here/i }),
-      );
+    await user.click(
+      await screen.findByRole("button", { name: /delete everything stored here/i }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
 
-      expect(backend.called("delete_all_data")).toBe(false);
-    } finally {
-      confirm.mockRestore();
-    }
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(backend.called("delete_all_data")).toBe(false);
   });
 });
 
