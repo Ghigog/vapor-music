@@ -12,6 +12,14 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
+/*
+ * The port is per-session. Several Claude sessions share this machine, and a
+ * suite that finds 1421 already listening would otherwise run against whatever
+ * frontend that server was built from. Set VAPOR_E2E_PORT to take a port of
+ * your own; playwright.config.ts reads the same variable.
+ */
+const port = Number(process.env.VAPOR_E2E_PORT ?? 1421);
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -22,6 +30,6 @@ export default defineConfig({
   },
   // Same allowance as the dev config: the Vibe help sheet imports
   // docs/ai_dj_workflow.md, which sits above this root.
-  server: { port: 1421, strictPort: true, fs: { allow: [".."] } },
-  preview: { port: 1421, strictPort: true },
+  server: { port, strictPort: true, fs: { allow: [".."] } },
+  preview: { port, strictPort: true },
 });

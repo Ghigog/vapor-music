@@ -8,6 +8,11 @@ import { defineConfig, devices } from "@playwright/test";
  * and WKWebView it does run in, and the component tests already cover the
  * behaviour that is engine-independent.
  */
+// Same variable vite.e2e.config.ts reads: one session per port, so a suite
+// never reports against a frontend it did not build.
+const port = Number(process.env.VAPOR_E2E_PORT ?? 1421);
+const baseURL = `http://localhost:${port}`;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -15,7 +20,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "line" : "list",
   use: {
-    baseURL: "http://localhost:1421",
+    baseURL,
     // Kept on failure only: a passing monkey run would otherwise write a
     // hundred megabytes of trace nobody reads.
     trace: "retain-on-failure",
@@ -51,8 +56,12 @@ export default defineConfig({
   ],
   webServer: {
     command: "npx vite --config vite.e2e.config.ts",
-    url: "http://localhost:1421",
-    reuseExistingServer: !process.env.CI,
+    url: baseURL,
+    // Never reuse. Outside CI this used to attach to whatever was already on
+    // the port, which on a machine running several sessions meant a green run
+    // against another session's frontend. Failing to start is the honest
+    // outcome: take a port of your own with VAPOR_E2E_PORT.
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 });
