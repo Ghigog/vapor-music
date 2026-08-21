@@ -1,13 +1,26 @@
 # Licenses
 
-Vapor Music is licensed under the **GNU Affero General Public License v3.0**.
-The full text is in [`../LICENSE`](../LICENSE).
+Vapor Music is **proprietary — all rights reserved**. The terms are in
+[`../LICENSE`](../LICENSE).
+
+This file said AGPL-3.0 until 2026-08-21. That was true of the Godot build and
+stopped being true on 2026-08-20, when the licence moved to all rights reserved
+across seven declarations; this was an eighth nobody had counted. It is recorded
+rather than quietly overwritten because a stale licence grant is the one kind of
+mistake that cannot be taken back once someone has relied on it.
 
 This directory holds the license texts of bundled third-party components, so
 they travel with the application as the licenses require. See
 [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) for what each component
 is used for, and [`../docs/LICENSING.md`](../docs/LICENSING.md) for the
 compliance reasoning.
+
+## Archived — the Godot tree
+
+Nothing in this table ships. Essentia and Rubber Band were the strong-copyleft
+dependencies that forced the original AGPL conclusion; neither survives in the
+Rust build, where analysis is `vapor-dsp` and stretching is Signalsmith (MIT).
+The texts stay for the record until the Godot tree is removed.
 
 | File | Component | License |
 |---|---|---|
