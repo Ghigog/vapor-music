@@ -11,7 +11,7 @@
 //! sample-to-sample steps around the switch against the steps the tone makes
 //! on its own.
 
-use vapor_engine::source::{SourceView, TrackSource};
+use vapor_engine::source::TrackSource;
 use vapor_engine::stretch::{from_f32, Any, Quality};
 
 const RATE: f32 = 44_100.0;

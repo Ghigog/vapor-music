@@ -17,18 +17,28 @@
 //! removals. Both are recorded in the GUT suite and both are preserved here.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 // `PartialEq` so the shared document (SYNC-006) can be compared — a round
 // trip that cannot be asserted is a serialisation format nobody checked.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+// Serialised for two audiences at once: the IPC boundary, where the frontend
+// reads camelCase, and the JSON on disk, which was written snake_case before
+// this was noticed. `rename_all` fixes the wire; the per-field `alias` keeps
+// every existing file readable, so nobody's folders or manual ordering reset
+// on upgrade. Removing an alias is a data migration, not a tidy-up.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Playlist {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    #[serde(alias = "custom_cover_path")]
     pub custom_cover_path: String,
     #[serde(default)]
     pub tracks: Vec<String>,
     #[serde(default)]
+    #[serde(alias = "folder_id")]
     pub folder_id: String,
 }
 

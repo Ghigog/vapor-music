@@ -52,6 +52,7 @@ use cpal::{FromSample, SizedSample};
 use serde::Serialize;
 
 use vapor_engine::{Mixer, TrackSource, TransitionType};
+use ts_rs::TS;
 
 /// Largest block the mixer will render in one callback.
 ///
@@ -65,7 +66,18 @@ const MAX_BLOCK: usize = 4096;
 /// 0.5 dB is about 6% of amplitude arriving in one sample. Below that the
 /// release's per-block creep dominates and counting it would report a number
 /// with no defect behind it.
-const LIMITER_STEP_DB: f32 = 0.5;
+/// A jump in applied gain big enough to hear as a click.
+///
+/// Linear, not dB, because what reaches the ear is a step in the waveform and
+/// its size is the gain change times the sample. At 0.02 a full-scale sample
+/// steps by about -34 dBFS, which is audible against quiet material and well
+/// clear of float noise, which sits around 1e-7.
+///
+/// This replaced a 0.5 dB threshold on the change in *reduction* between
+/// blocks. That measured the limiter working, not the limiter clicking, and
+/// once the gain ramped across the block the two stopped being the same thing
+/// — it reported seventeen steps through a mix that was clean.
+const LIMITER_JUMP: f32 = 0.02;
 
 /// How many commands may be in flight.
 ///
@@ -107,8 +119,9 @@ const BRIGHTNESS_FLOOR: f32 = 1e-9;
 ///
 /// Loading is deliberately absent: fetching and decoding a track is the shell's
 /// business, and the audio thread has no way to know it is happening.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub enum Status {
     Idle,
     Playing,
@@ -234,6 +247,8 @@ pub struct Link {
     /// honest way to hold that trade is to count how often it does not rather
     /// than to assume it always does. Nonzero means audible dropouts.
     starved_blocks: AtomicU64,
+    /// The cued deck running dry, counted apart from the audible one.
+    starved_incoming_blocks: AtomicU64,
     /// Blocks where the master limiter's gain jumped between one block and the
     /// next (LIM-001).
     ///
@@ -243,6 +258,8 @@ pub struct Link {
     /// "a weird scratch during that mix" stops being a thing only the person
     /// listening can see.
     limiter_steps: AtomicU64,
+    /// Whether the mix is audible yet, as opposed to merely scheduled.
+    transition_running: AtomicBool,
     /// Deepest reduction the limiter has reached since anyone last looked, in
     /// dB (negative).
     ///
@@ -267,6 +284,7 @@ pub struct Snapshot {
     pub brightness: f32,
     pub commands_deferred: u64,
     pub starved_blocks: u64,
+    pub starved_incoming_blocks: u64,
     pub limiter_steps: u64,
     pub limiter_deepest_db: f32,
 }
@@ -296,7 +314,9 @@ impl Link {
             brightness: AtomicU32::new(0),
             commands_deferred: AtomicU64::new(0),
             starved_blocks: AtomicU64::new(0),
+            starved_incoming_blocks: AtomicU64::new(0),
             limiter_steps: AtomicU64::new(0),
+            transition_running: AtomicBool::new(false),
             limiter_deepest_db: AtomicU32::new(0f32.to_bits()),
             sample_rate,
         }
@@ -379,6 +399,19 @@ impl Link {
         self.transition_armed.load(Ordering::Acquire)
     }
 
+    /// True only once the mix is actually audible.
+    ///
+    /// The distinction matters because a mix is armed `TRANSITION_ARM_LEAD`
+    /// seconds — thirty — before it starts, and `transition_armed` cannot tell
+    /// those apart. Cancelling a *pending* mix is free: the mixer drops it and
+    /// no sample changes. Cancelling one already under way snaps the outgoing
+    /// deck back to unity gain mid-crossfade, which is audible.
+    ///
+    /// So anything that wants to abandon a mix has to ask this first.
+    pub fn transition_running(&self) -> bool {
+        self.transition_running.load(Ordering::Acquire)
+    }
+
     /// Where the cued deck is, in its own track. Only meaningful mid-mix.
     pub fn incoming_position(&self) -> f64 {
         f64::from_bits(self.incoming_position.load(Ordering::Relaxed))
@@ -451,6 +484,9 @@ impl Link {
             brightness: f32::from_bits(self.brightness.load(Ordering::Relaxed)),
             commands_deferred: self.commands_deferred.load(Ordering::Relaxed),
             starved_blocks: self.starved_blocks.load(Ordering::Relaxed),
+            starved_incoming_blocks: self
+                .starved_incoming_blocks
+                .load(Ordering::Relaxed),
             limiter_steps: self.limiter_steps.load(Ordering::Relaxed),
             limiter_deepest_db: f32::from_bits(
                 self.limiter_deepest_db.load(Ordering::Relaxed),
@@ -658,6 +694,9 @@ impl Engine {
 
         // Published every block rather than tracked by hand, so it cannot fall
         // out of step with what the mixer actually holds.
+        self.link
+            .transition_running
+            .store(self.mixer.is_transitioning(), Ordering::Release);
         self.link.transition_armed.store(
             self.mixer.is_transitioning() || self.mixer.has_pending_transition(),
             Ordering::Release,
@@ -702,8 +741,13 @@ impl Engine {
          * playing has run dry", or a starving *cued* deck would be read as the
          * current song finishing and advance the queue mid-track.
          */
-        if starved || self.mixer.incoming().is_starved() {
+        if starved {
             self.link.starved_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        if self.mixer.incoming().is_starved() {
+            self.link
+                .starved_incoming_blocks
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         /*
@@ -719,10 +763,13 @@ impl Engine {
          * the gain back toward unity a little every block, and those steps are
          * tiny and continuous. What matters is a jump.
          */
-        let reduction = self.mixer.limiter_reduction_db();
-        if (reduction - self.last_limiter_db).abs() > LIMITER_STEP_DB {
+        // Asked of the limiter rather than inferred from its meter: it is the
+        // only thing that knows the gain it actually applied to each sample,
+        // and the join between blocks is the only place that gain can step.
+        if self.mixer.limiter_boundary_jump() > LIMITER_JUMP {
             self.link.limiter_steps.fetch_add(1, Ordering::Relaxed);
         }
+        let reduction = self.mixer.limiter_reduction_db();
         self.last_limiter_db = reduction;
         if reduction < f32::from_bits(self.link.limiter_deepest_db.load(Ordering::Relaxed)) {
             self.link

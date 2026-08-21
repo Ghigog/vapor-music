@@ -42,6 +42,22 @@ pub struct Limiter {
     /// Current gain reduction, 1.0 = no reduction.
     gain: f32,
     release_coef: f32,
+    /// The gain actually applied to the final sample of the previous block.
+    ///
+    /// Not the same as `gain`, which is where the ramp *ended*: a final sample
+    /// over the ceiling is scaled by `CEILING / mag` instead, and it is the
+    /// applied value the waveform is made of.
+    last_applied: f32,
+    /// How far the applied gain jumped across the last block boundary.
+    ///
+    /// The one discontinuity this design can still produce. Within a block the
+    /// gain is continuous by construction — the ramp is linear and the ceiling
+    /// term meets it exactly at the crossover — so a step can only appear
+    /// between the last sample of one block and the first of the next, and only
+    /// if the state carried between them is wrong. That is not hypothetical:
+    /// dropping `self.gain = target` at the end of `process` does exactly this,
+    /// and it has been dropped before.
+    boundary_jump: f32,
 }
 
 impl Limiter {
@@ -53,11 +69,23 @@ impl Limiter {
         Limiter {
             gain: 1.0,
             release_coef,
+            last_applied: 1.0,
+            boundary_jump: 0.0,
         }
     }
 
     pub fn reset(&mut self) {
         self.gain = 1.0;
+        self.last_applied = 1.0;
+        self.boundary_jump = 0.0;
+    }
+
+    /// The step in applied gain across the most recent block boundary.
+    ///
+    /// Zero in normal operation. Anything meaningfully above it is a
+    /// discontinuity in the output — a click, or a buzz at the block rate.
+    pub fn boundary_jump(&self) -> f32 {
+        self.boundary_jump
     }
 
     /// Current gain reduction in dB (0.0 when inactive), for metering.
@@ -104,6 +132,9 @@ impl Limiter {
         // Nothing over the ceiling and no reduction left to release: the
         // common case, and it should cost a comparison rather than a pass.
         if self.gain >= 1.0 && peak <= CEILING {
+            // The block is left alone, so unity is what reached the waveform.
+            self.boundary_jump = (1.0 - self.last_applied).abs();
+            self.last_applied = 1.0;
             self.gain = target;
             return;
         }
@@ -131,6 +162,7 @@ impl Limiter {
          */
         let start = self.gain;
         let step = (target - start) / block.len() as f32;
+        let mut applied = self.last_applied;
         for (i, s) in block.iter_mut().enumerate() {
             let ramp = start + step * i as f32;
             let mag = s[0].abs().max(s[1].abs());
@@ -139,9 +171,17 @@ impl Limiter {
             } else {
                 ramp
             };
+            if i == 0 {
+                // Measured against the previous block's final sample, which is
+                // the only pair of adjacent samples whose gains come from
+                // different invocations.
+                self.boundary_jump = (gain - self.last_applied).abs();
+            }
+            applied = gain;
             s[0] *= gain;
             s[1] *= gain;
         }
+        self.last_applied = applied;
 
         // The ramp ended here, so the next block starts from it. Without this
         // the limiter holds no state at all between blocks and the release
@@ -153,6 +193,86 @@ impl Limiter {
 
 #[cfg(test)]
 mod tests {
+
+    /// The metric has to see the bug it exists for.
+    ///
+    /// `boundary_jump` replaced a counter that compared gain *reduction*
+    /// between blocks and called any change a step. That was true when the
+    /// limiter applied one gain to a whole block; once the gain ramps, a change
+    /// between blocks is interpolated and no longer a discontinuity — so the
+    /// old counter reported seventeen "steps" during a perfectly clean mix and
+    /// would have gone on doing it for ever.
+    ///
+    /// This measures the boundary itself, which is the only place a step can
+    /// still appear. Driven with the material that produces reduction: loud
+    /// blocks, so the limiter is actually working across the join.
+    #[test]
+    fn a_clean_run_of_loud_blocks_reports_no_discontinuity() {
+        let mut limiter = Limiter::new(48_000.0, 512);
+        let mut worst = 0.0f32;
+
+        for block_index in 0..40 {
+            // Loud enough to need reduction, and varying, so the gain is moving
+            // at every boundary rather than sitting still.
+            let amplitude = 1.2 + 0.6 * ((block_index % 5) as f32 / 5.0);
+            let mut block = vec![[0.0f32; 2]; 512];
+            for (i, s) in block.iter_mut().enumerate() {
+                let phase = (i as f32 / 512.0) * std::f32::consts::TAU * 4.0;
+                let v = amplitude * phase.sin();
+                *s = [v, v];
+            }
+            limiter.process(&mut block);
+            if block_index > 0 {
+                worst = worst.max(limiter.boundary_jump());
+            }
+        }
+
+        assert!(
+            worst < 1e-3,
+            "the gain jumped {worst} across a block boundary; the ramp is \
+             supposed to make the join continuous"
+        );
+    }
+
+    /// And it has to fail when the state between blocks is dropped.
+    ///
+    /// Reproducing the real defect rather than asserting against a constant:
+    /// `reset()` between blocks is what "the limiter holds no state" looks
+    /// like, which is precisely what omitting `self.gain = target` produced.
+    #[test]
+    fn losing_the_gain_between_blocks_shows_up_as_a_jump() {
+        let mut limiter = Limiter::new(48_000.0, 512);
+        let loud = || {
+            let mut block = vec![[0.0f32; 2]; 512];
+            for (i, s) in block.iter_mut().enumerate() {
+                let phase = (i as f32 / 512.0) * std::f32::consts::TAU * 4.0;
+                let v = 3.0 * phase.sin();
+                *s = [v, v];
+            }
+            block
+        };
+
+        let mut block = loud();
+        limiter.process(&mut block);
+        let settled = limiter.boundary_jump();
+
+        // Throw the carried gain away, exactly as the bug did.
+        let carried = limiter.last_applied;
+        limiter.gain = 1.0;
+        let mut next = loud();
+        limiter.process(&mut next);
+
+        assert!(
+            limiter.boundary_jump() > settled,
+            "a limiter that forgot its gain ({carried}) must report a bigger \
+             jump than one that did not"
+        );
+        assert!(
+            limiter.boundary_jump() > 0.05,
+            "and a jump that size is a click, not float noise: got {}",
+            limiter.boundary_jump()
+        );
+    }
     use super::*;
 
     const RATE: f32 = 44100.0;

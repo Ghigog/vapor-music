@@ -13,10 +13,12 @@
 //! untestable alone — `delete` here returns the id so the caller can do it.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// What a dynamic group can contain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum EntityType {
     Artist,
     Album,
@@ -42,14 +44,20 @@ impl EntityType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct Entity {
-    #[serde(rename = "type")]
+    // `entityType` on the wire, because that is what the frontend reads —
+    // `SmartGroup.tsx` keys its chips on `e.entityType`. It was `type`, which
+    // is neither what TypeScript expects nor worth keeping for its own sake.
+    // The alias keeps groups written by earlier builds loading.
+    #[serde(rename = "entityType", alias = "type")]
     pub entity_type: EntityType,
     pub value: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DynamicGroup {
     pub id: String,
     pub name: String,
@@ -180,11 +188,19 @@ impl GroupStore {
 
 // `PartialEq` so the shared document (SYNC-006) can be compared — a round
 // trip that cannot be asserted is a serialisation format nobody checked.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+// Serialised for two audiences at once: the IPC boundary, where the frontend
+// reads camelCase, and the JSON on disk, which was written snake_case before
+// this was noticed. `rename_all` fixes the wire; the per-field `alias` keeps
+// every existing file readable, so nobody's folders or manual ordering reset
+// on upgrade. Removing an alias is a data migration, not a tidy-up.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Folder {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    #[serde(alias = "parent_id")]
     pub parent_id: String,
 }
 

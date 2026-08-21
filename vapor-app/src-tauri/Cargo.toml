@@ -59,6 +59,12 @@ lofty = "0.25.1"
 # MIG-022 decided not to port the Godot build's 191 lines of C++/WinRT — three
 # platform ports maintained separately is what this replaces.
 souvlaki = "0.8.3"
+# `no-serde-warnings`: the boundary structs carry `#[serde(alias = "...")]`
+# so files written before the camelCase rename still load. Aliases are a
+# deserialisation concern with no bearing on the generated type, and ts-rs
+# says so once per alias on every build. The warning is right and the noise
+# is not useful.
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 
 # Android has no OS credential store, so `keyring` has nothing to wrap there.
 # `src/secrets/android.rs` reaches the Android Keystore over JNI instead;
@@ -114,3 +120,6 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # still rebuilds in seconds; the cost is a one-off longer first build.
 [profile.dev.package."*"]
 opt-level = 2
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

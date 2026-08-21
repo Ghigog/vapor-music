@@ -9,6 +9,7 @@
 //! precedence rule is stated once instead of being repeated and drifting.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::camelot::harmonic_relation_cost;
 use crate::genre::genre_distance;
@@ -30,20 +31,31 @@ const OVER_THRESHOLD_PENALTY: f32 = 100.0;
 /// Deliberately not the full metadata record: this is the mixing view, and
 /// keeping it narrow means the pathfinder cannot quietly grow a dependency on
 /// artwork or play counts.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+// Serialised for two audiences at once: the IPC boundary, where the frontend
+// reads camelCase, and the JSON on disk, which was written snake_case before
+// this was noticed. `rename_all` fixes the wire; the per-field `alias` keeps
+// every existing file readable, so nobody's folders or manual ordering reset
+// on upgrade. Removing an alias is a data migration, not a tidy-up.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct TrackMeta {
     pub href: String,
     pub bpm: f32,
     /// Whole-track key, in Camelot notation.
     #[serde(default)]
+    #[serde(alias = "musical_key")]
     pub musical_key: String,
     /// Key of the outro, when segmented analysis produced one.
     #[serde(default)]
+    #[serde(alias = "outro_key")]
     pub outro_key: String,
     /// Key of the intro, when segmented analysis produced one.
     #[serde(default)]
+    #[serde(alias = "intro_key")]
     pub intro_key: String,
     #[serde(default = "half")]
+    #[serde(alias = "energy_level")]
     pub energy_level: f32,
     #[serde(default)]
     pub genre: String,

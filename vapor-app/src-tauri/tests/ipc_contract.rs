@@ -356,163 +356,20 @@ fn both_sides_of_the_contract_are_where_this_test_thinks() {
 // ---------------------------------------------------------------------------
 // Reply shapes
 // ---------------------------------------------------------------------------
+/*
+ * `reply_field_names_match_the_typescript_that_reads_them` used to live here.
+ *
+ * It compared each Rust struct's field names against the TypeScript interface
+ * that read them, by scanning both files as text and applying serde's rename
+ * rules by hand. It earned its place — it is what caught `Settings` crossing as
+ * snake_case — but it was a hand-maintained third copy of a contract that is
+ * now derived: `ts-rs` generates `src/lib/generated/` from these structs, using
+ * the same serde attributes serde itself uses, and `npm run types:check` fails
+ * when the committed output drifts. A mismatch is no longer detectable after
+ * the fact; it is unrepresentable.
+ *
+ * What remains in this file is the half `ts-rs` does not cover: the command
+ * surface. Types say nothing about whether a command the frontend calls is
+ * registered, or whether its argument names agree.
+ */
 
-/// Field names in a reply must match the TypeScript interface that reads them.
-///
-/// This is the half the first version of this file missed, and it missed a real
-/// bug: `Settings` was the only struct on the boundary without
-/// `#[serde(rename_all = "camelCase")]`, so it crossed as snake_case while
-/// `core.ts` declared camelCase. Fourteen fields read as `undefined` in the
-/// frontend. Most were defaulted away with `??` and silently ignored — the font
-/// size did nothing, `bpmOverrides` arrived empty so corrected tempos were never
-/// marked — and the one screen that called a method on the value instead of
-/// defaulting it threw and blanked the window.
-///
-/// Checking names rather than types: a type mismatch is a narrower problem and a
-/// much harder thing to read out of two files, while a *missing* field is what
-/// produces `undefined`, and `undefined` is what throws.
-#[test]
-fn reply_field_names_match_the_typescript_that_reads_them() {
-    let lib = read("src/lib.rs");
-    let core = read("../src/lib/core.ts");
-    let settings = read("../../vapor-core/crates/vapor-library/src/settings.rs");
-
-    let mut wrong: Vec<String> = Vec::new();
-    for (rust_struct, ts_interface, source) in PAIRS {
-        let src = match *source {
-            "settings" => &settings,
-            _ => &lib,
-        };
-        let Some(rust) = struct_fields(src, rust_struct) else {
-            wrong.push(format!("  {rust_struct}: not found in {source}"));
-            continue;
-        };
-        let Some(ts) = interface_fields(&core, ts_interface) else {
-            wrong.push(format!("  {ts_interface}: not found in core.ts"));
-            continue;
-        };
-
-        // Only what Rust sends but TypeScript does not name. The reverse is
-        // legitimate: an interface may carry a field the backend fills in
-        // elsewhere, and an optional one may be genuinely absent.
-        let missing: Vec<&String> = rust.difference(&ts).collect();
-        if !missing.is_empty() {
-            wrong.push(format!(
-                "  {rust_struct} sends {missing:?}, which {ts_interface} does not declare — \
-                 the frontend will read `undefined`"
-            ));
-        }
-    }
-
-    assert!(
-        wrong.is_empty(),
-        "reply shapes disagree between Rust and TypeScript:\n{}",
-        wrong.join("\n")
-    );
-}
-
-/// Rust struct, the TypeScript interface that reads it, and which file it is in.
-const PAIRS: &[(&str, &str, &str)] = &[
-    ("Settings", "Settings", "settings"),
-    ("RemoteConfig", "RemoteConfig", "settings"),
-    ("BlendPreview", "BlendPreview", "lib"),
-    ("PlaybackState", "PlaybackState", "lib"),
-    ("MixCandidate", "MixCandidate", "lib"),
-    ("AlbumArt", "AlbumArt", "lib"),
-    ("LookedUp", "LookedUp", "lib"),
-    ("CacheStatus", "CacheStatus", "lib"),
-];
-
-/// The wire names of a Rust struct's public fields.
-///
-/// Applies `rename_all = "camelCase"` when the struct declares it, and honours a
-/// per-field `rename`, because those are what decide the name on the wire.
-fn struct_fields(src: &str, name: &str) -> Option<BTreeSet<String>> {
-    let at = src.find(&format!("struct {name} "))?;
-    // The attributes sit above the declaration; look back a little for them.
-    let head = &src[at.saturating_sub(400)..at];
-    let camel = head.contains(r#"rename_all = "camelCase""#);
-
-    let open = at + src[at..].find('{')?;
-    let body = balanced(src, open, '{', '}')?;
-
-    let mut out = BTreeSet::new();
-    let mut renamed: Option<String> = None;
-    let mut skip = false;
-    for line in body.lines() {
-        let t = line.trim();
-        if let Some(i) = t.find(r#"rename = ""#) {
-            let rest = &t[i + r#"rename = ""#.len()..];
-            renamed = rest.find('"').map(|e| rest[..e].to_string());
-            continue;
-        }
-        if t.contains("skip_serializing") || t.contains("serde(skip)") {
-            skip = true;
-            continue;
-        }
-        if t.starts_with('#') || t.starts_with("//") || t.is_empty() {
-            continue;
-        }
-        let Some(field) = t.strip_prefix("pub ").and_then(|r| r.split(':').next()) else {
-            // A private field is not on the wire.
-            renamed = None;
-            skip = false;
-            continue;
-        };
-        if !skip {
-            out.insert(renamed.clone().unwrap_or_else(|| {
-                if camel {
-                    to_camel(field.trim())
-                } else {
-                    field.trim().to_string()
-                }
-            }));
-        }
-        renamed = None;
-        skip = false;
-    }
-    Some(out)
-}
-
-/// The property names of a TypeScript interface.
-fn interface_fields(src: &str, name: &str) -> Option<BTreeSet<String>> {
-    let at = src.find(&format!("interface {name} "))?;
-    let open = at + src[at..].find('{')?;
-    let body = balanced(src, open, '{', '}')?;
-
-    let mut out = BTreeSet::new();
-    let mut depth = 0i32;
-    for line in body.lines() {
-        let t = line.trim();
-        // Only top-level properties; a nested object literal's keys belong to it.
-        let opens = t.matches('{').count() as i32;
-        let closes = t.matches('}').count() as i32;
-        if depth == 0 && !t.starts_with('*') && !t.starts_with("//") && !t.starts_with("/*") {
-            if let Some((lhs, _)) = t.split_once(':') {
-                let key = lhs.trim().trim_end_matches('?').trim();
-                if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    out.insert(key.to_string());
-                }
-            }
-        }
-        depth += opens - closes;
-    }
-    Some(out)
-}
-
-/// `snake_case` as serde's `camelCase` rename writes it.
-fn to_camel(s: &str) -> String {
-    let mut out = String::new();
-    let mut upper = false;
-    for c in s.chars() {
-        if c == '_' {
-            upper = true;
-        } else if upper {
-            out.push(c.to_ascii_uppercase());
-            upper = false;
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}

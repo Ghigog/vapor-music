@@ -9,6 +9,12 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11.0"
+# `no-serde-warnings`: the boundary structs carry `#[serde(alias = "...")]`
+# so files written before the camelCase rename still load. Aliases are a
+# deserialisation concern with no bearing on the generated type, and ts-rs
+# says so once per alias on every build. The warning is right and the noise
+# is not useful.
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 
 [dev-dependencies]
 proptest = "1"

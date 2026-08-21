@@ -187,6 +187,12 @@ impl Mixer {
         self.limiter.reduction_db()
     }
 
+    /// The step in applied gain across the last block boundary. See
+    /// [`crate::limiter::Limiter::boundary_jump`].
+    pub fn limiter_boundary_jump(&self) -> f32 {
+        self.limiter.boundary_jump()
+    }
+
     pub fn outgoing(&mut self) -> &mut Deck {
         if self.a_is_outgoing {
             &mut self.deck_a

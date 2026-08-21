@@ -32,13 +32,15 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ts_rs::TS;
 
 /// Milliseconds since the Unix epoch, passed in by the shell.
 pub type Millis = u64;
 
 /// What kind of machine a peer is, for the dashboard to draw.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum DeviceKind {
     Desktop,
     Phone,
@@ -107,14 +109,19 @@ impl Advert {
 }
 
 /// A device seen on the network.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Peer {
     pub id: String,
     pub name: String,
     pub kind: DeviceKind,
     /// Host and port, as the shell resolved it from the datagram's source.
     pub address: String,
+    // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
+    // plain number and the webview parses it as one. Values here are byte
+    // counts and millisecond timestamps, far below 2^53.
+    #[ts(type = "number")]
     pub last_seen: Millis,
 }
 
@@ -260,13 +267,18 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 }
 
 /// A device this one has agreed to sync with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct TrustedDevice {
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub kind: DeviceKind,
+    // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
+    // plain number and the webview parses it as one. Values here are byte
+    // counts and millisecond timestamps, far below 2^53.
+    #[ts(type = "number")]
     pub paired_at: Millis,
 }
 

@@ -1,0 +1,12 @@
+# Where the generated TypeScript lands.
+#
+# `ts-rs` writes one file per type when the export tests run, which is any
+# `cargo test` in this workspace. Pointing it straight into the frontend's
+# source tree is deliberate: the generated types are checked in and imported by
+# `src/lib/core.ts`, so a Rust struct changing shows up as a TypeScript diff in
+# the same commit rather than as a runtime surprise months later.
+#
+# `relative = true` resolves this against the directory holding this file, so it
+# does not depend on which crate cargo happens to be building.
+[env]
+TS_RS_EXPORT_DIR = { value = "../vapor-app/src/lib/generated", relative = true }

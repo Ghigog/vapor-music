@@ -10,6 +10,7 @@
 //! trips as JSON.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 fn default_folder() -> String {
     "Music".to_string()
@@ -21,8 +22,25 @@ fn default_ui_scale() -> f32 {
     1.2
 }
 fn default_theme() -> String {
-    "default_dark".to_string()
+    APPEARANCE_AUTO.to_string()
 }
+
+/// The three answers the appearance control can give.
+///
+/// Stored as a string rather than an enum because [`Settings::theme`] already
+/// existed as one, holding a Godot theme-resource name (`default_dark`) that
+/// nothing in the Tauri app ever read. Anything outside this set — including
+/// that leftover — is repaired to `auto` by [`Settings::sanitised`], which is
+/// also the migration: `auto` is the behaviour those installs already had,
+/// since the placeholder dark mode only ever followed the OS.
+pub const APPEARANCE_AUTO: &str = "auto";
+/// The light theme: warm paper, sky at the horizon.
+pub const APPEARANCE_DAYLIGHT: &str = "daylight";
+/// The dark theme: warm umber ground under one lamp.
+pub const APPEARANCE_LAMPLIGHT: &str = "lamplight";
+
+/// Every value [`Settings::theme`] may hold.
+pub const APPEARANCES: [&str; 3] = [APPEARANCE_AUTO, APPEARANCE_DAYLIGHT, APPEARANCE_LAMPLIGHT];
 fn default_cache_max_bytes() -> u64 {
     MAX_CACHE_BYTES_DEFAULT
 }
@@ -42,7 +60,8 @@ pub const MIN_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// The password is deliberately **not** part of this struct. It belongs in the
 /// platform keychain, and keeping it out means these settings can be logged,
 /// serialised and diffed without leaking a credential.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct RemoteConfig {
     #[serde(default)]
     pub url: String,
@@ -74,8 +93,9 @@ impl RemoteConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum ThemeMode {
     #[default]
     Preset,
@@ -96,8 +116,9 @@ pub enum ThemeMode {
 /// load. Without them the rename would silently reset every one of those
 /// fourteen fields to its default on first launch, which is the same data loss
 /// by the opposite route.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Settings {
     #[serde(default)]
     pub remote: RemoteConfig,
@@ -187,6 +208,9 @@ pub struct Settings {
     /// entitled to. It belongs to the person, not to a constant.
     #[serde(default = "default_cache_max_bytes")]
     #[serde(alias = "cache_max_bytes")]
+    // A JSON number over IPC, not a `bigint` — serde_json writes u64 as a plain
+    // number. A cache ceiling is nowhere near 2^53.
+    #[ts(type = "number")]
     pub cache_max_bytes: u64,
 
     /// Whether the app may look up lyrics and artwork from public services.
@@ -403,9 +427,17 @@ impl Settings {
         if self.remote.folder.trim().is_empty() {
             self.remote.folder = default_folder();
         }
-        if self.theme.trim().is_empty() {
-            self.theme = default_theme();
-        }
+        // Not just the empty case: this field used to hold a Godot theme
+        // resource name, so an install from before the appearance control has
+        // `default_dark` in it and every install from after has one of three
+        // known words. Anything else is a hand edit or a leftover, and the
+        // safe reading of both is "follow the OS".
+        let theme = self.theme.trim().to_ascii_lowercase();
+        self.theme = if APPEARANCES.contains(&theme.as_str()) {
+            theme
+        } else {
+            default_theme()
+        };
         self
     }
 }
@@ -528,7 +560,41 @@ mod tests {
         .sanitised();
         assert_eq!(s.base_font_size, 48);
         assert_eq!(s.ui_scale, 0.5);
-        assert_eq!(s.theme, "default_dark");
+        assert_eq!(s.theme, APPEARANCE_AUTO);
+    }
+
+    /// The Godot leftover is a value, not a blank, so the empty-string check
+    /// this replaced would have let it through to the frontend — which knows
+    /// three words and would have fallen back to one of them anyway, silently.
+    #[test]
+    fn an_unknown_appearance_falls_back_to_following_the_os() {
+        for stored in ["default_dark", "Solarized", "", "  "] {
+            let s = Settings {
+                theme: stored.into(),
+                ..Default::default()
+            }
+            .sanitised();
+            assert_eq!(s.theme, APPEARANCE_AUTO, "stored {stored:?}");
+        }
+    }
+
+    /// Casing and stray whitespace are a hand edit of a JSON file, not a
+    /// different choice.
+    #[test]
+    fn a_known_appearance_survives_sanitising() {
+        for stored in ["daylight", " Lamplight ", "AUTO"] {
+            let s = Settings {
+                theme: stored.into(),
+                ..Default::default()
+            }
+            .sanitised();
+            assert!(
+                APPEARANCES.contains(&s.theme.as_str()),
+                "stored {stored:?} became {:?}",
+                s.theme
+            );
+            assert_eq!(s.theme, stored.trim().to_ascii_lowercase());
+        }
     }
 
     /// A cache too small to hold a track fetches it, evicts it to make room for

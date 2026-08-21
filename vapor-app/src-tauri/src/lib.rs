@@ -44,11 +44,13 @@ use std::sync::{Arc, Mutex};
 use store::Store;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use tauri::{Manager, State};
 
 use vapor_engine::TrackSource;
 use vapor_library::{
     index::{GroupBy, Row, SortKey},
+    settings::APPEARANCES,
     Curve, FolderStore, GroupStore, PlaylistStore, Queue, Settings, TrackMeta,
 };
 
@@ -638,6 +640,10 @@ impl From<tags::Tags> for StoredTags {
 /// from `State` cannot.
 type Shared = Arc<Mutex<AppState>>;
 
+/// Tests that go through the real `invoke_handler` — see `seam.rs`.
+#[cfg(test)]
+mod seam;
+
 /// Errors crossing the IPC boundary.
 ///
 /// A string rather than a typed error on purpose: the frontend shows these to
@@ -688,8 +694,9 @@ struct LibraryView {
 /// The Albums tab used to render a card per *track*, grouped under an album
 /// heading — so "All Melody" was a header with nine tiles under it, none of
 /// which was the album. A tab called Albums shows albums.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct LibraryEntity {
     /// Album title, or artist name.
     name: String,
@@ -707,8 +714,9 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct LibrarySection {
     header: String,
     rows: Vec<Row>,
@@ -996,8 +1004,9 @@ pub fn finite64<S: serde::Serializer>(value: &f64, s: S) -> std::result::Result<
 }
 
 /// What is known about a track from outside this device.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct LookedUp {
     lyrics: Option<metadata::Lyrics>,
     artist_image: String,
@@ -1147,8 +1156,9 @@ fn media_keys_available() -> bool {
 }
 
 /// Progress of the library identification pass.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct IdentifyProgress {
     done: usize,
     total: usize,
@@ -1633,8 +1643,9 @@ fn resolve_album_cover(app: &AppState, album: &str, lead: &str) -> Option<String
 }
 
 /// An album's cover, and where it came from.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct AlbumArt {
     /// The picture, as a `data:` URI. `None` when there is none to show.
     src: Option<String>,
@@ -1743,6 +1754,28 @@ fn set_prefer_looked_up_art(enabled: bool, state: State<'_, Shared>) -> Result<S
     Ok(app.settings.clone())
 }
 
+/// Daylight, Lamplight, or follow the OS.
+///
+/// Rejected rather than repaired, unlike a value read off disk: a word that is
+/// not one of the three did not come from the control, so writing it would
+/// persist a state the UI has no way to show. `sanitised` still has to cope
+/// with the same problem on load, because a settings file is a thing people
+/// edit, but a live command is not.
+#[tauri::command]
+fn set_appearance(appearance: String, state: State<'_, Shared>) -> Result<Settings> {
+    let choice = appearance.trim().to_ascii_lowercase();
+    if !APPEARANCES.contains(&choice.as_str()) {
+        return Err(Error(format!(
+            "unknown appearance {appearance:?}; expected one of {}",
+            APPEARANCES.join(", ")
+        )));
+    }
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    app.settings.theme = choice;
+    app.save_settings()?;
+    Ok(app.settings.clone())
+}
+
 #[tauri::command]
 fn set_hide_duplicates(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
@@ -1808,8 +1841,9 @@ fn set_metadata_lookup(enabled: bool, state: State<'_, Shared>) -> Result<Settin
 // ---------------------------------------------------------------------------
 
 /// What a running sync is doing, for the dashboard.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct SyncProgress {
     running: bool,
     /// The device being synced with.
@@ -1819,6 +1853,10 @@ struct SyncProgress {
     done: usize,
     total: usize,
     /// Bytes moved since this sync started.
+    // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
+    // plain number and the webview parses it as one. Values here are byte
+    // counts and millisecond timestamps, far below 2^53.
+    #[ts(type = "number")]
     bytes: u64,
     /// Seconds since it started, so the frontend can divide rather than have
     /// a rate pushed at it that is already stale by the time it renders.
@@ -1979,8 +2017,9 @@ fn build_manifest(app: &mut AppState) -> vapor_library::sync::Manifest {
 }
 
 /// Everything the sync dashboard draws.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct SyncView {
     /// Whether local sync is switched on at all.
     enabled: bool,
@@ -2346,8 +2385,9 @@ fn pull_track(
 // ---------------------------------------------------------------------------
 
 /// What a round trip to the server changed.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct SharedSyncResult {
     playlists_added: usize,
     playlists_extended: usize,
@@ -2593,8 +2633,9 @@ fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folde
  * and stay until they are removed by hand.
  * -------------------------------------------------------------------- */
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct DownloadProgress {
     done: usize,
     total: usize,
@@ -2762,8 +2803,9 @@ fn remove_download(kind: String, id: String, state: State<'_, Shared>) -> Result
 /// way to say whether pressing it again would do anything. `attempted` is the
 /// flag, not "found something" — a track LRCLIB has never heard of has still
 /// been asked about, and asking again costs a request and finds nothing.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct LookupCounts {
     fetched: usize,
     total: usize,
@@ -3128,8 +3170,9 @@ fn rows_in_order<'a>(rows: &'a [Row], hrefs: &[String]) -> Vec<&'a Row> {
 // Queue
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct QueueState {
     current: Option<String>,
     tracks: Vec<String>,
@@ -3312,8 +3355,9 @@ fn previous_track(state: State<'_, Shared>) -> Result<Option<String>> {
 /// prefetch (TD-08) exists to remove.
 const SUPERVISOR_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct PlaybackState {
     href: Option<String>,
     /// Resolved from the library rows, so the transport can name what is
@@ -4628,6 +4672,7 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
              * only when the number moved.
              */
             let mut starved_seen: u64 = 0;
+            let mut starved_incoming_seen: u64 = 0;
             let mut limiter_steps_seen: u64 = 0;
             loop {
                 std::thread::sleep(SUPERVISOR_POLL);
@@ -4663,9 +4708,45 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
                         note_audio_fault(app.store.dir(), &line);
                     }
 
+                    /*
+                     * The cued deck, counted apart from the audible one.
+                     *
+                     * Both used to increment one counter, on the reasoning that
+                     * during a mix the incoming deck is the one most likely to
+                     * run dry — which is true, and is why it is still watched.
+                     * What that missed is that a deck is *also* empty for the
+                     * ordinary reason that its stream has not opened yet, and a
+                     * mix is armed thirty seconds ahead. So arming a track
+                     * logged "audio starved for 22 block(s)" — every block in
+                     * the window, because a stream with no bytes yet supplies
+                     * nothing at all — while the listener heard a clean track.
+                     *
+                     * Reported only once the mix is audible, because that is
+                     * when an empty incoming deck becomes silence rather than
+                     * a buffer still filling.
+                     */
+                    let incoming = snap.starved_incoming_blocks;
+                    if incoming > starved_incoming_seen {
+                        let blocks = incoming - starved_incoming_seen;
+                        starved_incoming_seen = incoming;
+                        if player.transition_running() {
+                            let line = format!(
+                                "cued deck starved for {blocks} block(s) in the last {}ms, mid-mix",
+                                SUPERVISOR_POLL.as_millis(),
+                            );
+                            eprintln!("{line}");
+                            note_audio_fault(app.store.dir(), &line);
+                        }
+                    }
+
                     // The limiter's own discontinuities (LIM-001), reported the
                     // same way and for the same reason: a click during a mix is
                     // otherwise only visible to whoever is listening.
+                    //
+                    // "Stepped" now means the applied gain jumped across a
+                    // block boundary — the one discontinuity the ramp cannot
+                    // remove — rather than the reduction merely having moved,
+                    // which is the limiter doing its job.
                     let steps = snap.limiter_steps;
                     if steps > limiter_steps_seen {
                         let jumps = steps - limiter_steps_seen;
@@ -4890,8 +4971,9 @@ fn now_playing(app: &AppState) -> media::NowPlaying {
 /// The queue itself holds hrefs and nothing else — deliberately, so the core
 /// stays free of presentation — which means the shell is where an href becomes
 /// something a person can read.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct QueueEntry {
     href: String,
     // No `cover`. A queue is routinely the whole library, and a cover runs to
@@ -4907,8 +4989,9 @@ struct QueueEntry {
     current: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct QueueView {
     entries: Vec<QueueEntry>,
     /// "off" | "all" | "one".
@@ -5365,8 +5448,9 @@ fn dedupe_recordings(
         .collect()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct VibePath {
     hrefs: Vec<String>,
     /// How many library tracks were eligible — analysed, with a tempo. The
@@ -5418,8 +5502,9 @@ fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<V
 /// `Follow` is not a recommendation, it is what happens if nobody touches
 /// anything — which is why there is no badge any more, and no cycle to reason
 /// about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 enum Exit {
     /// Hold roughly where the set is now, without advancing the curve.
     Stay,
@@ -5479,8 +5564,9 @@ fn exit_between(from: &TrackMeta, to: &TrackMeta, similar_genre: bool) -> Exit {
 }
 
 /// One option for what plays next.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct MixCandidate {
     href: String,
     title: String,
@@ -5759,6 +5845,27 @@ fn card_for(
 /// overriding one step must not throw away the arc: the tail is re-searched
 /// from the chosen track along the same curve. Being 60% through a Build stays
 /// 60% through a Build — the route changes, not where it is going.
+/// Whether an armed mix has to be abandoned because a different exit was taken.
+///
+/// A mix is armed `TRANSITION_ARM_LEAD` seconds — thirty — before it starts, so
+/// for the last half-minute of every track there is a track already cued on the
+/// incoming deck. `choose_next` used to only rewrite the queue, which meant a
+/// press in that window updated the badge and the plan while the deck went on
+/// playing what it had already loaded: "I selected switch, it went ahead with
+/// the follow track". The screen said one thing and the speakers did another.
+///
+/// Three conditions, all necessary:
+///
+/// * something is armed at all,
+/// * it is not already the track that was chosen — pressing Follow is a no-op
+///   by construction and re-arming it would restart a fetch for no reason,
+/// * and the mix has not become audible yet. Once it has, abandoning it snaps
+///   the outgoing deck back to full gain mid-crossfade, which is worse than
+///   honouring the press one track late.
+fn mix_must_be_rearmed(armed_next: Option<&str>, chosen: &str, running: bool) -> bool {
+    !running && armed_next.is_some_and(|armed| armed != chosen)
+}
+
 #[tauri::command]
 fn choose_next(
     href: String,
@@ -5772,6 +5879,24 @@ fn choose_next(
         if !app.queue.set_next(&href) {
             return Err(Error("That track is no longer in the queue.".to_string()));
         }
+
+        // The queue is not the whole story: a mix armed for a different track
+        // has that track loaded on the deck already, and the queue does not
+        // reach it. Drop it so the supervisor arms the chosen one instead.
+        let running = app
+            .player
+            .as_ref()
+            .is_some_and(|p| p.transition_running());
+        if mix_must_be_rearmed(app.armed_next.as_deref(), &href, running) {
+            if let Some(player) = app.player.as_ref() {
+                player.cancel_transition();
+            }
+            // Cleared as well as cancelled: an `arm_mix` still in flight checks
+            // this before handing its decoder over, so clearing it is what
+            // makes that one stand down too.
+            app.armed_next = None;
+        }
+
         app.curve_plan = app.curve_plan.wrapping_add(1);
 
         let pool = track_meta_pool(&app);
@@ -5842,8 +5967,9 @@ fn choose_next(
 }
 
 /// What the next blend will do, in the terms the Vibe screen states them.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct BlendPreview {
     from_title: String,
     to_title: String,
@@ -5963,8 +6089,9 @@ fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
 // Liner notes
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct TrackDetails {
     href: String,
     title: String,
@@ -6051,8 +6178,9 @@ fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails>
 // Search
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct SearchResults {
     /// The single best row, shown larger. Absent when nothing matched.
     top: Option<Row>,
@@ -6066,8 +6194,9 @@ struct SearchResults {
     total: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct Facet {
     label: String,
     count: usize,
@@ -6335,8 +6464,9 @@ fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, hrefs: Vec<Stri
 // Library scan
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct ScanReport {
     tracks: usize,
     directories: usize,
@@ -6554,8 +6684,9 @@ fn build_row(href: &str, base_folder: &str) -> Row {
 // Analysis
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct AnalysisStatus {
     analysed: usize,
     total: usize,
@@ -7112,10 +7243,19 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
 // Cache
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct CacheStatus {
+    // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
+    // plain number and the webview parses it as one. Values here are byte
+    // counts and millisecond timestamps, far below 2^53.
+    #[ts(type = "number")]
     bytes: u64,
+    // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
+    // plain number and the webview parses it as one. Values here are byte
+    // counts and millisecond timestamps, far below 2^53.
+    #[ts(type = "number")]
     max_bytes: u64,
     /// How many of the library's tracks are held locally, so the Your Data
     /// screen can state what is actually on the device rather than implying
@@ -7220,11 +7360,16 @@ fn data_location(state: State<'_, Shared>) -> Result<String> {
 }
 
 /// One line of the Your Data table: what it is, where it sits, how big.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct DataRow {
     label: String,
     path: String,
+    // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
+    // plain number and the webview parses it as one. Values here are byte
+    // counts and millisecond timestamps, far below 2^53.
+    #[ts(type = "number")]
     bytes: u64,
     /// False for anything that lives on the server rather than here. The
     /// screen's whole claim is about what is on *this* device, so the
@@ -7588,6 +7733,7 @@ pub fn run() {
             clear_album_art,
             set_prefer_looked_up_art,
             set_hide_duplicates,
+            set_appearance,
             artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
@@ -7654,6 +7800,44 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// The last thirty seconds of every track, and what a press means in them.
+    ///
+    /// A mix is armed `TRANSITION_ARM_LEAD` ahead of its start, so there is
+    /// always a cued deck by the time the three cards are worth looking at.
+    /// Pressing Switch there used to change the queue and nothing else, and the
+    /// already-loaded track played: the badge said Switch, the speakers played
+    /// Follow.
+    #[test]
+    fn a_chosen_exit_abandons_a_mix_armed_for_a_different_track() {
+        assert!(
+            mix_must_be_rearmed(Some("/fools-rhythm.m4a"), "/gorillaz.m4a", false),
+            "a pending mix for another track has to be dropped, or the deck wins"
+        );
+    }
+
+    #[test]
+    fn choosing_what_is_already_armed_changes_nothing() {
+        // Follow is a no-op by construction. Re-arming it would cancel a fetch
+        // that is already most of the way through and start it again.
+        assert!(!mix_must_be_rearmed(Some("/same.m4a"), "/same.m4a", false));
+    }
+
+    #[test]
+    fn nothing_armed_means_nothing_to_abandon() {
+        assert!(!mix_must_be_rearmed(None, "/anything.m4a", false));
+    }
+
+    /// Once the crossfade is audible, the press arrives too late to honour.
+    ///
+    /// Cancelling then resets the outgoing deck to unity gain and flat EQ
+    /// part-way through a fade, which is a jump anyone would hear. Playing the
+    /// mix out and applying the choice to the track after it is the quieter
+    /// wrong answer, and the one this picks deliberately.
+    #[test]
+    fn a_mix_already_under_way_is_left_alone() {
+        assert!(!mix_must_be_rearmed(Some("/other.m4a"), "/chosen.m4a", true));
+    }
     use super::*;
 
     /// A real `AppState` on a throwaway directory.
@@ -9788,6 +9972,7 @@ mod tests {
             brightness: 0.0,
             commands_deferred: 0,
             starved_blocks: 0,
+            starved_incoming_blocks: 0,
             limiter_steps: 0,
             limiter_deepest_db: 0.0,
         };

@@ -12,6 +12,7 @@
 //!   every view of its contents evaluates this against the live library.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::group::{Entity, EntityType};
 
@@ -23,8 +24,9 @@ pub const UNKNOWN_HEADER: &str = "—";
 
 /// Where a derived field came from, so the UI can distinguish verified
 /// metadata from a guess and from honest ignorance.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum Source {
     Cache,
     File,
@@ -40,13 +42,22 @@ impl Source {
 }
 
 /// One row of the library table.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+// Serialised for two audiences at once: the IPC boundary, where the frontend
+// reads camelCase, and the JSON on disk, which was written snake_case before
+// this was noticed. `rename_all` fixes the wire; the per-field `alias` keeps
+// every existing file readable, so nobody's folders or manual ordering reset
+// on upgrade. Removing an alias is a data migration, not a tidy-up.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Row {
     pub href: String,
     pub title: String,
     pub artist: String,
     pub album: String,
+    #[serde(alias = "artist_source")]
     pub artist_source: Source,
+    #[serde(alias = "album_source")]
     pub album_source: Source,
     /// Empty when unknown.
     pub genre: String,
@@ -56,6 +67,7 @@ pub struct Row {
     pub key: String,
     pub year: u32,
     /// Position in a manually ordered playlist.
+    #[serde(alias = "manual_pos")]
     pub manual_pos: usize,
 }
 

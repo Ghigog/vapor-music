@@ -42,3 +42,7 @@ runner = ["/bin/sh", "-c", 'codesign -s "Vapor Dev" -i com.dylangrowcoot.vapormu
 
 [target.x86_64-apple-darwin]
 runner = ["/bin/sh", "-c", 'codesign -s "Vapor Dev" -i com.dylangrowcoot.vapormusic.dev -f "$0" >/dev/null 2>&1 || true; exec "$0" "$@"']
+
+# The app crate's boundary types are generated too — see vapor-core/.cargo/config.toml.
+[env]
+TS_RS_EXPORT_DIR = { value = "../src/lib/generated", relative = true }

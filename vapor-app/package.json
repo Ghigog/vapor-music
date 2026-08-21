@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/verify-dist.mjs",
+    "build": "node scripts/check-types.mjs && tsc --noEmit && vite build && node scripts/verify-dist.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "app": "tauri dev",
@@ -18,7 +18,8 @@
     "e2e:ui": "playwright test --ui",
     "verify-dist": "node scripts/verify-dist.mjs",
     "mark": "node scripts/export-mark.mjs",
-    "icon:macos": "node scripts/make-icon.mjs"
+    "icon:macos": "node scripts/make-icon.mjs",
+    "types:check": "node scripts/check-types.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",

@@ -26,6 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use ts_rs::TS;
 
 /// How long a lookup may take before it is abandoned.
 ///
@@ -42,7 +43,8 @@ const USER_AGENT: &str = concat!(
 );
 
 /// One line of time-aligned lyrics.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct LyricLine {
     /// Seconds from the start of the track.
     pub time: f32,
@@ -50,8 +52,9 @@ pub struct LyricLine {
 }
 
 /// The words to a track, however they arrived.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Lyrics {
     /// Whether `lines` carry usable timings.
     pub synced: bool,
