@@ -172,7 +172,7 @@ export function makeEntity(
     tracks: 1,
     lead: "/dav/Koofr/Music/track.m4a",
     plays: 0,
-    lastPlayed: 0n,
+    lastPlayed: 0,
     ...over,
   };
 }

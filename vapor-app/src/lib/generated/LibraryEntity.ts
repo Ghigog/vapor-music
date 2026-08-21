@@ -35,5 +35,10 @@ lead: string,
 plays: number, 
 /**
  * When one of its tracks was last listened to, unix seconds. 0 for never.
+ *
+ * `number`, not the `bigint` ts-rs gives an `i64` by default. Nothing on
+ * this wire is a real `bigint`: `serde_json` writes it as a plain JSON
+ * number and the webview parses it as one, so the generated type would
+ * have been a claim about the value that the value does not meet.
  */
-lastPlayed: bigint, };
+lastPlayed: number, };
