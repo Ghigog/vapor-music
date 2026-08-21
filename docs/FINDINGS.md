@@ -55,6 +55,40 @@ The engine was a faithful port throughout — same A\* search, same weights, sam
 Camelot graph, same four curves with identical arithmetic. It was the interface
 to it that was reduced.
 
+**The library screen opens on shelves rather than on the album grid.** Decided
+2026-08-21, and a deliberate departure from the Daylight design, whose Library
+carries four tabs and lands on Albums.
+
+The reason is what someone is doing when they open the app. Almost nobody
+arrives at their own library looking for a particular record; they arrive
+wanting something on, and the thing they reach for is a playlist they already
+have. An album grid answers "which record", which is the rarer question, and it
+was the first and only thing the screen offered. Tidal and Spotify both land on
+rows of recent and most-played collections for the same reason.
+
+So: a search field, then four shelves ranked most-played-first — playlists,
+smart groups, artists, albums — each scrolling sideways and capped at twelve
+tiles, with the four grouping tabs kept behind them for the visit that does
+know what it wants. Smart groups are second, above artists, because they are
+the thing this app has that the others do not.
+
+Three things fell out of the decision and are worth writing down:
+
+* **A shelf needs play counts, and there were none.** Tracks now earn a listen
+  after 30 seconds (or halfway, under a minute), and a playlist or group earns
+  one alongside whichever of its tracks did — credited by id rather than by
+  name, so renaming a playlist does not reset it.
+* **Ranking falls through four keys**, because each runs out: direct plays,
+  then plays of the member tracks, then when it was last played, then size. The
+  second is what stops a playlist built this morning out of worn-out records
+  sorting below one nobody has ever opened. The fourth is what the shelf says
+  on the day the library is new and every count is zero — biggest first is at
+  least about the person's music, where alphabetical would put A first for
+  ever.
+* **Typing searches; it does not filter the shelves.** A shelf holds the first
+  twelve of something ranked by plays, so narrowing one would answer "you have
+  no such album" for an album that is in the library and merely thirteenth.
+
 ---
 
 ## Analysis
