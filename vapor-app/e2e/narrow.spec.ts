@@ -10,12 +10,8 @@
  * phone preset — the touch input and `hover: none` matter as much as the width.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { boot } from "./harness";
 
-async function boot(page: Page, options: Record<string, unknown> = {}) {
-  await page.goto("/");
-  await page.evaluate((o) => window.__vaporReset(o), options);
-  await expect(page.getByRole("main")).toBeVisible();
-}
 
 test.describe("Navigation exists at all", () => {
   /**
@@ -339,13 +335,27 @@ test.describe("Playlists and groups open from the bar", () => {
       ],
     });
 
+    /*
+     * Which tracks a group resolves to is `vapor_library::group` matching
+     * entities against the index, and it is tested there. The fake used to
+     * restate that union and stopped (eb5fa70); it now hands back the whole
+     * library unless a test asks for a narrower answer.
+     *
+     * So the answer is arranged, and what is asserted is the screen's half:
+     * it draws the tracks it was given and does not pad the list with the rest
+     * of the library. Roygbiv is the check on the second half.
+     */
+    await page.evaluate(() => {
+      const backend = window.__vaporBackend;
+      backend.answers("group_tracks", backend.rowsNamed("Windowlicker", "Xtal"));
+    });
+
     await tab(page, "Groups").click();
     await page
       .getByRole("dialog", { name: "Dynamic groups" })
       .getByRole("button", { name: /braindance/i })
       .click();
 
-    // Both Aphex Twin tracks in the fixture, and nothing by anyone else.
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
     await expect(page.getByText("Xtal", { exact: true })).toBeVisible();
     await expect(page.getByText("Roygbiv", { exact: true })).toHaveCount(0);

@@ -39,6 +39,7 @@
  * because the gesture and the expected outcome genuinely differ.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { boot } from "./harness";
 
 /** The fixture library, by title. */
 const TITLES = ["Windowlicker", "Xtal", "Roygbiv", "Not Yet Analysed"];
@@ -80,11 +81,6 @@ async function openSongs(page: Page) {
   await page.getByRole("tab", { name: "Songs" }).click();
 }
 
-async function boot(page: Page) {
-  await page.goto("/");
-  await page.evaluate(() => window.__vaporReset({}));
-  await expect(page.getByRole("main")).toBeVisible();
-}
 
 /** The title showing in the player at the bottom of the window. */
 function transportTitle(page: Page): Locator {
@@ -189,7 +185,9 @@ const SCREENS: {
   name: string;
   reach: (page: Page) => Promise<void>;
   activate: (page: Page) => Promise<void>;
-  byKeyboard: (page: Page) => Promise<void>;
+  /* Returns the title it expects to hear, when the row it lands on is the
+   * backend's choice rather than this file's. Otherwise `plays`. */
+  byKeyboard: (page: Page) => Promise<string | void>;
   plays: string;
   displayOnly?: string[];
 }[] = [
@@ -206,12 +204,21 @@ const SCREENS: {
     },
     // The listbox pattern: focus the table once, drive it with arrows, Enter
     // plays the row under the cursor (TD-33).
+    //
+    // Which row End lands on is the backend's ordering. This used to name it —
+    // "sorted by title ascending, so End lands on Xtal" — which was true of the
+    // fake's own sort, and the fake stopped sorting when it stopped restating
+    // `library_view` (eb5fa70). The claim here is not what order the table is
+    // in; it is that Enter plays the row the cursor is on. So the cursor is
+    // read off the table rather than predicted, and the table can be sorted
+    // however the backend sorts it.
     byKeyboard: async (page) => {
       await page.getByRole("listbox", { name: /tracks/i }).focus();
       await page.keyboard.press("End");
+      const landed = await page.locator(".songrow--cursor .songrow__title").innerText();
       await page.keyboard.press("Enter");
+      return landed;
     },
-    // Sorted by title ascending, so End lands on Xtal.
     plays: "Xtal",
   },
   {
@@ -312,9 +319,9 @@ for (const screen of SCREENS) {
       await boot(page);
       await screen.reach(page);
 
-      await screen.byKeyboard(page);
+      const expected = (await screen.byKeyboard(page)) ?? screen.plays;
 
-      await expect(transportTitle(page)).toHaveText(screen.plays);
+      await expect(transportTitle(page)).toHaveText(expected);
     });
   });
 }

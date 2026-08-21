@@ -8,6 +8,7 @@
  * screen in isolation.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { boot } from "./harness";
 
 /*
  * What is deliberately *not* here.
@@ -48,15 +49,6 @@ async function openSongs(page: Page) {
   await page.getByRole("tab", { name: "Songs" }).click();
 }
 
-/** Start with the backend in a chosen state. Options survive the reload. */
-async function boot(page: Page, options: Record<string, unknown> = {}) {
-  await page.goto("/");
-  await page.evaluate((o) => window.__vaporReset(o), options);
-  // Wait for the content column rather than the sidebar: onboarding takes the
-  // whole window with no sidebar at all, so waiting for the nav hangs on
-  // exactly the first-run case these tests exist to cover.
-  await expect(page.getByRole("main")).toBeVisible();
-}
 
 test.describe("A first run", () => {
   test("connect, scan, analyse, play", async ({ page }) => {
@@ -87,8 +79,24 @@ test.describe("A first run", () => {
     await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible();
   });
 
+  /*
+   * Whether an address is an address is the backend's ruling, not this file's.
+   * The fake used to restate the rule with its own regex and the two came
+   * apart twice, so it stopped (eb5fa70) and the refusal is arranged here.
+   *
+   * What the journey still owns is everything around that ruling: onboarding
+   * hands off to Settings, the address the owner typed is sent, and the reason
+   * it comes back with reaches the screen instead of being swallowed. Arranging
+   * the refusal tests that path; computing it here would only test a regex.
+   */
   test("a wrong server address is refused with an explanation", async ({ page }) => {
     await boot(page, { connected: false });
+    await page.evaluate(() =>
+      window.__vaporBackend.fail(
+        "set_remote_config",
+        '"https://4wg9ie7xi8v7nbi6" is not a server address',
+      ),
+    );
 
     await page.getByRole("button", { name: /choose where music lives/i }).click();
     // A Koofr app password in the address field — the mistake that happens.
