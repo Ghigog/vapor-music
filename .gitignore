@@ -19,3 +19,15 @@ bin/libaudio_dsp.*
 /vapor-app/playwright-report/
 /vapor-app/blob-report/
 /vapor-app/.playwright/
+
+# Claude Code session state. The hooks and settings.json are versioned on
+# purpose — the guard only works if every session gets it. Everything else
+# here is per-session: worktrees are whole checkouts (152 MB of node_modules
+# each) and the lock file is machine-local.
+/.claude/worktrees/
+/.claude/scheduled_tasks.lock
+/.claude/*.local.json
+/.claude/settings.local.json
+
+# Playwright, run from the repo root instead of vapor-app/
+/test-results/

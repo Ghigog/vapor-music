@@ -1,48 +1,102 @@
 # Vapor Music
 
-Godot original at the repo root (`project.godot`, `src/` GDExtension, `scenes/`).
-The Tauri + React rewrite is `vapor-app/`; the Rust analysis crates are
-`vapor-core/`. Architecture is in `docs/ARCHITECTURE.md`, testing in
-`docs/TESTING.md`.
+The live application is **`vapor-app/`** (Tauri 2 shell in `src-tauri/`, React 19
+in `src/`) on top of **`vapor-core/`** (the Rust crates: `vapor-dsp`,
+`vapor-engine`, `vapor-library`). That is what ships and what almost every task
+is about.
+
+The Godot original at the repo root — `project.godot`, `scenes/`, `autoloads/`,
+and the root-level `src/` and `scripts/` — is **archived**. It is kept so legacy
+behaviour can be read, not built or changed.
+
+> The root `src/` and `scripts/` are Godot. The live ones are `vapor-app/src/`
+> and `vapor-app/scripts/`. This trips people up; check the prefix.
+
+Current, and worth reading: `docs/TESTING.md`, `docs/FINDINGS.md`,
+`docs/RELEASE.md`, `docs/LICENSING.md`, `docs/DECISIONS.md`, `docs/ANDROID.md`,
+`docs/theme_system.md`.
+
+`docs/ARCHITECTURE.md` describes the **Godot** build and nothing else. Do not
+start there for work on the Tauri app; it is archaeology.
 
 ## Several Claude sessions run in this repo at once
 
-Dylan often has two or three sessions working here simultaneously, each briefed
-on its own scope. Assume you are not alone.
+Dylan runs two or three at a time, each briefed on its own scope. Assume you are
+not alone.
 
-**Stay in the lane your task describes.** Before editing a file the request did
-not name, run `git status` — modified or untracked files you did not create are
-another session's work in flight. If your fix needs one of them, say so and let
-Dylan route it rather than editing it yourself. Two sessions changing the same
-module produces conflicts he has to untangle, and they can fight at runtime
-rather than in the diff.
+**Work in a worktree unless the task is one file or none.** Reading the code,
+answering a question, a single-file fix, a doc edit — stay in the main checkout.
+Anything else, create one and start there. Do not ask first; the cost of a wrong
+yes is 152 MB and a minute, and the cost of a wrong no is on record below.
 
-**Stage explicit paths. Never `git add -A`, `git add .`, or `git commit -a`.**
-The working tree is shared, so a blanket stage sweeps up whatever another
-session had half-finished and commits it under your message.
+Three commits in this history carry work their author did not do — `278cb5d`,
+`050281f`, `eb5fa70` — and each says so in its own message. `278cb5d` landed 63
+minutes after the rule against it was written:
 
-## Ask about a worktree before you start
+> "Not mine, and committed rather than left loose because the tree was being
+> committed whole."
 
-A worktree gives the session its own directory and branch, so nothing above
-applies inside it. Dylan runs plain sessions by default and does not always
-think to ask for one.
+That rule did not fail through carelessness. A session holding a dirty tree it
+cannot attribute has to choose between leaving the tree dirty and committing it,
+and tidiness wins. A worktree removes the choice.
 
-**Say so, and wait for his answer, when the task looks like any of these:**
+**If you are in the main checkout and `git status` shows work you did not do:
+leave it, and say so in your reply.** Do not stage it, stash it, or commit it
+under your message. You cannot tell your own older edits from someone else's —
+`git status` has no author column — so if you are unsure, it is not yours.
+`?? test-results/` is Playwright output and belongs to nobody.
 
-- it will touch more than a handful of files, or run for more than a few turns
-- it changes a module another session is likely in — `src/lib/`,
-  `src/components/`, `src-tauri/src/lib.rs`, generated types
-- it is exploratory: a refactor, a spike, or something that may be thrown away
-- `git status` already shows heavy in-flight work from someone else
+**Stage explicit paths. Never `git add -A`, `git add .`, `git commit -a`, or
+`git stash`.** Stash is the worst of them: it takes another session's work out
+of the tree entirely, and they watch it vanish mid-task.
 
-Phrase it as a question ("this touches the theme system and another session has
-files open there — want me in a worktree?"). Only call `EnterWorktree` once he
-says yes. Small, contained edits and single-file fixes do not need one; asking
-every time is its own kind of noise.
+This one is enforced rather than trusted — `.claude/hooks/guard-git-staging.sh`
+blocks those commands, plus `git reset --hard` and whole-tree `checkout`/
+`restore`, and tells you what to run instead. If it fires, it is not a hurdle to
+work around; the command was about to take something that was not yours.
 
-Trade-off worth stating when he asks: a worktree needs its own `node_modules`
-(~150 MB) and its own `target/` unless `CARGO_TARGET_DIR` points back at the
-main one — a cold Rust build there is slow.
+## Before you start, every time
+
+The only way to find out what the other sessions are doing:
+
+```
+git worktree list
+git branch --no-merged main
+for w in .claude/worktrees/*/; do echo "-- $w"; git -C "$w" status --porcelain; done
+```
+
+Worktrees isolate **trees, not tasks**. On 2026-08-21 two sessions independently
+diagnosed the same wry/WKWebView drag bug and wrote the same one-line fix to
+`tauri.conf.json`, hours apart, in separate worktrees — byte-identical, and
+neither knew. Isolation prevents collisions; only looking prevents duplication.
+
+## Lanes
+
+Pick tasks from different lanes and two sessions will rarely meet.
+
+| Lane | Globs |
+|------|-------|
+| **shell** — Tauri/Rust backend | `vapor-app/src-tauri/src/**`, `src-tauri/Cargo.*`, `src-tauri/capabilities/**` |
+| **screens** — React screens | `vapor-app/src/screens/**`, `vapor-app/src/App.tsx` |
+| **components** — shared widgets | `vapor-app/src/components/**` |
+| **core** — DSP, engine, library | `vapor-core/**` |
+| **platform** — build, CI, packaging | `src-tauri/src/android.rs`, `.github/workflows/**`, `vapor-app/scripts/**`, `tools/**`, `docs/RELEASE.md`, `docs/ANDROID.md` |
+| **docs** | `docs/**`, `README.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, `licenses/**` |
+| **archived — never edit** | `src/**`, `scenes/**`, `autoloads/**`, `scripts/**`, `addons/**`, `godot-cpp/**`, `project.godot`, `SConstruct`, `tests/**` (all repo-root) |
+
+`core` is the cleanest lane in the repo — zero recorded collisions. `components`
+is the dirtiest: `PlaylistRail`, `SyncPanel` and `TabMenu` get pulled in by
+several features at once.
+
+### Seams, where lanes unavoidably meet
+
+| Seam | Rule |
+|------|------|
+| `src-tauri/src/lib.rs` | Over 10,000 lines and ~100 commands behind one mutex — the only door to the backend. **One session in the backend at a time** until it is split into `commands/<domain>.rs`. |
+| `vapor-app/src/lib/generated/**` | Generated from Rust by `ts-rs`. Never hand-edit: the shell lane regenerates, frontend lanes read. `npm run types:check` already fails on drift — this seam is solved, and is the template for the others. |
+| `vapor-app/src/lib/core.ts` | Additive only. Add your wrapper; restructuring the file is its own task with no other session live. |
+| `vapor-app/src/app.css`, `tokens.css` | Additive only, append at the end of the token block. Renaming or reorganising a token is its own task. |
+| `vapor-app/src/test/ipc.ts` | Holds state and answers, no logic. Add fixtures, never decisions. A diff here that adds `if` or `sort` is the regression signal. |
 
 ## Ports and builds are machine-global
 
@@ -77,7 +131,7 @@ green suite against another session's code was the failure mode this replaced;
 if the run refuses to start, move ports, do not free the port by killing what
 is on it.
 
-`vapor-app/src-tauri/target` is ~45 GB and shared. Two cargo builds in the same
+`vapor-app/src-tauri/target` is ~48 GB and shared. Two cargo builds in the same
 tree serialize on its lock: "Blocking waiting for file lock on build directory"
 is contention, not a hang — wait it out rather than killing the other build.
 
@@ -85,39 +139,33 @@ is contention, not a hang — wait it out rather than killing the other build.
 
 ## How worktrees actually work here
 
-For Dylan, so the answer is written down rather than re-explained each time.
-
 A worktree is a second checkout of this repo in its own directory, on its own
 branch, sharing one `.git`. Two sessions in two worktrees cannot collide in
 `git status`, cannot stage each other's files, and cannot deadlock on the cargo
 build lock. They still share the machine's ports.
 
-**Starting one.** Nothing to set up in advance and no separate terminal: ask
-the session to work in a worktree, or say yes when it offers, and it creates
-one itself. They land in `.claude/worktrees/<name>/` on a `claude/<name>`
-branch. Two already exist from earlier sessions:
+**Starting one.** Nothing to set up in advance and no separate terminal — the
+session creates it. They land in `.claude/worktrees/<name>/` on a
+`claude/<name>` branch. **Name the branch after the task, not the session**, so
+`git branch --no-merged main` reads as a list of work in flight.
+
+**Frontend-only work** should share the main tree's Rust build, which makes the
+cold-build cost zero:
 
 ```
-git worktree list
+export CARGO_TARGET_DIR=/Users/dylangrowcoot/Documents/personal_apps/vapor-music/vapor-app/src-tauri/target
+npm ci     # 152 MB, about a minute, unavoidable
 ```
 
-**Working in one.** The session `cd`s there on its own; paths it reports are
-inside the worktree. Files edited there are invisible to the main checkout
-until the branch merges, which is the whole point.
+A session doing real Rust work should let the worktree build its own `target/`
+rather than serialising on the shared lock.
 
 **Finishing one.** The work comes back as a branch merge or a cherry-pick onto
-`main` — the session does this when the work is done. Afterwards the directory
-is removed with `git worktree remove <path>`; a worktree with nothing in it is
-cleaned up automatically.
+`main`, done by the session that did it. Then `git worktree remove <path>`.
 
-**What it costs.** Each worktree needs its own `node_modules` (~150 MB —
-`npm ci` in the new tree before running anything frontend). Rust is the
-expensive half: a fresh `target/` is a cold build of the whole dependency
-graph. Point `CARGO_TARGET_DIR` at the main tree's `target/` to skip that, at
-the price of re-serializing on the build lock with whoever else is compiling.
-Frontend-only sessions should share it; a session doing real Rust work should
-not.
+**Measured 2026-08-21:** `node_modules` 152 MB; shared `target/` 48 GB; 627
+crates in the graph; an existing frontend-only worktree 169–171 MB.
 
-**When it is not worth it.** A single-file fix, a doc edit, a question about
-the code. The setup cost is real and a contained edit will not collide with
-anything.
+**Stale worktrees are invisible debt.** They sit outside every `git status`, so
+work parked in one is lost until somebody runs `git worktree list`. Land it or
+delete it; do not leave it.
