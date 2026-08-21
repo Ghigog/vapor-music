@@ -330,11 +330,30 @@
   color: var(--ink-3);
 }
 
+/*
+ * Six digits, and room for all six.
+ *
+ * `9ch` was not it. `ch` is the advance of "0" and knows nothing about the
+ * `letter-spacing` below, which adds 0.18em *per character* — including a
+ * trailing gap after the last one — and `border-box` means the 12px of padding
+ * either side comes out of the declared width too. Six digits needed about
+ * 91px and had 75, so the code scrolled sideways inside its own field and you
+ * could only see four of what you had typed.
+ *
+ * Written as the sum of the things it has to hold, so it stays right if the
+ * padding or the tracking changes. The 6px on the end is slack: `ch` is
+ * measured from the loaded font, and the first paint before JetBrains Mono
+ * arrives uses a fallback whose digits are wider.
+ */
 .sync__code {
-  width: 9ch;
+  width: calc(6ch + 6 * 0.18em + 2 * 12px + 2px + 6px);
   flex: none;
   font-family: var(--font-mono);
   letter-spacing: 0.18em;
+  /* Centred, because a six-digit code read aloud is looked at rather than
+     read — and left-aligned it sat against the padding with the trailing
+     tracking making it look off-centre. */
+  text-align: center;
 }
 
 /* The code this device is showing, to be read aloud and typed on the other. */
