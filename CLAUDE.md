@@ -55,20 +55,31 @@ blocks those commands, plus `git reset --hard` and whole-tree `checkout`/
 `restore`, and tells you what to run instead. If it fires, it is not a hurdle to
 work around; the command was about to take something that was not yours.
 
+It ignores prose — heredoc bodies and quoted `-m` arguments are stripped before
+matching, so a commit message may name the commands it blocks. If you change the
+guard, `bash .claude/hooks/guard-git-staging.test.sh` is beside it.
+
 ## Before you start, every time
 
-The only way to find out what the other sessions are doing:
+**This now runs on its own.** `.claude/hooks/session-survey.sh` fires on
+SessionStart and puts the answer in your context before your first message:
+which trees are dirty and with what, which lanes are occupied, which seams are
+being touched, which worktrees are stale, and whether 1420 or 1421 is taken.
+
+Run it by hand any time the picture may have moved — after a long turn, or
+before starting something big:
 
 ```
-git worktree list
-git branch --no-merged main
-for w in .claude/worktrees/*/; do echo "-- $w"; git -C "$w" status --porcelain; done
+bash .claude/hooks/session-survey.sh
 ```
 
-Worktrees isolate **trees, not tasks**. On 2026-08-21 two sessions independently
-diagnosed the same wry/WKWebView drag bug and wrote the same one-line fix to
+It was made automatic because the manual version was not run. Worktrees isolate
+**trees, not tasks**. On 2026-08-21 two sessions independently diagnosed the
+same wry/WKWebView drag bug and wrote the same one-line fix to
 `tauri.conf.json`, hours apart, in separate worktrees — byte-identical, and
-neither knew. Isolation prevents collisions; only looking prevents duplication.
+neither knew. Isolation prevented the collision; only looking prevents the
+duplication, and looking is exactly the step a session skips when it is keen to
+start.
 
 ## Lanes
 
