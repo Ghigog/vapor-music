@@ -10779,9 +10779,21 @@ mod tests {
     fn a_library() -> (AppState, std::path::PathBuf) {
         let (mut app, dir) = app();
         app.rows = vec![
-            shelf_row("/dav/Aphex/Windowlicker/01.m4a", "Aphex Twin", "Windowlicker"),
-            shelf_row("/dav/Aphex/Windowlicker/02.m4a", "Aphex Twin", "Windowlicker"),
-            shelf_row("/dav/Aphex/SAW/01.m4a", "Aphex Twin", "Selected Ambient Works"),
+            shelf_row(
+                "/dav/Aphex/Windowlicker/01.m4a",
+                "Aphex Twin",
+                "Windowlicker",
+            ),
+            shelf_row(
+                "/dav/Aphex/Windowlicker/02.m4a",
+                "Aphex Twin",
+                "Windowlicker",
+            ),
+            shelf_row(
+                "/dav/Aphex/SAW/01.m4a",
+                "Aphex Twin",
+                "Selected Ambient Works",
+            ),
             shelf_row("/dav/BoC/Geogaddi/01.m4a", "Boards of Canada", "Geogaddi"),
         ];
         (app, dir)
@@ -10818,7 +10830,11 @@ mod tests {
 
         let shelves = home_shelves_for(&app);
         assert_eq!(
-            shelves.playlists.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
+            shelves
+                .playlists
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
             ["On Repeat", "Untouched"],
         );
         assert_eq!(shelves.playlists[0].plays, 1);
@@ -10916,5 +10932,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
     }
-
 }

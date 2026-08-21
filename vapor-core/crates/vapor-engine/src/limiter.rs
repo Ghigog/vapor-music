@@ -383,8 +383,11 @@ mod tests {
         );
         // And it really did move, or the test proves nothing.
         let travelled = (applied[applied.len() - 1] - applied[0]).abs();
-        assert!(travelled > 0.05, "gain barely moved ({travelled:.3}); the test \
-             would pass on a limiter that does nothing at all");
+        assert!(
+            travelled > 0.05,
+            "gain barely moved ({travelled:.3}); the test \
+             would pass on a limiter that does nothing at all"
+        );
     }
 
     /// Release must not be so fast that each block jumps back to unity — that
