@@ -1,6 +1,6 @@
 # Android
 
-What is done, what is not, and what to run when the NDK is installed.
+What is done, what is not, and what to run.
 
 ## What this covers
 
@@ -18,22 +18,28 @@ columns separate.
 
 ## The machine this was written on
 
-macOS, Android Studio installed, SDK platform 36, build-tools 37 — and **no
-NDK**, and no `cmdline-tools`, so no `sdkmanager` to install one with. Nothing
-compiles for Android without it: every C dependency (`ring` first) is built by
-the `cc` crate, which looks for `aarch64-linux-android<api>-clang` and stops.
+macOS, Android Studio installed, SDK platform 36, build-tools 37, and **NDK
+30.0.15729638** at `$ANDROID_HOME/ndk/`. A local `--debug --target aarch64`
+build was produced and installed on 2026-08-21. This section previously recorded
+no NDK, which was true when it was written.
 
-That is why the verification lives in CI. GitHub's Ubuntu runners ship an NDK at
+Without one nothing compiles for Android at all: every C dependency (`ring`
+first) is built by the `cc` crate, which goes looking for a cross-compiler and
+stops when there is none.
+
+CI checks it too, and that is worth keeping rather than treating as a fallback
+now that the machine can build: GitHub's Ubuntu runners ship an NDK at
 `$ANDROID_NDK_LATEST_HOME`, so the compile is checked on every push by a machine
-that has one, and the JNI is type-checked on all three desktop runners besides —
-see `--features android-check` below.
+whose toolchain nobody has adjusted by hand, and the JNI is type-checked on all
+three desktop runners besides — see `--features android-check` below.
 
-## Installing the NDK
+## The environment
 
-In Android Studio: **Settings → Languages & Frameworks → Android SDK → SDK
-Tools**, tick **NDK (Side by side)** and **Android SDK Command-line Tools**.
+If the NDK is ever missing, Android Studio installs one: **Settings → Languages
+& Frameworks → Android SDK → SDK Tools**, tick **NDK (Side by side)** and
+**Android SDK Command-line Tools**.
 
-Then, per shell:
+Per shell:
 
 ```bash
 export ANDROID_HOME="$HOME/Library/Android/sdk"
@@ -80,6 +86,17 @@ Or, to produce an installable APK without a device attached:
 cd vapor-app && npm run build && npm run tauri android build -- --debug --target aarch64
 ```
 
+It lands at
+`src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`,
+with an AAB beside it. The debug APK is around 570 MB — unstripped Rust
+debuginfo, not a packaging fault — and installs as
+`com.dylangrowcoot.vapormusic.debug`, alongside a release build rather than over
+it:
+
+```bash
+~/Library/Android/sdk/platform-tools/adb install -r <apk>
+```
+
 ## Checks that do not need a device
 
 The whole Rust half, on any machine:
@@ -93,11 +110,21 @@ That compiles `src/secrets/android.rs` on the host. It is not a runtime feature
 signatures are type-checked where they were written rather than only where they
 run. Its record-format tests run with the ordinary suite.
 
-With an NDK, the real thing:
+The real thing needs the toolchain pointed at explicitly. `NDK_HOME` alone is
+not enough: `cc` looks for `aarch64-linux-android-clang`, the NDK ships only
+API-suffixed names like `aarch64-linux-android24-clang`, and the build stops on
+`ring`. The tauri CLI sets this up itself, which is why the APK builds while a
+bare `cargo check` does not.
 
 ```bash
+export PATH="$NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin:$PATH"
+export CC_aarch64_linux_android="aarch64-linux-android24-clang"
+export AR_aarch64_linux_android="llvm-ar"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android24-clang"
 cd vapor-app/src-tauri && cargo check --target aarch64-linux-android
 ```
+
+24 is `minSdk`, set in `gen/android/app/build.gradle.kts` and noted above.
 
 ## What to distrust first
 
