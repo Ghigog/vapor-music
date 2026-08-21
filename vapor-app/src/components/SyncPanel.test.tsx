@@ -10,8 +10,8 @@
  * `vapor_library::sync` for pairing and reconciliation, `peers.rs` for what an
  * unpaired device is allowed to ask for.
  */
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SyncPanel } from "./SyncPanel";
 import type * as core from "../lib/core";
@@ -44,30 +44,31 @@ describe("Sync panel", () => {
    * reaches. The panel used to open with three paragraphs about how sync works
    * before either.
    */
-  it("says who it is sharing with", async () => {
-    useBackend({ syncEnabled: true, trustedPeers: [trusted()] });
-    render(<SyncPanel />);
-
-    // The name appears in the paired list too, so assert on the row's own
-    // subtitle rather than on the name alone.
-    const sub = await screen.findByText(/sharing data with:/i);
-    expect(sub).toHaveTextContent(trusted().name);
-  });
-
-  it("says so plainly when it is sharing with nobody", async () => {
-    useBackend({ syncEnabled: true, trustedPeers: [] });
-    render(<SyncPanel />);
-
-    expect(
-      await screen.findByText(/sharing data with: none yet/i),
-    ).toBeInTheDocument();
-  });
-
+  /*
+   * The switch's subtitle carries the one fact pairing needs.
+   *
+   * It used to say "Sharing data with: <names>", which the list below already
+   * says at more length. What is not written anywhere else is what the *other*
+   * device will call this one — and both machines called themselves "Vapor"
+   * until the name took the machine's own name, so the list was two identical
+   * rows.
+   */
   it("names this device, so the other end can be told what to look for", async () => {
     useBackend({ syncEnabled: true });
     render(<SyncPanel />);
 
-    expect(await screen.findByText(/this device is/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/this device appears as/i),
+    ).toBeInTheDocument();
+  });
+
+  it("says it is off rather than leaving the row blank", async () => {
+    useBackend({ syncEnabled: false });
+    render(<SyncPanel />);
+
+    expect(
+      await screen.findByText(/nothing is announced and nothing is listening/i),
+    ).toBeInTheDocument();
   });
 
   /** A lone machine is the normal case, and it needs an explanation. */
@@ -78,7 +79,6 @@ describe("Sync panel", () => {
     expect(
       await screen.findByText(/nothing else running vapor here/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/none yet/i)).toBeInTheDocument();
   });
 
   it("lists a device it can see, and offers both ends of the exchange", async () => {
@@ -175,51 +175,67 @@ describe("Sync panel", () => {
   });
 
   /** Unpairing is not undoable, and the prompt says what it costs. */
+  /*
+   * The dialog is the app's, not the webview's.
+   *
+   * `window.confirm` opened a real prompt on Android — wry's
+   * `RustWebChromeClient` overrides `onJsConfirm` — and returned `false`
+   * immediately on macOS, where wry installs no `WKUIDelegate` at all. Every
+   * caller read that as "the person said no", so Forget did nothing on the
+   * desktop, silently. These tests no longer stub `window.confirm`, which is
+   * the point: stubbing it was what made the broken platform look tested.
+   */
   it("asks before forgetting a device", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockImplementation(() => true);
     const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
     await user.click(await screen.findByRole("button", { name: /forget/i }));
+
+    // The question is asked, and nothing has happened yet.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/paired again/i);
+    expect(backend.called("forget_peer")).toBe(false);
+
+    await user.click(within(dialog).getByRole("button", { name: /^forget$/i }));
 
     await waitFor(() => expect(backend.called("forget_peer")).toBe(true));
-    expect(confirm.mock.calls[0]?.[0]).toMatch(/paired again/i);
-    confirm.mockRestore();
   });
 
-  it("does not forget a device when the prompt is declined", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockImplementation(() => false);
+  it("does not forget a device when the question is declined", async () => {
     const backend = useBackend({ syncEnabled: true, peers: [peer()], trustedPeers: [trusted()] });
     const user = userEvent.setup();
     render(<SyncPanel />);
 
     await user.click(await screen.findByRole("button", { name: /forget/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
     expect(backend.called("forget_peer")).toBe(false);
-    confirm.mockRestore();
   });
 
   /**
    * SYNC-006 — the other way to sync, and the one that works when the two
    * devices are never switched on at the same time.
+   *
+   * It has no control of its own any more: it ran behind a button called
+   * "Sync through the server", under two paragraphs explaining a distinction
+   * that is the app's to make and not the owner's. Turning the switch on runs
+   * it, and so does finishing a sync with a device.
    */
   describe("through the server", () => {
     it("writes the first document when there is none", async () => {
       const backend = useBackend({ syncEnabled: true });
-      const user = userEvent.setup();
       render(<SyncPanel />);
 
-      await user.click(
-        await screen.findByRole("button", { name: /sync through the server/i }),
-      );
-
+      // No button: turning the switch on is the whole gesture now.
       await waitFor(() =>
         expect(backend.called("sync_shared_document")).toBe(true),
       );
-      expect(await screen.findByText(/written for the first time/i))
-        .toBeInTheDocument();
+      expect(await screen.findByText(/copied to server/i)).toBeInTheDocument();
     });
 
     it("takes a playlist the server has and this device does not", async () => {
@@ -235,12 +251,7 @@ describe("Sync panel", () => {
           },
         ],
       });
-      const user = userEvent.setup();
       render(<SyncPanel />);
-
-      await user.click(
-        await screen.findByRole("button", { name: /sync through the server/i }),
-      );
 
       await waitFor(() => expect(backend.state.playlists).toHaveLength(1));
       expect(await screen.findByText(/1 playlist arrived/i)).toBeInTheDocument();
@@ -253,24 +264,14 @@ describe("Sync panel", () => {
      */
     it("says so when both ends already agree", async () => {
       useBackend({ syncEnabled: true, playlists: [], sharedDocument: [] });
-      const user = userEvent.setup();
       render(<SyncPanel />);
 
-      await user.click(
-        await screen.findByRole("button", { name: /sync through the server/i }),
-      );
-
-      expect(await screen.findByText(/already in step/i)).toBeInTheDocument();
+      expect(await screen.findByText(/up to date/i)).toBeInTheDocument();
     });
 
     it("reports having nowhere to keep it when no server is set up", async () => {
       useBackend({ syncEnabled: true, connected: false });
-      const user = userEvent.setup();
       render(<SyncPanel />);
-
-      await user.click(
-        await screen.findByRole("button", { name: /sync through the server/i }),
-      );
 
       expect(await screen.findByRole("alert")).toHaveTextContent(
         /nowhere to keep it/i,
@@ -288,7 +289,7 @@ describe("Sync panel", () => {
       useBackend({ peers: [peer()] });
       render(<SyncPanel />);
 
-      expect(await screen.findByRole("checkbox", { name: /find my other devices/i }))
+      expect(await screen.findByRole("checkbox", { name: /share across this network/i }))
         .not.toBeChecked();
       // Not merely hidden — the backend does not report a peer either.
       expect(screen.queryByText("Dylan's Phone")).not.toBeInTheDocument();
@@ -302,7 +303,7 @@ describe("Sync panel", () => {
       render(<SyncPanel />);
 
       await user.click(
-        await screen.findByRole("checkbox", { name: /find my other devices/i }),
+        await screen.findByRole("checkbox", { name: /share across this network/i }),
       );
 
       await waitFor(() => expect(backend.called("set_sync_enabled")).toBe(true));
@@ -320,7 +321,7 @@ describe("Sync panel", () => {
       render(<SyncPanel />);
 
       await user.click(
-        await screen.findByRole("checkbox", { name: /find my other devices/i }),
+        await screen.findByRole("checkbox", { name: /share across this network/i }),
       );
 
       await waitFor(() => expect(backend.called("set_sync_enabled")).toBe(true));

@@ -26,12 +26,30 @@ import type { ReactNode } from "react";
 export function SettingRow({
   title,
   subtitle,
+  detail,
+  footer,
   children,
   onClick,
 }: {
   title: string;
   /** The state that decides whether to touch this. Not a description. */
   subtitle?: ReactNode;
+  /**
+   * A second line under the subtitle.
+   *
+   * For rows whose subtitle is carrying two unrelated facts joined by a dash.
+   * Analyse was "556 of 563 done — let Vibe DJ find tempo, key and cue
+   * points": a count that changes every few seconds welded to a sentence that
+   * never changes, on one line that ellipsised before it reached the end.
+   */
+  detail?: ReactNode;
+  /**
+   * Something below the whole text column, spanning it.
+   *
+   * Used for a problem the row has to own but cannot state in a subtitle —
+   * the tracks analysis could not describe, which needs to be pressable.
+   */
+  footer?: ReactNode;
   /** The control: a switch, a button, whatever the row acts through. */
   children?: ReactNode;
   /**
@@ -50,6 +68,10 @@ export function SettingRow({
         {subtitle !== undefined && subtitle !== "" && (
           <span className="setrow__sub">{subtitle}</span>
         )}
+        {detail !== undefined && detail !== "" && (
+          <span className="setrow__sub setrow__sub--detail">{detail}</span>
+        )}
+        {footer}
       </span>
       {children && <span className="setrow__control">{children}</span>}
     </>

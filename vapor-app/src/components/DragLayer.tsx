@@ -15,6 +15,8 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { overlayRoot } from "./overlay";
 import * as drag from "../lib/drag";
 
 interface DragApi {
@@ -220,19 +222,21 @@ export function DragLayer({
   return (
     <Ctx.Provider value={{ begin, dragging: payload !== null }}>
       {children}
-      {payload && (
-        <div
-          ref={preview}
-          className="draglayer"
-          style={{ left: at.x, top: at.y }}
-          aria-hidden="true"
-        >
-          <span className="draglayer__label">{payload.label}</span>
-          {payload.values.length > 1 && (
-            <span className="draglayer__count">{payload.values.length}</span>
-          )}
-        </div>
-      )}
+      {payload &&
+        createPortal(
+          <div
+            ref={preview}
+            className="draglayer"
+            style={{ left: at.x, top: at.y }}
+            aria-hidden="true"
+          >
+            <span className="draglayer__label">{payload.label}</span>
+            {payload.values.length > 1 && (
+              <span className="draglayer__count">{payload.values.length}</span>
+            )}
+          </div>,
+          overlayRoot(),
+        )}
     </Ctx.Provider>
   );
 }

@@ -304,3 +304,129 @@
   color: var(--accent);
   text-underline-offset: 2px;
 }
+
+/* ---- The list of tracks analysis could not describe -------------------
+ *
+ * Rendered inside the modal shell, so the panel, backdrop and close button
+ * come from `.help__*` above and only the list itself is new.
+ * -------------------------------------------------------------------- */
+
+.failures__note {
+  margin: 0 0 16px;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.failures__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.failures__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(var(--ink-3-rgb), 0.2);
+}
+
+.failures__row:last-child {
+  border-bottom: 0;
+}
+
+.failures__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.failures__title {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--ink);
+}
+
+.failures__artist {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+/* The reason is the point of the row, so it is the one part in --danger. */
+.failures__reason {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+/* The path, because two tracks can share a title and only this says which
+   file to go and look at. Quietest thing in the row. */
+.failures__href {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.failures__kind {
+  flex: none;
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
+  background: var(--danger-wash);
+  border: 1px solid var(--danger-edge);
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--danger-ink);
+  white-space: nowrap;
+}
+
+/* ---- Confirmation ----------------------------------------------------
+ *
+ * Shares `.help__backdrop`, because it is the same scrim over the same app.
+ * The panel is its own: a question with two answers is a narrow box, not a
+ * document, and it must not grow to the reading width of one.
+ * -------------------------------------------------------------------- */
+
+.confirm {
+  width: min(440px, 100%);
+  margin: 20px;
+  padding: 24px;
+  border-radius: var(--r-lg);
+  background: var(--page);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.confirm__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-lg);
+  letter-spacing: var(--ls-tight);
+  color: var(--ink);
+}
+
+.confirm__body {
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}

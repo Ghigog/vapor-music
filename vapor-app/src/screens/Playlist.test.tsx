@@ -7,7 +7,7 @@
  * the library, an optimistic reorder that the backend then refuses, and a drop
  * that adds nothing because everything dropped was already there.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Playlist } from "./Playlist";
@@ -477,9 +477,6 @@ describe("Playlist rail — folders", () => {
    * one.
    */
   it("deletes a folder and keeps the playlists that were in it", async () => {
-    const confirm = vi
-      .spyOn(window, "confirm")
-      .mockImplementation(() => true);
     const backend = useBackend({
       folders: [folder()],
       playlists: [playlist({ id: "p1", name: "Late Night", folderId: "f1" })],
@@ -491,19 +488,20 @@ describe("Playlist rail — folders", () => {
       await screen.findByRole("button", { name: /delete folder sets/i }),
     );
 
+    // The question says what survives, so a safe action is not declined out of
+    // fear of an unsafe one.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/move back to the top level/i);
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
     await waitFor(() => expect(backend.state.folders).toHaveLength(0));
     expect(backend.state.playlists).toHaveLength(1);
     expect(backend.state.playlists[0]?.folderId).toBe("");
-    expect(confirm.mock.calls[0]?.[0]).toMatch(/move back to the top level/i);
     // And it is still on screen, at the top level now.
     expect(await screen.findByText("Late Night")).toBeInTheDocument();
-    confirm.mockRestore();
   });
 
-  it("does not delete a folder when the prompt is declined", async () => {
-    const confirm = vi
-      .spyOn(window, "confirm")
-      .mockImplementation(() => false);
+  it("does not delete a folder when the question is declined", async () => {
     const backend = useBackend({ folders: [folder()], playlists: [] });
     const user = userEvent.setup();
     render(<PlaylistRail activeId={null} onOpen={() => {}} />);
@@ -512,8 +510,12 @@ describe("Playlist rail — folders", () => {
       await screen.findByRole("button", { name: /delete folder sets/i }),
     );
 
-    await new Promise((r) => setTimeout(r, 50));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
     expect(backend.called("delete_folder")).toBe(false);
-    confirm.mockRestore();
   });
 });

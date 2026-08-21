@@ -92,3 +92,46 @@
   align-items: center;
   gap: 8px;
 }
+
+/* The second subtitle line. Same size, quieter, and it may wrap where the
+   first may not — a count with a track title in it is long by nature. */
+.setrow__sub--detail {
+  color: var(--ink-3);
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/*
+ * A problem the row owns.
+ *
+ * A button rather than a line of text with a handler on it: it opens a dialog,
+ * so it has to be reachable and operable from the keyboard, and `--danger`
+ * text that cannot be tabbed to is a dead end for anyone not using a mouse.
+ * Left-aligned and unpadded so it sits in the text column with the subtitles
+ * rather than looking like a control that escaped the right-hand side.
+ */
+.setrow__problem {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--danger);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+.setrow__problem:hover {
+  color: var(--danger-ink);
+}
+
+.setrow__problem:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+  border-radius: var(--r-hair);
+}

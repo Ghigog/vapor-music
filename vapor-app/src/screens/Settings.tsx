@@ -29,6 +29,7 @@ import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
 import { VaporMark, LOGO_POSE } from "../components/VaporMark";
 import { HelpModal } from "../components/HelpModal";
+import { AnalysisFailures } from "../components/AnalysisFailures";
 import { SettingRow, SettingGroup } from "../components/SettingRow";
 import { AppearanceControl } from "../components/Appearance";
 // The notices themselves, not a second copy of them. Same reasoning as the
@@ -86,6 +87,10 @@ export function Settings() {
   const [status, setStatus] = useState<core.AnalysisStatus | null>(null);
   /** How many files are second-or-later copies, so the switch can say. */
   const [dupes, setDupes] = useState<number | null>(null);
+  /** Tracks analysis could not describe. Empty is the ordinary case. */
+  const [failures, setFailures] = useState<core.AnalysisFailure[]>([]);
+  /** Whether the list of them is open. */
+  const [showFailures, setShowFailures] = useState(false);
   /** Whether a pass has been seen running since Analyse was pressed. */
   const [started, setStarted] = useState(false);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
@@ -126,10 +131,11 @@ export function Settings() {
   // and asking the backend twice for one answer is how two numbers on one
   // screen end up disagreeing.
   const refresh = useCallback(async () => {
-    const [s, d, l] = await Promise.allSettled([
+    const [s, d, l, f] = await Promise.allSettled([
       core.analysisStatus(),
       core.duplicateCount(),
       core.lookupCounts(),
+      core.analysisFailures(),
     ]);
     if (s.status === "fulfilled") {
       setStatus(s.value);
@@ -139,6 +145,10 @@ export function Settings() {
     // Left alone on failure rather than zeroed — a row that reports "0 of 0"
     // because a call failed is the rails' bug in a different place.
     if (l.status === "fulfilled") setLooked(l.value);
+    // Same reasoning as the lookup counts: left alone on failure rather than
+    // emptied, since "no problems" and "could not ask" are different answers
+    // and only one of them should hide the line.
+    if (f.status === "fulfilled") setFailures(f.value);
   }, []);
 
   // The lookup row's subtitle counts what has been fetched, and lookups happen
@@ -497,14 +507,33 @@ export function Settings() {
         */}
         <SettingRow
           title="Analyse"
-          subtitle={
+          // The sentence, which never changes.
+          subtitle="Let Vibe DJ find tempo, key and cue points, and more"
+          // The count, which changes every few seconds. Welded onto the end of
+          // the sentence above it ran past the width of the row and ellipsised,
+          // so the number — the only part worth watching — was the part that
+          // got cut.
+          detail={
             status?.running
               ? `${(progress?.done ?? status.analysed).toLocaleString()} of ${(
                   progress?.total ?? status.total
                 ).toLocaleString()} — ${status.current || "working…"}`
               : status
-                ? `${status.analysed.toLocaleString()} of ${status.total.toLocaleString()} done — let Vibe DJ find tempo, key and cue points, and more`
-                : "Let Vibe DJ find tempo, key and cue points, and more"
+                ? `${status.analysed.toLocaleString()} of ${status.total.toLocaleString()} done`
+                : ""
+          }
+          footer={
+            failures.length > 0 && (
+              <button
+                type="button"
+                className="setrow__problem"
+                onClick={() => setShowFailures(true)}
+              >
+                {failures.length === 1
+                  ? "1 track could not be analysed"
+                  : `${failures.length.toLocaleString()} tracks could not be analysed`}
+              </button>
+            )
           }
         >
           {/*
@@ -691,6 +720,10 @@ export function Settings() {
           markdown={notices}
           onClose={() => setLicences(false)}
         />
+      )}
+
+      {showFailures && (
+        <AnalysisFailures onClose={() => setShowFailures(false)} />
       )}
     </div>
   );

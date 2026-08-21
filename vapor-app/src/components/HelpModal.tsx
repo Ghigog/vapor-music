@@ -14,7 +14,9 @@
  */
 
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { overlayRoot } from "./overlay";
 
 /**
  * Inline markdown: `**bold**` and `` `code` ``.
@@ -282,22 +284,29 @@ function render(markdown: string): ReactNode[] {
   return out;
 }
 
-export function HelpModal({
+/**
+ * The sheet itself, without an opinion about what is in it.
+ *
+ * Extracted when a second thing needed a modal — the list of tracks analysis
+ * could not describe. The parts worth having in one place are the ones easy to
+ * leave out of a second copy: Escape closes, focus lands on the close button
+ * rather than after the whole document, and the backdrop dismisses only when
+ * it is itself the target, so a drag that starts on the text and ends outside
+ * does not throw away what you were reading.
+ */
+export function Modal({
   title,
-  markdown,
+  children,
   onClose,
 }: {
   title: string;
-  markdown: string;
+  children: ReactNode;
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    // Focus the close button, so the sheet is dismissable from the keyboard
-    // the moment it opens rather than after tabbing through all of it.
     closeRef.current?.focus();
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -305,12 +314,9 @@ export function HelpModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       className="help__backdrop"
-      // The backdrop closes it, but only when the backdrop itself is the
-      // target: a drag that starts on the text and ends outside must not
-      // dismiss the thing being read.
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -327,13 +333,30 @@ export function HelpModal({
             ref={closeRef}
             className="help__close"
             onClick={onClose}
-            aria-label="Close help"
+            aria-label={`Close ${title}`}
           >
             ×
           </button>
         </header>
-        <div className="help__body">{render(markdown)}</div>
+        <div className="help__body">{children}</div>
       </div>
-    </div>
+    </div>,
+    overlayRoot(),
+  );
+}
+
+export function HelpModal({
+  title,
+  markdown,
+  onClose,
+}: {
+  title: string;
+  markdown: string;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={onClose}>
+      {render(markdown)}
+    </Modal>
   );
 }

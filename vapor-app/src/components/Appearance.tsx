@@ -24,13 +24,6 @@ import {
   type Appearance,
 } from "../lib/theme";
 
-/** What each choice means, in the one line that decides whether to press it. */
-const HINTS: Record<Appearance, string> = {
-  daylight: "Warm paper, sky at the horizon.",
-  lamplight: "Warm umber under one lamp. Not the lights off — the lamp on.",
-  auto: "Follows this machine, and changes with it.",
-};
-
 export function AppearanceControl() {
   const chosen = useAppearance();
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +74,6 @@ export function AppearanceControl() {
           </button>
         ))}
       </div>
-      <p className="appearance__hint">{HINTS[chosen]}</p>
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
     </div>
   );

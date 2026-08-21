@@ -14,9 +14,10 @@
  * the one being typed into. A single button would have to guess which end of
  * the exchange this device is, and it cannot.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as core from "../lib/core";
 import { SettingRow, SettingGroup } from "./SettingRow";
+import { Confirm } from "./Confirm";
 import { ErrorNotice, messageOf } from "./ErrorNotice";
 
 export function SyncPanel() {
@@ -30,6 +31,8 @@ export function SyncPanel() {
    *  choice, because it was never one anybody made. */
   const what: core.SyncWhat = { tracks: true, playlists: true };
   const [shared, setShared] = useState<"idle" | "running">("idle");
+  /** The device a "stop syncing with this?" question is open about. */
+  const [forgetting, setForgetting] = useState<core.TrustedDevice | null>(null);
   const [sharedNote, setSharedNote] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -48,6 +51,30 @@ export function SyncPanel() {
     const timer = setInterval(() => void refresh(), 2000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  /*
+   * The server round trip, run rather than offered.
+   *
+   * It used to be a button under two paragraphs distinguishing it from the
+   * over-the-network kind. The distinction is real — this one works when the
+   * two devices are never awake together, which for a laptop and a phone is
+   * most of the time — but it is the app's distinction, not the owner's, and
+   * making somebody read it before pressing anything is how playlists stayed
+   * out of step on the device that was switched off.
+   *
+   * Once per switch-on rather than on a timer: it is a WebDAV round trip, and
+   * `sync()` runs it again after every device sync, which covers the case
+   * where something actually changed.
+   */
+  const started = useRef(false);
+  useEffect(() => {
+    if (!view?.enabled || started.current) return;
+    started.current = true;
+    void syncShared();
+    // `syncShared` is stable for the life of the panel and re-running this on
+    // every render is the opposite of once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view?.enabled]);
 
   async function show(peer: core.SyncPeer) {
     setError(null);
@@ -78,6 +105,9 @@ export function SyncPanel() {
     try {
       await core.syncWith(peer.id, what);
       await refresh();
+      // The two halves are one action now, so the file beside the music is
+      // brought into step with whatever just arrived over the network.
+      await syncShared();
     } catch (e: unknown) {
       setError(messageOf(e));
     }
@@ -111,12 +141,21 @@ export function SyncPanel() {
       // Four outcomes, and three of them look identical if only the changes
       // are reported: nothing there yet, nothing to change, and a failure that
       // did not throw.
+      //
+      // Two or three words each, because this line appears unheaded after
+      // something the owner did not press. "Already in step. Yours is on the
+      // server too." was the no-change case, and it borrowed the "too" from
+      // the case above it, where something had in fact arrived — here it
+      // pointed at nothing. A status has to be readable without knowing the
+      // mechanism that produced it. The change list stays a sentence because
+      // it is information rather than status, and the deletions in it are the
+      // part somebody most needs to read.
       setSharedNote(
         r.created
-          ? "Written for the first time. Other devices will pick it up when they sync."
+          ? "Copied to server"
           : changes.length > 0
-            ? `${changes.join(", ")}. Yours is on the server too.`
-            : "Already in step. Yours is on the server too.",
+            ? `${changes.join(", ")}.`
+            : "Up to date",
       );
       window.dispatchEvent(new Event("vapor:playlists-changed"));
     } catch (e: unknown) {
@@ -127,13 +166,7 @@ export function SyncPanel() {
   }
 
   async function forget(peer: core.TrustedDevice) {
-    if (
-      !window.confirm(
-        `Stop syncing with ${peer.name}? It will have to be paired again, with a new code.`,
-      )
-    ) {
-      return;
-    }
+    setForgetting(null);
     try {
       await core.forgetPeer(peer.id);
       await refresh();
@@ -156,24 +189,48 @@ export function SyncPanel() {
    * from a glance is whether it is on and who it reaches; the rest belongs
    * below, and only once it is on.
    */
-  const sharingWith = view.trusted.length
-    ? view.trusted.map((t) => t.name).join(", ")
-    : "none yet";
-
   return (
     <section className="settings__card glass">
       <SettingGroup title="network">
-        <SettingRow title="Network" subtitle={`Sharing data with: ${sharingWith}`}>
+        {/*
+          One switch, where there were two.
+
+          A `SettingRow` here and a bare checkbox below both called
+          `setSyncEnabled` and both read `view.enabled` — the same setting drawn
+          twice, so each one moved the other and neither was the control.
+
+          Named for what it does rather than for the network it does it on: the
+          Wi-Fi name is not obtainable without a location permission on either
+          platform, and this machine is on Ethernet besides, where there is no
+          Wi-Fi name to print. See the commit for the detail.
+        */}
+        <SettingRow
+          title="Share across this network"
+          subtitle={
+            view.enabled
+              ? `This device appears as ${view.deviceName}`
+              : "Off — nothing is announced and nothing is listening"
+          }
+        >
           <label className="settings__switch settings__switch--bare">
             <input
               type="checkbox"
-              aria-label="Network"
+              aria-label="Share across this network"
               checked={view.enabled}
               onChange={(e) => {
                 const on = e.target.checked;
+                // Switching off forgets every pairing, which is a consequence
+                // worth stating rather than leaving somebody to discover.
                 void core
                   .setSyncEnabled(on)
                   .then(refresh)
+                  .then(() =>
+                    setNote(
+                      on
+                        ? "This device is now visible to other copies of Vapor on this network."
+                        : "Switched off. Nothing is announced, nothing is listening, and paired devices have been forgotten.",
+                    ),
+                  )
                   .catch((err: unknown) => setError(messageOf(err)));
               }}
             />
@@ -183,51 +240,10 @@ export function SyncPanel() {
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
-      {/* Named where pairing happens rather than in the head: the only reason
-          to know it is to tell somebody at the other machine what to look
-          for, and that is a thing you do while pairing. */}
-      {view.enabled && (
-        <p className="settings__stat numeric">
-          This device is <strong>{view.deviceName}</strong>
-        </p>
-      )}
-
-      {/*
-        Off by default, for the same reason lookups are: a beacon every five
-        seconds announces this machine to whatever network it is joined to.
-        Nothing listens until this is on, so there is no firewall prompt and
-        nothing accepting connections either.
-      */}
-      <label className="settings__switch">
-        <input
-          type="checkbox"
-          checked={view.enabled}
-          onChange={(e) => {
-            const on = e.target.checked;
-            void core
-              .setSyncEnabled(on)
-              .then(refresh)
-              .then(() =>
-                setNote(
-                  on
-                    ? "This device is now visible to other copies of Vapor on this network."
-                    : "Switched off. Nothing is announced, nothing is listening, and paired devices have been forgotten.",
-                ),
-              )
-              .catch((err: unknown) => setError(messageOf(err)));
-          }}
-        />
-        <span>Find my other devices on this network</span>
-      </label>
-
+      {/* Outside the `enabled` block below, because the note that matters most
+          is the one about switching *off* — and by the time it is written,
+          everything inside that block is gone. */}
       {!view.enabled && note && <p className="settings__note">{note}</p>}
-      {!view.enabled && (
-        <p className="settings__hint">
-          Turning this on lets Vapor on your other machines find this one. They
-          still have to be paired with a code before either can see the other's
-          library.
-        </p>
-      )}
 
       {view.enabled && (
         <>
@@ -281,7 +297,7 @@ export function SyncPanel() {
                     </button>
                     <button
                       className="settings__button settings__button--danger"
-                      onClick={() => void forget(peer)}
+                      onClick={() => setForgetting(peer)}
                     >
                       Forget
                     </button>
@@ -389,11 +405,13 @@ export function SyncPanel() {
                     {progress.elapsed > 0 &&
                       ` · ${rate(progress.bytes, progress.elapsed)}`}
                   </p>
+                  {/* No nothing-to-move branch: the block above only renders
+                      when `progress.total > 0`, so the zero case was
+                      unreachable. A device sync that moves nothing still
+                      reports through the shared-document note below. */}
                   {!progress.running && progress.total > 0 && (
                     <p className="settings__note">
-                      {progress.total === 0
-                        ? "Already in step — nothing to move."
-                        : `Done. ${progress.done} of ${progress.total} moved from ${progress.peer}.`}
+                      {`Done. ${progress.done} of ${progress.total} moved from ${progress.peer}.`}
                     </p>
                   )}
                 </>
@@ -402,30 +420,32 @@ export function SyncPanel() {
           )}
 
           {/*
-        SYNC-006. The other way to sync, and the one that works when the two
-        devices are never switched on at the same time — which for a laptop and
-        a phone is most of the time. Playlists and tempo corrections go in a
-        file beside the music, in the owner's own storage.
+        SYNC-006 runs on its own now, from the effect above — it was a button
+        called "Sync through the server" under two paragraphs explaining a
+        distinction nobody has to care about. Playlists and tempo corrections
+        go in a file beside the music either way; whether they travelled over
+        the network or through the server is the app's problem.
+
+        Still reported while it happens, because it touches the server and a
+        thing that touches the network in the background should be visible.
       */}
-          <h3 className="label sync__heading">through your server</h3>
-          <p className="settings__hint">
-            Keeps playlists and tempo corrections in a file next to your music,
-            so devices that are never on at the same time still agree. Track
-            files are already there; this is only the part the app added.
-          </p>
-          <div className="settings__actions">
-            <button
-              className="settings__button"
-              disabled={shared === "running"}
-              onClick={() => void syncShared()}
-            >
-              {shared === "running" ? "Syncing…" : "Sync through the server"}
-            </button>
-          </div>
+          {shared === "running" && (
+            <p className="settings__note">Syncing…</p>
+          )}
           {sharedNote && <p className="settings__note">{sharedNote}</p>}
 
           {note && <p className="settings__note">{note}</p>}
         </>
+      )}
+
+      {forgetting && (
+        <Confirm
+          title={`Stop syncing with ${forgetting.name}?`}
+          body={`It will have to be paired again, with a new code. Nothing in either library is deleted.`}
+          confirmLabel="Forget"
+          onConfirm={() => void forget(forgetting)}
+          onCancel={() => setForgetting(null)}
+        />
       )}
     </section>
   );

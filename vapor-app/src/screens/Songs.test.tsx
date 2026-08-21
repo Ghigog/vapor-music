@@ -362,7 +362,7 @@ describe("Songs — correcting a tempo", () => {
         href,
         bpm: 128,
         beats: null,
-        error: "not available locally",
+        error: "no file at this path on the server",
       });
     });
 

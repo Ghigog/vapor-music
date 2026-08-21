@@ -9,6 +9,8 @@
  * and the row you release over is the one that receives what you are holding.
  */
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
+import { overlayRoot } from "./overlay";
 
 export interface TabMenuItem {
   id: string;
@@ -48,7 +50,7 @@ export function TabMenu({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       className="tabmenu__backdrop"
       onClick={(e) => {
@@ -91,6 +93,7 @@ export function TabMenu({
           </ul>
         )}
       </div>
-    </div>
+    </div>,
+    overlayRoot(),
   );
 }

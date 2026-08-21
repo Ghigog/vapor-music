@@ -517,3 +517,59 @@ describe("Settings — analysis in progress", () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * The Analyse row.
+ *
+ * "556 of 563 done" with no way to learn which seven, and pressing Analyse
+ * again leaving it at 556, is the state this was written from.
+ */
+describe("the analyse row", () => {
+  it("keeps the count on its own line, apart from the sentence", async () => {
+    useBackend();
+    render(<Settings />);
+
+    // The sentence never changes and the count changes every few seconds;
+    // welded together they ellipsised, and the number was the part cut off.
+    expect(
+      await screen.findByText(/let vibe dj find tempo, key and cue points/i),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/\d+ of \d+ done/)).toBeInTheDocument();
+  });
+
+  it("says nothing about failures when there are none", async () => {
+    useBackend({ analysisFailures: [] });
+    render(<Settings />);
+
+    await screen.findByText(/let vibe dj find tempo/i);
+    expect(
+      screen.queryByRole("button", { name: /could not be analysed/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("surfaces the tracks it could not describe, and opens the list", async () => {
+    useBackend({
+      analysisFailures: [
+        {
+          href: "/dav/Music/one.flac",
+          title: "Undertow",
+          artist: "Hollow Coast",
+          reason: "not downloaded yet",
+          permanent: false,
+          attempts: 4,
+        },
+      ],
+    });
+    render(<Settings />);
+
+    const line = await screen.findByRole("button", {
+      name: /1 track could not be analysed/i,
+    });
+    await userEvent.click(line);
+
+    expect(await screen.findByRole("dialog")).toHaveAccessibleName(
+      /could not be analysed/i,
+    );
+    expect(screen.getByText("not downloaded yet")).toBeInTheDocument();
+  });
+});

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
+import { Confirm } from "../components/Confirm";
 import { listen } from "@tauri-apps/api/event";
 
 /** Offered ceilings. A large library is a legitimate reason to want a large
@@ -37,6 +38,8 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
   const [cache, setCache] = useState<core.CacheStatus | null>(null);
   const [location, setLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** Whether the "delete everything?" question is open. */
+  const [purging, setPurging] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
 
@@ -280,14 +283,20 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
         <div className="data__actions">
           <button
             className="data__button data__button--danger"
-            onClick={() => {
-              if (
-                !window.confirm(
-                  "Delete the local index, analysis, playlists, cached audio and the saved password? Your music on the server is untouched.",
-                )
-              ) {
-                return;
-              }
+            onClick={() => setPurging(true)}
+          >
+            Delete everything stored here
+          </button>
+        </div>
+      </section>
+
+      {purging && (
+        <Confirm
+          title="Delete everything stored here?"
+          body="The index, the analysis, playlists, cached audio and the saved password all go. Your music on the server is untouched."
+          confirmLabel="Delete everything"
+          onConfirm={() => {
+            setPurging(false);
               // Deleting used to refresh and say nothing at all, which leaves
               // the most consequential button on the screen with no outcome
               // to read — and no way to notice a delete that only half
@@ -309,12 +318,10 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
                   );
                 })
                 .catch((e: unknown) => setError(messageOf(e)));
-            }}
-          >
-            Delete everything stored here
-          </button>
-        </div>
-      </section>
+          }}
+          onCancel={() => setPurging(false)}
+        />
+      )}
 
       {location && (
         <p className="data__footnote numeric" title={location}>

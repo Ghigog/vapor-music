@@ -11,6 +11,8 @@
  * competing for the same 44px.
  */
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
+import { overlayRoot } from "./overlay";
 
 export function TrackSheet({
   title,
@@ -55,7 +57,7 @@ export function TrackSheet({
     ["Key", musicalKey || "—"],
   ];
 
-  return (
+  return createPortal(
     <div
       className="sheet__backdrop"
       // Only when the backdrop itself is the target, so a drag that ends
@@ -98,6 +100,7 @@ export function TrackSheet({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    overlayRoot(),
   );
 }

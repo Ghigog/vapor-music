@@ -8,6 +8,8 @@
 
 .appearance {
   padding: 14px 16px;
+  /* Column and gap for the sake of the error notice, which is the only other
+     thing that ever appears in here. */
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -80,11 +82,4 @@
 
 .appearance__swatch--lamplight {
   background: var(--swatch-lamplight);
-}
-
-.appearance__hint {
-  margin: 0;
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--ink-2);
 }

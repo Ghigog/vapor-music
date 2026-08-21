@@ -39,6 +39,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { messageOf } from "./ErrorNotice";
+import { Confirm } from "./Confirm";
 
 /** The drag payload: a JSON array of hrefs. */
 export const TRACK_DRAG_TYPE = "application/x-vapor-tracks";
@@ -84,6 +85,8 @@ export function PlaylistRail({
   const [folders, setFolders] = useState<core.Folder[]>([]);
   const [over, setOver] = useState<string | null>(null);
   const [creating, setCreating] = useState<Creating>(null);
+  /** The folder a "delete this?" question is open about. */
+  const [deleting, setDeleting] = useState<core.Folder | null>(null);
   const [name, setName] = useState("");
   /** Folders currently collapsed, by id. Open is the default. */
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
@@ -219,13 +222,7 @@ export function PlaylistRail({
    * so — otherwise a person declines a safe action for fear of an unsafe one.
    */
   async function removeFolder(folder: core.Folder) {
-    const inside = playlists.filter((p) => p.folderId === folder.id).length;
-    const fate =
-      inside === 0
-        ? ""
-        : `\n\nThe ${inside} ${inside === 1 ? "playlist" : "playlists"} inside will move back to the top level, not be deleted.`;
-    if (!window.confirm(`Delete the folder "${folder.name}"?${fate}`)) return;
-
+    setDeleting(null);
     try {
       await core.deleteFolder(folder.id);
       refresh();
@@ -364,7 +361,7 @@ export function PlaylistRail({
                   className="rail__folder-del"
                   aria-label={`Delete folder ${f.name}`}
                   title={`Delete folder ${f.name}`}
-                  onClick={() => void removeFolder(f)}
+                  onClick={() => setDeleting(f)}
                 >
                   ×
                 </button>
@@ -416,6 +413,22 @@ export function PlaylistRail({
       )}
 
       {flash && <div className="rail__flash">{flash}</div>}
+
+      {deleting && (
+        <Confirm
+          title={`Delete the folder "${deleting.name}"?`}
+          body={(() => {
+            const inside = playlists.filter(
+              (p) => p.folderId === deleting.id,
+            ).length;
+            return inside === 0
+              ? "The folder is empty."
+              : `The ${inside} ${inside === 1 ? "playlist" : "playlists"} inside will move back to the top level, not be deleted.`;
+          })()}
+          onConfirm={() => void removeFolder(deleting)}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </div>
   );
 }
