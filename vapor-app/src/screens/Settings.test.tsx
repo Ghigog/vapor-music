@@ -313,8 +313,22 @@ describe("Settings — the password, and knowing whether one is stored", () => {
 });
 
 describe("Settings — unhappy paths", () => {
+  /*
+   * Whether an address is an address is the backend's ruling, and it is tested
+   * where the rule lives — `vapor-app/src-tauri` refuses anything without a
+   * plausible host, which is what catches a Koofr app password pasted into the
+   * address field. This file used to carry a second copy of that regex in the
+   * fake, and the two drifted apart twice.
+   *
+   * What this screen owes is sending it and showing the reason it gets back
+   * rather than swallowing it. So the refusal is arranged, not computed.
+   */
   it("surfaces a refused server address instead of storing it", async () => {
     const backend = useBackend({ connected: false });
+    backend.fail(
+      "set_remote_config",
+      '"https://4wg9ie7xi8v7nbi6" is not a server address',
+    );
     const user = userEvent.setup();
     render(<Settings />);
 

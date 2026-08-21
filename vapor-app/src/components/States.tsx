@@ -24,7 +24,7 @@ export function Loading({
     <div className="state">
       {/* `thinking` rather than `idle`: the mark tightens while it works, and
           a spinner that does not spin is not a spinner. */}
-      <VaporMark size={96} theme="light" state="thinking" />
+      <VaporMark size={96} state="thinking" />
       <p className="state__title">{label}</p>
       {detail && <p className="state__detail numeric">{detail}</p>}
     </div>
@@ -42,7 +42,7 @@ export function Empty({
 }) {
   return (
     <div className="state">
-      <VaporMark size={96} theme="light" state="idle" />
+      <VaporMark size={96} state="idle" />
       <p className="state__title">{title}</p>
       {body && <p className="state__body">{body}</p>}
       {action && (

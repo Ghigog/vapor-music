@@ -9,9 +9,9 @@
  * there was no Settings.
  *
  * So the shape here follows the first run rather than the design's grouping:
- * connect, scan, analyse, in that order, each one showing what it did. The
- * appearance and theme controls the design also specifies are not here yet —
- * they change how the app looks, not whether it works.
+ * connect, scan, analyse, in that order, each one showing what it did.
+ * Appearance sits after them for the same reason: it is what someone comes
+ * back to Settings for, not what got them here the first time.
  */
 
 import {
@@ -30,6 +30,7 @@ import { SyncPanel } from "../components/SyncPanel";
 import { VaporMark, LOGO_POSE } from "../components/VaporMark";
 import { HelpModal } from "../components/HelpModal";
 import { SettingRow, SettingGroup } from "../components/SettingRow";
+import { AppearanceControl } from "../components/Appearance";
 // The notices themselves, not a second copy of them. Same reasoning as the
 // Vibe help sheet importing `ai_dj_workflow.md`: a licence notice that is
 // retyped is one that goes stale, and this one is an obligation rather than
@@ -310,6 +311,9 @@ export function Settings() {
         // the box above it. Pressing Scan after filling the form means "use
         // what I just typed"; making that a two-step ritual serves nothing.
         await apply();
+        // The library's contents are what a scan is for, so the reads
+        // Library remembered are no longer answers.
+        window.dispatchEvent(new Event("vapor:library-changed"));
         return core.scanLibrary();
       },
       (report) => {
@@ -475,6 +479,12 @@ export function Settings() {
         )}
       </section>
 
+      {/* After the storage card, before the library rows: connecting storage
+          is what a first run is for, and this is what someone comes back for. */}
+      <SettingGroup title="appearance">
+        <AppearanceControl />
+      </SettingGroup>
+
       <SettingGroup title="library">
         {/*
           One row, not a card of caveats.
@@ -622,7 +632,7 @@ export function Settings() {
       </SettingGroup>
 
       <section className="settings__card glass">
-        <h2 className="settings__section">About Vapor</h2>
+        <h2 className="settings__section">About</h2>
         {/*
           The logo, pinned rather than animated. `LOGO_POSE` is the same frame
           the app icon is rendered from, so this is not a picture *of* the mark
@@ -630,14 +640,23 @@ export function Settings() {
           is ever repinned, this moves with it.
         */}
         <div className="settings__lockup">
-          <VaporMark size={96} theme="light" pose={LOGO_POSE} />
+          <VaporMark size={96} pose={LOGO_POSE} />
           <div className="settings__lockup-text">
             <span className="settings__lockup-name">Vapor Music</span>
             <span className="label">Music, continuous</span>
           </div>
         </div>
+        {/*
+          One line, not three. What has to survive the trim is what is owed or
+          claimed: the copyright, the CC BY attribution (which the licence
+          wants where users can see it, so it cannot move behind the button),
+          and the on-device claim, which is the whole privacy position. The
+          component credits went to the sheet, where they already were.
+        */}
         <p className="settings__hint">
-          Icons by Gregor Cresnar, from the Noun Project, used under a{" "}
+          © 2026 Dylan Growcoot, all rights reserved. Tempo and key are worked
+          out on this device. Icons by Gregor Cresnar, from the Noun Project,
+          under a{" "}
           <a
             href="https://creativecommons.org/licenses/by/3.0/"
             target="_blank"
@@ -654,16 +673,6 @@ export function Settings() {
         <button className="settings__licences" onClick={() => setLicences(true)}>
           Licences and attributions
         </button>
-        <p className="settings__hint">
-          {/* Two things were wrong here, both user-facing. It claimed the
-              AGPL, which the project has moved away from (see
-              docs/LICENSING.md), and it credited Essentia for analysis —
-              which has not shipped since the Rust rewrite. Tempo and key are
-              worked out on this device by `vapor-dsp`. */}
-          Vapor Music is © 2026 Dylan Growcoot, all rights reserved. Tempo and
-          key are worked out on this device; audio decoding uses Symphonia and
-          time-stretching uses Signalsmith Stretch.
-        </p>
       </section>
 
       {/*

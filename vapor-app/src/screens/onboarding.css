@@ -80,8 +80,8 @@
   padding: 15px 20px;
   border: 0;
   border-radius: var(--r-lg);
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-fill);
+  color: var(--on-accent);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--fs-md);

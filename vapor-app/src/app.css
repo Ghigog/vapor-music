@@ -139,12 +139,12 @@
 }
 
 .nav__item:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-quiet);
 }
 
 .nav__item--on {
-  background: rgba(255, 255, 255, 0.85);
-  color: var(--ink);
+  background: var(--fill-on);
+  color: var(--ink-on);
   box-shadow: var(--shadow-sm);
 }
 
@@ -204,8 +204,8 @@
 
   /* Matches .nav__item--on: the same state, drawn the same way. */
   .shell__tab--on {
-    background: rgba(255, 255, 255, 0.85);
-    color: var(--ink);
+    background: var(--fill-on);
+    color: var(--ink-on);
     box-shadow: var(--shadow-sm);
   }
 }
@@ -288,7 +288,7 @@
 }
 
 .rail__new:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-quiet);
   color: var(--ink);
 }
 
@@ -296,11 +296,11 @@
   width: 100%;
   margin: 2px 0 6px;
   padding: 7px 12px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--edge);
   border-radius: var(--r-md);
   font-family: var(--font-ui);
   font-size: var(--fs-body);
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--fill-raised);
 }
 
 .rail__list {
@@ -329,19 +329,19 @@
 }
 
 .rail__item:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-quiet);
 }
 
 .rail__item--on {
-  background: rgba(255, 255, 255, 0.85);
-  color: var(--ink);
+  background: var(--fill-on);
+  color: var(--ink-on);
   box-shadow: var(--shadow-sm);
 }
 
 /* The drop state has to be unmistakable while a drag is in flight: the pointer
    is somewhere else entirely and this is the only thing saying where it lands. */
 .rail__item--over {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--fill-strong);
   outline: 2px solid var(--ink);
   outline-offset: -2px;
   color: var(--ink);
@@ -398,7 +398,7 @@
 /* Unmistakable while a drag is in flight: the pointer is somewhere else and
    this is the only thing saying where the playlist will land. */
 .rail__folder--over {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--fill-strong);
   outline: 2px solid var(--ink);
   outline-offset: -2px;
 }
@@ -427,7 +427,7 @@
 }
 
 .rail__folder-name:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-quiet);
   color: var(--ink);
 }
 
@@ -460,7 +460,7 @@
 }
 
 .rail__folder-del:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-quiet);
   color: var(--ink);
 }
 
@@ -485,7 +485,7 @@
 }
 
 .rail__loose--over {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--fill-strong);
   outline: 2px solid var(--ink);
   outline-offset: -2px;
   color: var(--ink);
@@ -651,8 +651,8 @@
   max-width: 80vw;
   padding: 10px 16px;
   border-radius: var(--r-md);
-  background: rgba(20, 22, 26, 0.9);
-  color: #fff;
+  background: var(--scrim-solid);
+  color: var(--on-scrim);
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
   text-align: center;
@@ -660,7 +660,7 @@
 }
 
 .shell__said--no {
-  background: rgba(150, 44, 44, 0.94);
+  background: var(--scrim-danger);
 }
 
 @keyframes shell-said {

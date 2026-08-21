@@ -18,8 +18,8 @@
   max-width: 62vw;
   padding: 8px 12px;
   border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 26px rgba(38, 62, 116, 0.28);
+  background: var(--fill-strong);
+  box-shadow: var(--shadow-md);
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -36,8 +36,8 @@
   flex: none;
   padding: 1px 7px;
   border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-fill);
+  color: var(--on-accent);
   font-family: var(--font-mono);
   font-size: var(--fs-label);
 }

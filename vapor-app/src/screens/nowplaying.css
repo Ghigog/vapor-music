@@ -56,7 +56,7 @@
   margin: 0 auto;
   border-radius: var(--r-screen);
   overflow: hidden;
-  background: linear-gradient(150deg, #8fadf0, #3a58a8 52%, #16224a);
+  background: var(--art-fill-deep);
   box-shadow: var(--shadow-md);
   flex: none;
 }
@@ -66,7 +66,7 @@
   inset: 0;
   background: linear-gradient(
     138deg,
-    rgba(255, 255, 255, 0.3) 0%,
+    var(--specular) 0%,
     transparent 42%
   );
 }
@@ -80,7 +80,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.18),
+    var(--sheen),
     transparent
   );
 }
@@ -212,7 +212,7 @@
   place-items: center;
   border: 0;
   border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.62);
+  background: var(--fill-raised);
   cursor: pointer;
   font-size: var(--fs-md);
   color: var(--ink-2);
@@ -232,7 +232,7 @@
 }
 
 .np__button:hover {
-  background: #fff;
+  background: var(--fill-raised-hover);
   color: var(--ink);
 }
 
@@ -240,7 +240,7 @@
   width: 84px;
   height: 84px;
   font-size: 30px;
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(
     180deg,
     rgba(var(--accent-rgb), 0.98),
@@ -250,7 +250,7 @@
 }
 
 .np__button--play:hover {
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(
     180deg,
     rgba(var(--accent-rgb), 1),

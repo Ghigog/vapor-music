@@ -42,7 +42,7 @@
   height: 56px;
   flex: none;
   border-radius: var(--r-md);
-  background: linear-gradient(150deg, #8fadf0, #3a58a8 52%, #16224a);
+  background: var(--art-fill-deep);
 }
 
 .queue__now-text {
@@ -88,7 +88,7 @@
 }
 
 .queue__item:hover {
-  background: rgba(255, 255, 255, 0.62);
+  background: var(--fill-quiet);
 }
 
 .queue__item--dragging {
@@ -189,7 +189,7 @@
 }
 
 .queue__action:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--fill-raised-hover);
   color: var(--ink);
 }
 
@@ -199,7 +199,7 @@
 }
 
 .queue__action--remove:hover {
-  color: #b3261e;
+  color: var(--danger);
 }
 
 /* ---- Repeat and shuffle ---------------------------------------------- */
@@ -222,7 +222,7 @@
   padding: 7px 13px;
   border: 1px solid var(--glass-rim);
   border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--fill-raised);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
@@ -230,7 +230,7 @@
 }
 
 .queue__mode:hover {
-  background: #fff;
+  background: var(--fill-raised-hover);
   color: var(--ink);
 }
 

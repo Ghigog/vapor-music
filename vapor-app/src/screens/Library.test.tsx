@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { useBackend } from "../test/setup";
 import { makeRow } from "../test/ipc";
+import type * as core from "../lib/core";
 
 const FOUND =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
@@ -37,6 +38,24 @@ function album() {
   ];
 }
 
+/**
+ * The album entity a scan of `album()` produces.
+ *
+ * Stated, not derived. The grouping rule — an album is its title plus the
+ * folder its tracks sit in — belongs to `vapor_library` and is tested there;
+ * restating it in the fake gave two implementations that could disagree.
+ */
+function currents(): core.LibraryEntity[] {
+  return [
+    {
+      name: "Currents",
+      subtitle: "Tame Impala",
+      tracks: 2,
+      lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+    },
+  ];
+}
+
 async function openTheAlbum(user: ReturnType<typeof userEvent.setup>) {
   // By the accessible name, as a person reaches it: the tile's cover is the
   // button and the title beside it is a label, not a control.
@@ -52,7 +71,7 @@ describe("Library — album artwork", () => {
   }
 
   it("says where the picture is from and where tapping sends the query", async () => {
-    useBackend({ rows: album(), covers: true });
+    useBackend({ rows: album(), albums: currents(), covers: true });
     const user = userEvent.setup();
     render(<Library />);
     await openTheAlbum(user);
@@ -65,7 +84,7 @@ describe("Library — album artwork", () => {
 
   it("replaces the cover with what the search found", async () => {
     useBackend({
-      rows: album(),
+      rows: album(), albums: currents(),
       covers: true,
       albumArtSearch: { Currents: FOUND },
     });
@@ -88,7 +107,7 @@ describe("Library — album artwork", () => {
   /// button with a second button hiding underneath it.
   it("can be sent back to the file's own artwork by tapping again", async () => {
     useBackend({
-      rows: album(),
+      rows: album(), albums: currents(),
       covers: true,
       albumArtSearch: { Currents: FOUND },
     });
@@ -113,7 +132,7 @@ describe("Library — album artwork", () => {
   /// spelling all the time — and it has to be said on screen rather than
   /// leaving the control stuck on "Searching…".
   it("says so when the search finds nothing", async () => {
-    useBackend({ rows: album(), covers: true, albumArtSearch: {} });
+    useBackend({ rows: album(), albums: currents(), covers: true, albumArtSearch: {} });
     const user = userEvent.setup();
     render(<Library />);
     await openTheAlbum(user);
@@ -130,7 +149,7 @@ describe("Library — album artwork", () => {
   /// picture there to tap yet.
   it("still offers the search when the files have no artwork", async () => {
     useBackend({
-      rows: album(),
+      rows: album(), albums: currents(),
       covers: false,
       albumArtSearch: { Currents: FOUND },
     });
@@ -147,7 +166,19 @@ describe("Library — album artwork", () => {
 
   /// The artist view has no album to search for, so it must not offer to.
   it("does not offer artwork search on an artist", async () => {
-    useBackend({ rows: album(), covers: true });
+    useBackend({
+      rows: album(),
+      albums: currents(),
+      artists: [
+        {
+          name: "Tame Impala",
+          subtitle: "1 album",
+          tracks: 2,
+          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+        },
+      ],
+      covers: true,
+    });
     const user = userEvent.setup();
     render(<Library />);
 
@@ -167,6 +198,15 @@ describe("Library — album identity", () => {
   /// Two albums that share a title are two albums. Grouping by title alone
   /// merged them into one tile with one cover — latent in the owner's library
   /// today, and certain to bite eventually.
+  /*
+   * Two records can share a title, and the grid has to draw both.
+   *
+   * That they arrive as two entities rather than one is the backend's rule —
+   * an album is its title plus its folder — and `vapor_library` tests it. What
+   * is this grid's to get wrong is what it does when they do arrive: the cards
+   * were keyed on name alone, so React treated the second as a duplicate of the
+   * first and warned about it. Hence two entities in, two cards expected out.
+   */
   it("keeps two albums with the same name apart", async () => {
     useBackend({
       rows: [
@@ -182,6 +222,20 @@ describe("Library — album identity", () => {
           artist: "Abba",
           album: "Greatest Hits",
         }),
+      ],
+      albums: [
+        {
+          name: "Greatest Hits",
+          subtitle: "Queen",
+          tracks: 1,
+          lead: "/dav/Music/Queen/Greatest%20Hits/01.mp3",
+        },
+        {
+          name: "Greatest Hits",
+          subtitle: "Abba",
+          tracks: 1,
+          lead: "/dav/Music/Abba/Greatest%20Hits/01.mp3",
+        },
       ],
       covers: true,
     });

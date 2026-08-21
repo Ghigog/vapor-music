@@ -83,7 +83,7 @@
 }
 
 .transport__button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-quiet);
   color: var(--ink);
 }
 
@@ -124,15 +124,15 @@
 .transport__button--primary {
   width: 40px;
   height: 40px;
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-fill);
+  color: var(--on-accent);
   font-size: var(--fs-md);
   box-shadow: var(--shadow-sm);
 }
 
 .transport__button--primary:hover:not(:disabled) {
   background: var(--accent-bright);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .transport__scrub {

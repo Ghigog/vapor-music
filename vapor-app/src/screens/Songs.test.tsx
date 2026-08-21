@@ -103,12 +103,41 @@ describe("Songs — showing the library", () => {
     expect(screen.queryByText(/reading library/i)).not.toBeInTheDocument();
   });
 
-  it("filters as you type", async () => {
-    useBackend();
+  /*
+   * Searching is two responsibilities and only one of them is this table's.
+   *
+   * The table has to send what was typed and render the answer. Deciding which
+   * rows match is `vapor_library::index::filter`, which has its own tests —
+   * including the cases a reimplementation here got wrong. So this asserts the
+   * request went out and the reply was drawn, and says nothing about matching.
+   */
+  it("sends what was typed to the backend", async () => {
+    const backend = useBackend();
     const user = userEvent.setup();
     render(<Songs />);
 
     await screen.findByText("Windowlicker");
+    await user.type(screen.getByRole("searchbox"), "roygbiv");
+
+    await waitFor(() => {
+      const view = backend.lastArgs("library_view")?.view as
+        | { query?: string }
+        | undefined;
+      expect(view?.query).toBe("roygbiv");
+    });
+  });
+
+  it("shows the rows the backend replied with, not a locally filtered set", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await screen.findByText("Windowlicker");
+
+    // The narrowed answer a real backend would send back for this query.
+    backend.answers("library_view", [
+      { header: "", rows: backend.rowsNamed("Roygbiv") },
+    ]);
     await user.type(screen.getByRole("searchbox"), "roygbiv");
 
     await waitFor(() => {
@@ -539,11 +568,24 @@ describe("Songs — gestures", () => {
   });
 
   it("extends the selection with shift, across a range of rows", async () => {
-    useBackend();
+    const backend = useBackend();
+    // The order on screen is the backend's answer, not this table's doing, so
+    // a test about spanning a range states the order rather than relying on a
+    // sort happening somewhere out of sight.
+    backend.answers("library_view", [
+      {
+        header: "",
+        rows: backend.rowsNamed(
+          "Not Yet Analysed",
+          "Roygbiv",
+          "Windowlicker",
+          "Xtal",
+        ),
+      },
+    ]);
     const user = userEvent.setup();
     render(<Songs />);
 
-    // Sorted by title: Not Yet Analysed, Roygbiv, Windowlicker, Xtal.
     await screen.findByText("Roygbiv");
     await user.click(screen.getByRole("checkbox", { name: /select roygbiv/i }));
     await user.keyboard("{Shift>}");
@@ -554,7 +596,21 @@ describe("Songs — gestures", () => {
   });
 
   it("extends the selection with shift-click on the row itself", async () => {
-    useBackend();
+    const backend = useBackend();
+    // The order on screen is the backend's answer, not this table's doing, so
+    // a test about spanning a range states the order rather than relying on a
+    // sort happening somewhere out of sight.
+    backend.answers("library_view", [
+      {
+        header: "",
+        rows: backend.rowsNamed(
+          "Not Yet Analysed",
+          "Roygbiv",
+          "Windowlicker",
+          "Xtal",
+        ),
+      },
+    ]);
     const user = userEvent.setup();
     render(<Songs />);
 

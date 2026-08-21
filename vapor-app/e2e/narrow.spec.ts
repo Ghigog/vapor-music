@@ -523,19 +523,16 @@ test.describe("Duplicate tracks", () => {
     // The row's subtitle is the count and its state, not a sentence about it.
     await expect(page.getByText(/1 extra copy — still showing/i)).toBeVisible();
 
-    // Off by default: both copies are still listed.
-    const tabs = page.getByRole("navigation", { name: "Screens" });
-    await tabs.getByRole("button", { name: "Library", exact: true }).click();
-    await page.getByRole("tab", { name: "Songs" }).click();
-    await expect(page.locator(".songrow")).toHaveCount(2);
-
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    // The table's row count is not asserted here any more. Whether a copy is
+    // hidden is decided by `vapor_library`, and this suite runs against the
+    // fake in `src/test/ipc.ts`, which no longer re-derives that rule — so a
+    // count here would have been a fact about the fake. What the setting row
+    // says, and that the switch drives it, is this screen's own.
     await page.getByLabel(/hide duplicates/i).check();
     await expect(page.getByText(/1 hidden/i)).toBeVisible();
 
-    await tabs.getByRole("button", { name: "Library", exact: true }).click();
-    await page.getByRole("tab", { name: "Songs" }).click();
-    await expect(page.locator(".songrow")).toHaveCount(1);
+    await page.getByLabel(/hide duplicates/i).uncheck();
+    await expect(page.getByText(/1 extra copy — still showing/i)).toBeVisible();
   });
 });
 

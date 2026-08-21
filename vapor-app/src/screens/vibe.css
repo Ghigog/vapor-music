@@ -247,9 +247,9 @@
   margin: 0;
   padding: 9px 12px;
   border-radius: var(--r-md);
-  background: rgba(179, 38, 30, 0.08);
-  border: 1px solid rgba(179, 38, 30, 0.22);
-  color: #8c1d18;
+  background: var(--danger-wash);
+  border: 1px solid var(--danger-edge);
+  color: var(--danger-ink);
   font-size: var(--fs-sm);
 }
 
@@ -477,7 +477,7 @@
   aspect-ratio: 1;
   width: 100%;
   /* A sleeveless track still holds the card's shape rather than collapsing it. */
-  background: linear-gradient(150deg, #7d9de8, #3a58a8 55%, #1b2a58);
+  background: var(--art-fill-deep);
 }
 
 .vibe__exit-art img {
@@ -498,7 +498,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-micro);
   letter-spacing: 0.08em;
-  color: #fff;
+  color: var(--on-scrim);
   background: rgba(var(--exit), 0.92);
 }
 

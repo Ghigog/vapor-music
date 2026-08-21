@@ -125,7 +125,7 @@ export function Vibe({
         // The curve is the backend's, not this component's: the playback
         // thread extends the set along it whether or not this screen is open,
         // so showing a local default would show the wrong one.
-        setCurve(s.curve);
+        setCurve(core.asCurve(s.curve));
       })
       .catch(() => {});
   }, []);
@@ -256,7 +256,6 @@ export function Vibe({
         <div className="vibe__mark">
           <VaporMark
             size={92}
-            theme="light"
             // The mark *is* the DJ on this screen: it tightens while planning
             // and swirls through a blend, both of which are real states.
             state={planning ? "thinking" : mixing ? "blending" : "playing"}

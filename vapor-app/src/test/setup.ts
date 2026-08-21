@@ -76,6 +76,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Both outlive a test the way module state does: a remembered theme would
+  // decide the next test's colours, and a dark OS preference would decide what
+  // `auto` resolves to in a test that never mentioned it.
+  localStorage.clear();
+  setPrefersDark(false);
   // The cover cache is module state and outlives a test. Left alone, one test's
   // artwork answers the next one's rows and a fetch that should have happened
   // never does.
@@ -195,3 +200,71 @@ class DragEventStub extends MouseEvent {
 }
 
 globalThis.DragEvent ??= DragEventStub as never;
+
+/* ---- Two things this jsdom does not have ------------------------------
+ *
+ * `localStorage` and `matchMedia` are both absent here, and the theme layer
+ * uses both — one to remember the choice across launches, the other to read
+ * the OS preference under `auto`. The app guards for their absence, so their
+ * being missing did not fail anything; it just made the whole of `auto`
+ * untestable, which is the half most likely to break.
+ * -------------------------------------------------------------------- */
+
+class StorageStub implements Storage {
+  private items = new Map<string, string>();
+
+  get length(): number {
+    return this.items.size;
+  }
+  key(index: number): string | null {
+    return [...this.items.keys()][index] ?? null;
+  }
+  getItem(key: string): string | null {
+    return this.items.get(key) ?? null;
+  }
+  setItem(key: string, value: string): void {
+    this.items.set(key, String(value));
+  }
+  removeItem(key: string): void {
+    this.items.delete(key);
+  }
+  clear(): void {
+    this.items.clear();
+  }
+}
+
+globalThis.localStorage ??= new StorageStub() as never;
+
+/** Whether the fake OS is currently asking for dark. */
+let prefersDark = false;
+const mediaListeners = new Set<(e: MediaQueryListEvent) => void>();
+
+/**
+ * Flip the OS preference mid-test and tell everything listening.
+ *
+ * This is what `auto` is for, so a test of `auto` that cannot move it is only
+ * testing the light half.
+ */
+export function setPrefersDark(dark: boolean): void {
+  if (dark === prefersDark) return;
+  prefersDark = dark;
+  const event = { matches: dark, media: "(prefers-color-scheme: dark)" };
+  for (const listener of mediaListeners) {
+    listener(event as MediaQueryListEvent);
+  }
+}
+
+globalThis.matchMedia ??= ((query: string) => ({
+  get matches() {
+    return prefersDark && query.includes("prefers-color-scheme: dark");
+  },
+  media: query,
+  onchange: null,
+  addEventListener: (_: string, listener: (e: MediaQueryListEvent) => void) =>
+    void mediaListeners.add(listener),
+  removeEventListener: (_: string, listener: (e: MediaQueryListEvent) => void) =>
+    void mediaListeners.delete(listener),
+  addListener: () => {},
+  removeListener: () => {},
+  dispatchEvent: () => false,
+})) as never;

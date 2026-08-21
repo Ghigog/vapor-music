@@ -32,7 +32,15 @@ import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
  * bar now, which opens a list instead of a screen — five pills also wrapped
  * onto two rows at a phone's width.
  */
-type Tab = GroupBy;
+/**
+ * Which tab of the library is showing.
+ *
+ * Exported because App holds it. It is a place — going back from a track's
+ * liner notes should return to the tab you left, and when this was local state
+ * it could not, because opening liner notes unmounts Library and a remount
+ * starts at the default. You left from Songs and came back to Albums.
+ */
+export type Tab = GroupBy;
 
 const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "album", label: "Albums" },
@@ -75,10 +83,56 @@ export type Opened = {
   artist: string;
 };
 
+/**
+ * The last few library reads, kept across unmounts.
+ *
+ * Library is unmounted whenever a drill-down covers it — liner notes, a
+ * playlist, an album — so returning to it used to mean a fresh round trip and
+ * a spinner every time, for a list that had not changed. What is on screen is
+ * painted from here first and corrected when the answer arrives, so going back
+ * is instant and still ends up truthful.
+ *
+ * Bounded for the reason `lib/artwork.ts` bounds its own: a 563-row section
+ * list is around a hundred kilobytes, and remembering every query someone
+ * typed is how a cache becomes a leak. Insertion order is close enough to
+ * least-recently-used for a handful of entries.
+ */
+const READS = 8;
+const viewCache = new Map<string, LibrarySection[]>();
+const entityCache = new Map<string, LibraryEntity[]>();
+
+/**
+ * Throw away the remembered reads.
+ *
+ * Called by whatever changes what a read would return — a scan, a corrected
+ * BPM. Without this the cache would paint a list that is known to be wrong,
+ * and although the background fetch corrects it within a frame, painting a
+ * deleted track even briefly is the kind of thing that reads as a bug.
+ */
+export function forgetLibraryReads() {
+  viewCache.clear();
+  entityCache.clear();
+}
+
+function cacheKey(groupBy: GroupBy, query: string) {
+  return `${groupBy}\u0000${query}`;
+}
+
+function remember<T>(cache: Map<string, T>, key: string, value: T) {
+  cache.delete(key);
+  cache.set(key, value);
+  for (const oldest of cache.keys()) {
+    if (cache.size <= READS) break;
+    cache.delete(oldest);
+  }
+}
+
 export function Library({
   onOpen,
   opened: controlledOpened,
   onOpenedChange,
+  tab: controlledTab,
+  onTabChange,
 }: {
   /** Opens a track's liner notes — the table's double-click. */
   onOpen?: ((href: string) => void) | undefined;
@@ -95,8 +149,21 @@ export function Library({
    */
   opened?: Opened | null | undefined;
   onOpenedChange?: ((opened: Opened | null) => void) | undefined;
+  /** The open tab, when the caller owns it — same arrangement as `opened`,
+   *  and optional for the same reason: Library still stands alone in a test. */
+  tab?: Tab | undefined;
+  onTabChange?: ((tab: Tab) => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
+  /**
+   * The query the reads actually use.
+   *
+   * Debouncing lived inside the fetch effects, which meant *every* read waited
+   * 120ms — including the one on mount, and the one after a tab press, neither
+   * of which is a burst of keystrokes. Returning to the library paid it on top
+   * of the round trip. Only typing waits now.
+   */
+  const [settledQuery, setSettledQuery] = useState("");
   const [ownOpened, setOwnOpened] = useState<Opened | null>(null);
   const opened = onOpenedChange ? (controlledOpened ?? null) : ownOpened;
   const setOpened = (next: Opened | null) => {
@@ -104,34 +171,67 @@ export function Library({
     else setOwnOpened(next);
   };
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
-  const [tab, setTab] = useState<Tab>("album");
+  const [ownTab, setOwnTab] = useState<Tab>("album");
+  const tab = onTabChange ? (controlledTab ?? "album") : ownTab;
+  const setTab = (next: Tab) => {
+    if (onTabChange) onTabChange(next);
+    else setOwnTab(next);
+  };
   const groupBy: GroupBy = tab;
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   /** A failure to start playback belongs on screen, not in the console. */
   const [playError, setPlayError] = useState<string | null>(null);
 
+  /**
+   * A scan or a correction while this screen is open.
+   *
+   * The reads are keyed on query and tab, so neither effect re-runs when the
+   * *library* changes underneath them. `nonce` is a dependency that exists to
+   * be changed, which is what makes them run again.
+   */
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    const handler = () => {
+      forgetLibraryReads();
+      setNonce((n) => n + 1);
+    };
+    window.addEventListener("vapor:library-changed", handler);
+    return () => window.removeEventListener("vapor:library-changed", handler);
+  }, []);
+
+  // 120ms is below the threshold where typing feels laggy but high enough to
+  // collapse a burst of keystrokes into one round trip.
+  useEffect(() => {
+    if (query === settledQuery) return;
+    const t = setTimeout(() => setSettledQuery(query), 120);
+    return () => clearTimeout(t);
+  }, [query, settledQuery]);
+
   useEffect(() => {
     let cancelled = false;
+    const key = cacheKey(groupBy, settledQuery);
 
-    // Debounced because the table re-runs the whole filter/sort/group pipeline
-    // per keystroke. 120ms is below the threshold where typing feels laggy but
-    // high enough to collapse a burst of keystrokes into one round trip.
-    const t = setTimeout(() => {
-      core
-        .libraryView({ query, groupBy, sortKey: "title", ascending: true })
-        .then((sections) => {
-          if (!cancelled) setLoad({ kind: "ready", sections });
-        })
-        .catch((e: unknown) => {
-          if (!cancelled) setLoad({ kind: "error", message: messageOf(e) });
-        });
-    }, 120);
+    // Paint what was there before, if anything, rather than a spinner. The
+    // request still goes out — this is the previous answer, not the final one.
+    const known = viewCache.get(key);
+    setLoad(known ? { kind: "ready", sections: known } : { kind: "loading" });
+
+    core
+      .libraryView({ query: settledQuery, groupBy, sortKey: "title", ascending: true })
+      .then((sections) => {
+        remember(viewCache, key, sections);
+        if (!cancelled) setLoad({ kind: "ready", sections });
+      })
+      .catch((e: unknown) => {
+        // A failed refresh must not blank a list that is already on screen:
+        // stale is better than empty, and the next attempt corrects it.
+        if (!cancelled && !known) setLoad({ kind: "error", message: messageOf(e) });
+      });
 
     return () => {
       cancelled = true;
-      clearTimeout(t);
     };
-  }, [query, groupBy]);
+  }, [settledQuery, groupBy, nonce]);
 
   /** The albums or artists for the current tab. */
   useEffect(() => {
@@ -140,23 +240,26 @@ export function Library({
       return;
     }
     let cancelled = false;
-    const t = setTimeout(() => {
-      core
-        .libraryEntities({ query, groupBy, sortKey: "title", ascending: true })
-        .then((list) => {
-          if (!cancelled) setEntities(list);
-        })
-        .catch(() => {
-          // The grid falls back to the row view's error, which is the same
-          // request against the same index.
-          if (!cancelled) setEntities([]);
-        });
-    }, 120);
+    const key = cacheKey(groupBy, settledQuery);
+
+    const known = entityCache.get(key);
+    setEntities(known ?? null);
+
+    core
+      .libraryEntities({ query: settledQuery, groupBy, sortKey: "title", ascending: true })
+      .then((list) => {
+        remember(entityCache, key, list);
+        if (!cancelled) setEntities(list);
+      })
+      .catch(() => {
+        // The grid falls back to the row view's error, which is the same
+        // request against the same index.
+        if (!cancelled && !known) setEntities([]);
+      });
     return () => {
       cancelled = true;
-      clearTimeout(t);
     };
-  }, [query, groupBy]);
+  }, [settledQuery, groupBy, nonce]);
 
   /**
    * Play a card, queueing everything currently on screen behind it.
@@ -318,7 +421,12 @@ export function Library({
             <div className="library__grid">
               {entities.map((entity) => (
                 <EntityCard
-                  key={entity.name}
+                  /* Name *and* subtitle. Two albums can share a title — the
+                     backend already keeps them apart by artist, so keying on
+                     name alone collided them back together and React warned
+                     about duplicate keys on exactly the case the album-identity
+                     test covers. */
+                  key={`${entity.name}\u0000${entity.subtitle}`}
                   entity={entity}
                   kind={groupBy}
                   onOpen={() =>

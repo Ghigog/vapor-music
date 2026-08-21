@@ -27,6 +27,14 @@
   align-items: center;
   gap: 16px;
   width: 100%;
+  /*
+   * `border-box`, because `box-sizing` is not reset globally — only `.shell`
+   * sets it. Without this, `width: 100%` plus 16px of padding either side made
+   * every row 32px wider than the card holding it, and since `.setgroup__rows`
+   * clips its overflow the row's control was cut off at the right edge rather
+   * than wrapping or scrolling. The Analyse button was sliced in half.
+   */
+  box-sizing: border-box;
   padding: 14px 16px;
   border: 0;
   border-bottom: 1px solid var(--glass-rim);

@@ -1,6 +1,6 @@
 # Vapor Music — Licensing & Compliance
 
-**Version:** 2.2
+**Version:** 2.3
 **Status:** Applied — Vapor Music is proprietary; see `LICENSE`
 **Last reviewed:** 2026-08-20
 
@@ -198,8 +198,44 @@ that was welded shut.
    obliges complete corresponding source to **every recipient of a binary**, so
    a private repository plus a shared `.dmg` is a breach — this is the specific
    trap the current arrangement would have walked into.
-4. Add the About → Licences screen (see below). It is required for CC BY under
-   any licence, and it is where the MPL notice belongs too.
+4. The About → Licences screen already exists and stays either way — it is
+   required for CC BY under any licence, and it carries the MPL notice too.
+
+---
+
+## Assets, and where the reasoning went
+
+`THIRD_PARTY_NOTICES.md` is rendered verbatim inside the app (Settings → About →
+Licences), so it was cut back on 2026-08-20 to the attributions actually owed.
+The analysis behind them lives here instead, where the audience is whoever is
+checking the position rather than whoever is listening to music.
+
+### Fonts — the OFL renaming clause
+
+Inter, Outfit and JetBrains Mono are vendored as woff2 under SIL OFL 1.1. The
+OFL is permissive for this use: bundling inside an application is explicitly
+allowed, and it imposes nothing on Vapor Music's own licence. Its condition is
+that the licence and copyright notices travel with the fonts, which they do.
+
+The subtlety is that these are **Google Fonts' subsetted builds** (`latin` and
+`latin-ext` only, variable weight axis), not the upstream originals — so they
+are modified versions in the licence's sense. That matters only for the
+renaming clause, and **none of the three declares a Reserved Font Name**: no
+copyright line carries the "with Reserved Font Name" phrase, so the clause has
+nothing to bite on and the families keep their names.
+
+> Check this again before vendoring a fourth font. It is a per-font fact, not a
+> general property of the OFL.
+
+### The archived Godot tree
+
+The Godot tree in this repository is **archived, not built or distributed**. It
+linked Essentia (AGPL-3.0), Rubber Band (GPL-2.0-or-later) and their transitive
+dependencies (FFmpeg, TagLib, Chromaprint, FFTW3, libsamplerate, libyaml), and
+used Godot Engine, godot-cpp and GUT, all MIT. Their licence texts remain in
+`licenses/` for the record. None of them is part of any binary produced today,
+so no attribution is owed for them and they were dropped from the user-facing
+notices.
 
 ---
 
@@ -243,3 +279,7 @@ whether people donate.
   donation model written down.
 * **v2.2 (2026-08-20)** — Applied across all seven declarations, and the stale
   Essentia claims in Settings and the README corrected with it.
+* **v2.3 (2026-08-20)** — About → Licences shipped, which settles the CC BY
+  visibility gap. `THIRD_PARTY_NOTICES.md` is now user-facing, so it was cut to
+  the attributions owed and its reasoning — the OFL renaming clause, the
+  archived Godot tree — moved here.

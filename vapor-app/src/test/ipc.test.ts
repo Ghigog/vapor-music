@@ -1,4 +1,22 @@
 /**
+ * What this file does and does not prove.
+ *
+ * It checks the mock against the *frontend*: that it answers every command the
+ * app can send, holds real state, and can be made to fail. That is worth
+ * having, and it is not a contract with the backend — it was green throughout
+ * the period when `playlists` returned a shape no screen could read.
+ *
+ * The contract with Rust lives in two other places now:
+ *
+ *   - `src/lib/generated/` — the response types, derived by `ts-rs` from the
+ *     Rust structs. `npm run types:check` fails if they drift, and the mock's
+ *     canned responses are constrained to them with `satisfies`.
+ *   - `src-tauri/src/seam.rs` — real commands invoked through the real IPC,
+ *     asserting on the JSON a webview would receive.
+ *
+ * Neither of those can be satisfied by editing this file, which is the point.
+ */
+/**
  * The fake, tested against the real command list.
  *
  * A fake that has drifted from the thing it fakes turns every test written

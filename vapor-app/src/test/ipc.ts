@@ -17,13 +17,39 @@
  * drives them, and a test can assert on what the screen *shows* rather than on
  * which function was called.
  *
+ * A stub with a memory, in other words — not a second copy of the backend. See
+ * below for where that line is drawn.
+ *
+ * ## What it deliberately does not do
+ *
+ * It holds state; it does not derive answers. Filtering, sorting, grouping rows
+ * into albums, resolving a group to its tracks, scoring the DJ's three cards,
+ * ruling on whether an address is an address or a tempo plausible — all of that
+ * is the backend's, and `vapor-core` tests it. This file used to carry a second
+ * implementation of each, in comments that described themselves as "mirroring
+ * the backend" and "kept in step deliberately".
+ *
+ * They were not kept in step. The copies disagreed — keys sorted alphabetically
+ * here and musically there, the address rule came apart twice, `MAX_STRETCH`
+ * existed as a number in two languages — and because every test ran against
+ * this file rather than against Rust, the tests agreed with the copy.
+ *
+ * So a command here returns state, or a fixture, or whatever the test asked for
+ * with `answers()`. A screen's test then says what the screen does with an
+ * answer, and `calls`/`lastArgs` say what it asked for. Both of those are the
+ * screen's own behaviour, which is the only thing a screen's test can be about.
+ *
  * ## Keeping it honest
  *
- * The shapes must match `src-tauri/src/lib.rs`. `tests/command_bindings.rs`
- * proves every command has a binding in `core.ts` but says nothing about
- * payload shape, so drift here surfaces as component tests failing in confusing
- * ways rather than as a clear error. When a command's shape changes, change it
- * here in the same commit.
+ * Shapes are no longer this file's problem: the response types in
+ * `src/lib/generated/` are derived from the Rust structs by `ts-rs`, the canned
+ * replies here are constrained to them with `satisfies`, and
+ * `npm run types:check` fails when they drift. Behaviour across the boundary is
+ * covered by `src-tauri/src/seam.rs`, which invokes real commands through the
+ * real IPC.
+ *
+ * If you find yourself writing a rule in here, that is the signal it belongs in
+ * a test in `vapor-core` instead.
  */
 import type * as core from "../lib/core";
 
@@ -37,6 +63,16 @@ export interface FakeOptions {
   withPassword?: boolean;
   /** Tracks in the library. Defaults to a small mixed set. */
   rows?: core.Row[];
+  /**
+   * The albums and artists those tracks group into.
+   *
+   * Given rather than worked out. Grouping is `vapor_library`'s, and a fake
+   * that derives it a second way is a fake that can disagree with the real one.
+   * Defaults to the entities `DEFAULT_ROWS` produces; supply `rows` without
+   * this and the grid is empty, which is the prompt to say what it should hold.
+   */
+  albums?: core.LibraryEntity[];
+  artists?: core.LibraryEntity[];
   playlists?: core.Playlist[];
   /** Playlist folders. Not to be confused with `unreadableFolders` below. */
   folders?: core.Folder[];
@@ -49,6 +85,8 @@ export interface FakeOptions {
   syncEnabled?: boolean;
   /** Whether the DJ conducts. On by default, as ships. */
   djMode?: boolean;
+  /** The stored theme choice. `auto` by default, as ships. */
+  appearance?: "auto" | "daylight" | "lamplight";
   /**
    * Data files the backend could not read at startup, already turned into the
    * sentences it would show. Empty by default, which is every normal launch.
@@ -163,6 +201,99 @@ const DEFAULT_ROWS: core.Row[] = [
 ];
 
 /**
+ * The albums and artists a scan of `DEFAULT_ROWS` produces.
+ *
+ * Written down rather than derived. Grouping rows into entities is
+ * `vapor_library`'s job — including the part that is easy to get subtly wrong,
+ * where an album's identity is its title *plus* the folder its tracks live in,
+ * so two records called "Greatest Hits" stay two records. This file used to
+ * reimplement that rule and describe itself as "mirroring the backend", which
+ * is the arrangement that lets the two drift apart in silence.
+ *
+ * A test that needs different entities scripts them with
+ * `backend.answers("library_entities", ...)`.
+ *
+ * "Not Yet Analysed" has `artistSource: "unknown"`, so the backend omits it
+ * from both lists — an unknown artist is not an artist named "unknown".
+ */
+const DEFAULT_ALBUMS: core.LibraryEntity[] = [
+  {
+    name: "Windowlicker EP",
+    subtitle: "Aphex Twin",
+    tracks: 1,
+    lead: "/dav/Koofr/Music/windowlicker.m4a",
+  },
+  {
+    name: "Selected Ambient Works",
+    subtitle: "Aphex Twin",
+    tracks: 1,
+    lead: "/dav/Koofr/Music/xtal.m4a",
+  },
+  {
+    name: "Music Has the Right",
+    subtitle: "Boards of Canada",
+    tracks: 1,
+    lead: "/dav/Koofr/Music/roygbiv.m4a",
+  },
+];
+
+const DEFAULT_ARTISTS: core.LibraryEntity[] = [
+  {
+    name: "Aphex Twin",
+    subtitle: "2 albums",
+    tracks: 2,
+    lead: "/dav/Koofr/Music/windowlicker.m4a",
+  },
+  {
+    name: "Boards of Canada",
+    subtitle: "1 album",
+    tracks: 1,
+    lead: "/dav/Koofr/Music/roygbiv.m4a",
+  },
+];
+
+/**
+ * The three cards the Vibe screen is offered.
+ *
+ * Canned, not chosen. Which track earns each exit is `candidate_cost`,
+ * `exit_between` and the pathfinder in the backend, scoring intensity and
+ * transition cost against the whole pool. This file used to approximate that
+ * in about seventy lines whose own comments said they "stood in for" the real
+ * scoring — an approximation nothing compared against the thing it approximated
+ * and which no screen test was actually about.
+ *
+ * A screen's test needs three cards with distinct exits, one of them queued.
+ * That is what this is. A test that needs different cards — none at all, two
+ * that clash, an unanalysed library — scripts them with
+ * `backend.answers("mix_candidates", ...)`.
+ */
+function defaultCandidates(covers: boolean): core.MixCandidate[] {
+  const card = (
+    row: core.Row,
+    exit: core.Exit,
+    transition: string,
+    selected: boolean,
+  ): core.MixCandidate => ({
+    href: row.href,
+    title: row.title,
+    artist: row.artist,
+    bpm: row.bpm,
+    key: row.key,
+    exit,
+    label: exit.toUpperCase(),
+    transition,
+    selected,
+    cover: covers ? A_SLEEVE : null,
+  });
+  const [windowlicker, xtal, roygbiv] = DEFAULT_ROWS;
+  return [
+    card(xtal!, "stay", "Bass Swap", false),
+    card(roygbiv!, "follow", "Filter Sweep", true),
+    card(windowlicker!, "switch", "Echo Out", false),
+  ];
+}
+
+/**
  * A fake backend.
  *
  * `invoke` is the function to hand to the app; everything else on here is for
@@ -175,9 +306,26 @@ export class FakeBackend {
   /** Commands set to reject, so unhappy paths can be driven. */
   private failures = new Map<Command, string>();
 
+  /**
+   * Answers a test has scripted, by command.
+   *
+   * The counterpart to `fail`. Where this file used to compute a reply — sort
+   * the rows, resolve a group's members, pick mix candidates — it now returns
+   * what the test asked it to, because that computation is the backend's and
+   * `vapor-library` already tests it. Re-deriving it here produced a second
+   * implementation that could disagree with the first, and did: keys sorted
+   * alphabetically here and musically there.
+   *
+   * A screen's test is then about the screen. What it asked for is in `calls`
+   * and `lastArgs`; what it does with the answer is on the page.
+   */
+  private scripted = new Map<Command, unknown>();
+
   private settings: core.Settings;
   private password: string | null;
   private rows: core.Row[];
+  private albums: core.LibraryEntity[];
+  private artists: core.LibraryEntity[];
   private scanned: boolean;
   private playlists: core.Playlist[];
   private folders: core.Folder[];
@@ -299,7 +447,7 @@ export class FakeBackend {
       baseFontSize: 16,
       uiScale: 1,
       themeMode: "preset",
-      theme: "daylight",
+      theme: options.appearance ?? "auto",
       customBaseColor: "#ffffff",
       customAccentColor: "#000000",
       headphoneProfile: "",
@@ -335,6 +483,11 @@ export class FakeBackend {
         ? "app-password"
         : null;
     this.rows = options.rows ?? DEFAULT_ROWS;
+    // The default entities describe the default rows, so they only stand in
+    // when the default rows are what is being used.
+    const own = options.rows !== undefined;
+    this.albums = options.albums ?? (own ? [] : DEFAULT_ALBUMS);
+    this.artists = options.artists ?? (own ? [] : DEFAULT_ARTISTS);
     // A connected library is one that has been scanned; a fresh one has not.
     this.scanned = connected;
     this.playlists = options.playlists ?? [];
@@ -350,6 +503,35 @@ export class FakeBackend {
   }
 
   /** Make `cmd` reject with `message` until cleared. */
+  /**
+   * Reply to `cmd` with `value`, from now on.
+   *
+   * Call it again to change the answer mid-test, which is how a test drives a
+   * search: arrange the second answer, type, and assert the table shows it.
+   */
+  answers(cmd: Command, value: unknown) {
+    this.scripted.set(cmd, value);
+  }
+
+  /** Stop answering `cmd` from a script and go back to the default. */
+  clearAnswer(cmd: Command) {
+    this.scripted.delete(cmd);
+  }
+
+  /**
+   * The default rows whose titles are listed, in the order given.
+   *
+   * For arranging the answer a search would have produced, without a test
+   * having to restate a whole row to do it.
+   */
+  rowsNamed(...titles: string[]): core.Row[] {
+    return titles.map((title) => {
+      const row = this.rows.find((r) => r.title === title);
+      if (!row) throw new Error(`no default row titled ${title}`);
+      return row;
+    });
+  }
+
   fail(cmd: Command, message: string) {
     this.failures.set(cmd, message);
   }
@@ -394,60 +576,67 @@ export class FakeBackend {
     return this.handle(cmd, args ?? {}) as T;
   };
 
-  /** The tracks a playlist or group holds, as the backend resolves them. */
+  /**
+   * The tracks a playlist or group holds.
+   *
+   * A playlist keeps its own list, so that half is just state. A group does
+   * not — it resolves against the index, and that resolution is
+   * `vapor_library::group`, which this used to carry a second copy of. The
+   * whole library stands in for it here: what a download screen owes is
+   * downloading what it is handed and counting it, not deciding membership.
+   */
   private collectionTracks(kind: string, id: string): string[] {
     if (kind === "playlist") {
       return this.playlists.find((p) => p.id === id)?.tracks ?? [];
     }
     if (kind === "group") {
-      const g = this.groups.find((x) => x.id === id);
-      if (!g) return [];
-      return this.rows
-        .filter((r) =>
-          g.entities.some((e) =>
-            e.entityType === "artist"
-              ? r.artist === e.value
-              : e.entityType === "album"
-                ? r.album === e.value
-                : r.genre === e.value,
-          ),
-        )
-        .map((r) => r.href);
+      return this.groups.some((x) => x.id === id)
+        ? this.rows.map((r) => r.href)
+        : [];
     }
     return [];
   }
 
+  /**
+   * `satisfies`, not a cast.
+   *
+   * The response types come from `ts-rs`, generated from the Rust structs, so
+   * constraining a canned response to one makes it impossible for this file to
+   * answer in a shape the real backend would not. That is the specific failure
+   * this mock had: it returned camelCase because the frontend expected
+   * camelCase, while Rust sent snake_case, and every test agreed with the mock.
+   *
+   * A cast would silence the check. `satisfies` keeps the literal's own type and
+   * still fails the build when the Rust changes underneath it.
+   */
   private handle(cmd: Command, a: Record<string, unknown>): unknown {
+    // A scripted answer wins over the default one, so a test can say what the
+    // backend replies without this file having to work it out.
+    if (this.scripted.has(cmd)) return this.scripted.get(cmd);
+
     switch (cmd) {
       // --- settings and connection -------------------------------------
       case "settings":
         return this.settings;
 
       case "set_remote_config": {
-        const url = String(a.url ?? "").trim();
-        /*
-         * The real command refuses a value that is not an origin, because
-         * everything downstream hangs paths off it — and it checks the *host*,
-         * not just the scheme. A prefix check was enough while the address box
-         * started empty; it is prefilled with `https://` now, so a pasted app
-         * password arrives as `https://4wg9ie7xi8v7nbi6` and clears it.
-         *
-         * Kept in step deliberately: this fake exists so screens can be driven
-         * the way a person drives them, and a fake that accepts what the real
-         * one refuses tests the drift.
-         */
-        if (url !== "" && !/^https?:\/\/[^/]{4,}\.[^/]/.test(url)) {
-          throw new Error(`"${url}" is not a server address`);
-        }
-        const previous = this.settings.remote.username;
-        const next = String(a.username ?? "").trim();
-        // A rename *moves* the credential; it used to delete it.
-        if (previous !== "" && previous !== next && this.password !== null) {
-          // Nothing to do in the fake beyond keeping it — that is the point.
-        }
+        // No address validation here. The real command refuses anything that is
+        // not an origin, checking the host and not merely the scheme, and this
+        // file used to restate that rule with a matching regex and a comment
+        // explaining that the two had to be kept in step by hand. They came
+        // apart twice.
+        //
+        // Refusal is the backend's, and the seam tests cover it. A screen's
+        // test that needs a refusal asks for one with
+        // `backend.fail("set_remote_config", "...")`, which is what it means to
+        // test that the screen shows the reason it was given.
         this.settings = {
           ...this.settings,
-          remote: { url, username: next, folder: String(a.folder ?? "").trim() },
+          remote: {
+            url: String(a.url ?? "").trim(),
+            username: String(a.username ?? "").trim(),
+            folder: String(a.folder ?? "").trim(),
+          },
         };
         return this.settings;
       }
@@ -494,168 +683,29 @@ export class FakeBackend {
       // --- library ------------------------------------------------------
       case "library_view": {
         if (!this.scanned) return [];
-        const view = (a.view ?? {}) as core.LibraryView;
-        let rows = [...this.rows];
-        const q = (view.query ?? "").trim().toLowerCase();
-        if (q) {
-          rows = rows.filter((r) =>
-            `${r.title} ${r.artist} ${r.album}`.toLowerCase().includes(q),
-          );
-        }
-        // Exact, not substring: opening an album means that album.
-        if (view.album) rows = rows.filter((r) => r.album === view.album);
-        if (view.artist) rows = rows.filter((r) => r.artist === view.artist);
-        // Last, as the backend does it, so the count is of what was asked for.
-        if (this.settings.hideDuplicates) {
-          const seen = new Set<string>();
-          rows = rows.filter((r) => {
-            const key = `${r.title.trim().toLowerCase()}\u0001${r.artist.trim().toLowerCase()}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        }
-        const key = view.sortKey ?? "title";
-        rows.sort((x, y) => {
-          const pick = (r: core.Row) =>
-            key === "bpm" ? r.bpm : String(r[key as keyof core.Row] ?? "");
-          const l = pick(x);
-          const r = pick(y);
-          const cmp = typeof l === "number" ? l - (r as number) : String(l).localeCompare(String(r));
-          return view.ascending === false ? -cmp : cmp;
-        });
-        if ((view.groupBy ?? "none") === "none") return [{ header: "", rows }];
-        return [{ header: "All", rows }];
+        // No filtering, sorting, scoping or de-duplication here. All of it is
+        // `vapor_library::index`, which tests it — including the parts this
+        // used to get wrong: Camelot keys sort musically rather than
+        // alphabetically, unknowns sink whichever way the sort runs, and ties
+        // break on title. A screen's test asserted against none of that.
+        //
+        // What comes back is what the test arranged. That makes a screen's
+        // test say what the screen does with an answer, and `calls` says what
+        // it asked for.
+        return [{ header: "", rows: this.rows }];
       }
 
       case "library_entities": {
         if (!this.scanned) return [];
         const view = (a.view ?? {}) as core.LibraryView;
-        const byArtist = view.groupBy === "artist";
-        const q = (view.query ?? "").trim().toLowerCase();
-        let rows = this.rows.filter((r) =>
-          q ? `${r.title} ${r.artist} ${r.album}`.toLowerCase().includes(q) : true,
-        );
-        if (view.album) rows = rows.filter((r) => r.album === view.album);
-        if (view.artist) rows = rows.filter((r) => r.artist === view.artist);
-
-        const order: string[] = [];
-        const members = new Map<string, core.Row[]>();
-        for (const row of rows) {
-          const name = byArtist ? row.artist : row.album;
-          const known = byArtist
-            ? row.artistSource !== "unknown"
-            : row.albumSource !== "unknown";
-          if (!known || !name) continue;
-          // Grouped by identity, displayed by name — mirroring the backend.
-          // An album's identity is its title plus the folder its tracks live
-          // in, so two records sharing a title stay two records. A fake that
-          // grouped differently from the real thing would make a test pass for
-          // a shape the app never produces.
-          const key = byArtist
-            ? name
-            : `${row.href.replace(/\/[^/]*$/, "")}\u001f${name.trim()}`;
-          if (!members.has(key)) {
-            order.push(key);
-            members.set(key, []);
-          }
-          members.get(key)!.push(row);
-        }
-        return order.map((key) => {
-          const tracks = members.get(key)!;
-          const name = byArtist ? key : tracks[0]!.album;
-          const others = byArtist
-            ? [...new Set(tracks.map((t) => t.album))]
-            : [...new Set(tracks.map((t) => t.artist))];
-          return {
-            name,
-            subtitle: byArtist
-              ? others.length === 1
-                ? "1 album"
-                : `${others.length} albums`
-              : others.length === 1
-                ? others[0]
-                : "Various artists",
-            tracks: tracks.length,
-            lead: tracks[0]!.href,
-          };
-        });
+        return view.groupBy === "artist" ? this.artists : this.albums;
       }
 
       case "mix_candidates": {
-        const from = this.rows.find((r) => r.href === this.current);
-        if (!from) return [];
-
-        // Follow is not chosen here — it is whatever the set already has
-        // queued. Only Stay and Switch are searched for, which is the shape of
-        // the whole feature: the set follows itself, and the other two cards
-        // are departures from it.
-        const queuedNext = this.queue[this.queue.indexOf(from.href) + 1];
-        const pool = this.rows.filter(
-          (r) => r.href !== from.href && r.href !== queuedNext && r.bpm > 0,
-        );
-
-        // The real backend scores Stay on how little the *intensity* moves,
-        // with transition cost breaking ties — and rows carry no intensity, so
-        // this stands in for it with the classification the same thresholds
-        // produce: a genre jump or 45 BPM is a departure, and Stay prefers what
-        // is left.
-        const byTempo = (a: core.Row, b: core.Row) =>
-          Math.abs(from.bpm - a.bpm) - Math.abs(from.bpm - b.bpm);
-        const departing = pool.filter(
-          (r) => r.genre !== from.genre || Math.abs(from.bpm - r.bpm) >= 45,
-        );
-        const holding = pool.filter((r) => !departing.includes(r));
-
-        // Asked of every candidate, not only of the ones inside the band: a
-        // library with nothing within 8 BPM still has a closest track, and two
-        // cards with no explanation is what this replaced.
-        const stay = (holding.length ? holding : pool).slice().sort(byTempo)[0];
-
-        // Switch is chosen after Stay and from what Stay left, or both land on
-        // the same track on a small library and the screen is back to two cards.
-        const rest = pool.filter((r) => r.href !== stay?.href);
-        const switchTo =
-          rest.filter((r) => departing.includes(r)).sort(byTempo)[0] ??
-          rest.slice().sort((a, b) => byTempo(b, a))[0];
-
-        // Follow is the plan's next track, and before anything is planned there
-        // is no such track — which left the screen showing two cards until
-        // something was queued, and growing a third afterwards. Stay and Switch
-        // both fall back rather than withhold a card; Follow now does too, and
-        // never onto what is playing or onto a track another card already took.
-        const follow =
-          this.rows.find((r) => r.href === queuedNext && r.href !== from.href) ??
-          pool
-            .filter((r) => r.href !== stay?.href && r.href !== switchTo?.href)
-            .slice()
-            .sort(
-              (a, b) =>
-                Math.abs(Math.abs(from.bpm - a.bpm) - 15) -
-                Math.abs(Math.abs(from.bpm - b.bpm) - 15),
-            )[0];
-        const cards: [core.Row | undefined, core.Exit, string][] = [
-          [stay, "stay", "Bass Swap"],
-          [follow, "follow", "Filter Sweep"],
-          [switchTo, "switch", "Echo Out"],
-        ];
-        return cards.flatMap(([r, exit, transition]) => {
-          if (!r) return [];
-          return [
-            {
-              href: r.href,
-              title: r.title,
-              artist: r.artist,
-              bpm: r.bpm,
-              key: r.key,
-              exit,
-              label: exit.toUpperCase(),
-              transition,
-              selected: r.href === queuedNext,
-              cover: this.covers ? A_SLEEVE : null,
-            },
-          ];
-        });
+        // Nothing playing means nothing to mix out of, which is the one part
+        // of this the screen actually branches on.
+        if (!this.rows.some((r) => r.href === this.current)) return [];
+        return defaultCandidates(this.covers);
       }
 
       case "choose_next": {
@@ -677,7 +727,7 @@ export class FakeBackend {
         return {
           fetched: this.rows.filter((r) => this.attempted.has(r.href)).length,
           total: this.rows.length,
-        };
+        } satisfies core.LookupCounts;
       }
 
       case "track_cover":
@@ -689,23 +739,19 @@ export class FakeBackend {
       }
 
       case "search": {
-        const q = String(a.query ?? "").trim().toLowerCase();
-        const tracks = q
-          ? this.rows.filter((r) =>
-              `${r.title} ${r.artist}`.toLowerCase().includes(q),
-            )
-          : [];
+        // Searching is ranked in the backend across tracks, artists, albums and
+        // playlists. A substring match over two fields is not that, and no test
+        // here is about ranking — the ones that are about search script it.
         return {
-          top: tracks[0] ?? null,
-          tracks,
+          top: null,
+          tracks: [],
           artists: [],
           albums: [],
           playlists: [],
-          total: tracks.length,
-        };
+          total: 0,
+        } satisfies core.SearchResults;
       }
 
-      // --- playlists ----------------------------------------------------
       case "playlists":
         return this.playlists;
 
@@ -805,7 +851,7 @@ export class FakeBackend {
         return {
           src: chosen ?? this.coverFor(a.lead as string),
           chosen: chosen !== undefined,
-        };
+        } satisfies core.AlbumArt;
       }
 
       case "find_album_art": {
@@ -817,12 +863,12 @@ export class FakeBackend {
           );
         }
         this.albumArt[`${a.album as string}\u001f${a.lead as string}`] = found;
-        return { src: found, chosen: true };
+        return { src: found, chosen: true } satisfies core.AlbumArt;
       }
 
       case "clear_album_art": {
         delete this.albumArt[`${a.album as string}\u001f${a.lead as string}`];
-        return { src: this.coverFor(a.lead as string), chosen: false };
+        return { src: this.coverFor(a.lead as string), chosen: false } satisfies core.AlbumArt;
       }
 
       case "set_prefer_looked_up_art":
@@ -852,6 +898,17 @@ export class FakeBackend {
       case "set_dj_mode":
         this.settings = { ...this.settings, djMode: a.enabled === true };
         return this.settings;
+
+      // Rejects an unknown word exactly as the command does, so a test that
+      // types one gets the failure rather than a fake that shrugs.
+      case "set_appearance": {
+        const choice = String(a.appearance ?? "").trim().toLowerCase();
+        if (!["auto", "daylight", "lamplight"].includes(choice)) {
+          throw new Error(`unknown appearance ${JSON.stringify(a.appearance)}`);
+        }
+        this.settings = { ...this.settings, theme: choice };
+        return this.settings;
+      }
 
       case "set_sync_enabled": {
         this.settings = { ...this.settings, syncEnabled: a.enabled === true };
@@ -938,7 +995,7 @@ export class FakeBackend {
           playlistsDeleted: 0,
           foldersDeleted: 0,
           created,
-        };
+        } satisfies core.SharedSyncResult;
       }
 
       // --- Dynamic groups ---------------------------------------------------
@@ -1074,17 +1131,13 @@ export class FakeBackend {
       }
 
       case "group_tracks": {
-        const g = this.groups.find((x) => x.id === a.id);
-        if (!g) return [];
-        return this.rows.filter((r) =>
-          g.entities.some((e) =>
-            e.entityType === "artist"
-              ? r.artist === e.value
-              : e.entityType === "album"
-                ? r.album === e.value
-                : r.genre === e.value,
-          ),
-        );
+        // Which tracks a group resolves to is `vapor_library::group`, matching
+        // entities against the index — a union across artists, albums and
+        // genres, with rules about unknown fields that this restated and could
+        // get wrong. The screen's half is drawing what it is handed and saying
+        // how many, so it is handed the whole library and a test that cares
+        // scripts a narrower answer.
+        return this.groups.some((x) => x.id === a.id) ? this.rows : [];
       }
 
       case "playlist_folders":
@@ -1265,10 +1318,11 @@ export class FakeBackend {
         const bpm = Number(a.bpm ?? 0);
         const overrides = { ...this.settings.bpmOverrides };
         if (bpm > 0) {
-          // The real command refuses an implausible tempo rather than clamping.
-          if (bpm < 40 || bpm > 250) {
-            throw new Error(`A tempo of ${bpm} is not plausible.`);
-          }
+          // No plausibility range here. The real command refuses a tempo
+          // outside its bounds rather than clamping, and those bounds are a
+          // Rust constant — restating them meant two numbers that had to be
+          // changed together and nothing saying so. A test about the refusal
+          // asks for one with `backend.fail`.
           overrides[href] = bpm;
         } else {
           delete overrides[href];
@@ -1305,6 +1359,16 @@ export class FakeBackend {
           available: true,
           mixing: false,
           level: 0,
+          // Six fields the mock had simply never grown, and nothing noticed
+          // because its response was unchecked. Anything reading them got
+          // `undefined` here and a number in the real app — which is how a
+          // component can pass its tests and still divide by nothing.
+          brightness: 0,
+          beatPeriod: 0,
+          nextBeat: 0,
+          setIndex: 0,
+          setTotal: 0,
+          setEnergy: 0,
           waveform: [],
           nextTitle: nextRow?.title ?? "",
           nextArtist: nextRow?.artist ?? "",
@@ -1312,7 +1376,7 @@ export class FakeBackend {
           nextHref: nextRow?.href ?? "",
           cover: null,
           scope: this.scope,
-        };
+        } satisfies core.PlaybackState;
       }
 
       case "queue_state":
@@ -1386,7 +1450,7 @@ export class FakeBackend {
           hrefs: usable.map((r) => r.href),
           considered: usable.length,
           skipped: this.rows.length - usable.length,
-        };
+        } satisfies core.VibePath;
       }
 
       case "blend_preview": {
@@ -1395,8 +1459,10 @@ export class FakeBackend {
         const from = this.rows.find((r) => r.href === this.current);
         const to = this.rows.find((r) => r.href === this.queue[at + 1]);
         if (!from || !to) return null;
-        const matchable =
-          from.bpm > 0 && to.bpm > 0 && Math.abs(from.bpm - to.bpm) / from.bpm <= 0.06;
+        // Whether two tracks can be bridged is `MAX_STRETCH` and the engine's
+        // own arithmetic. This used to carry its own copy of the 6% figure,
+        // which is a constant living in two languages waiting to disagree.
+        // Scripted when a test is about what the panel says.
         return {
           fromTitle: from.title,
           toTitle: to.title,
@@ -1404,12 +1470,12 @@ export class FakeBackend {
           toBpm: to.bpm,
           fromKey: from.key,
           toKey: to.key,
-          shiftPercent: from.bpm > 0 ? ((to.bpm - from.bpm) / from.bpm) * 100 : 0,
+          shiftPercent: 0,
           gainDelta: 0,
-          matchable,
-          reason: matchable ? "" : "Their tempos are too far apart to bridge.",
+          matchable: true,
+          reason: "",
           transition: "Standard Crossfade",
-        };
+        } satisfies core.BlendPreview;
       }
 
       case "track_details": {
@@ -1442,7 +1508,7 @@ export class FakeBackend {
           cover: this.covers ? A_SLEEVE : null,
           notes: null,
           tagged: false,
-        };
+        } satisfies core.TrackDetails;
       }
 
       case "data_breakdown":

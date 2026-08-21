@@ -66,6 +66,10 @@
 }
 
 .data__row-text {
+  /* `flex: 1`, so every row's bar is measured against the same width. Sized to
+     its own text instead, each bar got a different track and two categories
+     three orders of magnitude apart drew the same length. */
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -144,7 +148,7 @@
   padding: 9px 16px;
   border: 1px solid var(--glass-rim);
   border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.75);
+  background: var(--fill-raised);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
@@ -153,12 +157,12 @@
 }
 
 .data__button:hover {
-  background: #fff;
+  background: var(--fill-raised-hover);
 }
 
 .data__button--danger {
-  color: #b3261e;
-  border-color: rgba(179, 38, 30, 0.3);
+  color: var(--danger);
+  border-color: var(--danger-edge);
 }
 
 .data__note {
@@ -181,9 +185,9 @@
   margin: 0;
   padding: 10px 14px;
   border-radius: var(--r-md);
-  background: rgba(179, 38, 30, 0.08);
-  border: 1px solid rgba(179, 38, 30, 0.22);
-  color: #8c1d18;
+  background: var(--danger-wash);
+  border: 1px solid var(--danger-edge);
+  color: var(--danger-ink);
   font-size: var(--fs-sm);
 }
 
@@ -197,7 +201,7 @@
   padding: 6px 10px;
   border: 1px solid var(--glass-rim);
   border-radius: var(--r-sm);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--fill-raised);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--ink);
@@ -239,7 +243,7 @@
   margin: 2px 0 18px;
   border-radius: 999px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.35);
+  background: var(--track);
   box-shadow: inset 0 0 0 1px var(--glass-rim);
 }
 
@@ -266,4 +270,38 @@
 
 .data__split-part--settings {
   background: var(--iri-b);
+}
+
+/* ---- A bar per row ---------------------------------------------------
+ *
+ * The stacked bar at the top answers "what is taking the space" only if its
+ * segments can be told apart, and on a real library one segment is almost the
+ * whole width — every other category becomes a sliver with no readable size.
+ * A bar per row gives each category a full width to be small against, and
+ * keeps its colour so the eye can match a row to its piece of the total.
+ */
+
+.data__row-bar {
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: rgba(var(--ink-3-rgb), 0.2);
+  overflow: hidden;
+}
+
+.data__row-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  /* Colour comes from the `data__split-part--*` class it shares with the
+     stacked bar above, so the two can never disagree. */
+}
+
+/* The ceiling, inline with the actions rather than on a card of its own. */
+.data__field--inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
 }

@@ -26,7 +26,7 @@
   align-items: center;
   justify-content: center;
   padding: 32px 20px;
-  background: rgba(20, 22, 26, 0.45);
+  background: var(--veil);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   /* See above. Not decoration — this is what stops an ancestor's display

@@ -268,6 +268,8 @@ export function Songs({
     }
     try {
       await core.setBpmOverride(href, bpm);
+      // The tempo column is part of a read, so the remembered ones are stale.
+      window.dispatchEvent(new Event("vapor:library-changed"));
       setBpmError(null);
       setRevision((r) => r + 1);
     } catch (e: unknown) {

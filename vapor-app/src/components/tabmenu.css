@@ -13,7 +13,7 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  background: rgba(20, 30, 48, 0.28);
+  background: var(--veil);
 }
 
 .tabmenu {
@@ -24,7 +24,7 @@
   margin-bottom: calc(78px + env(safe-area-inset-bottom, 0px));
   padding: 14px;
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg, 0 18px 40px rgba(38, 62, 116, 0.22));
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -90,7 +90,7 @@
 
 .tabmenu__item:hover,
 .tabmenu__item:focus-visible {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--fill-quiet);
   outline: none;
 }
 

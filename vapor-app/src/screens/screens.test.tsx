@@ -78,19 +78,37 @@ describe("Library", () => {
     expect(screen.getAllByText("Aphex Twin").length).toBeGreaterThan(0);
   });
 
-  it("opens an album to its tracks, and comes back", async () => {
-    useBackend();
+  /*
+   * Opening an album is a request and a render, which is all this screen does.
+   *
+   * Narrowing the rows to one album is `vapor_library::index`, and it is tested
+   * there. What is this screen's to get wrong is asking for the wrong album, or
+   * failing to show what came back — so that is what this asserts.
+   */
+  it("asks for the album it opened, and shows what comes back", async () => {
+    const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
+
+    backend.answers("library_view", [
+      { header: "", rows: backend.rowsNamed("Windowlicker") },
+    ]);
 
     await user.click(
       await screen.findByRole("button", { name: /open the album windowlicker ep/i }),
     );
 
+    await waitFor(() => {
+      const view = backend.lastArgs("library_view")?.view as
+        | { album?: string }
+        | undefined;
+      expect(view?.album).toBe("Windowlicker EP");
+    });
+
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
-    // Narrowed to that album, so the other one is not in the table.
     expect(screen.queryByText("Xtal")).not.toBeInTheDocument();
 
+    backend.clearAnswer("library_view");
     await user.click(screen.getByRole("button", { name: /albums/i }));
     expect(await screen.findByText("Selected Ambient Works")).toBeInTheDocument();
   });
@@ -100,12 +118,18 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
+    // What the backend would answer for that album. The card queues what it is
+    // given — that it is given the right thing is the backend's half.
+    backend.answers("library_view", [
+      { header: "", rows: backend.rowsNamed("Xtal") },
+    ]);
+
     await user.click(
       await screen.findByRole("button", { name: /play selected ambient works/i }),
     );
 
     await waitFor(() => expect(backend.state.status).toBe("playing"));
-    // Only that album is queued — not everything on screen.
+    // Exactly the answer, and nothing else that happens to be on screen.
     expect(backend.state.queue).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
   });
 
@@ -252,11 +276,16 @@ describe("Library", () => {
 
     await openSongsTab(user);
     await screen.findByText("Windowlicker");
+
+    backend.answers("library_view", [
+      { header: "", rows: backend.rowsNamed("Xtal") },
+    ]);
     await user.type(screen.getByRole("searchbox"), "xtal");
 
-    // Wait for the filter to land, not merely for the row to exist — it exists
-    // in the unfiltered table too, and clicking it before the debounced reload
-    // arrives queues the whole library and passes for the wrong reason.
+    // Wait for the narrowed answer to land, not merely for the row to exist —
+    // it exists in the unfiltered table too, and clicking it before the
+    // debounced reload arrives queues the whole library and passes for the
+    // wrong reason.
     await waitFor(() =>
       expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument(),
     );
@@ -951,11 +980,11 @@ describe("Your Data", () => {
     const user = userEvent.setup();
     render(<YourData />);
 
-    await user.click(await screen.findByRole("button", { name: /clear cached audio/i }));
+    await user.click(await screen.findByRole("button", { name: /empty cache/i }));
 
     expect(await screen.findByText(/freed/i)).toBeInTheDocument();
     // Not merely "freed": the screen re-read the cache and it is empty.
-    expect(screen.queryByText(/still cached/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/still held/i)).not.toBeInTheDocument();
   });
 
   /**
@@ -969,9 +998,9 @@ describe("Your Data", () => {
     const user = userEvent.setup();
     render(<YourData />);
 
-    await user.click(await screen.findByRole("button", { name: /clear cached audio/i }));
+    await user.click(await screen.findByRole("button", { name: /empty cache/i }));
 
-    expect(await screen.findByText(/still cached/i)).toBeInTheDocument();
+    expect(await screen.findByText(/still held/i)).toBeInTheDocument();
   });
 
   it("deletes everything and confirms nothing is left", async () => {
@@ -1037,6 +1066,54 @@ describe("Onboarding", () => {
 });
 
 describe("Transport", () => {
+  /**
+   * A fetch that takes seconds has to look like one.
+   *
+   * Playing a track streams it from the server, and a cold range request can
+   * take several seconds before a sample exists — reported as "I tried playing
+   * a track and nothing happened". `loading` is set the moment the command is
+   * accepted, so the transport has something to say for that whole window, and
+   * this is what says it is being said.
+   *
+   * The controls stay live rather than being disabled: a slow download is the
+   * case where someone most wants to press stop.
+   */
+  it("says it is loading while a track is being fetched", async () => {
+    const backend = useBackend();
+    backend.answers("playback_state", {
+      href: "/slow.m4a",
+      title: "",
+      artist: "",
+      status: "idle",
+      loading: true,
+      position: 0,
+      duration: 0,
+      volume: 1,
+      error: null,
+      available: true,
+      mixing: false,
+      level: 0,
+      brightness: 0,
+      beatPeriod: 0,
+      nextBeat: 0,
+      setIndex: 0,
+      setTotal: 0,
+      setEnergy: 0,
+      waveform: [],
+      nextTitle: "",
+      nextArtist: "",
+      nextAlbum: "",
+      nextHref: "",
+      cover: null,
+      scope: "",
+    } satisfies core.PlaybackState);
+    render(<Transport />);
+
+    expect(await screen.findByText(/loading/i)).toBeInTheDocument();
+    // Not disabled: an abandoned download is the whole reason to keep them.
+    expect(screen.getByRole("button", { name: /play|pause/i })).toBeEnabled();
+  });
+
   it("says nothing is playing, and offers disabled controls rather than none", async () => {
     useBackend();
     render(<Transport />);
@@ -1143,12 +1220,53 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
     makeRow({ href: "/away.m4a", title: "Away", bpm: 121, key: "3B", genre: "Jazz" }),
   ];
 
+  /**
+   * One card, as the backend would send it.
+   *
+   * Which track earns which exit is scored in the backend — `candidate_cost`,
+   * `exit_between`, the pathfinder — against intensity and transition cost over
+   * the whole pool. The fake used to approximate that scoring in seventy lines
+   * that admitted to "standing in for" the real thing, and no test here was
+   * ever about the scoring.
+   *
+   * So the cards are an input. What this screen owes is drawing the three it is
+   * handed, marking the one that is queued, and re-reading after a choice.
+   */
+  function card(
+    href: string,
+    exit: core.Exit,
+    transition: string,
+    selected = false,
+  ): core.MixCandidate {
+    const row = MIXABLE.find((r) => r.href === href)!;
+    return {
+      href,
+      title: row.title,
+      artist: row.artist,
+      bpm: row.bpm,
+      key: row.key,
+      exit,
+      label: exit.toUpperCase(),
+      transition,
+      selected,
+      cover: null,
+    };
+  }
+
+  /** Follow is "Lift", because it is the one marked as queued. */
+  const CARDS: core.MixCandidate[] = [
+    card("/near.m4a", "stay", "Bass Swap"),
+    card("/lift.m4a", "follow", "Filter Sweep", true),
+    card("/away.m4a", "switch", "Echo Out"),
+  ];
+
   async function playing() {
     const backend = useBackend({ rows: MIXABLE });
     await backend.invoke("play_tracks", {
       hrefs: MIXABLE.map((r) => r.href),
       start: HERE,
     });
+    backend.answers("mix_candidates", CARDS);
     return backend;
   }
 
@@ -1168,15 +1286,14 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
    * has queued next, so the screen and the queue cannot disagree. Falsifiable —
    * change the queue and the card has to follow it.
    */
-  it("shows the set's own next track as Follow", async () => {
-    const backend = await playing();
+  it("draws the card the backend marked as the set's own next track", async () => {
+    await playing();
     render(<Vibe />);
 
     const follow = (await screen.findByText("FOLLOW")).closest("button");
-    const queued = backend.state.queue[backend.state.queue.indexOf(HERE) + 1];
-    const row = MIXABLE.find((r) => r.href === queued);
-    expect(follow).toHaveTextContent(row!.title);
-    // And it is the one marked as queued, because it is the one queued.
+    expect(follow).toHaveTextContent("Lift");
+    // Pressed because the backend said `selected`, not because this screen
+    // worked out what was queued.
     expect(follow).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -1243,6 +1360,15 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
     const title = chosen?.querySelector(".vibe__exit-title")?.textContent ?? "";
     expect(title).not.toBe("");
 
+    // What the backend answers once the choice has been made: the track that
+    // was taken is now the set's own next one. Arranged before the press,
+    // because the press is what makes the screen ask again.
+    backend.answers("mix_candidates", [
+      card("/near.m4a", "stay", "Bass Swap"),
+      card("/away.m4a", "follow", "Echo Out", true),
+      card("/lift.m4a", "switch", "Filter Sweep"),
+    ]);
+
     await user.click(screen.getByText("SWITCH"));
 
     // It is now the middle card — the set carries on through it.
@@ -1257,6 +1383,10 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
   it("says so rather than showing empty cards when nothing is analysed", async () => {
     const backend = useBackend({ rows: [makeRow({ href: "/a.mp3", title: "A", bpm: 0 })] });
     await backend.invoke("play_tracks", { hrefs: ["/a.mp3"], start: "/a.mp3" });
+    // Nothing analysed means nothing to score, so the backend offers no cards.
+    // That it offers none is its decision; this is about what the screen shows
+    // when it gets none.
+    backend.answers("mix_candidates", []);
     render(<Vibe />);
 
     expect(await screen.findByText(/nothing analysed to choose from/i)).toBeInTheDocument();

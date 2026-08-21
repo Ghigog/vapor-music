@@ -15,7 +15,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { VaporMark } from "./components/VaporMark";
 import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
-import { Library, type Opened } from "./screens/Library";
+import {
+  Library,
+  type Opened,
+  type Tab as LibraryTab,
+} from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
 import { TabMenu, type TabMenuItem } from "./components/TabMenu";
@@ -29,6 +33,7 @@ import { Settings } from "./screens/Settings";
 import { SmartGroup } from "./screens/SmartGroup";
 import { Onboarding } from "./screens/Onboarding";
 import * as core from "./lib/core";
+import { adoptAppearance, asAppearance } from "./lib/theme";
 import "./components/transport.css";
 import "./components/states.css";
 import "./components/notice.css";
@@ -45,6 +50,7 @@ import "./screens/settings.css";
 import "./screens/nowplaying.css";
 import "./components/lyrics.css";
 import "./components/setrow.css";
+import "./components/appearance.css";
 import "./screens/onboarding.css";
 import "./screens/liner.css";
 import "./screens/yourdata.css";
@@ -152,6 +158,10 @@ export function App() {
   const [opened, setOpened] = useState<Opened | null>(null);
   /** The dynamic group being looked at — a drill-down like the others. */
   const [group, setGroup] = useState<string | null>(null);
+  /** Which library tab is showing. Held here, like `opened`, because Library is
+   *  unmounted whenever a drill-down covers it and a remount would otherwise
+   *  land on the default tab rather than the one being returned to. */
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("album");
   /** Which tab's list is open, if any. Not a place, so not in the history. */
   const [menu, setMenu] = useState<Menu | null>(null);
   /** What the last drop did, or why it would not. */
@@ -199,7 +209,14 @@ export function App() {
   const fromPop = useRef(false);
   const firstPlace = useRef(true);
   useEffect(() => {
-    const place = { screen, liner: liner?.href ?? null, playlist, opened, group };
+    const place = {
+      screen,
+      liner: liner?.href ?? null,
+      playlist,
+      opened,
+      group,
+      libraryTab,
+    };
     if (firstPlace.current) {
       firstPlace.current = false;
       window.history.replaceState(place, "");
@@ -215,7 +232,7 @@ export function App() {
     // `opened` by value rather than by reference: it is rebuilt on every
     // render that changes it, and a reference dep would push an entry for a
     // re-render that went nowhere.
-  }, [screen, liner?.href, playlist, opened?.kind, opened?.name, group]);
+  }, [screen, liner?.href, playlist, opened?.kind, opened?.name, group, libraryTab]);
 
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
@@ -225,6 +242,7 @@ export function App() {
         playlist: string | null;
         opened: Opened | null;
         group: string | null;
+        libraryTab?: LibraryTab;
       } | null;
       if (!place) return;
       fromPop.current = true;
@@ -232,6 +250,9 @@ export function App() {
       setPlaylist(place.playlist);
       setOpened(place.opened ?? null);
       setGroup(place.group ?? null);
+      // Older entries pushed before the tab was a place have none; the default
+      // is the same one a fresh Library would have picked anyway.
+      setLibraryTab(place.libraryTab ?? "album");
       // A list is not a place, so walking history closes whichever is open
       // rather than restoring it.
       setMenu(null);
@@ -271,6 +292,9 @@ export function App() {
           if (cancelled) return;
           const connected =
             s.remote.url.trim() !== "" && s.remote.username.trim() !== "";
+          // The backend is the record; the local mirror was only a head start,
+          // so this is where the two are reconciled. Usually a no-op.
+          adoptAppearance(asAppearance(s.theme));
           setDjMode(s.djMode ?? true);
           setStatus({ kind: connected ? "ready" : "onboarding" });
           return;
@@ -469,6 +493,8 @@ export function App() {
                   onOpen={openLiner}
                   opened={opened}
                   onOpenedChange={setOpened}
+                  tab={libraryTab}
+                  onTabChange={setLibraryTab}
                 />
               )}
               {screen === "playing" && <NowPlaying />}
@@ -625,7 +651,6 @@ export function App() {
     <div className="boot">
       <VaporMark
         size={160}
-        theme="light"
         state={status.kind === "loading" ? "thinking" : "idle"}
       />
       <div

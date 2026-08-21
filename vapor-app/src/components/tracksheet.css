@@ -12,7 +12,7 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  background: rgba(20, 30, 48, 0.34);
+  background: var(--veil);
 }
 
 .sheet {
@@ -24,7 +24,7 @@
   margin-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   padding: 20px;
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg, 0 18px 40px rgba(38, 62, 116, 0.22));
+  box-shadow: var(--shadow-lg);
 }
 
 .sheet__title {
@@ -77,13 +77,13 @@
 
 .sheet__open {
   border: 0;
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-fill);
+  color: var(--on-accent);
 }
 
 .sheet__close {
   border: 1px solid var(--glass-rim);
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--fill-raised);
   color: var(--ink);
 }
 

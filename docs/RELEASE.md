@@ -116,9 +116,10 @@ itself. Two of them were also factually wrong — Settings and the README both
 credited Essentia for analysis, which has not shipped since the Rust rewrite —
 and were corrected at the same time.
 
-**Still outstanding:** CC BY requires attribution *visible to users*, which a
-repository file does not provide. An About → Licences screen would settle it,
-and would be the natural home for the MPL notice too.
+**Settled 2026-08-20.** CC BY requires attribution *visible to users*, which a
+repository file does not provide. Settings → About → Licences now renders
+`THIRD_PARTY_NOTICES.md` inside the app — the file itself, not a second copy of
+it — which covers the icons and carries the MPL notice for Symphonia too.
 
 > This is an engineering summary of publicly declared licence metadata, not
 > legal advice. Confirm with a lawyer before commercial distribution.
@@ -212,7 +213,8 @@ Decisions, not oversights. Each is recorded where it was made.
 - [x] ~~Apply the licence direction across all seven declarations.~~ Done
       2026-08-20; Vapor Music is proprietary, see `LICENSE`.
 - [x] ~~Correct the Essentia claims in `Settings.tsx` and `README.md`.~~ Done.
-- [ ] An About → Licences screen, for the CC BY icons and the MPL notice.
+- [x] ~~An About → Licences screen, for the CC BY icons and the MPL notice.~~
+      Done 2026-08-20.
 - [ ] Apple Developer ID, `signingIdentity`, notarisation, hardened runtime
       tested against real audio output.
 - [ ] Android keystore created, backed up, gitignored; release APK built and its

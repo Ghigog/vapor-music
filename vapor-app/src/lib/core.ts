@@ -13,34 +13,122 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 // ---------------------------------------------------------------------------
-// Types — mirror the serde shapes in src-tauri/src/lib.rs
+// Types — generated from the Rust structs, not written here
 // ---------------------------------------------------------------------------
+//
+// These used to be hand-written to "mirror the serde shapes in
+// src-tauri/src/lib.rs". Nothing enforced the mirror, and it broke: `Playlist`
+// went over the wire as `folder_id` while the rail filtered on `folderId`, so
+// every playlist read as filed nowhere and the sidebar rendered a heading with
+// nothing under it.
+//
+// `ts-rs` derives these from the Rust definitions, reading the same
+// `#[serde(rename_all)]` attributes serde itself reads, so the two cannot
+// disagree. They are checked in, and `npm run types:check` fails if the
+// committed files are not what the current Rust produces. Do not edit them by
+// hand — edit the struct.
+// Imported as well as re-exported: `export ... from` forwards a name without
+// binding it locally, and the command signatures below use these.
+import type { Settings } from "./generated/Settings";
+import type { Appearance } from "./theme";
+import type { RemoteConfig } from "./generated/RemoteConfig";
+import type { DownloadProgress } from "./generated/DownloadProgress";
+import type { IdentifyProgress } from "./generated/IdentifyProgress";
+import type { Source } from "./generated/Source";
+import type { Row } from "./generated/Row";
+import type { Playlist } from "./generated/Playlist";
+import type { Folder } from "./generated/Folder";
+import type { TrackMeta } from "./generated/TrackMeta";
+import type { EntityType } from "./generated/EntityType";
+import type { Entity } from "./generated/Entity";
+import type { DynamicGroup } from "./generated/DynamicGroup";
+import type { AlbumArt } from "./generated/AlbumArt";
+import type { AnalysisStatus } from "./generated/AnalysisStatus";
+import type { BlendPreview } from "./generated/BlendPreview";
+import type { CacheStatus } from "./generated/CacheStatus";
+import type { DataRow } from "./generated/DataRow";
+import type { DeviceKind } from "./generated/DeviceKind";
+import type { Exit } from "./generated/Exit";
+import type { Facet } from "./generated/Facet";
+import type { LibraryEntity } from "./generated/LibraryEntity";
+import type { LibrarySection } from "./generated/LibrarySection";
+import type { LookedUp } from "./generated/LookedUp";
+import type { LookupCounts } from "./generated/LookupCounts";
+import type { LyricLine } from "./generated/LyricLine";
+import type { Lyrics } from "./generated/Lyrics";
+import type { MixCandidate } from "./generated/MixCandidate";
+import type { PlaybackState } from "./generated/PlaybackState";
+import type { QueueEntry } from "./generated/QueueEntry";
+import type { QueueState } from "./generated/QueueState";
+import type { QueueView } from "./generated/QueueView";
+import type { ScanReport } from "./generated/ScanReport";
+import type { SearchResults } from "./generated/SearchResults";
+import type { SharedSyncResult } from "./generated/SharedSyncResult";
+import type { SyncProgress } from "./generated/SyncProgress";
+import type { SyncView } from "./generated/SyncView";
+import type { TrackDetails } from "./generated/TrackDetails";
+import type { TrustedDevice } from "./generated/TrustedDevice";
+import type { VibePath } from "./generated/VibePath";
 
-/** Where a derived field came from, so the UI can distinguish fact from guess. */
-export type Source = "cache" | "file" | "folder" | "unknown";
-
-export interface Row {
-  href: string;
-  title: string;
-  artist: string;
-  album: string;
-  artistSource: Source;
-  albumSource: Source;
-  /** Empty when unknown. */
-  genre: string;
-  /** 0 when unknown — not "0 BPM". */
-  bpm: number;
-  /** Camelot key, empty when unknown. */
-  key: string;
-  year: number;
-  manualPos: number;
+/**
+ * Narrow the settings' curve to the four the UI draws.
+ *
+ * `Settings.curve` is a `String` in Rust, not the `Curve` enum, because it also
+ * accepts the spellings the Godot build wrote. The hand-written type here used
+ * to claim it was the union, which was a guess that happened to hold; the
+ * generated type says `string`, which is the truth. So it is narrowed once,
+ * here, rather than asserted at each use.
+ */
+export function asCurve(value: string): Curve {
+  return value === "build" || value === "chill" || value === "wave"
+    ? value
+    : "flat";
 }
 
-export interface LibrarySection {
-  /** Empty when ungrouped; "—" for rows whose grouping field is unknown. */
-  header: string;
-  rows: Row[];
-}
+export type {
+  IdentifyProgress,
+  DownloadProgress,
+  RemoteConfig,
+  Settings,
+  Source,
+  Row,
+  Playlist,
+  Folder,
+  TrackMeta,
+  EntityType,
+  Entity,
+  DynamicGroup,
+  AlbumArt,
+  AnalysisStatus,
+  BlendPreview,
+  CacheStatus,
+  DataRow,
+  DeviceKind,
+  Exit,
+  Facet,
+  LibraryEntity,
+  LibrarySection,
+  LookedUp,
+  LookupCounts,
+  LyricLine,
+  Lyrics,
+  MixCandidate,
+  PlaybackState,
+  QueueEntry,
+  QueueState,
+  QueueView,
+  ScanReport,
+  SearchResults,
+  SharedSyncResult,
+  SyncProgress,
+  SyncView,
+  TrackDetails,
+  TrustedDevice,
+  VibePath,
+};
+
+
+
 
 export type SortKey =
   | "title"
@@ -67,230 +155,21 @@ export interface LibraryView {
   artist?: string;
 }
 
-/**
- * One album or artist, as the Library grid draws it.
- *
- * The grid used to render a card per track grouped under an album heading,
- * which answers "what is on this album" rather than "which albums do I have".
- */
-export interface LibraryEntity {
-  name: string;
-  /** The album's artist, or how many albums an artist has. */
-  subtitle: string;
-  tracks: number;
-  /** A track from it — what plays when pressed, and whose cover is shown. */
-  lead: string;
-}
 
-export interface Playlist {
-  id: string;
-  name: string;
-  customCoverPath: string;
-  tracks: string[];
-  /** The folder it is filed in, or "" for the top level. */
-  folderId: string;
-}
 
-/**
- * A folder of playlists.
- *
- * An organisational layer only — a folder never owns tracks, a playlist points
- * at one. `parentId` makes nesting representable so it needs no later
- * migration, but nothing creates a nested folder and the rail draws one level.
- */
-export interface Folder {
-  id: string;
-  name: string;
-  parentId: string;
-}
 
-export interface QueueState {
-  current: string | null;
-  tracks: string[];
-  /** What plays next, so the UI need not ask again. */
-  next: string | null;
-}
 
 /** What the audio thread is doing. "loading" is a separate flag — fetching and
  *  decoding is the shell's business, not the device's. */
 export type PlaybackStatus = "idle" | "playing" | "paused";
 
-export interface PlaybackState {
-  href: string | null;
-  /** Resolved from the library rows; empty when nothing is playing. */
-  title: string;
-  artist: string;
-  status: PlaybackStatus;
-  /** Fetching and decoding — seconds on a cold cache. */
-  loading: boolean;
-  position: number;
-  duration: number;
-  volume: number;
-  error: string | null;
-  /** False when the machine has no output device at all. */
-  available: boolean;
-  /** True while a beat-matched mix is arranged or under way (TD-25). */
-  mixing: boolean;
-  /** Peak output level, 0–1. Drives the mark's `energy` on Now Playing. */
-  level: number;
-  /** Fraction of output energy above 1500 Hz, 0–1. Drives how fast the mark
-   *  turns: bright music turns faster than dark music at the same loudness. */
-  brightness: number;
-  /** Seconds between the beats either side of the playhead. 0 = no usable
-   *  grid, and the mark stays on its steady rate rather than guessing. */
-  beatPeriod: number;
-  /** Track-seconds at which the next beat lands. A position rather than a
-   *  countdown, so it stays true between polls and the UI can run its own
-   *  clock off it. 0 with no usable grid. */
-  nextBeat: number;
-  /** Where the playing track sits in the planned set. `setTotal` 0 means
-   *  nothing is planned — shuffle, or a queue the pathfinder did not build. */
-  setIndex: number;
-  setTotal: number;
-  /** Energy the curve wants the set to be at here, 0–1. Drives the mark's
-   *  hue, so the logo says where the set has got to. */
-  setEnergy: number;
-  /** Envelope peaks for the playing track. Empty until it has been analysed
-   *  at the current version — draw a plain bar rather than inventing one. */
-  waveform: number[];
-  /** What plays after this, so Now Playing needs no second call. */
-  nextTitle: string;
-  nextArtist: string;
-  nextAlbum: string;
-  /**
-   * The next track's href, for its artwork.
-   *
-   * The cover is fetched separately, through the same tile-sized path a row
-   * uses — carrying a 300 KB data URI on a four-times-a-second poll is the
-   * mistake `trackThumb` exists to avoid.
-   */
-  nextHref: string;
-  /** Cover art as a data URI, when the file carried one. */
-  cover: string | null;
-  /**
-   * What the DJ is conducting over — a playlist, album, artist, genre or
-   * dynamic group name. Empty means the whole library.
-   *
-   * Set by whatever list `playTracks` was called from, and it is the pool the
-   * planner actually chooses within, not a caption. See `AppState::scope`.
-   */
-  scope: string;
-}
 
-export interface TrackMeta {
-  href: string;
-  bpm: number;
-  musicalKey: string;
-  outroKey: string;
-  introKey: string;
-  energyLevel: number;
-  genre: string;
-}
 
 export type Curve = "build" | "chill" | "wave" | "flat";
 
-/**
- * The three ways out of the track that is playing.
- *
- * `follow` is the set: whatever the planner already has queued next. The other
- * two are departures from it — `stay` holds this energy, `switch` leaves it.
- * There is no fourth state and no rotation between them; the set follows itself
- * until someone says otherwise.
- */
-export type Exit = "stay" | "follow" | "switch";
 
-/** One option for what plays next. */
-export interface MixCandidate {
-  href: string;
-  title: string;
-  artist: string;
-  bpm: number;
-  key: string;
-  exit: Exit;
-  /** The word on the card: STAY, FOLLOW, SWITCH. */
-  label: string;
-  /** The mix the engine would actually perform to get there. */
-  transition: string;
-  /** Whether this is what is actually queued next. */
-  selected: boolean;
-  /** The sleeve, as the design's alternates carry one. */
-  cover: string | null;
-}
 
-export interface RemoteConfig {
-  url: string;
-  username: string;
-  folder: string;
-}
 
-export interface Settings {
-  remote: RemoteConfig;
-  baseFontSize: number;
-  uiScale: number;
-  themeMode: "preset" | "custom";
-  theme: string;
-  customBaseColor: string;
-  customAccentColor: string;
-  headphoneProfile: string;
-  headphoneCalibrationEnabled: boolean;
-  /** Manual corrections, keyed by href. See the note on setBpmOverride. */
-  bpmOverrides: Record<string, number>;
-  /** Album artwork chosen by hand, keyed by album identity (title + folder). */
-  albumArt: Record<string, string>;
-  /** Whether a looked-up cover outranks the file's own embedded artwork. */
-  preferLookedUpArt: boolean;
-  /**
-   * Whether the library hides second and later copies of a recording.
-   *
-   * Off by default: these are your own files, and a library quietly showing
-   * fewer tracks than are on disk is one you cannot trust. Hiding is a view,
-   * not a deletion. The Vibe DJ excludes duplicates regardless — two copies of
-   * one track are identical in tempo, key and intensity, so a set free to use
-   * both will mix a record into itself.
-   */
-  hideDuplicates: boolean;
-  /** Ceiling on the local audio cache, in bytes. */
-  cacheMaxBytes: number;
-  /**
-   * Whether the app may look up lyrics and artwork from public services.
-   *
-   * Off by default. Everything else the app knows is worked out on the device;
-   * a lookup sends the artist and title of what is playing to a third party.
-   */
-  metadataLookupEnabled: boolean;
-  /**
-   * The Vibe Limit: the energy difference between consecutive tracks past
-   * which the pathfinder starts paying a steep penalty (ai_dj_workflow.md §6).
-   *
-   * Strict keeps a set at one intensity; loose permits drops and climbs.
-   */
-  vibeLimit: number;
-  /**
-   * Whether this device announces itself on the local network.
-   *
-   * Off by default, for the same reason `metadataLookupEnabled` is: a beacon
-   * every five seconds tells everyone on the network that this machine is
-   * here, on whatever network it happens to be joined to.
-   */
-  syncEnabled: boolean;
-  /**
-   * Whether the DJ conducts the set, or the queue plays in order.
-   *
-   * Persisted and read by the backend, which is the half that decides what
-   * plays next. It was component state until 2026-08-17, so the supervisor had
-   * never heard of it and the "DJ" could only re-order a queue someone else had
-   * already built — a set of one track repeated forever.
-   */
-  djMode: boolean;
-  /**
-   * Where the set is going, as `pathfinder.rs` names the curves.
-   *
-   * Persisted for the same reason `djMode` is: the playback thread extends the
-   * set when the queue runs short, and it does that whether or not the Vibe
-   * screen is open.
-   */
-  curve: Curve;
-}
 
 /** The band the Vibe Limit is offered over. Matches `settings.rs`. */
 export const MIN_VIBE_LIMIT = 0.1;
@@ -410,37 +289,8 @@ export function createPlaylist(
 
 // --- Lyrics and artwork from public services --------------------------------
 
-/** One line of time-aligned lyrics. */
-export interface LyricLine {
-  /** Seconds from the start of the track. */
-  time: number;
-  text: string;
-}
 
-export interface Lyrics {
-  /** Whether `lines` carry usable timings. */
-  synced: boolean;
-  lines: LyricLine[];
-  /** The unaligned text, empty when a synced version was available. */
-  plain: string;
-}
 
-/**
- * What is known about a track from outside this device.
- *
- * Kept apart from analysis and tags, which are what this device measured and
- * what the file itself carries. A screen has to be able to say which is which.
- */
-export interface LookedUp {
-  lyrics: Lyrics | null;
-  artistImage: string;
-  albumArt: string;
-  genre: string;
-  /** Whether a lookup has been made for this track at all. */
-  attempted: boolean;
-  /** Whether the setting permits making one. */
-  allowed: boolean;
-}
 
 /** What has already been looked up. Never makes a request. */
 export function trackLookup(href: string): Promise<LookedUp> {
@@ -462,23 +312,6 @@ export function lookedUpImage(url: string): Promise<string | null> {
   return invoke<string | null>("looked_up_image", { url });
 }
 
-/**
- * Artwork for an album, resolved.
- *
- * Three sources in order: a cover chosen by hand, then the file's own embedded
- * picture, then a looked-up one for a file that carries none.
- * `preferLookedUpArt` swaps the last two.
- *
- * `lead` is any track on the album — an album's identity is its title plus the
- * folder its tracks live in, so any of them resolves the same cover.
- */
-export interface AlbumArt {
-  /** The picture, as a data URI. `null` when there is none to show. */
-  src: string | null;
-  /** Whether this is a cover chosen by hand rather than the file's own.
-   *  Answered by the backend, because the album key's format is its business. */
-  chosen: boolean;
-}
 
 export function albumCover(album: string, lead: string): Promise<AlbumArt> {
   return invoke<AlbumArt>("album_cover", { album, lead });
@@ -505,18 +338,6 @@ export function clearAlbumArt(album: string, lead: string): Promise<AlbumArt> {
   return invoke<AlbumArt>("clear_album_art", { album, lead });
 }
 
-/** Emitted on `identify-progress`, once per track and once at the end. */
-export interface IdentifyProgress {
-  done: number;
-  total: number;
-  /** The track just finished. */
-  title: string;
-  /** Tempos corrected so far — the point of the exercise. */
-  corrected: number;
-  /** Tracks Deezer had a genre for. */
-  genres: number;
-  finished: boolean;
-}
 
 /**
  * Ask Deezer about every track in the library.
@@ -553,6 +374,17 @@ export function setHideDuplicates(enabled: boolean): Promise<Settings> {
 }
 
 /**
+ * Which theme the app draws in.
+ *
+ * Lands in `Settings.theme`, which held a Godot theme-resource name until the
+ * appearance control existed and which nothing in this app ever read. See
+ * `lib/theme.ts` for what the three words mean and how they reach the DOM.
+ */
+export function setAppearance(appearance: Appearance): Promise<Settings> {
+  return invoke<Settings>("set_appearance", { appearance });
+}
+
+/**
  * A looked-up portrait for an artist, as a data URI.
  *
  * Keyed by name: any track by that artist will do, so the first one carrying a
@@ -570,7 +402,6 @@ export function setMetadataLookup(enabled: boolean): Promise<Settings> {
 
 // --- Sync with another device on the same network (SYNC-001 to SYNC-005) ----
 
-export type DeviceKind = "desktop" | "phone" | "tablet" | "unknown";
 
 /** A device seen on the network. */
 export interface SyncPeer {
@@ -582,40 +413,8 @@ export interface SyncPeer {
   lastSeen: number;
 }
 
-/** A device this one has agreed to sync with. */
-export interface TrustedDevice {
-  id: string;
-  name: string;
-  kind: DeviceKind;
-  pairedAt: number;
-}
 
-export interface SyncProgress {
-  running: boolean;
-  peer: string;
-  /** What is moving right now. */
-  file: string;
-  done: number;
-  total: number;
-  bytes: number;
-  /** Seconds since it started — the rate is divided here, not pushed stale. */
-  elapsed: number;
-  error: string;
-}
 
-export interface SyncView {
-  /** Whether local sync is switched on at all. Off is the shipped default. */
-  enabled: boolean;
-  deviceId: string;
-  deviceName: string;
-  /** On the network, paired or not. */
-  discovered: SyncPeer[];
-  trusted: TrustedDevice[];
-  /** The code this device is showing, if it is showing one. */
-  pin: string | null;
-  pairingWith: string | null;
-  progress: SyncProgress;
-}
 
 /** What may move. Both default to true. */
 export interface SyncWhat {
@@ -671,20 +470,6 @@ export function syncWith(peerId: string, what?: SyncWhat): Promise<void> {
   return invoke<void>("sync_with", { peerId, what: what ?? null });
 }
 
-/** What a round trip to the shared document on the server changed. */
-export interface SharedSyncResult {
-  playlistsAdded: number;
-  playlistsExtended: number;
-  foldersAdded: number;
-  temposAdded: number;
-  /** Removed here because another device removed them (TD-57). A deletion is
-   *  the one edit an additive merge cannot carry, so it travels as a record of
-   *  its own and is applied on arrival. */
-  playlistsDeleted: number;
-  foldersDeleted: number;
-  /** True when there was none there and this device wrote the first. */
-  created: boolean;
-}
 
 /**
  * Pull the shared document from the server, merge it in, and push it back.
@@ -699,45 +484,11 @@ export function syncSharedDocument(): Promise<SharedSyncResult> {
 
 // --- Dynamic groups -----------------------------------------------------------
 
-/**
- * What a dynamic group can hold.
- *
- * Entities, not tracks. That is what makes a group different from a playlist:
- * membership is resolved against the library whenever it is read, so a record
- * added later belongs without anyone maintaining a list. A track dropped on a
- * group is refused for the same reason — it is not one of these.
- */
-export type EntityType = "artist" | "album" | "genre";
 
-export interface Entity {
-  entityType: EntityType;
-  value: string;
-}
 
-export interface DynamicGroup {
-  id: string;
-  name: string;
-  entities: Entity[];
-}
 
 // --- Downloads --------------------------------------------------------------
 
-/**
- * Keeping a track, as opposed to happening to have one.
- *
- * Everything else in the audio cache is there because something needed to read
- * it once and is dropped when the set moves past it. These are the tracks you
- * asked for: they live outside the evicted directory and stay until removed.
- */
-export interface DownloadProgress {
-  done: number;
-  total: number;
-  /** What is being fetched now. Empty when finished. */
-  title: string;
-  finished: boolean;
-  /** Why it stopped early, if it did. */
-  error: string;
-}
 
 export type Collection = "playlist" | "group";
 
@@ -766,11 +517,6 @@ export function removeDownload(
 }
 
 /** How many files are second-or-later copies of a recording. */
-/** How much of the library has been looked up, and how much there is. */
-export interface LookupCounts {
-  fetched: number;
-  total: number;
-}
 
 /**
  * Tracks that have been asked about, against the library size.
@@ -973,27 +719,9 @@ export function setVolume(volume: number): Promise<void> {
 // Queue
 // ---------------------------------------------------------------------------
 
-export interface QueueEntry {
-  href: string;
-  title: string;
-  artist: string;
-  /** 0 when unknown — not "0 BPM". */
-  bpm: number;
-  key: string;
-  current: boolean;
-}
 
 export type RepeatMode = "off" | "all" | "one";
 
-export interface QueueView {
-  entries: QueueEntry[];
-  repeat: RepeatMode;
-  shuffled: boolean;
-  current: number | null;
-  /** Seconds still to come. Unanalysed tracks contribute nothing rather than
-   *  a guess, so this is a floor, not an estimate. */
-  remainingSecs: number;
-}
 
 export function queueView(): Promise<QueueView> {
   return invoke<QueueView>("queue_view");
@@ -1029,13 +757,6 @@ export function setShuffled(shuffled: boolean): Promise<boolean> {
 // Vibe DJ
 // ---------------------------------------------------------------------------
 
-export interface VibePath {
-  hrefs: string[];
-  /** Library tracks eligible to be planned with — analysed, with a tempo. */
-  considered: number;
-  /** How many were passed over for want of analysis. */
-  skipped: number;
-}
 
 /**
  * Order the library along an energy and tempo curve, starting from one track.
@@ -1048,24 +769,6 @@ export function vibePath(start: string, curve: Curve): Promise<VibePath> {
   return invoke<VibePath>("vibe_path", { start, curve });
 }
 
-export interface BlendPreview {
-  fromTitle: string;
-  toTitle: string;
-  fromBpm: number;
-  toBpm: number;
-  fromKey: string;
-  toKey: string;
-  /** Tempo stretch the incoming deck takes, as a percentage. */
-  shiftPercent: number;
-  /** Loudness difference in LU. */
-  gainDelta: number;
-  /** Whether the engine would actually accept this as a beat-matched mix. */
-  matchable: boolean;
-  /** Why not, when it would not. */
-  reason: string;
-  /** Which of the three mixes this pair would get (TD-27). */
-  transition: string;
-}
 
 /** Describe the mix between what is playing and what is next, or null when
  *  there is no pair to describe. */
@@ -1077,36 +780,6 @@ export function blendPreview(): Promise<BlendPreview | null> {
 // Liner notes
 // ---------------------------------------------------------------------------
 
-export interface TrackDetails {
-  href: string;
-  title: string;
-  artist: string;
-  album: string;
-  year: number;
-  genre: string;
-  /** False until analysed — show that rather than a column of zeroes. */
-  analysed: boolean;
-  bpm: number;
-  bpmIsManual: boolean;
-  key: string;
-  lufs: number;
-  duration: number;
-  cueIn: number;
-  cueOut: number;
-  energy: number;
-  beats: number;
-  waveform: number[];
-  hrefPath: string;
-  cached: boolean;
-  /** Why this track cannot be played, when it cannot (TD-12). */
-  unplayable: string | null;
-  cover: string | null;
-  /** The file's own comment field — the nearest thing to sleeve notes a file
-   *  actually carries. */
-  notes: string | null;
-  /** True when any of this came from tags rather than the path. */
-  tagged: boolean;
-}
 
 export function trackDetails(href: string): Promise<TrackDetails> {
   return invoke<TrackDetails>("track_details", { href });
@@ -1116,21 +789,7 @@ export function trackDetails(href: string): Promise<TrackDetails> {
 // Search
 // ---------------------------------------------------------------------------
 
-export interface Facet {
-  label: string;
-  count: number;
-}
 
-export interface SearchResults {
-  /** The single best row, shown larger. Excluded from `tracks`. */
-  top: Row | null;
-  tracks: Row[];
-  artists: Facet[];
-  albums: Facet[];
-  playlists: Playlist[];
-  /** Total matches before truncation. */
-  total: number;
-}
 
 export function search(query: string): Promise<SearchResults> {
   return invoke<SearchResults>("search", { query });
@@ -1140,37 +799,7 @@ export function search(query: string): Promise<SearchResults> {
 // Connecting a library
 // ---------------------------------------------------------------------------
 
-export interface ScanReport {
-  tracks: number;
-  /** Directories visited, so a slow scan reports progress honestly. */
-  directories: number;
-  /**
-   * Folders the scan could not read and walked past.
-   *
-   * Reported rather than swallowed: a scan that skipped half a library still
-   * says "found 40 tracks", and that is indistinguishable from a library with
-   * 40 tracks in it.
-   */
-  unreadable: number;
-}
 
-export interface AnalysisStatus {
-  analysed: number;
-  total: number;
-  /**
-   * Whether a pass is running right now, whoever started it.
-   *
-   * Analysis begins by itself after a scan, so "did someone press Analyse" is
-   * no longer the same question as "is it running" — and the screen used to
-   * answer the second by checking the first, which left an automatic pass
-   * invisible.
-   */
-  running: boolean;
-  /** The track it is on. Empty between tracks and when nothing is running. */
-  current: string;
-  /** Why the last pass ended early, if it did. Empty otherwise. */
-  stoppedBecause: string;
-}
 
 export interface Analysis {
   bpm: number;
@@ -1222,14 +851,6 @@ export interface BpmRetrack {
   error: string | null;
 }
 
-export interface CacheStatus {
-  bytes: number;
-  maxBytes: number;
-  /** How many of the library's tracks are actually on the device. */
-  tracksCached: number;
-  tracksTotal: number;
-  location: string;
-}
 
 /**
  * Point the app at a server. Returns the settings as stored.
@@ -1294,13 +915,6 @@ export function dataLocation(): Promise<string> {
   return invoke<string>("data_location");
 }
 
-export interface DataRow {
-  label: string;
-  path: string;
-  bytes: number;
-  /** False for anything on the server rather than this device. */
-  local: boolean;
-}
 
 /** Itemise what is stored, so the sovereignty claim can be checked rather than
  *  taken on trust. */

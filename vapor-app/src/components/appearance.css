@@ -1,0 +1,90 @@
+/*
+ * The appearance control.
+ *
+ * A segmented control rather than three rows: the choices are exclusive and
+ * they are compared against each other, which is what a segment says and a
+ * list of switches does not.
+ */
+
+.appearance {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.appearance__segments {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--r-lg);
+  background: var(--fill-quiet);
+}
+
+.appearance__segment {
+  flex: 1;
+  /* The smallest target a thumb hits reliably, and the row height the design
+     uses for this control. */
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.appearance__segment:hover:not(.appearance__segment--on) {
+  background: var(--fill-quiet);
+  color: var(--ink);
+}
+
+.appearance__segment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* An accent tint, not "more light": on paper brighter reads as nearer, and on
+   Lamplight's umber it reads as a smudge. The tint means the same in both. */
+.appearance__segment--on {
+  background: rgba(var(--accent-rgb), 0.16);
+  border-color: rgba(var(--accent-rgb), 0.36);
+  color: var(--ink);
+  font-weight: var(--fw-semibold);
+}
+
+/* Each theme's own ground, in miniature. Ringed because warm paper on warm
+   paper is not a swatch. */
+.appearance__swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--edge-strong);
+}
+
+.appearance__swatch--daylight {
+  background: var(--swatch-daylight);
+}
+
+.appearance__swatch--lamplight {
+  background: var(--swatch-lamplight);
+}
+
+.appearance__hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--ink-2);
+}

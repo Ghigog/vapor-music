@@ -27,14 +27,6 @@ const CACHE_SIZES = [
   128 * 1024 ** 3,
 ];
 
-/** The design's list, verbatim. Every line is a claim the code keeps. */
-const NEVERS = [
-  "Send a listening log anywhere — there is no endpoint to send it to.",
-  "Ask for an email, a password, or a subscription.",
-  "Hold your library hostage in a format only Vapor can read.",
-  "Load a single analytics or advertising SDK.",
-];
-
 /** A class-safe name for a row, so each slice can carry its own colour. */
 function slug(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -46,37 +38,7 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
   const [location, setLocation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  /** Progress of the library identification pass, or null before one runs. */
-  const [identify, setIdentify] = useState<core.IdentifyProgress | null>(null);
 
-  // Reported per track by the backend rather than polled: the pass is minutes
-  // long and already emits an event for exactly this.
-  useEffect(() => {
-    const unlisten = listen<core.IdentifyProgress>("identify-progress", (e) => {
-      setIdentify(e.payload);
-    });
-    return () => {
-      void unlisten.then((f) => f());
-    };
-  }, []);
-
-  async function startIdentify() {
-    setError(null);
-    setIdentify({
-      done: 0,
-      total: 0,
-      title: "starting",
-      corrected: 0,
-      genres: 0,
-      finished: false,
-    });
-    try {
-      await core.identifyLibrary();
-    } catch (e: unknown) {
-      setError(messageOf(e));
-      setIdentify(null);
-    }
-  }
 
   const refresh = useCallback(async () => {
     const [r, c, l] = await Promise.allSettled([
@@ -205,6 +167,26 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
                 <span className="data__row-path numeric" title={row.path}>
                   {row.path}
                 </span>
+                {/*
+                  The row's own share, drawn in its own colour.
+
+                  The stacked bar above answers "what is taking the space" only
+                  if you can tell its segments apart, and on this library one
+                  segment is almost the whole width — so every other category is
+                  a sliver with no readable size. A bar per row gives each one a
+                  full width to be small against, and keeps the colour so the
+                  eye can match a row to its piece of the total.
+                */}
+                {row.local && localBytes > 0 && (
+                  <span className="data__row-bar" aria-hidden="true">
+                    <span
+                      className={`data__row-bar-fill data__split-part--${slug(row.label)}`}
+                      style={{
+                        width: `${Math.max((row.bytes / localBytes) * 100, row.bytes > 0 ? 1 : 0)}%`,
+                      }}
+                    />
+                  </span>
+                )}
               </span>
               <span className="data__row-size numeric">
                 {/* The library on the server is not measured — asking a WebDAV
@@ -216,6 +198,13 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
           ))}
         </ul>
 
+        {/*
+          Every action on this data, together.
+
+          Emptying the cache lived on a second card about held audio, and
+          deleting everything on a third about deletion — so three cards each
+          owned a verb and none of them owned the nouns, which are all here.
+        */}
         <div className="data__actions">
           <button
             className="data__button"
@@ -225,49 +214,18 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
           >
             Open folder
           </button>
-        </div>
-
-        <p className="data__note">
-          Metadata lives in plain JSON. Open it in any text editor — no export
-          tool, no lock-in.
-        </p>
-      </section>
-
-      {cache && (
-        <section className="data__card glass">
-          <div className="data__summary">
-            {/* "Held" rather than "cached": this counts tracks whose *audio*
-                is on the device, which is a different question from how many
-                have been listened to and described. During an analysis pass the
-                two are far apart — the fetchers run ahead of the listening — and
-                two bare numbers on two cards invite the reader to pick one and
-                assume the other is wrong. */}
-            <h2 className="label">audio held on this device</h2>
-            <span className="data__total numeric">
-              {cache.tracksCached.toLocaleString()} of{" "}
-              {cache.tracksTotal.toLocaleString()} tracks
-            </span>
-          </div>
-          <div className="data__meter">
-            <div
-              className="data__meter-fill"
-              style={{
-                width: `${Math.min((cache.bytes / Math.max(cache.maxBytes, 1)) * 100, 100)}%`,
-              }}
-            />
-          </div>
-          <p className="data__note">
-            {bytes(cache.bytes)} of {bytes(cache.maxBytes)} used. Audio is
-            fetched as it is needed and the oldest is dropped first — the
-            analysis is kept, because it is small and expensive and the audio is
-            large and cheap to fetch again.
-          </p>
-
-          <label className="data__field">
-            <span className="label">ceiling</span>
+          {/* Distinct from deleting everything: audio is the only re-fetchable
+              part of the directory and the only part that gets large, so
+              reclaiming space should not also cost the analysis. */}
+          {/* The cap on cached audio, beside the number it caps. It had a card
+              of its own — "audio held on this device" — reporting bytes the
+              storage list above already reports, so only this survived it. */}
+          <label className="data__field data__field--inline">
+            <span className="label">keep at most</span>
             <select
               className="data__select"
-              value={String(cache.maxBytes)}
+              value={String(cache?.maxBytes ?? 0)}
+              disabled={!cache}
               onChange={(e) => {
                 void core
                   .setCacheMaxBytes(Number(e.target.value))
@@ -282,85 +240,36 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
               ))}
             </select>
           </label>
-
-          <div className="data__actions">
-            {/* Distinct from "delete everything": this is the only re-fetchable
-                part of the directory and the only part that gets large, so
-                reclaiming space should not also cost the analysis. */}
-            <button
-              className="data__button"
-              disabled={cache.bytes === 0}
-              onClick={() => {
-                void core
-                  .clearAudioCache()
-                  .then(async (freed) => {
-                    // Read the cache back before saying anything about it.
-                    // "Freed 2.1 GB" is the command's own account of what it
-                    // did; whether the cache is actually empty afterwards is a
-                    // different question, and it is the one being answered on
-                    // screen.
-                    const after = await core.cacheStatus();
-                    await refresh();
-                    setNote(
-                      after.bytes === 0
-                        ? `Freed ${bytes(freed)}. Tracks are fetched again as they are played.`
-                        : `Freed ${bytes(freed)}, but ${bytes(after.bytes)} is still cached — ` +
-                          `something is holding files open. Try again once playback has stopped.`,
-                    );
-                  })
-                  .catch((err: unknown) => setError(messageOf(err)));
-              }}
-            >
-              Clear cached audio
-            </button>
-          </div>
-        </section>
-      )}
-
-      <section className="data__card glass">
-        <h2 className="label">identify the library</h2>
-        <p className="data__note">
-          Vapor works out tempo, key and loudness from the audio on this device.
-          The one thing it cannot work out is whether a track you hear at 174
-          was measured as 87 — both readings describe the same pulse, and only a
-          second opinion can say which one a listener counts.
-        </p>
-        <p className="data__note data__note--warn">
-          This sends the artist and title of <strong>every track</strong> to
-          Deezer. It is the largest thing Vapor ever discloses, and nothing else
-          in the app does it.
-        </p>
-        {identify ? (
-          <p className="data__note">
-            {identify.finished
-              ? `Done. ${identify.corrected} tempo${identify.corrected === 1 ? "" : "s"} corrected, ${identify.genres} genre${identify.genres === 1 ? "" : "s"} found.`
-              : `${identify.done} of ${identify.total} — ${identify.title}`}
-          </p>
-        ) : null}
-        <button
-          className="data__button"
-          onClick={() => void startIdentify()}
-          disabled={identify !== null && !identify.finished}
-        >
-          {identify !== null && !identify.finished
-            ? "Identifying…"
-            : "Identify my library"}
-        </button>
+          <button
+            className="data__button"
+            disabled={!cache || cache.bytes === 0}
+            onClick={() => {
+              setNote(null);
+              void core
+                .clearAudioCache()
+                .then(async (freed) => {
+                  await refresh();
+                  // Read back what is actually gone rather than assume: the
+                  // delete button on this screen was changed for the same
+                  // reason — a button whose outcome nobody checks is one that
+                  // can half-work in silence.
+                  const after = await core.cacheStatus();
+                  setNote(
+                    after.bytes === 0
+                      ? `Freed ${bytes(freed)}. Audio is fetched again as you play.`
+                      : `Freed ${bytes(freed)}, and ${bytes(after.bytes)} is still held.`,
+                  );
+                })
+                .catch((e: unknown) => setError(messageOf(e)));
+            }}
+          >
+            Empty cache
+          </button>
+        </div>
       </section>
 
-      <section className="data__card glass">
-        <h2 className="label">what Vapor never does</h2>
-        <ul className="data__nevers">
-          {NEVERS.map((line) => (
-            <li key={line} className="data__never">
-              <span className="data__never-mark sovereign" aria-hidden="true">
-                ✓
-              </span>
-              <span>{line}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+
+
 
       <section className="data__card glass">
         <h2 className="label">delete</h2>

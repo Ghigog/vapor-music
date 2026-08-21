@@ -70,7 +70,7 @@ export function NowPlaying() {
   if (nothing) {
     return (
       <div className="np np--empty">
-        <VaporMark size={120} theme="light" state="idle" />
+        <VaporMark size={120} state="idle" />
         <p className="np__empty-title">Nothing playing</p>
         <p className="np__empty-body">
           Pick something from Songs, and it will appear here.
@@ -202,7 +202,7 @@ export function NowPlaying() {
           {nextArt ? (
             <img src={nextArt} alt="" />
           ) : (
-            <VaporMark size={42} theme="light" state={markState} energy={level} />
+            <VaporMark size={42} state={markState} energy={level} />
           )}
         </span>
         <div className="np__next-text">

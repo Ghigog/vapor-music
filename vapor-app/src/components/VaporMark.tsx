@@ -28,6 +28,7 @@
  */
 import { useEffect, useRef } from "react";
 import markDef from "../lib/mark.json";
+import { useTheme } from "../lib/theme";
 
 export type MarkState = "idle" | "playing" | "blending" | "thinking";
 
@@ -59,6 +60,15 @@ export const LOGO_POSE: number = markDef.pose;
 
 export interface VaporMarkProps {
   size?: number;
+  /**
+   * The ground the mark is drawn against.
+   *
+   * Omitted — which is every call site in the app — it follows the theme. The
+   * mark is a canvas, so it cannot read `tokens.css` the way everything else
+   * does; it has to be handed the answer. This was pinned to `"light"`
+   * everywhere while a dark mode existed, so under it the one thing on screen
+   * that draws its own background kept drawing a bright one.
+   */
   theme?: "light" | "dark";
   state?: MarkState;
   /** 0–1 amplitude drive, used while playing. */
@@ -107,7 +117,7 @@ export interface VaporMarkProps {
 
 export function VaporMark({
   size = 160,
-  theme = "light",
+  theme,
   state = "idle",
   energy,
   brightness,
@@ -124,6 +134,8 @@ export function VaporMark({
   hue = MARK.hue,
 }: VaporMarkProps) {
   const ref = useRef<HTMLElement>(null);
+  const active = useTheme();
+  const ground = theme ?? (active === "lamplight" ? "dark" : "light");
 
   // Attributes are set imperatively rather than via JSX props: the element
   // observes attributes, and React would otherwise serialise unknown props
@@ -132,7 +144,7 @@ export function VaporMark({
     const el = ref.current;
     if (!el) return;
     el.setAttribute("size", String(size));
-    el.setAttribute("theme", theme);
+    el.setAttribute("theme", ground);
     el.setAttribute("state", state);
     el.setAttribute("turns", String(turns));
     el.setAttribute("ribbon", String(ribbon));
@@ -159,7 +171,7 @@ export function VaporMark({
     else el.removeAttribute("static");
   }, [
     size,
-    theme,
+    ground,
     state,
     energy,
     brightness,

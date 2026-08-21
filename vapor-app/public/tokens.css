@@ -1,31 +1,53 @@
 /**
- * Vapor Music — Daylight design tokens.
+ * Vapor Music design tokens.
  *
- * Extracted from `Vapor Music v2 - Daylight.dc.html`, which is the source of
- * truth for the visual design. Values here are transcribed, not invented; when
- * the design changes, re-extract rather than hand-editing both.
+ * Two themes, one identity:
  *
- * The design's thesis, worth stating because it constrains everything below:
- * every other music app is dark and says "stay in here with us". Daylight says
- * the opposite — warm paper, sky at the horizon, and exactly one green that
- * means one thing: this is on your device and it is yours.
+ * - **Daylight**, extracted from `Vapor Music v2 - Daylight.dc.html` — warm
+ *   paper, sky at the horizon, and exactly one green that means "this is on
+ *   your device and it is yours".
+ * - **Lamplight**, extracted from `Vapor Music v3 - Lamplight.dc.html` — the
+ *   same room after dark. Not the lights off, the lamp on: a low-chroma umber
+ *   ground rather than the cool near-black the placeholder dark mode used.
+ *
+ * Values here are transcribed, not invented; when a design changes, re-extract
+ * rather than hand-editing both. Nothing outside this file may name a colour.
+ * That rule is what the placeholder dark mode broke — it swapped a dozen tokens
+ * while some sixty rules still said `rgba(255,255,255,0.6)` outright, so the
+ * surfaces stayed light and only the text went dark.
  */
 
 :root {
+  /* Native widgets — scrollbars, `<select>` menus, form controls — are drawn
+     by the OS and cannot read anything below. This is the one line that
+     reaches them, so it moves with the theme like everything else. */
+  color-scheme: light;
+
   /* ---- Brand ------------------------------------------------------- */
 
   /* Interactive accent. `-rgb` variants exist because the design composes
      translucent fills as rgba(var(--accent-rgb), a). */
   --accent: #007aff;
   --accent-rgb: 0, 122, 255;
+  /* The ground of a *filled* accent control, which is not always `--accent`:
+     in Lamplight the accent is lifted for legibility as text, and a fill at
+     that lightness cannot carry a label. See the dark block. */
+  --accent-fill: #007aff;
+  /* Its hover. */
   --accent-bright: #3396ff;
+  /* The accent as text on an accent-tinted chip. */
   --accent-dim: #0062d6;
+  /* What a label on `--accent-fill` is set in. */
+  --on-accent: #fff;
 
   /* Sovereignty green. Reserved: this colour means "local, yours, not
      leaving the device" and must never be used for ordinary emphasis. */
   --sov: #2e9e6b;
   --sov-rgb: 46, 158, 107;
   --sov-ink: #237a52;
+  /* The sovereignty line under the Library title — the same meaning stated
+     quietly, so it is a step back from `--sov-ink` rather than a second green. */
+  --sov-quiet: #5c8f76;
 
   /* Amber. The third of the three tag colours on the Vibe alternates, where
      it means "a genre switch" against the green of a match and the accent of
@@ -33,13 +55,33 @@
   --amber-rgb: 214, 158, 32;
   --amber-ink: #9a6a12;
 
-  /* Iridescence, used by the generative mark and blend states. */
+  /* Iridescence, used by the generative mark and blend states. Brand rather
+     than surface, so it is the one pair that does not move between themes. */
   --iri-a: #7b6ef6;
   --iri-b: #3dd6c8;
+
+  /* Each theme's ground in miniature, for the appearance control. These do not
+     move between themes either — they name the two themes, so a Lamplight
+     swatch that changed under Lamplight would be labelling nothing. */
+  --swatch-daylight: #e4d6c2;
+  --swatch-lamplight: #d68a4a;
+
+  /* Trouble. Not in either design file — neither draws an error — so these are
+     the smallest addition that keeps a failure legible on both grounds. The
+     wash and edge are their own tokens rather than a `--danger-rgb` triple
+     because the alpha has to move with the theme too: 8% of a dark red on
+     paper is a tint, and 8% of a light red on umber is nothing. */
+  --danger: #b3261e;
+  --danger-ink: #8c1d18;
+  --danger-wash: rgba(179, 38, 30, 0.08);
+  --danger-edge: rgba(179, 38, 30, 0.24);
 
   /* ---- Ink (text) --------------------------------------------------- */
   --ink: #14161a;
   --ink-2: #676c75;
+  /* Between `--ink-2` and `--ink-3`: the secondary line of a table row, where
+     the artist has to stay readable while the title stays dominant. */
+  --ink-soft: #7b8189;
   --ink-3: #9ba1aa;
   /* The same grey as a triple, for rules that need it at partial alpha. */
   --ink-3-rgb: 155, 161, 170;
@@ -54,6 +96,40 @@
   /* Inside a device frame. */
   --screen-gradient: linear-gradient(180deg, #dcebfa 0%, #eef2f2 38%, #f8f6f0 100%);
 
+  /* ---- Fills --------------------------------------------------------
+   *
+   * The four states a control can be in, named by what they mean rather than
+   * by their alpha. On paper they are all "white, a bit more white"; under the
+   * lamp they are three different things — a warm wash, a smoked-glass panel,
+   * and an accent tint for the one that is switched on — so a rule that hard
+   * codes the alpha can only be right in one theme.
+   * ------------------------------------------------------------------- */
+
+  /** Hover on a control that is otherwise transparent. */
+  --fill-quiet: rgba(255, 255, 255, 0.6);
+  /** A control that sits on the page in its own right: input, chip, button. */
+  --fill-raised: rgba(255, 255, 255, 0.75);
+  /** Its hover. */
+  --fill-raised-hover: #fff;
+  /** Selected: the nav item you are on, the tab that is open. */
+  --fill-on: rgba(255, 255, 255, 0.85);
+  /** Its label. On paper the fill carries the state on its own and the label
+      stays ink; on umber a 16% tint is quiet enough that the accent has to say
+      it too, which is what the Lamplight nav does. */
+  --ink-on: var(--ink);
+  /** Nearly opaque. Drop targets and the drag layer, which have to be
+      unmistakable while the pointer is somewhere else entirely. */
+  --fill-strong: rgba(255, 255, 255, 0.94);
+
+  /** A hairline between rows, drawn in the light rather than in ink. */
+  --hairline: rgba(255, 255, 255, 0.7);
+  /** The unfilled part of a bar: a progress track, a storage split. Recessed
+      rather than raised, so it reads as a channel the fill sits in. */
+  --track: rgba(0, 0, 0, 0.08);
+  /** A border on a control that sits on a light ground. */
+  --edge: rgba(0, 0, 0, 0.12);
+  --edge-strong: rgba(0, 0, 0, 0.22);
+
   /* ---- Glass -------------------------------------------------------- */
   /* Frutiger Aero, restrained. Real blur plus saturation, not a flat white
      overlay — the saturation boost is what stops it reading as fog. */
@@ -64,6 +140,30 @@
   --rim: 0.85;
   --glass-fill: rgba(255, 255, 255, var(--glass-a));
   --glass-rim: rgba(255, 255, 255, var(--rim));
+  /** The lit top edge of a glass panel, and the diagonal sheen across art. */
+  --specular: rgba(255, 255, 255, 0.3);
+  --sheen: rgba(255, 255, 255, 0.24);
+
+  /* ---- Artwork placeholders ----------------------------------------- */
+  /* Standing in for a cover that has not loaded, so they have to look like a
+     sleeve rather than like a missing image. */
+  --art-fill: linear-gradient(150deg, #cfe0f2 0%, #dfe3ea 55%, #efe9de 100%);
+  /* The large one, behind Now Playing and the queue's current track. */
+  --art-fill-deep: linear-gradient(150deg, #8fadf0, #3a58a8 52%, #16224a);
+  /** A caption laid over artwork, which is whatever colour the sleeve is. */
+  --scrim: rgba(20, 22, 26, 0.62);
+  --scrim-solid: rgba(20, 22, 26, 0.9);
+  /** The same toast when the thing it is reporting failed. */
+  --scrim-danger: rgba(150, 44, 44, 0.94);
+  --on-scrim: #fff;
+  /** Behind a sheet or modal: the app is still there, and still readable as
+      the place you will be returned to. */
+  --veil: rgba(20, 30, 48, 0.3);
+  /** A sleeve's own shadow. Its own token because it is a two-part shadow with
+      a geometry the elevation scale does not have — art sits close to the page
+      and casts a tight contact shadow as well as a soft one. */
+  --shadow-art:
+    0 10px 24px -8px rgba(38, 58, 104, 0.34), 0 1px 2px rgba(38, 58, 104, 0.14);
 
   /* ---- Radii -------------------------------------------------------- */
   --r-hair: 3px;   /* meters, bars, waveform columns */
@@ -120,56 +220,216 @@
 }
 
 /**
- * Dark theme.
+ * Lamplight — the dark theme.
  *
- * Daylight is the identity, so dark is a deliberate alternate rather than the
- * default. Only the surfaces and ink invert; brand hues are unchanged so the
- * sovereignty green keeps meaning the same thing in both.
+ * Transcribed from `Vapor Music v3 - Lamplight.dc.html`. Three things it does
+ * that the placeholder dark mode did not, each of which is measured in the
+ * design file rather than asserted:
+ *
+ * - **The ground is not black.** #17130F at the darkest. Pure black under
+ *   bright text is what makes glyphs bloom and smear, which is the eye strain
+ *   most dark modes actually cause.
+ * - **The ink is not white.** #F2E4D2 is 13.3:1 on the reference background,
+ *   already past AAA; the remaining distance to 21:1 buys nothing and costs
+ *   comfort.
+ * - **The warmth is a hue, not a filter.** Every surface is a low-chroma
+ *   umber — measurably warm beside a neutral grey, never brown enough to read
+ *   as sepia — while the one blue accent stays cool, because a room lit
+ *   entirely in one hue has no depth and no affordances.
+ *
+ * Contrast against #231D17, the reference background: ink 13.3:1, secondary
+ * 7.1:1, tertiary 4.9:1, accent 5.9:1, sovereignty green 7.1:1.
  */
-:root[data-theme="dark"] {
-  --ink: #f2f4f7;
-  --ink-2: #a8aeb8;
-  --ink-3: #767c86;
-  --ink-3-rgb: 118, 124, 134;
-  --ink-4: #6a707a;
+:root[data-theme="dark"],
+:root[data-theme="lamplight"] {
+  color-scheme: dark;
 
-  --page: #0f1115;
-  --page-rgb: 15, 17, 21;
-  --page-gradient: linear-gradient(180deg, #12161d 0%, #0f1115 40%, #131518 100%);
-  --screen-gradient: linear-gradient(180deg, #161b24 0%, #111419 45%, #14161a 100%);
+  /* ---- Brand ------------------------------------------------------- */
+  /* Apple blue, lightness lifted and chroma pulled back so it reads as an
+     affordance on umber rather than as a glowing hole in it. */
+  --accent: #5b9fd6;
+  --accent-rgb: 91, 159, 214;
+  /* The design's filled controls are a #3A79AE → #27608F gradient, and this is
+     its foot. `--accent` itself cannot be the fill here: it is lifted for
+     legibility *as text*, and a warm-white label on it is 2.4:1. On this it is
+     5.6:1 — better than Daylight manages. */
+  --accent-fill: #27608f;
+  --accent-bright: #3a79ae;
+  /* On a dark ground the recessive-but-still-legible direction is lighter, not
+     darker, so this is the one token that moves the opposite way. */
+  --accent-dim: #8ec1e9;
+  --on-accent: #f5e9da;
 
-  --glass-a: 0.10;
-  --rim: 0.16;
-  --glass-fill: rgba(255, 255, 255, var(--glass-a));
-  --glass-rim: rgba(255, 255, 255, var(--rim));
+  /* Warm-shifted moss. Same meaning, but it belongs to this room. */
+  --sov: #7fb77e;
+  --sov-rgb: 127, 183, 126;
+  --sov-ink: #9acb99;
+  --sov-quiet: #9acb99;
 
-  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 12px 28px -8px rgba(0, 0, 0, 0.55);
-  --shadow-lg: 0 46px 84px -26px rgba(0, 0, 0, 0.7);
+  --amber-rgb: 216, 164, 90;
+  --amber-ink: #d8a45a;
+
+  --danger: #e39086;
+  --danger-ink: #efb1a6;
+  --danger-wash: rgba(227, 144, 134, 0.12);
+  --danger-edge: rgba(227, 144, 134, 0.32);
+
+  /* ---- Ink --------------------------------------------------------- */
+  --ink: #f2e4d2;
+  --ink-2: #b8a794;
+  --ink-soft: #a6957f;
+  --ink-3: #99897a;
+  --ink-3-rgb: 153, 137, 122;
+  --ink-4: #8a7c6c;
+
+  /* ---- Surfaces ---------------------------------------------------- */
+  /* Void #17130F behind everything, Base #1C1712 for bars and rails,
+     Elevated #231D17 for cards and rows, Float #2B231B for anything that
+     leaves the surface. `--page` is Base, since that is what the shell is. */
+  --page: #1c1712;
+  --page-rgb: 28, 23, 18;
+
+  /*
+   * The lamp: one source, off-corner and above.
+   *
+   * The design blurs and slowly drifts this wash. Here it is a static pair of
+   * radials laid over the ground instead — a blur(34px) layer the size of the
+   * window is a full-viewport compositor pass on every frame, which is a real
+   * cost for an effect that is deliberately low-amplitude. The gradient stops
+   * do the same work standing still.
+   */
+  --page-gradient:
+    radial-gradient(56% 44% at 20% 0%, rgba(230, 158, 88, 0.17), transparent 70%),
+    radial-gradient(42% 32% at 88% 0%, rgba(214, 138, 74, 0.08), transparent 72%),
+    linear-gradient(180deg, #241c15 0%, #1b1610 46%, #17130f 100%);
+  --screen-gradient: linear-gradient(180deg, #241c15 0%, #1b1610 46%, #17130f 100%);
+
+  /* ---- Fills ------------------------------------------------------- */
+  --fill-quiet: rgba(255, 216, 170, 0.06);
+  --fill-raised: rgba(62, 47, 34, 0.5);
+  --fill-raised-hover: rgba(78, 60, 42, 0.66);
+  /* Selected is an accent tint rather than "more light". On paper, brighter
+     reads as nearer; on umber it reads as a smudge. */
+  --fill-on: rgba(91, 159, 214, 0.16);
+  --ink-on: var(--accent-dim);
+  /* Float, opaque: a drop target during a drag has to be certain. */
+  --fill-strong: #2b231b;
+
+  --hairline: rgba(255, 214, 170, 0.09);
+  --track: rgba(242, 228, 210, 0.16);
+  --edge: rgba(255, 216, 170, 0.13);
+  --edge-strong: rgba(255, 216, 170, 0.22);
+
+  /* ---- Glass ------------------------------------------------------- */
+  /* Smoked glass with a warm rim. The fill is umber at alpha rather than white
+     at alpha: white glass on a warm ground goes grey, and grey is the one
+     thing this palette is trying not to be. */
+  --glass-a: 0.5;
+  --rim: 0.13;
+  --glass-fill: rgba(62, 47, 34, var(--glass-a));
+  --glass-rim: rgba(255, 216, 170, var(--rim));
+  /* Top-left only, as in the design: one light source means one lit edge. */
+  --specular: rgba(255, 216, 170, 0.1);
+  --sheen: rgba(255, 224, 186, 0.16);
+
+  /* ---- Artwork placeholders ---------------------------------------- */
+  --art-fill: linear-gradient(140deg, #4a3a2a 0%, #3a2d20 55%, #2a2118 100%);
+  --art-fill-deep: linear-gradient(145deg, #8a5c31 0%, #5e3a22 44%, #2c2018 100%);
+  --scrim: rgba(9, 6, 4, 0.66);
+  --scrim-solid: rgba(43, 35, 27, 0.94);
+  --scrim-danger: rgba(110, 44, 38, 0.95);
+  --on-scrim: #f2e4d2;
+  --veil: rgba(9, 6, 4, 0.62);
+  --shadow-art:
+    0 10px 24px -8px rgba(0, 0, 0, 0.62), 0 1px 2px rgba(0, 0, 0, 0.34);
+
+  /* ---- Elevation --------------------------------------------------- */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.42);
+  --shadow-md: 0 12px 28px -8px rgba(0, 0, 0, 0.58);
+  --shadow-lg: 0 46px 84px -26px rgba(0, 0, 0, 0.72);
 }
 
-/* Honour the OS preference unless the app has set an explicit theme. */
+/**
+ * Follow the OS unless the app has been told otherwise.
+ *
+ * This is what shipped before there was a control, and it stays the default:
+ * `data-theme` is only ever present because someone chose Daylight or
+ * Lamplight in Settings. `@import` cannot take a media query and a custom
+ * property cannot be aliased to a whole block, so the dark values are repeated
+ * rather than referenced — the two blocks are checked against each other by
+ * `tokens.test.ts`, which is cheaper than the indirection would be.
+ */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ink: #f2f4f7;
-    --ink-2: #a8aeb8;
-    --ink-3: #767c86;
-    --ink-3-rgb: 118, 124, 134;
-    --ink-4: #6a707a;
+  :root:not([data-theme="light"]):not([data-theme="daylight"]) {
+    color-scheme: dark;
 
-    --page: #0f1115;
-    --page-rgb: 15, 17, 21;
-    --page-gradient: linear-gradient(180deg, #12161d 0%, #0f1115 40%, #131518 100%);
-    --screen-gradient: linear-gradient(180deg, #161b24 0%, #111419 45%, #14161a 100%);
+    --accent: #5b9fd6;
+    --accent-rgb: 91, 159, 214;
+    --accent-fill: #27608f;
+    --accent-bright: #3a79ae;
+    --accent-dim: #8ec1e9;
+    --on-accent: #f5e9da;
 
-    --glass-a: 0.10;
-    --rim: 0.16;
-    --glass-fill: rgba(255, 255, 255, var(--glass-a));
-    --glass-rim: rgba(255, 255, 255, var(--rim));
+    --sov: #7fb77e;
+    --sov-rgb: 127, 183, 126;
+    --sov-ink: #9acb99;
+    --sov-quiet: #9acb99;
 
-    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 12px 28px -8px rgba(0, 0, 0, 0.55);
-    --shadow-lg: 0 46px 84px -26px rgba(0, 0, 0, 0.7);
+    --amber-rgb: 216, 164, 90;
+    --amber-ink: #d8a45a;
+
+    --danger: #e39086;
+    --danger-ink: #efb1a6;
+    --danger-wash: rgba(227, 144, 134, 0.12);
+    --danger-edge: rgba(227, 144, 134, 0.32);
+
+    --ink: #f2e4d2;
+    --ink-2: #b8a794;
+    --ink-soft: #a6957f;
+    --ink-3: #99897a;
+    --ink-3-rgb: 153, 137, 122;
+    --ink-4: #8a7c6c;
+
+    --page: #1c1712;
+    --page-rgb: 28, 23, 18;
+    --page-gradient:
+      radial-gradient(56% 44% at 20% 0%, rgba(230, 158, 88, 0.17), transparent 70%),
+      radial-gradient(42% 32% at 88% 0%, rgba(214, 138, 74, 0.08), transparent 72%),
+      linear-gradient(180deg, #241c15 0%, #1b1610 46%, #17130f 100%);
+    --screen-gradient: linear-gradient(180deg, #241c15 0%, #1b1610 46%, #17130f 100%);
+
+    --fill-quiet: rgba(255, 216, 170, 0.06);
+    --fill-raised: rgba(62, 47, 34, 0.5);
+    --fill-raised-hover: rgba(78, 60, 42, 0.66);
+    --fill-on: rgba(91, 159, 214, 0.16);
+    --ink-on: var(--accent-dim);
+    --fill-strong: #2b231b;
+
+    --hairline: rgba(255, 214, 170, 0.09);
+    --track: rgba(242, 228, 210, 0.16);
+    --edge: rgba(255, 216, 170, 0.13);
+    --edge-strong: rgba(255, 216, 170, 0.22);
+
+    --glass-a: 0.5;
+    --rim: 0.13;
+    --glass-fill: rgba(62, 47, 34, var(--glass-a));
+    --glass-rim: rgba(255, 216, 170, var(--rim));
+    --specular: rgba(255, 216, 170, 0.1);
+    --sheen: rgba(255, 224, 186, 0.16);
+
+    --art-fill: linear-gradient(140deg, #4a3a2a 0%, #3a2d20 55%, #2a2118 100%);
+    --art-fill-deep: linear-gradient(145deg, #8a5c31 0%, #5e3a22 44%, #2c2018 100%);
+    --scrim: rgba(9, 6, 4, 0.66);
+    --scrim-solid: rgba(43, 35, 27, 0.94);
+    --scrim-danger: rgba(110, 44, 38, 0.95);
+    --on-scrim: #f2e4d2;
+    --veil: rgba(9, 6, 4, 0.62);
+    --shadow-art:
+      0 10px 24px -8px rgba(0, 0, 0, 0.62), 0 1px 2px rgba(0, 0, 0, 0.34);
+
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.42);
+    --shadow-md: 0 12px 28px -8px rgba(0, 0, 0, 0.58);
+    --shadow-lg: 0 46px 84px -26px rgba(0, 0, 0, 0.72);
   }
 }
 

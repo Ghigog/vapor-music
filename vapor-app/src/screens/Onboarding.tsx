@@ -28,7 +28,7 @@ export function Onboarding({ onConnect }: { onConnect: () => void }) {
       <div className="onboard__mark">
         {/* Idle, breathing. The mark only becomes a readout once there is
             something to read — see Now Playing. */}
-        <VaporMark size={132} theme="light" state="idle" />
+        <VaporMark size={132} state="idle" />
       </div>
 
       <h1 className="onboard__title">
