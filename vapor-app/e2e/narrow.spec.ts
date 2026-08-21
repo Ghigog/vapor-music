@@ -463,11 +463,17 @@ test.describe("Dragging with a finger", () => {
     await send(page, "pointermove", tab.x, tab.y);
     await expect(page.getByRole("dialog", { name: "Playlists" })).toBeVisible();
 
-    const item = await centreOf(page, '[data-drop-id="p1"]');
+    // Scoped to the menu. The sidebar rail carries the same `data-drop-id`
+    // now that it is a drop target too, and on a narrow window it is the one
+    // that is hidden — an unscoped selector finds it first and has no box.
+    const item = await centreOf(page, '.tabmenu [data-drop-id="p1"]');
     await send(page, "pointermove", item.x, item.y);
     await send(page, "pointerup", item.x, item.y);
 
-    await expect(page.getByText(/added 1 track/i)).toBeVisible();
+    // Named, not counted. A drop used to answer "Added 1 track", which does
+    // not say *where* — and on a phone the list closes behind it, so the name
+    // is the only confirmation you get that it landed on the one you meant.
+    await expect(page.getByText(/added 1 to night drive/i)).toBeVisible();
   });
 
   /**
@@ -488,7 +494,7 @@ test.describe("Dragging with a finger", () => {
     await send(page, "pointermove", tab.x, tab.y);
     await expect(page.getByRole("dialog", { name: "Dynamic groups" })).toBeVisible();
 
-    const item = await centreOf(page, '[data-drop-id="g1"]');
+    const item = await centreOf(page, '.tabmenu [data-drop-id="g1"]');
     await send(page, "pointermove", item.x, item.y);
     await send(page, "pointerup", item.x, item.y);
 

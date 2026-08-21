@@ -140,13 +140,10 @@ export function DragLayer({
         clearDwell();
       }
 
-      mark(
-        target?.kind === "item"
-          ? (document.querySelector<HTMLElement>(
-              `[data-drop-id="${CSS.escape(target.id)}"]`,
-            ) ?? null)
-          : null,
-      );
+      // The element `targetAt` actually found, not a fresh lookup by id: the
+      // rail and the tab menu draw the same playlist under the same id, and
+      // only one of them is on screen at a given width.
+      mark(target?.kind === "item" ? target.el : null);
 
       // Holding near the ends of an open list scrolls it, slowly, for as long
       // as the finger stays there.
@@ -183,7 +180,7 @@ export function DragLayer({
         return;
       }
       void drag
-        .dropOn(held, { menu: target.menu, id: target.id })
+        .dropOn(held, { menu: target.menu, id: target.id, name: target.name })
         .then((message) => {
           resultRef.current(message, true);
           closeMenuRef.current();
