@@ -276,7 +276,7 @@ impl Cancel {
 /// experience than a slower scan.
 pub fn run<F>(
     hrefs: &[String],
-    resolve: impl Fn(&str) -> Option<PathBuf>,
+    resolve: impl Fn(&str) -> Result<PathBuf, String>,
     cancel: &Cancel,
     mut on_progress: F,
 ) where
@@ -292,9 +292,26 @@ pub fn run<F>(
         // Resolved separately from analysed, because the two failures mean
         // opposite things: one is "come back later", the other is "this file
         // will never work".
+        //
+        // The resolver's own words for the first kind, rather than a phrase
+        // invented here. It is the only thing that knows *why* there are no
+        // bytes — the server had no file at that path, the credential was
+        // refused, the connection timed out, the disk was full — and
+        // "not available locally" threw every one of those away and told the
+        // person the single thing that is true of every track in a library
+        // that is streamed rather than kept.
         let (outcome, retryable) = match resolve(href) {
-            Some(path) => (analyse_file(&path), false),
-            None => (Err("not available locally".to_string()), true),
+            Ok(path) => (analyse_file(&path), false),
+            Err(reason) => {
+                // Stopping is not something wrong with the track. Recorded, it
+                // would put an attempt against whichever track was in flight
+                // when Stop was pressed, and a few presses would then label a
+                // perfectly good track as stuck.
+                if cancel.is_stopped() {
+                    return;
+                }
+                (Err(reason), true)
+            }
         };
 
         let (analysis, error) = match outcome {
@@ -359,7 +376,7 @@ mod tests {
         run(
             &hrefs,
             // Nothing resolves, so every track fails.
-            |_| None,
+            |_| Err("no file at this path on the server".to_string()),
             &Cancel::new(),
             |p| seen.push((p.href, p.error.is_some())),
         );
@@ -394,7 +411,7 @@ mod tests {
         let mut seen = Vec::new();
         run(
             &["/absent.mp3".to_string()],
-            |_| None,
+            |_| Err("no file at this path on the server".to_string()),
             &Cancel::new(),
             |p| seen.push(p.retryable),
         );
@@ -405,11 +422,52 @@ mod tests {
         let mut seen = Vec::new();
         run(
             &["/broken.mp3".to_string()],
-            |_| Some(PathBuf::from("/nonexistent/vapor-broken-fixture.mp3")),
+            |_| Ok(PathBuf::from("/nonexistent/vapor-broken-fixture.mp3")),
             &Cancel::new(),
             |p| seen.push(p.retryable),
         );
         assert_eq!(seen, vec![false], "an unreadable file was marked retryable");
+    }
+
+    /// The reason reaches the screen unchanged.
+    ///
+    /// The whole point of the resolver returning a `Result` is that the words
+    /// naming what the server said survive the trip. A `run` that summarised
+    /// them back into one phrase would pass every other test here.
+    #[test]
+    fn the_resolvers_reason_is_what_gets_reported() {
+        let mut seen = Vec::new();
+        run(
+            &["/gone.mp3".to_string()],
+            |_| Err("no file at this path on the server".to_string()),
+            &Cancel::new(),
+            |p| seen.push(p.error.clone()),
+        );
+        assert_eq!(
+            seen,
+            vec![Some("no file at this path on the server".to_string())]
+        );
+    }
+
+    /// Pressing Stop must not leave a mark on the track it interrupted.
+    ///
+    /// The resolver fails when a pass is cancelled mid-download, and recording
+    /// that as an attempt would count Stop against the track rather than
+    /// against the pass — enough of them and a good track reads as stuck.
+    #[test]
+    fn cancelling_does_not_record_the_track_it_interrupted() {
+        let cancel = Cancel::new();
+        let mut seen = Vec::new();
+        run(
+            &["/a.mp3".to_string(), "/b.mp3".to_string()],
+            |_| {
+                cancel.stop();
+                Err("stopped".to_string())
+            },
+            &cancel,
+            |p| seen.push(p.href.clone()),
+        );
+        assert!(seen.is_empty(), "a cancelled track was recorded: {seen:?}");
     }
 
     #[test]
@@ -419,7 +477,7 @@ mod tests {
 
         run(
             &hrefs,
-            |_| None,
+            |_| Err("no file at this path on the server".to_string()),
             &Cancel::new(),
             |p| {
                 last = Some((p.done, p.total));
@@ -439,7 +497,7 @@ mod tests {
 
         run(
             &hrefs,
-            |_| None,
+            |_| Err("no file at this path on the server".to_string()),
             &cancel,
             |_| {
                 count += 1;

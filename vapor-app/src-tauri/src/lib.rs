@@ -44,8 +44,8 @@ use std::sync::{Arc, Mutex};
 use store::Store;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use tauri::{Manager, State};
+use ts_rs::TS;
 
 use vapor_engine::TrackSource;
 use vapor_library::{
@@ -109,6 +109,14 @@ struct AppState {
     /// `None` is the library itself, which is both the default and what
     /// playing from an unfiltered list means.
     scope: Option<Scope>,
+    /// The store key of the playlist or group the set was started from.
+    ///
+    /// Beside `scope` rather than inside it, and for the same span: everything
+    /// that plays out of one press of a playlist is listening to that
+    /// playlist, including the tracks the DJ appended, because that is what
+    /// putting a playlist on means. `None` for a set started from anywhere
+    /// else — an album tile, the Songs table, the queue.
+    collection: Option<String>,
     /// The library table's rows, rebuilt on scan.
     rows: Vec<Row>,
     /// Analysis results, keyed by href. Persisted so a library is analysed
@@ -128,6 +136,36 @@ struct AppState {
     /// cannot be a JSON object key, so the pair is joined by a unit separator —
     /// a character no href contains.
     skips: std::collections::HashMap<String, f32>,
+    /// How often each track has been listened to, and when it last was.
+    ///
+    /// Persisted. The whole value of a play count is that it accumulates
+    /// across launches — a "most played" shelf rebuilt from this session
+    /// would be empty every morning.
+    ///
+    /// Keyed by href, and credited by the supervisor rather than by
+    /// [`begin_playback`]: see [`CREDIT_AFTER`]. Starting a track is not
+    /// listening to it, and counting at the start means someone hunting for a
+    /// record through twenty tiles has just told the app those are their
+    /// twenty favourites.
+    plays: std::collections::HashMap<String, Play>,
+    /// The same, for a playlist or a dynamic group that was played from.
+    ///
+    /// Keyed `"playlist:<id>"` or `"group:<id>"` — see [`collection_key`] —
+    /// because one map with a prefixed key is one file and one load, and the
+    /// two are ranked side by side on the home screen anyway.
+    ///
+    /// The unit is *tracks listened to from it*, not "times you pressed play
+    /// on it". A playlist someone puts on for three hours and one they bounce
+    /// off after a track should not score the same, and pressing play counts
+    /// them equal.
+    collection_plays: std::collections::HashMap<String, Play>,
+    /// The track currently earning its play, and where it was played from.
+    ///
+    /// Set by [`begin_playback`] and cleared by the supervisor once the credit
+    /// is given, so a track that is paused, resumed and finished is counted
+    /// once. Not persisted: a play interrupted by quitting the app is a play
+    /// that did not happen.
+    crediting: Option<Crediting>,
     /// Embedded tags and artwork, keyed by href (TD-39).
     ///
     /// Persisted beside the analysis and for the same reason: reading them
@@ -141,6 +179,20 @@ struct AppState {
     /// alternative is downloading a broken file again to rediscover it. Only
     /// permanent failures land here — "not downloaded yet" is not one.
     failures: std::collections::HashMap<String, String>,
+    /// The other kind: what went wrong for a track the pass means to try again.
+    ///
+    /// Retryable errors used to be discarded outright — the arm that records a
+    /// failure ran only `if !progress.retryable`. That is fine for the track
+    /// that simply had not downloaded yet, and wrong for one that fails the
+    /// same retryable way on every pass: it is never described, never
+    /// condemned, and so never counted as done, and the Settings card sits at
+    /// "556 of 563" for ever with nothing on screen saying which seven or why.
+    ///
+    /// Kept apart from `failures` rather than merged into it because the two
+    /// mean different things to [`analysis_counts`]: a permanent failure is
+    /// done, and this is outstanding work. Counting these as done would hide
+    /// exactly the tracks this exists to surface.
+    stalls: std::collections::HashMap<String, Stall>,
     /// Cancels a running analysis pass.
     cancel: analysis::Cancel,
     /// Which pass is current. A replaced pass finishes some time after the one
@@ -300,6 +352,7 @@ impl AppState {
         let device_id: String = quarantined!("device_id").unwrap_or_else(|| new_id("device"));
         let analysis = quarantined!("analysis").unwrap_or_default();
         let failures = quarantined!("failures").unwrap_or_default();
+        let stalls = quarantined!("stalls").unwrap_or_default();
         let mut tags: std::collections::HashMap<String, StoredTags> =
             quarantined!("tags").unwrap_or_default();
         let covers = covers::Covers::new(store.dir().join("covers"));
@@ -329,6 +382,8 @@ impl AppState {
             }
         }
         let skips = quarantined!("skips").unwrap_or_default();
+        let plays = quarantined!("plays").unwrap_or_default();
+        let collection_plays = quarantined!("collection_plays").unwrap_or_default();
         // The scanned index. Without this the library was rebuilt from the
         // server on every launch: the app opened on "0 tracks" and stayed
         // there until someone found Settings and pressed Scan — a walk of
@@ -355,14 +410,19 @@ impl AppState {
             queue: Queue::default(),
             offered: None,
             scope: None,
+            collection: None,
             rows,
             last_mix: None,
             last_mix_ended: None,
             analysis,
             skips,
+            plays,
+            collection_plays,
+            crediting: None,
             tags,
             covers,
             failures,
+            stalls,
             cancel: analysis::Cancel::new(),
             analysis_generation: 0,
             analysing: false,
@@ -430,6 +490,53 @@ impl AppState {
         Ok(())
     }
 
+    fn save_plays(&self) -> Result<()> {
+        self.store.save("plays", &self.plays)?;
+        Ok(())
+    }
+
+    fn save_collection_plays(&self) -> Result<()> {
+        self.store
+            .save("collection_plays", &self.collection_plays)?;
+        Ok(())
+    }
+
+    /// How many times the tracks in `hrefs` have been listened to, in total.
+    ///
+    /// The second half of how a collection is ranked. A playlist made this
+    /// morning out of records someone has worn out has no plays *of its own*
+    /// and should still not sit below one they have never opened, so when
+    /// direct plays cannot separate two shelves this does.
+    fn member_plays(&self, hrefs: impl IntoIterator<Item = impl AsRef<str>>) -> u32 {
+        hrefs
+            .into_iter()
+            .filter_map(|h| self.plays.get(h.as_ref()))
+            .map(|p| p.count)
+            .sum()
+    }
+
+    /// Credit a listen to a track, and to whatever it was played from.
+    ///
+    /// Both halves or neither: a collection's count means "tracks listened to
+    /// from it", so it moves exactly when a track's does.
+    fn credit_play(&mut self, href: &str, collection: Option<&str>) {
+        let at = unix_now();
+        let play = self.plays.entry(href.to_string()).or_default();
+        play.count = play.count.saturating_add(1);
+        play.last = at;
+        if let Err(e) = self.save_plays() {
+            eprintln!("play counts could not be saved: {e:?}");
+        }
+
+        let Some(key) = collection else { return };
+        let play = self.collection_plays.entry(key.to_string()).or_default();
+        play.count = play.count.saturating_add(1);
+        play.last = at;
+        if let Err(e) = self.save_collection_plays() {
+            eprintln!("collection play counts could not be saved: {e:?}");
+        }
+    }
+
     /// Record a file's tags, sending its artwork to disk.
     ///
     /// The one way in. Artwork must not enter `self.tags`: that map is
@@ -452,6 +559,11 @@ impl AppState {
 
     fn save_failures(&self) -> Result<()> {
         self.store.save("failures", &self.failures)?;
+        Ok(())
+    }
+
+    fn save_stalls(&self) -> Result<()> {
+        self.store.save("stalls", &self.stalls)?;
         Ok(())
     }
 
@@ -544,9 +656,24 @@ impl AppState {
 
     /// What this device calls itself on the network.
     ///
-    /// The folder name of the library, or a plain fallback. **Not** the
-    /// hostname: on a personal machine that is usually the owner's name, and
-    /// this is broadcast in clear to everyone on the café Wi-Fi.
+    /// `<this machine> · Vapor`, falling back to the library folder and then to
+    /// a bare `Vapor`.
+    ///
+    /// ## Why the machine name is here now
+    ///
+    /// It used to be deliberately absent, on the grounds that a hostname is
+    /// usually the owner's name and this string is broadcast in clear to
+    /// everyone on the network. The folder name stood in for it — except the
+    /// folder is `Music` on a default install, which took the fallback, so
+    /// **every device announced itself as "Vapor"**. Two of them in one list is
+    /// two identical rows and no way to tell which is the phone.
+    ///
+    /// A name nobody can tell apart fails the one job the name has, so the
+    /// trade has been made the other way. It is worth knowing it *is* a trade:
+    /// on a Mac this is the Sharing name, which is often "<Owner>'s MacBook",
+    /// and it goes out with every advert while sync is on. Two things bound it
+    /// — sync is off by default, and the beacon only runs on private
+    /// addresses ([`peers::is_local`]) — but neither makes it private.
     fn device_name(&self) -> String {
         let folder = self
             .settings
@@ -555,10 +682,13 @@ impl AppState {
             .rsplit('/')
             .find(|s| !s.is_empty())
             .unwrap_or("");
-        if folder.is_empty() || folder == "Music" {
-            "Vapor".to_string()
-        } else {
-            format!("Vapor · {folder}")
+
+        match (machine_name(), folder) {
+            (Some(machine), _) => format!("{machine} · Vapor"),
+            // No machine name to be had: the folder is still better than
+            // nothing, as long as it is not the one everybody has.
+            (None, f) if !f.is_empty() && f != "Music" => format!("Vapor · {f}"),
+            _ => "Vapor".to_string(),
         }
     }
 
@@ -661,6 +791,320 @@ impl<E: std::fmt::Display> From<E> for Error {
 type Result<T> = std::result::Result<T, Error>;
 
 // ---------------------------------------------------------------------------
+// Play counts
+// ---------------------------------------------------------------------------
+
+/// How long a track has to run before it counts as listened to.
+///
+/// Thirty seconds, or half the track when the track is shorter than a minute —
+/// an interlude should not be uncountable for being short. The same rule every
+/// other player uses, and it exists because the alternative is worse than no
+/// count at all: crediting at the start means someone flicking through a
+/// library to find one record has just voted for everything they flicked past.
+const CREDIT_AFTER: f64 = 30.0;
+
+/// The point in a track of `duration` seconds at which it has been listened to.
+///
+/// Split out so the rule can be asserted without a running deck. A duration of
+/// zero is a stream whose length is not known yet, and the flat threshold is
+/// the right answer there: half of nothing would credit at the first poll.
+fn credit_point(duration: f64) -> f64 {
+    if duration > 0.0 && duration < 60.0 {
+        duration / 2.0
+    } else {
+        CREDIT_AFTER
+    }
+}
+
+/// Bank the listen for whatever is playing, once it has run long enough.
+///
+/// Taking `crediting` is what makes it once: a track that is paused, resumed,
+/// seeked back through and finished has one listen in it, and the next call
+/// finds nothing to take. [`begin_playback`] puts the next one there.
+fn credit_if_listened(app: &mut AppState) {
+    if app.crediting.is_none() {
+        return;
+    }
+    let Some(snap) = app.player.as_ref().map(|p| p.snapshot()) else {
+        return;
+    };
+    if snap.position < credit_point(snap.duration) {
+        return;
+    }
+    let Some(pending) = app.crediting.take() else {
+        return;
+    };
+    app.credit_play(&pending.href, pending.collection.as_deref());
+}
+
+/// How often something has been listened to, and when it last was.
+///
+/// `last` is unix seconds, and it is the tie-break rather than an ordering of
+/// its own: "most played" is the claim on the shelf, and two things with the
+/// same count are separated by which one is still in rotation.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct Play {
+    #[serde(default)]
+    count: u32,
+    #[serde(default)]
+    last: i64,
+}
+
+/// A track that is playing and has not yet earned its count.
+#[derive(Clone, Debug)]
+struct Crediting {
+    href: String,
+    /// The store key of the playlist or group it was played from, if any.
+    collection: Option<String>,
+}
+
+/// Seconds since the epoch, or 0 on a machine whose clock predates it.
+///
+/// Only ever compared against other values from here, so a clock that is wrong
+/// costs an ordering and nothing else.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Where a set was started from, when it was a playlist or a group.
+///
+/// Distinct from [`Scope`], which is about what the DJ may roam over and is
+/// named for a person to read. This is an identity: a playlist can be renamed
+/// without becoming a different playlist, and its count should follow it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionRef {
+    /// `"playlist"` or `"group"`. Anything else is ignored rather than
+    /// rejected — a set played from somewhere the backend has no name for is
+    /// still a set that should play.
+    kind: String,
+    id: String,
+}
+
+/// The key a collection's plays are stored under.
+///
+/// `None` for a kind this does not know, which is what keeps an unrecognised
+/// value out of the map rather than inventing a shelf for it.
+fn collection_key(reference: &CollectionRef) -> Option<String> {
+    let id = reference.id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    match reference.kind.as_str() {
+        "playlist" => Some(format!("playlist:{id}")),
+        "group" => Some(format!("group:{id}")),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The home shelves
+// ---------------------------------------------------------------------------
+
+/// How many tiles a shelf carries.
+///
+/// A shelf scrolls sideways, so this is not "how many fit" — three or four are
+/// visible and the rest are a flick away. It is the point past which nobody is
+/// flicking: a twelfth-most-played artist is already further down than anyone
+/// goes, and every tile beyond it is a cover fetched for nothing.
+const SHELF: usize = 12;
+
+/// One tile on a home shelf.
+///
+/// Deliberately one shape for all four shelves. A playlist, a group, an artist
+/// and an album are drawn identically and ranked identically, and giving each
+/// its own struct would mean four of everything to say so.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+struct Shelf {
+    /// What this is, for opening it: a playlist or group id, or the name of
+    /// an artist or an album. Not shown.
+    id: String,
+    title: String,
+    /// The one line under the title. Empty when there is nothing true to say.
+    subtitle: String,
+    /// A track from it, for the cover and for what plays when it is pressed.
+    /// Empty for a playlist with nothing in it yet.
+    lead: String,
+    tracks: u32,
+    /// Listens this was ranked on. Zero for everything in a library nobody has
+    /// played from yet, which is why [`rank`] has more keys than this one.
+    plays: u32,
+}
+
+/// The library's front door.
+#[derive(Debug, Default, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+struct HomeShelves {
+    playlists: Vec<Shelf>,
+    /// Dynamic groups — "smart groups" on screen.
+    groups: Vec<Shelf>,
+    artists: Vec<Shelf>,
+    albums: Vec<Shelf>,
+    /// How many tracks there are, for the line under the title.
+    ///
+    /// Here rather than counted on the other side, because the shelves do not
+    /// carry the library — twelve albums is not five hundred tracks — and the
+    /// home screen would otherwise have to read the whole index to write one
+    /// number on it.
+    tracks: u32,
+}
+
+/// A tile and the numbers it is ranked on, before the ranking throws them away.
+struct Ranked {
+    shelf: Shelf,
+    /// Listens to the thing itself. Always 0 for an artist or an album: there
+    /// is no such thing as putting an artist on, only playing their records.
+    direct: u32,
+    /// Listens to its tracks, wherever they were played from.
+    member: u32,
+    /// When it was last listened to, unix seconds.
+    last: i64,
+}
+
+/// Most played first, and stable when nothing has been played.
+///
+/// Four keys, and each exists because the one before it runs out. Direct plays
+/// are the claim the shelf makes. Member plays are what separates a playlist
+/// built this morning out of records someone has worn out from one they have
+/// never opened — without them the new playlist sorts below the untouched one,
+/// which is the opposite of true. `last` breaks a genuine tie towards whatever
+/// is still in rotation. And the size of the thing is what is left on the day
+/// the library is new and every count is zero: the shelf then reads "most of
+/// what you have", which is at least about the person's music, where falling
+/// through to alphabetical would put A first for ever.
+fn rank(mut tiles: Vec<Ranked>, limit: usize) -> Vec<Shelf> {
+    tiles.sort_by(|a, b| {
+        b.direct
+            .cmp(&a.direct)
+            .then(b.member.cmp(&a.member))
+            .then(b.last.cmp(&a.last))
+            .then(b.shelf.tracks.cmp(&a.shelf.tracks))
+    });
+    tiles.truncate(limit);
+    tiles.into_iter().map(|t| t.shelf).collect()
+}
+
+/// The body of [`home_shelves`], reachable from a test.
+fn home_shelves_for(app: &AppState) -> HomeShelves {
+    let playlists = app
+        .playlists
+        .all()
+        .iter()
+        .map(|p| {
+            let play = app.collection_plays.get(&format!("playlist:{}", p.id));
+            Ranked {
+                shelf: Shelf {
+                    id: p.id.clone(),
+                    title: p.name.clone(),
+                    subtitle: tracks_line(p.tracks.len()),
+                    lead: p.tracks.first().cloned().unwrap_or_default(),
+                    tracks: p.tracks.len() as u32,
+                    plays: play.map_or(0, |p| p.count),
+                },
+                direct: play.map_or(0, |p| p.count),
+                member: app.member_plays(&p.tracks),
+                last: play.map_or(0, |p| p.last),
+            }
+        })
+        .collect();
+
+    let groups = app
+        .groups
+        .all()
+        .iter()
+        .map(|g| {
+            let play = app.collection_plays.get(&format!("group:{}", g.id));
+            // Resolved against the library, because that is what a group is:
+            // a saved set of artists and albums, not a list of tracks. Doing
+            // it here is also the only way to know how big one is.
+            let tracks = tracks_in_group(app, g);
+            Ranked {
+                shelf: Shelf {
+                    id: g.id.clone(),
+                    title: g.name.clone(),
+                    subtitle: tracks_line(tracks.len()),
+                    lead: tracks.first().map(|r| r.href.clone()).unwrap_or_default(),
+                    tracks: tracks.len() as u32,
+                    plays: play.map_or(0, |p| p.count),
+                },
+                direct: play.map_or(0, |p| p.count),
+                member: app.member_plays(tracks.iter().map(|r| r.href.as_str())),
+                last: play.map_or(0, |p| p.last),
+            }
+        })
+        .collect();
+
+    HomeShelves {
+        playlists: rank(playlists, SHELF),
+        groups: rank(groups, SHELF),
+        artists: entity_shelf(app, "artist"),
+        albums: entity_shelf(app, "album"),
+        tracks: app.rows.len() as u32,
+    }
+}
+
+/// The artists or albums shelf.
+///
+/// Built on top of the grid's own reading of the library rather than beside
+/// it, so a tile on the shelf and the same tile in the Artists tab agree about
+/// what an artist is called and how many albums they have. The alternative is
+/// a second definition of album identity, and there is only room for one.
+fn entity_shelf(app: &AppState, group_by: &str) -> Vec<Shelf> {
+    // Spelled out rather than `..Default::default()`: `ascending` defaults to
+    // true through serde, and a derived `Default` would quietly make it false.
+    let view = LibraryView {
+        query: String::new(),
+        sort_key: None,
+        ascending: true,
+        group_by: Some(group_by.to_string()),
+        genre: None,
+        album: None,
+        artist: None,
+    };
+    let tiles = library_entities_for(app, &view)
+        .into_iter()
+        .map(|e| Ranked {
+            // An artist or an album has no plays of its own — there is no
+            // gesture that means "put on Aphex Twin" the way there is one for
+            // putting on a playlist. Their tracks are the whole of it.
+            direct: 0,
+            member: e.plays,
+            last: e.last_played,
+            shelf: Shelf {
+                id: e.name.clone(),
+                title: e.name,
+                subtitle: e.subtitle,
+                lead: e.lead,
+                tracks: e.tracks as u32,
+                plays: e.plays,
+            },
+        })
+        .collect();
+    rank(tiles, SHELF)
+}
+
+/// "12 tracks", and "1 track" rather than "1 tracks".
+fn tracks_line(n: usize) -> String {
+    format!("{n} {}", if n == 1 { "track" } else { "tracks" })
+}
+
+/// What the library screen opens on.
+///
+/// One call for all four shelves rather than four, because they are one screen
+/// and four round trips is four chances to paint a half-built page.
+#[tauri::command]
+fn home_shelves(state: State<'_, Shared>) -> Result<HomeShelves> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(home_shelves_for(&app))
+}
+
+// ---------------------------------------------------------------------------
 // Library
 // ---------------------------------------------------------------------------
 
@@ -708,6 +1152,16 @@ struct LibraryEntity {
     /// Covers are fetched per card rather than embedded in every row: a 2 MB
     /// sleeve on 563 rows is not a payload, it is an outage.
     lead: String,
+    /// Listens to its tracks, added up.
+    ///
+    /// Here rather than counted again by whatever wants to rank these, because
+    /// the members are already gathered at this point and gathering them a
+    /// second time means keying albums a second time — and album identity is
+    /// title *plus folder*, which is precisely the thing a second copy gets
+    /// wrong. See [`entity_shelf`].
+    plays: u32,
+    /// When one of its tracks was last listened to, unix seconds. 0 for never.
+    last_played: i64,
 }
 
 fn default_true() -> bool {
@@ -929,11 +1383,27 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
                 }
             };
 
+            // Both from the same walk of the members, so a tile's count and
+            // the moment it was last reached cannot disagree.
+            let plays = tracks
+                .iter()
+                .filter_map(|r| app.plays.get(&r.href))
+                .map(|p| p.count)
+                .sum();
+            let last_played = tracks
+                .iter()
+                .filter_map(|r| app.plays.get(&r.href))
+                .map(|p| p.last)
+                .max()
+                .unwrap_or(0);
+
             Some(LibraryEntity {
                 name,
                 subtitle,
                 tracks: tracks.len(),
                 lead,
+                plays,
+                last_played,
             })
         })
         .collect()
@@ -1201,10 +1671,7 @@ async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>
 /// correction is the second half of "find tempo, key and cue points", and the
 /// Vibe DJ needs it across the whole library rather than only where somebody
 /// has listened.
-fn identify_library_in_background(
-    app_handle: &tauri::AppHandle,
-    state: &Shared,
-) -> Result<()> {
+fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared) -> Result<()> {
     use tauri::Emitter;
     let app_handle = app_handle.clone();
 
@@ -3281,6 +3748,7 @@ fn play_tracks(
     hrefs: Vec<String>,
     start: Option<String>,
     scope: Option<String>,
+    collection: Option<CollectionRef>,
     state: State<'_, Shared>,
 ) -> Result<()> {
     let shared: Shared = Arc::clone(&state);
@@ -3293,6 +3761,15 @@ fn play_tracks(
             name,
             tracks: hrefs.iter().cloned().collect(),
         });
+        // Which shelf this was put on from, if it was one. Set before the
+        // queue moves, because `begin_playback` reads it to decide what the
+        // listen it is about to earn should be credited to.
+        //
+        // Assigned unconditionally, `None` included: playing an album after a
+        // playlist has to stop crediting the playlist, and only overwriting
+        // when a collection is named would leave the previous one attached to
+        // everything played afterwards.
+        app.collection = collection.as_ref().and_then(collection_key);
         app.queue.set_tracks(hrefs, start.as_deref());
         let current = app.queue.current().map(str::to_string);
         if let Some(current) = current.clone() {
@@ -3568,6 +4045,14 @@ fn stream_from_server(
 }
 
 fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
+    // A new track is a new listen to earn. Whatever the previous one had
+    // accrued is dropped rather than banked: it did not reach `CREDIT_AFTER`,
+    // which is the whole of what "listened to" means here.
+    app.crediting = Some(Crediting {
+        href: href.clone(),
+        collection: app.collection.clone(),
+    });
+
     // Words for what is about to play, if the person has asked for words at
     // all. Off the playback path entirely: a lyrics service is not allowed to
     // delay a track starting, and this is a nicety that can arrive late or not
@@ -3808,7 +4293,11 @@ fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
             .unwrap_or_default(),
         next_href: next.map(|r| r.href.clone()).unwrap_or_default(),
         cover: app.playing.as_deref().and_then(|href| app.covers.get(href)),
-        scope: app.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+        scope: app
+            .scope
+            .as_ref()
+            .map(|s| s.name.clone())
+            .unwrap_or_default(),
     })
 }
 
@@ -4765,6 +5254,15 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
                         note_audio_fault(app.store.dir(), &line);
                     }
                 }
+
+                // Long enough in to count as listened to (see `CREDIT_AFTER`).
+                //
+                // Here rather than in the branch that advances the queue,
+                // because a track earns its play at thirty seconds whatever
+                // happens after: it can be mixed out, skipped, or left running
+                // to the end, and all three are the same listen. Doing it where
+                // the queue moves would credit only the tracks that ran out.
+                credit_if_listened(&mut app);
 
                 // The one place that already knows, four times a second, what is
                 // playing and whether it still is. `publish_from` drops anything
@@ -5883,10 +6381,7 @@ fn choose_next(
         // The queue is not the whole story: a mix armed for a different track
         // has that track loaded on the deck already, and the queue does not
         // reach it. Drop it so the supervisor arms the chosen one instead.
-        let running = app
-            .player
-            .as_ref()
-            .is_some_and(|p| p.transition_running());
+        let running = app.player.as_ref().is_some_and(|p| p.transition_running());
         if mix_must_be_rearmed(app.armed_next.as_deref(), &href, running) {
             if let Some(player) = app.player.as_ref() {
                 player.cancel_transition();
@@ -6342,6 +6837,20 @@ fn set_bpm_override(
     Ok(())
 }
 
+/// Why a track has no local bytes, in words a person can act on.
+///
+/// Two quite different things arrive as a `CacheError` and only one of them is
+/// about the library: a server that has no file at that path is something to
+/// fix on the server, and a cache that could not be written to is something to
+/// fix on the device. Reporting both as the same sentence is how "not
+/// available locally" came to mean nothing.
+fn why_no_bytes(e: cache::CacheError) -> String {
+    match e {
+        cache::CacheError::Fetch(m) => m,
+        cache::CacheError::Io(e) => format!("could not be saved to the cache: {e}"),
+    }
+}
+
 /// What the UI is told about a re-tracking job.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -6415,16 +6924,24 @@ fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, hrefs: Vec<Stri
         let cache = cache::Cache::new(cache_dir, cache_max);
         // One session for the batch, as the analysis pass does: one keychain
         // read and one connection rather than one of each per track.
-        let fetcher = webdav::Fetcher::new(&remote).ok();
+        let fetcher = webdav::Fetcher::new(&remote);
 
         for (href, bpm) in todo {
-            let path = fetcher
-                .as_ref()
-                .and_then(|f| cache.store(&href, || f.fetch(&href)).ok());
-
-            let outcome = match path {
-                Some(path) => vapor_dsp::retrack_beats_file(&path, bpm).map_err(|e| e.to_string()),
-                None => Err("not available locally".to_string()),
+            // Same reasoning as the analysis pass: whatever went wrong is the
+            // only useful thing to say, and there are three separate ways to
+            // arrive here — no session at all, a server that would not serve
+            // the file, and a decode that failed on bytes that did arrive.
+            // Which of the three it was is the whole of what a person can act
+            // on, and `.ok()` on the session plus `.ok()` on the fetch used to
+            // flatten all three into "not available locally".
+            let outcome = match fetcher.as_ref() {
+                Ok(f) => cache
+                    .store(&href, || f.fetch(&href))
+                    .map_err(why_no_bytes)
+                    .and_then(|path| {
+                        vapor_dsp::retrack_beats_file(&path, bpm).map_err(|e| e.to_string())
+                    }),
+                Err(e) => Err(format!("no connection to the library server: {e}")),
             };
 
             let progress = match outcome {
@@ -6680,9 +7197,102 @@ fn build_row(href: &str, base_folder: &str) -> Row {
     }
 }
 
+/// What the operating system calls this machine.
+///
+/// Read once. [`AppState::device_name`] is called for every advert, and the
+/// beacon adverts every five seconds — a subprocess on that schedule to learn
+/// something that cannot change is a subprocess per five seconds for ever.
+///
+/// `None` where there is no answer, or where the answer is a placeholder: a
+/// Linux box that has never been named reports `localhost`, and Android's
+/// `gethostname` reports it on every device, so both would put every phone
+/// back under one name.
+fn machine_name() -> Option<String> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let raw = read_machine_name()?;
+        let name = raw.trim();
+        // `.local` is how Bonjour writes a hostname, and nobody calls their
+        // laptop that out loud.
+        let name = name.strip_suffix(".local").unwrap_or(name).trim();
+        if name.is_empty() || name.eq_ignore_ascii_case("localhost") {
+            return None;
+        }
+        Some(name.to_string())
+    })
+    .clone()
+}
+
+/// The platform half of [`machine_name`].
+#[cfg(target_os = "android")]
+fn read_machine_name() -> Option<String> {
+    // `Build.MODEL` rather than a hostname: Android reports `localhost` for the
+    // latter on every device, and the model is what the phone calls itself in
+    // its own Settings. It also happens to be the safer of the two — "Pixel 9"
+    // is a class of device, not a person.
+    android::build_model()
+}
+
+#[cfg(target_os = "macos")]
+fn read_machine_name() -> Option<String> {
+    // The Sharing name, which is what macOS shows the network and what the
+    // owner recognises. `hostname` would give the same thing with `.local` and
+    // spaces mangled into hyphens.
+    let out = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn read_machine_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "windows")))]
+fn read_machine_name() -> Option<String> {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+}
+
 // ---------------------------------------------------------------------------
 // Analysis
 // ---------------------------------------------------------------------------
+
+/// A track analysis keeps failing on for a reason that might not last.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct Stall {
+    /// What went wrong the last time the pass reached it.
+    reason: String,
+    /// How many passes have hit it. One is ordinary — the track had not
+    /// downloaded yet. Repeated attempts are the signal that it is not
+    /// transient after all, so the modal can say so rather than making
+    /// somebody press Analyse a fourth time to find out.
+    attempts: u32,
+}
+
+/// One track analysis could not describe, ready for the screen.
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+struct AnalysisFailure {
+    href: String,
+    /// From the library row, so the list names tracks rather than paths. Falls
+    /// back to the href for a failure whose row has since gone.
+    title: String,
+    artist: String,
+    reason: String,
+    /// `true` for the kind that will never work — a file that decodes to
+    /// nothing. `false` for the kind the next pass will try again.
+    permanent: bool,
+    /// Passes that have hit this. Always 0 for a permanent failure, which is
+    /// only ever recorded once.
+    attempts: u32,
+}
 
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -6813,6 +7423,65 @@ fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
         current: app.analysing_title.clone(),
         stopped_because: app.analysis_stopped_because.clone(),
     })
+}
+
+/// Every track analysis could not describe, and why.
+///
+/// Both kinds together, permanent first, because the person looking at this
+/// asked "which ones didn't work" and does not yet know there are two kinds.
+/// Within each kind, ordered by title so the list is the same twice running.
+///
+/// Joined against `rows` so the modal names tracks. A failure whose row has
+/// gone — the file was removed from the library after it failed — keeps its
+/// href as the title rather than being dropped: it is still a thing the count
+/// is missing, and silently omitting it makes the numbers disagree.
+#[tauri::command]
+fn analysis_failures(state: State<'_, Shared>) -> Result<Vec<AnalysisFailure>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(failure_list(&app))
+}
+
+/// The body of [`analysis_failures`], against state rather than a `State`.
+///
+/// Split out so the ordering and the row join can be tested by calling the
+/// thing the command calls. A test that rebuilds this from `failures` and
+/// `stalls` itself would agree with its own copy and not with the command.
+fn failure_list(app: &AppState) -> Vec<AnalysisFailure> {
+    let rows: std::collections::HashMap<&str, &Row> =
+        app.rows.iter().map(|r| (r.href.as_str(), r)).collect();
+
+    let describe = |href: &String, reason: &String, permanent: bool, attempts: u32| {
+        let row = rows.get(href.as_str());
+        AnalysisFailure {
+            href: href.clone(),
+            title: row.map_or_else(|| href.clone(), |r| r.title.clone()),
+            artist: row.map(|r| r.artist.clone()).unwrap_or_default(),
+            reason: reason.clone(),
+            permanent,
+            attempts,
+        }
+    };
+
+    let by_title = |a: &AnalysisFailure, b: &AnalysisFailure| {
+        a.title.to_lowercase().cmp(&b.title.to_lowercase())
+    };
+
+    let mut out: Vec<AnalysisFailure> = app
+        .failures
+        .iter()
+        .map(|(href, reason)| describe(href, reason, true, 0))
+        .collect();
+    out.sort_by(by_title);
+
+    let mut stalled: Vec<AnalysisFailure> = app
+        .stalls
+        .iter()
+        .map(|(href, stall)| describe(href, &stall.reason, false, stall.attempts))
+        .collect();
+    stalled.sort_by(by_title);
+
+    out.extend(stalled);
+    out
 }
 
 #[tauri::command]
@@ -7096,10 +7765,10 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                  */
                 for _ in 0..PREFETCH_WAIT_TICKS {
                     if cancel.is_stopped() {
-                        return None;
+                        return Err("stopped".to_string());
                     }
                     if let Some(path) = cache.get(href) {
-                        return Some(path);
+                        return Ok(path);
                     }
                     if prefetch_done.load(std::sync::atomic::Ordering::Acquire) >= PREFETCH_THREADS
                     {
@@ -7110,9 +7779,15 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
 
                 // Cancellable: Stop has to be answered during the download,
                 // not after it. See `Fetcher::fetch_until`.
+                //
+                // The error is kept rather than dropped. It is the only thing
+                // that can tell somebody looking at the list of tracks that
+                // failed what to do about one — and it was being thrown
+                // away here, one line above the place that then had nothing to
+                // report but "not available locally".
                 cache
                     .store(href, || fetcher.fetch_until(href, &|| cancel.is_stopped()))
-                    .ok()
+                    .map_err(why_no_bytes)
             },
             &cancel,
             |progress| {
@@ -7138,12 +7813,27 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
                         if app.failures.remove(&progress.href).is_some() {
                             let _ = app.save_failures();
                         }
+                        if app.stalls.remove(&progress.href).is_some() {
+                            let _ = app.save_stalls();
+                        }
                     } else if let Some(reason) = &progress.error {
-                        // Only the permanent kind. A track that simply was not
-                        // downloaded when the pass ran must not be condemned.
-                        if !progress.retryable {
+                        if progress.retryable {
+                            // Recorded rather than dropped. The pass will try
+                            // again, and if it keeps landing here the attempt
+                            // count is the only thing that can say so.
+                            let stall = app.stalls.entry(progress.href.clone()).or_default();
+                            stall.reason = reason.clone();
+                            stall.attempts = stall.attempts.saturating_add(1);
+                            let _ = app.save_stalls();
+                        } else {
+                            // Condemned. A track that simply was not downloaded
+                            // when the pass ran never reaches this arm.
                             app.failures.insert(progress.href.clone(), reason.clone());
                             let _ = app.save_failures();
+                            // It is described now, by the other map.
+                            if app.stalls.remove(&progress.href).is_some() {
+                                let _ = app.save_stalls();
+                            }
                         }
                     }
                 }
@@ -7734,6 +8424,7 @@ pub fn run() {
             set_prefer_looked_up_art,
             set_hide_duplicates,
             set_appearance,
+            analysis_failures,
             artist_portrait,
             set_metadata_lookup,
             set_vibe_limit,
@@ -7784,6 +8475,7 @@ pub fn run() {
             analyse_library,
             cancel_analysis,
             library_entities,
+            home_shelves,
             mix_candidates,
             choose_next,
             track_cover,
@@ -7836,7 +8528,11 @@ mod tests {
     /// wrong answer, and the one this picks deliberately.
     #[test]
     fn a_mix_already_under_way_is_left_alone() {
-        assert!(!mix_must_be_rearmed(Some("/other.m4a"), "/chosen.m4a", true));
+        assert!(!mix_must_be_rearmed(
+            Some("/other.m4a"),
+            "/chosen.m4a",
+            true
+        ));
     }
     use super::*;
 
@@ -7855,6 +8551,87 @@ mod tests {
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         (AppState::load(Store::new(dir.clone())), dir)
+    }
+
+    /// A stalled track is outstanding work; a condemned one is not.
+    ///
+    /// This is the arithmetic behind "556 of 563 done" never reaching 563. A
+    /// permanent failure counts as done deliberately, so it cannot be what
+    /// holds the number short — only the retryable kind can, and that kind used
+    /// to leave no record at all.
+    #[test]
+    fn only_a_stalled_track_holds_the_count_short() {
+        let (mut app, _dir) = app();
+        app.rows = ["/a.flac", "/b.flac", "/c.flac"]
+            .iter()
+            .map(|href| Row {
+                href: (*href).to_string(),
+                title: href.trim_start_matches('/').to_string(),
+                ..Default::default()
+            })
+            .collect();
+
+        assert_eq!(analysis_counts(&app), (0, 3), "nothing described yet");
+
+        app.failures
+            .insert("/a.flac".into(), "decodes to zero samples".into());
+        assert_eq!(
+            analysis_counts(&app),
+            (1, 3),
+            "a condemned file is done — it is not work anybody can finish"
+        );
+
+        app.stalls.insert(
+            "/b.flac".into(),
+            Stall {
+                reason: "not downloaded yet".into(),
+                attempts: 4,
+            },
+        );
+        assert_eq!(
+            analysis_counts(&app),
+            (1, 3),
+            "a stalled file is still outstanding, which is why the count sticks"
+        );
+    }
+
+    /// Both kinds reach the screen, each keeping the field that explains it.
+    #[test]
+    fn the_failure_list_names_tracks_and_says_which_kind() {
+        let (mut app, _dir) = app();
+        app.rows = vec![Row {
+            href: "/b.flac".into(),
+            title: "Undertow".into(),
+            artist: "Hollow Coast".into(),
+            ..Default::default()
+        }];
+        app.failures
+            .insert("/gone.flac".into(), "decodes to zero samples".into());
+        app.stalls.insert(
+            "/b.flac".into(),
+            Stall {
+                reason: "not downloaded yet".into(),
+                attempts: 4,
+            },
+        );
+
+        let out = failure_list(&app);
+
+        assert_eq!(out.len(), 2, "both kinds are listed");
+        // Permanent first: whoever opened this asked "which ones didn't work"
+        // and does not yet know there are two kinds.
+        assert!(out[0].permanent);
+        // A failure whose row has gone keeps its href as a title rather than
+        // being dropped — it is still part of the difference the count shows.
+        assert_eq!(out[0].href, "/gone.flac");
+        assert_eq!(out[0].title, "/gone.flac");
+        assert_eq!(out[0].attempts, 0);
+
+        assert!(!out[1].permanent);
+        assert_eq!(out[1].title, "Undertow", "the row supplies the name");
+        assert_eq!(out[1].artist, "Hollow Coast");
+        assert_eq!(out[1].reason, "not downloaded yet");
+        assert_eq!(out[1].attempts, 4, "what tells 'not yet' from 'not ever'");
     }
 
     /// A dissolve is planned even when the tempi are nowhere near each other.
@@ -8365,9 +9142,10 @@ mod tests {
         assert!(written.contains("(during a mix)"), "got: {written}");
         // Each line is stamped, or it cannot be lined up against what was heard.
         assert!(
-            written.lines().all(|l| l.split_whitespace().next().is_some_and(
-                |t| t.len() == 8 && t.matches(':').count() == 2
-            )),
+            written.lines().all(|l| l
+                .split_whitespace()
+                .next()
+                .is_some_and(|t| t.len() == 8 && t.matches(':').count() == 2)),
             "a line had no clock time: {written}"
         );
 
@@ -8535,7 +9313,10 @@ mod tests {
 
         assert!(extend_set(&mut app), "the DJ added nothing");
         assert!(
-            app.queue.tracks().iter().any(|h| h != "/a.mp3" && h != "/b.mp3"),
+            app.queue
+                .tracks()
+                .iter()
+                .any(|h| h != "/a.mp3" && h != "/b.mp3"),
             "the planner stayed inside two tracks with the library available"
         );
 
@@ -9568,11 +10349,7 @@ mod tests {
         // address. It is a password with a scheme in front of it, and stored as
         // an origin it produces a scan that finds nothing and reports no error
         // — which reads as an empty library rather than a wrong address.
-        for not_one in [
-            "https://4wg9ie7xi8v7nbi6",
-            "https://",
-            "https:///dav/Music",
-        ] {
+        for not_one in ["https://4wg9ie7xi8v7nbi6", "https://", "https:///dav/Music"] {
             assert!(
                 apply_remote_config(&mut app, not_one, "someone", "Music").is_err(),
                 "{not_one:?} was accepted as a server address"
@@ -9987,4 +10764,151 @@ mod tests {
         // Nothing playing: no length, rather than the last track's.
         assert_eq!(playing_duration(None, None), 0.0);
     }
+
+    // -----------------------------------------------------------------------
+    // The home shelves
+    // -----------------------------------------------------------------------
+
+    /// A library of two artists, four albums between them, and a playlist.
+    fn a_library() -> (AppState, std::path::PathBuf) {
+        let (mut app, dir) = app();
+        app.rows = vec![
+            shelf_row("/dav/Aphex/Windowlicker/01.m4a", "Aphex Twin", "Windowlicker"),
+            shelf_row("/dav/Aphex/Windowlicker/02.m4a", "Aphex Twin", "Windowlicker"),
+            shelf_row("/dav/Aphex/SAW/01.m4a", "Aphex Twin", "Selected Ambient Works"),
+            shelf_row("/dav/BoC/Geogaddi/01.m4a", "Boards of Canada", "Geogaddi"),
+        ];
+        (app, dir)
+    }
+
+    /// A row with an artist and an album the index would believe.
+    ///
+    /// The sources matter: the entity grid drops rows whose artist is unknown,
+    /// so a row built by [`row`] above never reaches a shelf at all.
+    fn shelf_row(href: &str, artist: &str, album: &str) -> Row {
+        Row {
+            artist: artist.to_string(),
+            album: album.to_string(),
+            artist_source: vapor_library::index::Source::File,
+            album_source: vapor_library::index::Source::File,
+            ..row(href, "A Track")
+        }
+    }
+
+    /// The claim the shelf makes, made true.
+    ///
+    /// Two playlists, one of them listened to. Nothing else separates them —
+    /// same size, created in the same breath — so if the played one is not
+    /// first, "most played" is decoration.
+    #[test]
+    fn a_played_playlist_leads_the_shelf() {
+        let (mut app, dir) = a_library();
+        app.playlists.create("p1", "Untouched");
+        app.playlists.create("p2", "On Repeat");
+        app.playlists.add_track("p1", "/dav/BoC/Geogaddi/01.m4a");
+        app.playlists.add_track("p2", "/dav/Aphex/SAW/01.m4a");
+
+        app.credit_play("/dav/Aphex/SAW/01.m4a", Some("playlist:p2"));
+
+        let shelves = home_shelves_for(&app);
+        assert_eq!(
+            shelves.playlists.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
+            ["On Repeat", "Untouched"],
+        );
+        assert_eq!(shelves.playlists[0].plays, 1);
+        assert_eq!(shelves.playlists[0].subtitle, "1 track");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A playlist built this morning out of records someone has worn out.
+    ///
+    /// It has no plays of its own and should still not sit below one they have
+    /// never opened. Member plays are the key that says so, and without them
+    /// the new playlist sorts second — which is the opposite of true.
+    #[test]
+    fn a_new_playlist_of_worn_out_records_outranks_an_untouched_one() {
+        let (mut app, dir) = a_library();
+        app.playlists.create("p1", "Never Opened");
+        app.playlists.add_track("p1", "/dav/BoC/Geogaddi/01.m4a");
+        app.playlists.create("p2", "Made This Morning");
+        app.playlists.add_track("p2", "/dav/Aphex/SAW/01.m4a");
+
+        // Played from the library, not from either playlist: no collection is
+        // credited, so both have zero direct plays.
+        app.credit_play("/dav/Aphex/SAW/01.m4a", None);
+
+        let shelves = home_shelves_for(&app);
+        assert_eq!(shelves.playlists[0].title, "Made This Morning");
+        assert_eq!(
+            shelves.playlists[0].plays, 0,
+            "it is ranked on its records' plays, and says so honestly"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Artists and albums are ranked on their tracks, because that is all
+    /// there is: nothing means "put on Aphex Twin", only playing their records.
+    #[test]
+    fn the_most_listened_to_artist_leads_the_artist_shelf() {
+        let (mut app, dir) = a_library();
+        app.credit_play("/dav/BoC/Geogaddi/01.m4a", None);
+
+        let shelves = home_shelves_for(&app);
+        assert_eq!(shelves.artists[0].title, "Boards of Canada");
+        assert_eq!(shelves.artists[0].plays, 1);
+        assert_eq!(shelves.albums[0].title, "Geogaddi");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The day the library is new, every count is zero and the shelf still has
+    /// to say something. Biggest first is at least about the person's music,
+    /// where falling through to alphabetical would put A first for ever.
+    #[test]
+    fn a_library_nobody_has_played_from_leads_with_the_biggest() {
+        let (app, dir) = a_library();
+
+        let shelves = home_shelves_for(&app);
+        assert_eq!(shelves.albums[0].title, "Windowlicker");
+        assert_eq!(shelves.albums[0].tracks, 2);
+        assert!(shelves.albums.iter().all(|s| s.plays == 0));
+        assert_eq!(shelves.tracks, 4, "the line under the title counts tracks");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A group is a saved set of artists and albums, not a list of tracks, so
+    /// how big one is has to be resolved against the library to be known.
+    #[test]
+    fn a_group_is_measured_against_the_library() {
+        let (mut app, dir) = a_library();
+        app.groups.create("g1", "Ambient");
+        app.groups
+            .add_entity("g1", vapor_library::EntityType::Artist, "Aphex Twin");
+
+        let shelves = home_shelves_for(&app);
+        assert_eq!(shelves.groups[0].title, "Ambient");
+        assert_eq!(shelves.groups[0].tracks, 3);
+        assert_eq!(shelves.groups[0].subtitle, "3 tracks");
+        assert_eq!(shelves.groups[0].lead, "/dav/Aphex/Windowlicker/01.m4a");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A shelf scrolls sideways, but not for ever: every tile past the cap is
+    /// a cover fetched for a place nobody scrolls to.
+    #[test]
+    fn a_shelf_stops_at_a_dozen() {
+        let (mut app, dir) = a_library();
+        for i in 0..30 {
+            app.playlists.create(format!("p{i}"), format!("List {i}"));
+        }
+
+        assert_eq!(home_shelves_for(&app).playlists.len(), SHELF);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
 }

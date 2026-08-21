@@ -210,6 +210,23 @@ pub struct Fetcher {
     client: reqwest::blocking::Client,
 }
 
+/// What a refusal from the server means, in words that name the fix.
+///
+/// The status on its own is true and useless. "server returned 404" reaches a
+/// person as the reason a track could not be described, and 404 and 401 want
+/// opposite things done about them: one is a library index pointing at a path
+/// the server no longer has, and the fix is a rescan; the other is a
+/// credential, and no number of further passes will supply it.
+fn refusal(status: reqwest::StatusCode) -> String {
+    match status {
+        reqwest::StatusCode::NOT_FOUND => "no file at this path on the server".to_string(),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            "the server refused the request — check the library username and password".to_string()
+        }
+        s => format!("server returned {s}"),
+    }
+}
+
 /// How long to wait for a connection to open.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -287,7 +304,7 @@ impl Fetcher {
             .map_err(|e| e.to_string())?;
 
         if !response.status().is_success() {
-            return Err(format!("server returned {}", response.status()));
+            return Err(refusal(response.status()));
         }
 
         // 64 KiB: small enough that a cancel is answered inside a second on any
@@ -326,7 +343,7 @@ impl Fetcher {
             .map_err(|e| e.to_string())?;
 
         if !response.status().is_success() {
-            return Err(format!("server returned {}", response.status()));
+            return Err(refusal(response.status()));
         }
 
         // `Content-Range: bytes 0-255/9437184` — the part after the slash is
@@ -367,7 +384,7 @@ impl Fetcher {
             .map_err(|e| e.to_string())?;
 
         if !response.status().is_success() {
-            return Err(format!("server returned {}", response.status()));
+            return Err(refusal(response.status()));
         }
         response
             .bytes()
@@ -392,7 +409,7 @@ impl Fetcher {
             return Ok(None);
         }
         if !response.status().is_success() {
-            return Err(format!("server returned {}", response.status()));
+            return Err(refusal(response.status()));
         }
         response
             .bytes()

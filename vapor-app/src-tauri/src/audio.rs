@@ -51,8 +51,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use serde::Serialize;
 
-use vapor_engine::{Mixer, TrackSource, TransitionType};
 use ts_rs::TS;
+use vapor_engine::{Mixer, TrackSource, TransitionType};
 
 /// Largest block the mixer will render in one callback.
 ///
@@ -484,13 +484,9 @@ impl Link {
             brightness: f32::from_bits(self.brightness.load(Ordering::Relaxed)),
             commands_deferred: self.commands_deferred.load(Ordering::Relaxed),
             starved_blocks: self.starved_blocks.load(Ordering::Relaxed),
-            starved_incoming_blocks: self
-                .starved_incoming_blocks
-                .load(Ordering::Relaxed),
+            starved_incoming_blocks: self.starved_incoming_blocks.load(Ordering::Relaxed),
             limiter_steps: self.limiter_steps.load(Ordering::Relaxed),
-            limiter_deepest_db: f32::from_bits(
-                self.limiter_deepest_db.load(Ordering::Relaxed),
-            ),
+            limiter_deepest_db: f32::from_bits(self.limiter_deepest_db.load(Ordering::Relaxed)),
         }
     }
 
@@ -872,8 +868,7 @@ impl Engine {
         }
         if total_energy > BRIGHTNESS_FLOOR {
             let ratio = ((total_energy - low_energy) / total_energy).clamp(0.0, 1.0);
-            self.bright_sm =
-                self.bright_sm * BRIGHTNESS_SMOOTH + ratio * (1.0 - BRIGHTNESS_SMOOTH);
+            self.bright_sm = self.bright_sm * BRIGHTNESS_SMOOTH + ratio * (1.0 - BRIGHTNESS_SMOOTH);
             self.link
                 .brightness
                 .store(self.bright_sm.to_bits(), Ordering::Relaxed);

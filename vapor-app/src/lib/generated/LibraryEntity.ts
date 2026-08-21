@@ -22,4 +22,18 @@ subtitle: string, tracks: number,
  * Covers are fetched per card rather than embedded in every row: a 2 MB
  * sleeve on 563 rows is not a payload, it is an outage.
  */
-lead: string, };
+lead: string, 
+/**
+ * Listens to its tracks, added up.
+ *
+ * Here rather than counted again by whatever wants to rank these, because
+ * the members are already gathered at this point and gathering them a
+ * second time means keying albums a second time — and album identity is
+ * title *plus folder*, which is precisely the thing a second copy gets
+ * wrong. See [`entity_shelf`].
+ */
+plays: number, 
+/**
+ * When one of its tracks was last listened to, unix seconds. 0 for never.
+ */
+lastPlayed: bigint, };

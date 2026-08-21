@@ -257,7 +257,9 @@ mod tests {
         );
 
         // Cached, so the second row to ask does not re-encode.
-        assert!(dir.join(format!("{:016x}.thumb.txt", hash("/music/big.mp3"))).exists());
+        assert!(dir
+            .join(format!("{:016x}.thumb.txt", hash("/music/big.mp3")))
+            .exists());
         assert_eq!(c.thumb("/music/big.mp3").as_deref(), Some(thumb.as_str()));
 
         let _ = std::fs::remove_dir_all(dir);
@@ -282,7 +284,10 @@ mod tests {
         // And it is the small one, not a copy of the original.
         let written = std::fs::read_to_string(&thumb).unwrap();
         let full = c.get("/music/big.mp3").unwrap();
-        assert!(written.len() * 10 < full.len(), "the 'thumbnail' is full size");
+        assert!(
+            written.len() * 10 < full.len(),
+            "the 'thumbnail' is full size"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -301,7 +306,8 @@ mod tests {
     #[test]
     fn an_undecodable_cover_falls_back_to_the_original() {
         let (c, dir) = covers();
-        c.put("/music/odd.mp3", "data:image/jpeg;base64,AAAA").unwrap();
+        c.put("/music/odd.mp3", "data:image/jpeg;base64,AAAA")
+            .unwrap();
         assert_eq!(
             c.thumb("/music/odd.mp3").as_deref(),
             Some("data:image/jpeg;base64,AAAA")

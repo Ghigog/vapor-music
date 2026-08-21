@@ -170,6 +170,25 @@ static SERVICE_CLASS: std::sync::OnceLock<jni::objects::GlobalRef> = std::sync::
 /// costs background playback and nothing else, and this is called four times a
 /// second from the playback supervisor — a failure that logged every time would
 /// be its own problem.
+/// `android.os.Build.MODEL` — what the phone calls itself.
+///
+/// A static field on a class, so there is no object to hold and nothing to
+/// release beyond the local refs the frame drops. `None` on any JNI failure:
+/// a device with no name falls back to a plain "Vapor", which is worse than a
+/// name and much better than a crash on a string for a settings row.
+pub fn build_model() -> Option<String> {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
+    let mut env = vm.attach_current_thread().ok()?;
+    let class = env.find_class("android/os/Build").ok()?;
+    let field = env
+        .get_static_field(class, "MODEL", "Ljava/lang/String;")
+        .ok()?;
+    let model: jni::objects::JString = field.l().ok()?.into();
+    let text: String = env.get_string(&model).ok()?.into();
+    Some(text)
+}
+
 pub fn service_update(title: &str, artist: &str, playing: bool, position: f64, duration: f64) {
     report(with_context(|env, context| {
         let title = env.new_string(title)?;

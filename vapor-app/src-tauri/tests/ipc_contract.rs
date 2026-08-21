@@ -372,4 +372,3 @@ fn both_sides_of_the_contract_are_where_this_test_thinks() {
  * surface. Types say nothing about whether a command the frontend calls is
  * registered, or whether its argument names agree.
  */
-

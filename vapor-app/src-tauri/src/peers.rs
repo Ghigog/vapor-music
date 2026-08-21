@@ -64,6 +64,25 @@ const IO_TIMEOUT: Duration = Duration::from_secs(20);
 /// Wi-Fi.
 const MAX_REQUEST: u64 = 64 * 1024;
 
+/// The largest reply line accepted.
+///
+/// Much larger than [`MAX_REQUEST`], and the asymmetry is the point. A request
+/// names one track and is always short, so a small bound on what the *server*
+/// will buffer is a defence worth having against anything on the network. A
+/// reply can be a whole manifest — one `TrackRecord` per track the peer knows,
+/// about 208 bytes each once a digest is present — and that is answered by a
+/// device this one has deliberately paired with.
+///
+/// Reading the reply with the request's bound is what broke sync on any real
+/// library: 64 KiB holds about 315 records, so at 563 tracks `read_line`
+/// stopped mid-document and serde's failure surfaced as "unreadable reply".
+/// Pairing was unaffected, its reply being two short strings, so the app found
+/// the other device and then refused to sync with it.
+///
+/// 32 MiB is roughly 150,000 tracks. Still bounded, because a paired device can
+/// also be a broken one.
+const MAX_REPLY: u64 = 32 * 1024 * 1024;
+
 /// Milliseconds since the epoch. The one place the wall clock is read.
 pub fn now() -> u64 {
     std::time::SystemTime::now()
@@ -580,13 +599,35 @@ pub fn ask(address: &str, request: &Request) -> Result<(Reply, Vec<u8>), String>
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader
+    let read = reader
         .by_ref()
-        .take(MAX_REQUEST)
+        .take(MAX_REPLY)
         .read_line(&mut line)
         .map_err(|e| e.to_string())?;
-    let reply: Reply =
-        serde_json::from_str(line.trim()).map_err(|_| "unreadable reply".to_string())?;
+
+    // Three different failures, told apart before parsing rather than after.
+    //
+    // All three used to arrive as "unreadable reply", which named the symptom
+    // and hid every cause. A reply is one line of JSON, so an ending without a
+    // newline is a reply that did not finish — either because it outgrew the
+    // bound above or because the peer stopped talking — and neither is serde's
+    // to explain.
+    if read == 0 {
+        return Err("the peer closed the connection without replying".to_string());
+    }
+    if !line.ends_with('\n') {
+        return Err(if read as u64 >= MAX_REPLY {
+            "the reply was too large to read".to_string()
+        } else {
+            "the reply was cut short".to_string()
+        });
+    }
+
+    let reply: Reply = serde_json::from_str(line.trim()).map_err(|e| {
+        // The parse error names the offset and what it expected, which is the
+        // difference between "a peer running another version" and a bug here.
+        format!("could not understand the reply: {e}")
+    })?;
 
     let mut body = Vec::new();
     if let Reply::Bytes { len, .. } = &reply {
@@ -635,6 +676,7 @@ mod tests {
         trust: StdMutex<Trust>,
         pairing: StdMutex<Option<Pairing>>,
         tracks: Vec<(String, Vec<u8>)>,
+        manifest: StdMutex<Manifest>,
     }
 
     impl Fixture {
@@ -643,6 +685,10 @@ mod tests {
                 trust: StdMutex::new(Trust::new()),
                 pairing: StdMutex::new(None),
                 tracks: vec![("/music/a.m4a".to_string(), b"the audio".to_vec())],
+                manifest: StdMutex::new(Manifest {
+                    device_id: "us".into(),
+                    ..Default::default()
+                }),
             }
         }
 
@@ -678,10 +724,7 @@ mod tests {
             outcome
         }
         fn manifest(&self) -> Manifest {
-            Manifest {
-                device_id: "us".into(),
-                ..Default::default()
-            }
+            self.manifest.lock().unwrap().clone()
         }
         fn read_track(&self, href: &str) -> Option<Vec<u8>> {
             self.tracks
@@ -938,5 +981,107 @@ mod tests {
         if let Some(session) = again {
             session.stop();
         }
+    }
+
+    /// A real library's manifest, over a real socket.
+    ///
+    /// Every other test in this file calls `handle` directly and gets a `Reply`
+    /// value back, which is why this went unseen: the handler was always right.
+    /// The failure was on the wire. `ask` read the reply with the bound meant
+    /// for *requests* — 64 KiB — and a manifest carries every track the library
+    /// knows: about 208 bytes each once a digest is present, so a 563-track
+    /// library is roughly 114 KiB. `read_line` stopped at the cap, the JSON was
+    /// half a document, and serde's failure was reported as "unreadable reply".
+    ///
+    /// Pairing kept working throughout, because that reply is two short
+    /// strings — which is exactly what "it finds the other device but will not
+    /// sync" looks like from the outside.
+    #[test]
+    fn a_manifest_larger_than_a_request_survives_the_wire() {
+        use vapor_library::sync::TrackRecord;
+
+        let fixture = Fixture::trusting("them");
+        {
+            let mut manifest = fixture.manifest.lock().unwrap();
+            manifest.tracks = (0..563)
+                .map(|i| TrackRecord {
+                    href: format!(
+                        "/dav/Koofr/Music/An Artist/An Album With A Long Name/{i:02} A Track.flac"
+                    ),
+                    size: 41_234_567,
+                    digest: "a".repeat(64),
+                    updated: 1_755_780_000_000,
+                })
+                .collect();
+        }
+
+        let wire = serde_json::to_string(&Reply::Manifest(Box::new(fixture.manifest())))
+            .expect("serialise");
+        assert!(
+            wire.len() as u64 > MAX_REQUEST,
+            "the fixture has to exceed the request bound or it proves nothing: {} bytes",
+            wire.len()
+        );
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            serve(&fixture, stream).expect("serve");
+        });
+
+        let (reply, body) = ask(
+            &address,
+            &Request::Manifest {
+                device_id: "them".into(),
+            },
+        )
+        .expect("the manifest has to arrive whole");
+        server.join().expect("server thread");
+
+        assert!(body.is_empty(), "a manifest has no trailing bytes");
+        match reply {
+            Reply::Manifest(manifest) => {
+                assert_eq!(manifest.tracks.len(), 563, "every record has to survive");
+            }
+            other => panic!("expected a manifest, got {other:?}"),
+        }
+    }
+
+    /// A reply cut short says it was cut short.
+    ///
+    /// The old message was "unreadable reply" for both this and genuine
+    /// nonsense, so the one failure a size bound can cause was indistinguishable
+    /// from the one it cannot. Finding the real cause took arithmetic on the
+    /// record size rather than anything the app said.
+    #[test]
+    fn a_truncated_reply_is_not_reported_as_nonsense() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut sink = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut sink)
+                .ok();
+            // Valid JSON for as far as it goes, and no newline ever.
+            let half = format!("{{\"Manifest\":{{\"tracks\":[{}", "0,".repeat(40 * 1024));
+            stream.write_all(half.as_bytes()).ok();
+            stream.flush().ok();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+
+        let err = ask(
+            &address,
+            &Request::Manifest {
+                device_id: "them".into(),
+            },
+        )
+        .expect_err("a reply with no end must not parse");
+
+        assert!(
+            err.contains("too large") || err.contains("cut short"),
+            "the error has to name the shape of the problem, got {err:?}"
+        );
     }
 }

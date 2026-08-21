@@ -23,8 +23,8 @@
 use super::*;
 
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
-use tauri::webview::InvokeRequest;
 use tauri::utils::acl::ExecutionContext;
+use tauri::webview::InvokeRequest;
 use tauri::WebviewWindowBuilder;
 
 /// The commands these tests drive. Named once, because the handler list and the
@@ -142,9 +142,16 @@ fn call(
 fn a_created_playlist_comes_back_under_the_keys_the_frontend_reads() {
     let (_app, app, _dir) = seam();
 
-    let made = call(&app, "create_playlist", serde_json::json!({ "name": "Late Night" }));
+    let made = call(
+        &app,
+        "create_playlist",
+        serde_json::json!({ "name": "Late Night" }),
+    );
     assert_eq!(made["name"], "Late Night");
-    assert!(made["id"].is_string(), "an id the frontend can address it by");
+    assert!(
+        made["id"].is_string(),
+        "an id the frontend can address it by"
+    );
 
     let all = call(&app, "playlists", serde_json::json!({}));
     let list = all.as_array().expect("an array");
@@ -155,7 +162,10 @@ fn a_created_playlist_comes_back_under_the_keys_the_frontend_reads() {
     // load-bearing: the rail filters `p.folderId === ""` for the top level, and
     // `undefined === ""` is false, which is how a playlist becomes invisible.
     for key in ["id", "name", "customCoverPath", "tracks", "folderId"] {
-        assert!(one.get(key).is_some(), "playlists[0] is missing {key}: {one}");
+        assert!(
+            one.get(key).is_some(),
+            "playlists[0] is missing {key}: {one}"
+        );
     }
     assert_eq!(one["folderId"], "", "a new playlist is at the top level");
     assert!(one["tracks"].is_array());
@@ -165,8 +175,16 @@ fn a_created_playlist_comes_back_under_the_keys_the_frontend_reads() {
 fn a_playlist_filed_into_a_folder_reports_that_folder() {
     let (_app, app, _dir) = seam();
 
-    let playlist = call(&app, "create_playlist", serde_json::json!({ "name": "Sets" }));
-    let folder = call(&app, "create_folder", serde_json::json!({ "name": "Nights" }));
+    let playlist = call(
+        &app,
+        "create_playlist",
+        serde_json::json!({ "name": "Sets" }),
+    );
+    let folder = call(
+        &app,
+        "create_folder",
+        serde_json::json!({ "name": "Nights" }),
+    );
     let folder_id = folder["id"].as_str().expect("folder id").to_string();
 
     call(
@@ -182,16 +200,27 @@ fn a_playlist_filed_into_a_folder_reports_that_folder() {
     );
 
     let folders = call(&app, "playlist_folders", serde_json::json!({}));
-    assert!(folders[0].get("parentId").is_some(), "camelCase, not parent_id");
+    assert!(
+        folders[0].get("parentId").is_some(),
+        "camelCase, not parent_id"
+    );
 }
 
 #[test]
 fn renaming_and_deleting_a_playlist_are_visible_to_the_next_read() {
     let (_app, app, _dir) = seam();
-    let made = call(&app, "create_playlist", serde_json::json!({ "name": "First" }));
+    let made = call(
+        &app,
+        "create_playlist",
+        serde_json::json!({ "name": "First" }),
+    );
     let id = made["id"].clone();
 
-    call(&app, "rename_playlist", serde_json::json!({ "id": id, "name": "Second" }));
+    call(
+        &app,
+        "rename_playlist",
+        serde_json::json!({ "id": id, "name": "Second" }),
+    );
     let all = call(&app, "playlists", serde_json::json!({}));
     assert_eq!(all[0]["name"], "Second");
 
@@ -206,7 +235,11 @@ fn renaming_and_deleting_a_playlist_are_visible_to_the_next_read() {
 fn a_group_entity_arrives_as_entity_type() {
     let (_app, app, _dir) = seam();
 
-    let group = call(&app, "create_group", serde_json::json!({ "name": "Ambient" }));
+    let group = call(
+        &app,
+        "create_group",
+        serde_json::json!({ "name": "Ambient" }),
+    );
     call(
         &app,
         "add_to_group",
@@ -229,7 +262,12 @@ fn settings_arrive_camel_cased_and_numeric() {
     let (_app, app, _dir) = seam();
     let s = call(&app, "settings", serde_json::json!({}));
 
-    for key in ["cacheMaxBytes", "hideDuplicates", "metadataLookupEnabled", "djMode"] {
+    for key in [
+        "cacheMaxBytes",
+        "hideDuplicates",
+        "metadataLookupEnabled",
+        "djMode",
+    ] {
         assert!(s.get(key).is_some(), "settings is missing {key}");
     }
     // Not a string, and not a bigint: `ts-rs` maps u64 to bigint by default and
