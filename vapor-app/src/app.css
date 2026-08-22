@@ -356,20 +356,20 @@
 
 .rail__count {
   color: var(--ink-3);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
 }
 
 .rail__empty {
   margin: 4px 12px;
   color: var(--ink-3);
-  font-size: var(--fs-small);
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
 .rail__flash {
   margin: 6px 12px 0;
   color: var(--ink-2);
-  font-size: var(--fs-small);
+  font-size: var(--fs-sm);
 }
 
 /* ---- Folders ------------------------------------------------------------
@@ -481,7 +481,7 @@
   padding: 4px 12px;
   border-radius: var(--r-md);
   color: var(--ink-3);
-  font-size: var(--fs-small);
+  font-size: var(--fs-sm);
 }
 
 .rail__loose--over {

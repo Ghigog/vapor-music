@@ -98,7 +98,7 @@
 
 .playlist__index {
   color: var(--ink-3);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   text-align: right;
 }
 
@@ -125,14 +125,14 @@
 }
 
 .playlist__artist {
-  font-size: var(--fs-small);
+  font-size: var(--fs-sm);
   color: var(--ink-3);
 }
 
 .playlist__bpm,
 .playlist__key {
   color: var(--ink-2);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   text-align: right;
 }
 
@@ -156,7 +156,7 @@
   color: var(--ink-3);
   padding: 4px 6px;
   border-radius: var(--r-sm);
-  font-size: var(--fs-small);
+  font-size: var(--fs-sm);
 }
 
 .playlist__row-actions button:hover:not(:disabled) {
