@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater",
+  "description": "The self-updater, which only exists on desktop. Separate from `default` and platform-scoped because tauri-plugin-updater is not compiled for Android or iOS, so on those targets `updater:default` names a permission that does not exist and the build script fails.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": ["updater:default"]
+}
