@@ -2567,3 +2567,38 @@ Titles reconstructed from Dylan's answers; the desks' own wording is gone.
 **Waiting for:** The `screens` and `components` lanes; all four land there and
 another session has been in both.
 
+
+### AUD-6 : the Daylight secondary ink scale is under AA (open)
+
+`--accent-fill` was 4.02:1 under a white label and is fixed — `#0062d6`, 5.65:1,
+guarded by a computed test in `src/lib/tokens.test.ts`. The rest of the scale
+was measured at the same time and is left alone, because darkening it changes
+how every quiet label in the app looks and that is a design call rather than a
+correctness one.
+
+Daylight, against `--page` `#eceef1`:
+
+| Token | Value | Ratio | |
+|---|---|---|---|
+| `--ink` | `#14161a` | 15.58:1 | passes |
+| `--ink-2` | `#676c75` | 4.54:1 | passes, and 4.30:1 on the gradient's top stop `#dfe9f5` |
+| `--sov-ink` | `#237a52` | 4.54:1 | passes |
+| `--ink-soft` | `#7b8189` | 3.38:1 | large text only |
+| `--accent` as text | `#007aff` | 3.46:1 | large text only |
+| `--sov-quiet` | `#5c8f76` | 3.20:1 | large text only |
+| `--ink-4` | `#8b9099` | 2.76:1 | **fails** |
+| `--ink-3` | `#9ba1aa` | 2.24:1 | **fails** |
+
+`--ink-4` is the one that matters: it is what `.label` is set in, at 11px, which
+is the most repeated text style in the app. Two of those numbers are marginal
+rather than failing — `--ink-2` drops to 4.30:1 where the page gradient is
+lightest, so it passes on most of the screen and not at the top.
+
+`docs/DESIGN_LANGUAGE.md` commits the app to WCAG 2.1 AA, so this is a gap
+against a stated position, not a suggestion. Deliberately not encoded as an
+accepted value in the test: a test that asserts a failing number is how the
+failure becomes permanent.
+
+**Waiting for:** Dylan. Darkening `--ink-4` to roughly `#6b7079` clears 4.5:1;
+whether the quiet scale should get darker or the 11px labels should get bigger
+is the actual question.

@@ -107,3 +107,84 @@ describe("colours live in tokens.css", () => {
     expect(offenders, "put these in public/tokens.css").toEqual([]);
   });
 });
+
+/**
+ * Contrast, computed rather than trusted.
+ *
+ * `docs/DESIGN_LANGUAGE.md` commits the app to WCAG 2.1 AA. Nothing checked
+ * it, and the primary button spent its life at 4.02:1 — white on `#007aff`,
+ * which is Apple's blue and looks entirely correct until it is measured. The
+ * comment beside it recorded 5.6:1, a figure that belonged to a label colour
+ * the theme no longer used.
+ *
+ * Only the pairs that are *decided* are asserted: a label on a fill, and body
+ * ink on the page. The secondary ink scale has known failures, deliberately not
+ * encoded here as acceptable — see `docs/workspace/tickets.md`. A test that
+ * asserts a failing value is how the failure becomes permanent.
+ */
+describe("contrast", () => {
+  const channel = (c: number) =>
+    c / 255 <= 0.03928 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4;
+
+  function luminance(hex: string): number {
+    const h = hex.trim().replace("#", "");
+    const full = h.length === 3 ? [...h].map((c) => c + c).join("") : h;
+    const [r, g, b] = [0, 2, 4].map((i) =>
+      channel(parseInt(full.slice(i, i + 2), 16)),
+    ) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  function ratio(a: string, b: string): number {
+    const [x, y] = [luminance(a), luminance(b)];
+    const [hi, lo] = x > y ? [x, y] : [y, x];
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  it("computes a known pair correctly", () => {
+    // Guards the maths itself: black on white is exactly 21:1, and a formula
+    // that is subtly wrong would otherwise make every assertion below
+    // meaningless in whichever direction it errs.
+    expect(ratio("#000000", "#ffffff")).toBeCloseTo(21, 5);
+    expect(ratio("#ffffff", "#ffffff")).toBeCloseTo(1, 5);
+  });
+
+  const themes: Array<[string, string]> = [
+    ["Daylight", ":root {"],
+    ["Lamplight", ':root[data-theme="dark"]'],
+  ];
+
+  for (const [name, selector] of themes) {
+    it(`${name}: the label on the primary fill passes AA`, () => {
+      const t = declarations(block(selector));
+      const label = t.get("--on-accent");
+      const fill = t.get("--accent-fill");
+
+      expect(label, `${name} has no --on-accent`).toBeTruthy();
+      expect(fill, `${name} has no --accent-fill`).toBeTruthy();
+
+      const measured = ratio(label as string, fill as string);
+      expect(
+        measured,
+        `${label} on ${fill} is ${measured.toFixed(2)}:1, under the 4.5:1 AA ` +
+          `floor for the button label this pair exists to carry`,
+      ).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it(`${name}: body ink passes AA on the page`, () => {
+      const t = declarations(block(selector));
+      const page = t.get("--page");
+      expect(page, `${name} has no --page`).toBeTruthy();
+
+      for (const token of ["--ink", "--ink-2"]) {
+        const value = t.get(token);
+        expect(value, `${name} has no ${token}`).toBeTruthy();
+        const measured = ratio(value as string, page as string);
+        expect(
+          measured,
+          `${token} ${value} on --page ${page} is ${measured.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+});

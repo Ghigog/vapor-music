@@ -32,7 +32,15 @@
   /* The ground of a *filled* accent control, which is not always `--accent`:
      in Lamplight the accent is lifted for legibility as text, and a fill at
      that lightness cannot carry a label. See the dark block. */
-  --accent-fill: #007aff;
+  /* Darker than `--accent`, and it has to be. The fill carries `--on-accent`,
+     which in this theme is #fff, and #fff on #007aff is 4.02:1 — under AA for
+     the button label it exists to hold. #0062d6 is 5.65:1 and is the same blue
+     the palette already uses one step down.
+
+     Measured rather than eyeballed. The Lamplight note below quotes 5.6:1 for
+     the old blue fill, which was true of the *warm-white* label it had then —
+     this theme's label became #fff, and that is the pair that fell under. */
+  --accent-fill: #0062d6;
   /* Its hover. */
   --accent-bright: #3396ff;
   /* The accent as text on an accent-tinted chip. */
