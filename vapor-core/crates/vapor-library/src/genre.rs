@@ -4,11 +4,12 @@
 //! (Club Music → House → Tech House); distance is the number of edges between
 //! two genres in that tree, found by breadth-first search.
 //!
-//! The tree is embedded rather than read from `assets/genre_taxonomy.json` at
-//! runtime. The GDScript already carried an identical hardcoded fallback for
-//! when the file failed to load, so there were effectively two copies; keeping
-//! the compiled-in one means the library has no file dependency and works
-//! unchanged in the browser.
+//! The tree is embedded rather than read from a file at runtime. The Godot
+//! build kept it in `assets/genre_taxonomy.json` *and* as a hardcoded fallback
+//! in GDScript for when the file failed to load, so there were two copies of it
+//! already; the compiled-in one was kept because it gives the library no file
+//! dependency and works unchanged in the browser. The JSON went with the Godot
+//! tree, so this is now the only copy.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
@@ -16,7 +17,7 @@ use std::sync::OnceLock;
 /// Cost returned when a genre is unknown, absent, or not in the tree.
 pub const UNRELATED_COST: f32 = 5.0;
 
-/// The taxonomy, matching `assets/genre_taxonomy.json`.
+/// The taxonomy. Sole copy since the Godot tree was removed.
 const TAXONOMY: &[(&str, &[&str])] = &[
     ("Club Music", &["House", "Techno"]),
     (

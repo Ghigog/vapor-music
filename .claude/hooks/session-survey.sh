@@ -36,7 +36,6 @@ lane_of() {
   vapor-app/src/components/*) echo components ;;
   vapor-core/*) echo core ;;
   docs/* | README.md | THIRD_PARTY_NOTICES.md | LICENSE | licenses/*) echo docs ;;
-  src/* | scenes/* | autoloads/* | scripts/* | addons/* | godot-cpp/* | project.godot | SConstruct | tests/*) echo archived ;;
   *) echo other ;;
   esac
 }

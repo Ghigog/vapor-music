@@ -15,26 +15,21 @@ they travel with the application as the licenses require. See
 is used for, and [`../docs/LICENSING.md`](../docs/LICENSING.md) for the
 compliance reasoning.
 
-## Archived — the Godot tree
-
-Nothing in this table ships. Essentia and Rubber Band were the strong-copyleft
-dependencies that forced the original AGPL conclusion; neither survives in the
-Rust build, where analysis is `vapor-dsp` and stretching is Signalsmith (MIT).
-The texts stay for the record until the Godot tree is removed.
-
-| File | Component | License |
-|---|---|---|
-| `Essentia-AGPL-3.0.txt` | Essentia — BPM and key analysis | AGPL-3.0 |
-| `RubberBand-GPL-2.0.txt` | Rubber Band — time-stretching | GPL-2.0-or-later |
-| `GodotEngine-MIT.txt` | Godot Engine | MIT |
-| `godot-cpp-MIT.txt` | godot-cpp — GDExtension bindings | MIT |
-| `GUT-MIT.txt` | GUT — test framework (not shipped) | MIT |
-
 ## Icons
 
-Icons in `assets/icon/` are by **Gregor Cresnar** via
+Icons in `vapor-app/public/assets/icon/` are by **Gregor Cresnar** via
 [the Noun Project](https://thenounproject.com), used under the
 [Creative Commons Attribution 4.0 licence](https://creativecommons.org/licenses/by/4.0/).
 
 CC BY requires attribution visible to users of the work, not only in the source
 repository — this is what the in-app About → Licenses screen is for.
+
+## What was removed with the Godot tree
+
+`Essentia-AGPL-3.0.txt`, `RubberBand-GPL-2.0.txt`, `GodotEngine-MIT.txt`,
+`godot-cpp-MIT.txt` and `GUT-MIT.txt` were deleted on 2026-08-21 along with the
+tree that used them. Essentia and Rubber Band were the strong-copyleft
+dependencies behind the original AGPL conclusion; neither survives in the Rust
+build, where analysis is `vapor-dsp` and stretching is Signalsmith (MIT). None
+of the five shipped in a Rust build, so nothing that was ever distributed is
+missing a notice. `godot-final-v1.78` has them if the history is needed.

@@ -1,23 +1,19 @@
 # Vapor Music
 
-The live application is **`vapor-app/`** (Tauri 2 shell in `src-tauri/`, React 19
-in `src/`) on top of **`vapor-core/`** (the Rust crates: `vapor-dsp`,
-`vapor-engine`, `vapor-library`). That is what ships and what almost every task
-is about.
+The application is **`vapor-app/`** (Tauri 2 shell in `src-tauri/`, React 19 in
+`src/`) on top of **`vapor-core/`** (the Rust crates: `vapor-dsp`,
+`vapor-engine`, `vapor-library`). Those two directories are the whole project.
 
-The Godot original at the repo root — `project.godot`, `scenes/`, `autoloads/`,
-and the root-level `src/` and `scripts/` — is **archived**. It is kept so legacy
-behaviour can be read, not built or changed.
+The Godot original was deleted on 2026-08-21 — 479 files, the repo root's
+`src/`, `scenes/`, `autoloads/`, `scripts/`, `addons/`, `assets/`, `tests/`,
+`project.godot` and `SConstruct`. It is not gone: the tag
+**`godot-final-v1.78`** is on origin and its tree was byte-identical to what
+was removed, so `git show godot-final-v1.78:<path>` reads any of it back.
+Nothing needs to be ported out of it; if something does, take it from the tag.
 
-> The root `src/` and `scripts/` are Godot. The live ones are `vapor-app/src/`
-> and `vapor-app/scripts/`. This trips people up; check the prefix.
-
-Current, and worth reading: `docs/TESTING.md`, `docs/FINDINGS.md`,
-`docs/RELEASE.md`, `docs/LICENSING.md`, `docs/DECISIONS.md`, `docs/ANDROID.md`,
+Worth reading: `docs/TESTING.md`, `docs/FINDINGS.md`, `docs/RELEASE.md`,
+`docs/LICENSING.md`, `docs/DECISIONS.md`, `docs/ANDROID.md`,
 `docs/theme_system.md`.
-
-`docs/ARCHITECTURE.md` describes the **Godot** build and nothing else. Do not
-start there for work on the Tauri app; it is archaeology.
 
 ## Answer the question that was asked
 
@@ -118,9 +114,8 @@ Pick tasks from different lanes and two sessions will rarely meet.
 | **screens** — React screens | `vapor-app/src/screens/**`, `vapor-app/src/App.tsx` |
 | **components** — shared widgets | `vapor-app/src/components/**` |
 | **core** — DSP, engine, library | `vapor-core/**` |
-| **platform** — build, CI, packaging | `src-tauri/src/android.rs`, `.github/workflows/**`, `vapor-app/scripts/**`, `tools/**`, `docs/RELEASE.md`, `docs/ANDROID.md` |
+| **platform** — build, CI, packaging | `src-tauri/src/android.rs`, `.github/workflows/**`, `vapor-app/scripts/**`, `docs/RELEASE.md`, `docs/ANDROID.md` |
 | **docs** | `docs/**`, `README.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, `licenses/**` |
-| **archived — never edit** | `src/**`, `scenes/**`, `autoloads/**`, `scripts/**`, `addons/**`, `godot-cpp/**`, `project.godot`, `SConstruct`, `tests/**` (all repo-root) |
 
 `core` is the cleanest lane in the repo — zero recorded collisions. `components`
 is the dirtiest: `PlaylistRail`, `SyncPanel` and `TabMenu` get pulled in by

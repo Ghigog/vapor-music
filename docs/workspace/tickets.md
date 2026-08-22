@@ -2366,27 +2366,27 @@ cargo test --lib live_services -- --ignored --nocapture
 **Waiting for:** A design iteration. `design/vapor-mark.js` and the app are byte-identical, so the app is not lagging the design.
 
 
-### TD-41 : (blocked)
+### TD-41 : (closed 2026-08-21 — the tree is gone)
 
 **The Godot CI job runs without the GDExtension**, so DSP-dependent tests are not covered. Deliberate — building Essentia from a HEAD-only tap on every run is worse — but the gap is real.
 
-**Waiting for:** Nothing — deliberate. The Godot tree is being archived, not repaired.
+**Closed by AUD-4.** The Godot tree was deleted on 2026-08-21; this described a gap in CI coverage of a tree that no longer exists. `godot-final-v1.78` holds it if the reasoning is ever needed again.
 
 **Where:** MIG-040
 
 
-### TD-42 : (blocked)
+### TD-42 : (closed 2026-08-21 — the tree is gone)
 
 ~~**12 GUT tests fail**, never diagnosed.~~ **Diagnosed (2026-08-16); not fixed.** All twelve are **stale tests**, not product defects — every one chases an interface that moved, and nothing in the app is broken by them. Three causes: (a) **nine** in `test_library_screen_parsing.gd` call `library_screen.call("_parse_track_info", …)`, and that function is not on `library_screen.gd` — path parsing lives in `metadata_service.gd`; (b) **two** — `test_focus_track_emits_signal` and `test_sidebar_preview_square_visibility` — pass five arguments to `track_focused`, which gained a leading `href` and now takes six; (c) **one**, `test_mini_player_responsive_squeeze`, asserts nav labels of `"♪ Library"` and `"▤ Playlists"` that collapse to icons when narrow, and no such label exists in the source any more. A thirteenth, `test_sidebar_hidden_on_mobile`, is *risky* rather than failing: it asserts nothing at all. **Deliberately not fixed** — this is `vapor-library::naming` and the new shell's problem now, and repairing tests for a tree phase 5 archives spends effort on the thing being deleted. Recorded so nobody has to run it again to find out.
 
-**Waiting for:** Nothing — deliberate. All twelve are stale tests chasing interfaces that moved; no product defect behind any.
+**Closed by AUD-4.** The Godot tree was deleted on 2026-08-21; this described a gap in CI coverage of a tree that no longer exists. `godot-final-v1.78` holds it if the reasoning is ever needed again.
 
 
-### TD-45 : (blocked)
+### TD-45 : (closed 2026-08-21 — the tree is gone)
 
 **The GUT baseline numbers in CI and in this document describe different runs.** CI pins `EXPECTED_PASS: 190 / EXPECTED_FAIL: 19` because it runs the *stub* path with no GDExtension (TD-41); the 211/12 quoted here and in `ci.yml`'s own comment is the local run with the dylib present. Both are correct and they are twelve lines apart in the same file, which is how a person ends up chasing a discrepancy that is not there. **Fixed in `ci.yml`** — both comments now say which run they describe. Kept as a record of why the numbers differ.
 
-**Waiting for:** Nothing — fixed in `ci.yml`; kept as the record of why two numbers differ.
+**Closed by AUD-4.** The Godot tree was deleted on 2026-08-21; this described a gap in CI coverage of a tree that no longer exists. `godot-final-v1.78` holds it if the reasoning is ever needed again.
 
 **Where:** TD-41, TD-42
 
@@ -2532,7 +2532,7 @@ but it is gone with the reports.
 
 **Waiting for:** Dylan to pick one.
 
-### AUD-4 : delete the Godot tree (decided, not done)
+### AUD-4 : delete the Godot tree (done 2026-08-21)
 
 The QA and Architecture desks disagreed. Architecture won on the numbers; QA's
 point that the CI ratchet script is sound was also true, and "delete it" is
@@ -2545,7 +2545,9 @@ tag `godot-final-v1.78` exists and is on origin, so the tree survives deletion.
 Closes TD-41, TD-42 and TD-45, which exist only because that tree does, and
 drops the `godot (stub path)` job from `ci.yml`.
 
-**Waiting for:** Nothing.
+479 files removed, the `godot (stub path)` job dropped from `ci.yml`, and
+`tools/` with it — both scripts in it were Godot's. TD-41, TD-42 and TD-45 close
+with it. The `godot-cpp` submodule is deregistered and `.gitmodules` is gone.
 
 ### AUD-5 : the four named UI findings (open)
 
