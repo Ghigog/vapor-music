@@ -19,6 +19,18 @@ Current, and worth reading: `docs/TESTING.md`, `docs/FINDINGS.md`,
 `docs/ARCHITECTURE.md` describes the **Godot** build and nothing else. Do not
 start there for work on the Tauri app; it is archaeology.
 
+## Answer the question that was asked
+
+Work you find on the way to something else is **not** yours to start. Say what
+you found, in a sentence, and ask. Dylan decides whether it is worth doing now.
+
+Fixing something you broke in this session is the exception, and only that. It
+does not extend to what you notice while fixing it.
+
+Written 2026-08-21, from a session that was asked where a file lived, and
+answered forty minutes later having rewritten two clippy lints it did not cause
+and read four CI logs. The question went unanswered the whole time.
+
 ## Several Claude sessions run in this repo at once
 
 Dylan runs two or three at a time, each briefed on its own scope. Assume you are
