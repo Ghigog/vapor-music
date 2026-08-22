@@ -74,6 +74,34 @@ The per-package breakdown and the method behind it are in `docs/LICENSING.md`.
 
 ---
 
+## Frontend
+
+The interface is bundled into a single JavaScript file that ships inside the
+application, so these are distributed with it exactly as the Rust crates are.
+They were missed until 2026-08-22: the Rust tree had been inventoried against
+`Cargo.lock` and the npm tree had not been inventoried at all.
+
+That inventory has now been done — 239 packages in `package-lock.json`, every
+one permissive, no copyleft. Most are build tooling that never leaves the
+machine. These four are in the shipped bundle and are what MIT asks be
+acknowledged.
+
+| Package | Copyright | Licence |
+|---|---|---|
+| **react** | Copyright (c) Meta Platforms, Inc. and affiliates | MIT |
+| **react-dom** | Copyright (c) Meta Platforms, Inc. and affiliates | MIT |
+| **@tanstack/react-virtual** | Copyright (c) 2021-present Tanner Linsley | MIT |
+| **@tauri-apps/api** | Copyright (c) 2019-2024 Tauri Programme within The Commons Conservancy | Apache-2.0 OR MIT |
+
+<https://react.dev> — <https://tanstack.com/virtual> — <https://tauri.app>
+
+> MIT asks for the copyright notice and the permission notice in all copies or
+> substantial portions. This file is that notice, and it is rendered inside the
+> app under Settings → About → Licences, which is where the people running the
+> software can actually reach it.
+
+---
+
 ## Assets
 
 ### Fonts — SIL Open Font License 1.1
