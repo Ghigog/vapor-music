@@ -2602,3 +2602,268 @@ failure becomes permanent.
 **Waiting for:** Dylan. Darkening `--ink-4` to roughly `#6b7079` clears 4.5:1;
 whether the quiet scale should get darker or the 11px labels should get bigger
 is the actual question.
+
+---
+
+## What the audit left, written down (2026-08-22)
+
+The ten desks produced more than the seven decisions in `docs/DECISIONS.md`.
+Twelve of their findings were fixed on 2026-08-21/22 and are closed in the
+commit log; what follows is everything still open, one ticket each, so the
+backlog stops living in a conversation.
+
+Ordered by what blocks distribution, not by which desk raised it.
+
+### AUD-7 : LAN sync is readable and forgeable on the wire (open)
+
+`peers.rs` has no transport encryption — grep for tls, noise, cipher or
+encrypt returns nothing. That much was already recorded as TD-56 and accepted
+for a single trusted network.
+
+The part TD-56 does not cover: the SHA-256 digest arrives in the same plaintext
+reply as the bytes it covers (`lib.rs`, `Reply::Bytes`). An attacker on the path
+rewrites both, so the integrity check confirms the content they substituted.
+That is not eavesdropping, it is injection into the audio cache, and it reaches
+the decoder.
+
+Fix is at the pairing layer: derive a session key from the pairing secret and
+store the peer's public key in `Trust`. The two unbounded allocations either
+side of this were closed in `30ba440`.
+
+**Waiting for:** Nothing. This is the one security item that should land before
+the app runs on a network Dylan does not own.
+
+### AUD-8 : the end-to-end suite never reaches Rust (open)
+
+`vite.e2e.config.ts` aliases `@tauri-apps/api/core` to `src/test/browser-ipc.ts`
+— the same fake the component tests use. So the e2e suite drives the real UI
+against a TypeScript reimplementation of the backend, and the seam between them
+is exactly where all five defects that reached the first outside user lived.
+
+`seam.rs` covers that seam properly but only for 12 of 102 commands.
+
+**Waiting for:** A decision on how far to go. Extending `seam.rs` a few commands
+at a time is cheap; making the e2e suite drive the real shell needs
+`tauri-driver` and is a different size of job.
+
+### AUD-9 : the monkey runs against a backend that cannot fail (open)
+
+`e2e/monkey.spec.ts` takes 250 random actions across three seeds. Every command
+it hits succeeds, because the fake always answers — one `.fail()` exists in the
+whole `e2e/` directory, in `journeys.spec.ts`.
+
+The first defect that ever reached an outside user was an error bar that could
+not be dismissed. A random walk is the right tool for finding that, and this one
+structurally cannot.
+
+**Waiting for:** Nothing. A `failureRate` on the fake plus a fourth seed is
+about thirty lines.
+
+### AUD-10 : four modules with no tests (open)
+
+`decoder.rs` (seek offsets, silence gating), `sync.rs`'s drift-thread lifecycle,
+`android.rs` (359 lines of JNI), and `secrets/{mod,desktop}.rs` (137 lines).
+
+`secrets/desktop.rs` is the one to do first: three of the five defects that
+reached the first outside user were keyring behaviour, and it is the wrapper
+around the keyring.
+
+**Waiting for:** Nothing.
+
+### AUD-11 : dynamic groups do not sync at all (open)
+
+`sync::Shared` carries playlists, folders, bpm overrides and tombstones. It does
+not mention groups — zero occurrences in `sync.rs`. Groups are a first-class
+organising concept with their own rail and eight commands, and they exist on
+exactly one device with nothing in the UI saying so.
+
+They are entity sets, so additive merge works and needs no new tombstone kind.
+The per-track removal tombstone added in `b121925` is the template if one is
+ever needed.
+
+**Waiting for:** Nothing. Either add `groups` to `Shared`, or say in the UI that
+groups are per-device.
+
+### AUD-12 : the cover cache has no ceiling (open)
+
+`covers.rs` has `get`, `put`, `thumb` and `size` — and no `max_bytes`, no
+eviction, no `clear`. The audio cache beside it has a full LRU and three
+commands to manage it.
+
+At 50k tracks that is multiple GB with no lever short of "delete all data".
+`data_breakdown` reports the number and offers nothing to do about it.
+
+**Waiting for:** A choice — give `Covers` the same LRU as `Cache`, or stop
+persisting full-size covers and keep thumbs plus a re-derive path.
+
+### AUD-13 : library_view returns the whole library, per keystroke (open)
+
+It clones every matching row, applies tags and analysis per row, sorts, groups
+and serialises the lot — under the global mutex, on a debounced query effect. At
+50k tracks that is roughly 15–25 MB of JSON per call, while the virtualiser
+renders about forty rows.
+
+The virtualiser solved rendering. Nothing solved transport. Dylan's own framing:
+the library view should show playlists, groups, albums and artists, never a wall
+of rows, and horizontal shelves should pull more in lazily — which is the same
+fix from the product end.
+
+**Waiting for:** The library redesign, which is where this naturally lands.
+
+### AUD-14 : the DJ planner is outside the portable core (open)
+
+`choose_transition`, `candidate_cost`, `dj_pick`, `extend_set`, `plan_mix` and
+the tuned weights live in `lib.rs` and take `&AppState`. The repo keeps a wasm CI
+job over three crates specifically to hold the core platform-free, and the
+feature the product is named for is in none of them.
+
+The planners are already portable; what binds them is the command wrappers.
+Behind a narrow `Catalogue` trait this is one to two days, and the tuned
+constants get property tests that need no Tauri runtime.
+
+**Waiting for:** Nothing, but it wants the `lib.rs` split further along first.
+
+### AUD-15 : finish the lib.rs split — 39 commands left (open)
+
+62 of 101 moved on 2026-08-22 (`7aa97b5`, `f96f391`), 11,033 lines down to
+9,663. Still in `lib.rs`: library, sync and peers, downloads, data, settings,
+metadata lookup.
+
+Until it is done, `CLAUDE.md`'s seam rule still binds — one session in the
+backend at a time — which is the constraint the split exists to remove.
+
+The extractor and its two hard-won fixes are worth reusing: a multi-line `fn`
+signature closes a span on its first parameter unless brace counting waits for
+the body to open, and a blind rewrite of a handler entry also matches
+struct-field shorthand in `AppState { … }`.
+
+**Waiting for:** Nothing. Mechanical, and each domain is independently green.
+
+### AUD-16 : no privacy policy, EULA or support route (open)
+
+None of the three exists. Verified 2026-08-22: no policy or terms file anywhere,
+no `mailto:` in the app or the README.
+
+* **Privacy policy** — mandatory for both stores regardless of how little is
+  collected, and artist/album/track names do leave the device when lookups are
+  on. Needed even for direct download.
+* **EULA** — `LICENSE` is a repository copyright notice. It grants a person who
+  downloads a build no right to run it.
+* **Support** — there is no telemetry and no crash reporting, both deliberate,
+  which makes a person describing a fault the only channel there is. The app can
+  now name its build (`b8eddb6`); nothing tells them where to send it.
+
+**Waiting for:** Dylan. The privacy policy is a factual description of what the
+code already does and can be drafted from the code; the EULA wants a template
+and, before anything is sold, a lawyer.
+
+### AUD-17 : contributions are unsettled, on a public repository (open, overdue)
+
+`docs/LICENSING.md` names this as the precondition for going public: settle
+contributions first, because one accepted outside pull request freezes the
+licence choice and cannot be undone unilaterally.
+
+The repository was already public when that was written, so it is not a step
+before a switch — the switch is thrown.
+
+**Waiting for:** Dylan. Disable pull requests, or add a CLA. Minutes either way.
+
+### AUD-18 : Deezer is called without registration or terms review (open)
+
+`metadata.rs` calls `search/artist`, `search/track`, `track/{id}`, `search/album`
+and `album/{id}`, and downloads artwork from `cdn-images.dzcdn.net` which is then
+kept permanently — the file is the cache. No API key, no registered application,
+no `User-Agent` naming a contact.
+
+An analysis pass over a whole library is a lot of requests. `docs/RELEASE.md` §3
+already lists reviewing the rate limits and terms as outstanding.
+
+**Waiting for:** Reading Deezer's current API terms, then either registering or
+moving to MusicBrainz plus the Cover Art Archive, which are built for this.
+
+### AUD-19 : Windows CI has been red since a runner image moved (open)
+
+`shell (windows-latest)` exits `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`)
+before any test runs — a DLL load failure, so no user code executes and nothing
+is printed. Every other job is green as of 2026-08-22.
+
+The archaeology in `FINDINGS.md` (see `3a03ce0`) ties the first failure to the
+runner image moving from `20260810.198` to `20260818.207`, with no windows-\*
+crate changing version. `MSVCP140`/`VCRUNTIME140` are the plausible suspects.
+The diagnostic step added to name the missing export finished in 1.5 seconds
+having parsed no DLLs, so it is inconclusive rather than clean.
+
+**Waiting for:** A decision — keep digging at roughly twenty minutes an
+iteration, or mark the job non-blocking with this ticket attached so the board
+reports honestly again. A permanently-red column is a gate nobody reads.
+
+### AUD-20 : CI actions float on tags, and nothing watches dependencies (open)
+
+`release.yml` pins all seven of its actions by commit SHA, because it is the one
+workflow holding the signing key and `contents: write` together. `app.yml`
+(0 of 12) and `ci.yml` (0 of 6) do not.
+
+There is also no Dependabot or Renovate, and no `cargo-deny`. `docs/LICENSING.md`
+warns that a new transitive dependency can reintroduce copyleft silently, and
+then relies on a manual pass — which has already drifted once, 624 packages to
+627.
+
+**Waiting for:** Nothing. SHA-pinning is mechanical; `cargo-deny check licenses
+advisories` turns the licence inventory from a document into a gate.
+
+### AUD-21 : the updater keypair is mismatched, and deliberately unmanaged (open)
+
+On 2026-08-22 a session printed the updater private key into a transcript while
+verifying it, and rotated it in response. `~/.tauri/` now holds a new keypair;
+the old one is kept beside it suffixed `.COMPROMISED-2026-08-22`.
+
+**`tauri.conf.json` still carries the old public key.** So the config trusts a
+key whose private half is the compromised file, and a build signed with the new
+key would produce a signature the app refuses. Nothing depends on this until a
+release is signed.
+
+Dylan's decision, same day: no private key gets saved or managed until
+distribution is actually on the table, because every handling of it is a chance
+to leak it. That is the right trade while nothing ships.
+
+**Waiting for:** Distribution. At that point: generate the keypair fresh, put the
+public half in `tauri.conf.json` and the private half straight into a password
+manager, and never read it back out into a terminal.
+
+### AUD-22 : nothing has been released, and the pipeline is unexercised (open)
+
+`release.yml` exists and its logic is verified as far as it can be locally — the
+version check runs against the real files, the YAML parses, and a local
+`tauri build` with the signing key produces exactly the artefacts it expects,
+including the `.sig`. It has never run on a tag.
+
+`docs/RELEASE.md` already records the intended first move: tag an `-rc` so a
+mistake costs a draft rather than the release `releases/latest` resolves to,
+which is the URL compiled into every binary.
+
+**Waiting for:** AUD-21, since `verify` fails without the signing secret, and a
+decision that v1 is worth cutting.
+
+### AUD-23 : the app has no front door (open)
+
+No landing page, no domain, no demo. The README was rewritten on 2026-08-22 to
+stop describing a product that does not exist, and is now a developer's README
+rather than a pitch — which is the right shape for it, and leaves nothing
+pointing a stranger at a download.
+
+The marketing desk's position, kept because it survived its own claims audit:
+lead with the mix rather than the manifesto, because it is demonstrable in eight
+seconds and is the only claim with measurement behind it. A recording of one
+transition is probably the single highest-leverage artefact that does not exist.
+
+**Waiting for:** Dylan, and only when there is something worth pointing at.
+
+---
+
+### Closed on 2026-08-22, for the record
+
+Android ran on real hardware for the first time — a Pixel 9, over wireless ADB.
+The debug APK installed and `MainActivity` launched with `libvapor_app_lib.so`
+loading cleanly and no JNI error, which is the failure `docs/DECISIONS.md` §5
+was written about. Launching is not the same as exercising the credential store,
+so §5's precondition is partly met rather than met.
