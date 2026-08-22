@@ -2867,3 +2867,77 @@ The debug APK installed and `MainActivity` launched with `libvapor_app_lib.so`
 loading cleanly and no JNI error, which is the failure `docs/DECISIONS.md` §5
 was written about. Launching is not the same as exercising the credential store,
 so §5's precondition is partly met rather than met.
+
+### AUD-24 : every electronic record is one genre (open)
+
+Nils Frahm, Delta Heavy, Jerry Paper, Eptic and xKore all sit under
+"Electronic". They have almost nothing to do with each other, and no amount of
+editing tracks by hand fixes the cause.
+
+The cause is `metadata::genre_of`, which reads `genres.data[0].name` from a
+Deezer **album** response. Two problems in one line:
+
+* **`[0]`** — the first of however many, so a record tagged electronic and
+  drum-and-bass keeps only the first.
+* **Deezer's taxonomy is about twenty-five top-level genres.** There is no
+  "drum and bass", no "riddim", no "neo-classical". Everything electronic maps
+  to Electronic because that is the only shelf Deezer has.
+
+`Row::genre` is also a single `String`, so even a richer source has nowhere to
+put a second genre today.
+
+**Stated preference: more granular and more specific, not less.**
+
+There is **no last.fm or MusicBrainz work anywhere** — no branch, no worktree,
+no file, no commit. Checked 2026-08-22. If a session was asked to do this, it
+produced nothing that survives, so this starts from zero.
+
+Worth weighing before starting:
+
+* **MusicBrainz** — already the recommendation in AUD-18 for a different
+  reason (Deezer is being called unregistered). Has genres *and* folksonomy
+  tags, is built for this, and asks only for a `User-Agent` naming a contact.
+* **last.fm** — user tags, far more granular than any editorial taxonomy and
+  correspondingly noisy: "seen live" and "favourites" are tags too. Needs an
+  API key. Best treated as a source to filter, not to trust.
+* **The file's own tags** — already read by `lofty`, already the most specific
+  thing available for a well-tagged library, and currently overwritten rather
+  than preferred.
+
+Shape of the work: `Row::genre` becomes a list; a source order is decided (the
+file first, then a service); and the Genres tab groups on the list rather than
+on one string. `Source` already distinguishes file, folder, service and
+unknown, so provenance has somewhere to go.
+
+**Waiting for:** A decision on the source, and on whether one track may appear
+under several genres — which is the thing that makes granularity useful and is
+a real change to how the tab reads.
+
+### AUD-25 : drag and drop is broken, and the fix is sitting on a branch (open)
+
+Reported on desktop and on mobile, 2026-08-22.
+
+The implementation exists and was never merged. `37369ec`, on
+`worktree-drag-to-groups`, is **16 files and 802 insertions** — `drag.ts` +152,
+a new `vapor-app/src/lib/entityDrag.ts` that main does not have at all, plus
+`Home`, `Library`, `Playlist`, `Songs` and 100 lines of tests.
+
+What did land in main is `08c28de`, "Land another session's drag fix, at the
+owner's request": **two files, eighteen lines** — the `dragDropEnabled: false`
+line in `tauri.conf.json` and a small `PlaylistRail` change. That config line
+is necessary and not sufficient. It stops wry from swallowing the drag before
+the webview sees it; it does not implement dragging anything.
+
+So the branch holds the working half and main holds the config half, which
+matches the symptom exactly.
+
+Two hazards before merging:
+
+* It is based on `278cb5d` and main has moved a long way since — including the
+  `lib.rs` split. Expect conflicts in the screens it touches.
+* `dragDropEnabled` was written twice by two sessions, byte-identical, hours
+  apart. Whichever way this merges, check the file ends with one copy.
+
+**Waiting for:** Nothing. Merge `37369ec`, resolve, and confirm on both
+platforms — mobile is the one that has never been checked, and the Pixel 9 now
+runs the app.
