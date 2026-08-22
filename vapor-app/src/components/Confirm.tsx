@@ -21,6 +21,8 @@
 
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+
+import { useDialog } from "./dialog";
 import type { ReactNode } from "react";
 import { overlayRoot } from "./overlay";
 
@@ -42,16 +44,14 @@ export function Confirm({
   onCancel: () => void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+
+  useDialog(panel, onCancel);
 
   useEffect(() => {
     // Focus lands on Cancel, not on the destructive button: a stray Return on
     // a dialog that just appeared should not be the thing that deletes.
     cancelRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
   return createPortal(
@@ -62,6 +62,7 @@ export function Confirm({
       }}
     >
       <div
+        ref={panel}
         className="confirm glass"
         role="alertdialog"
         aria-modal="true"

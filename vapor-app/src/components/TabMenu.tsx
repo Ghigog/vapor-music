@@ -10,6 +10,8 @@
  */
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+
+import { useDialog } from "./dialog";
 import { overlayRoot } from "./overlay";
 
 export interface TabMenuItem {
@@ -42,13 +44,18 @@ export function TabMenu({
 }) {
   const panel = useRef<HTMLDivElement>(null);
 
+  useDialog(panel, onClose);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    // This one had no initial focus at all: it opened, and the first Tab
+    // started from wherever the page happened to be, which is behind the
+    // dialog. Landing on the first control inside is the least surprising
+    // answer for a menu — unlike Confirm, nothing in here is destructive.
+    const first = panel.current?.querySelector<HTMLElement>(
+      'button, a[href], [tabindex]:not([tabindex="-1"])',
+    );
+    first?.focus();
+  }, []);
 
   return createPortal(
     <div

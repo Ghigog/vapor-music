@@ -12,6 +12,8 @@
  */
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+
+import { useDialog } from "./dialog";
 import { overlayRoot } from "./overlay";
 
 export function TrackSheet({
@@ -33,14 +35,12 @@ export function TrackSheet({
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+
+  useDialog(panel, onClose);
 
   useEffect(() => {
     closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
   /*
@@ -67,6 +67,7 @@ export function TrackSheet({
       }}
     >
       <div
+        ref={panel}
         className="sheet glass"
         role="dialog"
         aria-modal="true"
