@@ -2470,3 +2470,98 @@ already on Play.
 
 **Waiting for:** Nothing technical. Deferred until release builds are actually
 wanted.
+
+---
+
+## From the ten-desk audit (2026-08-21)
+
+Recovered from the conversation that commissioned it. **The consolidated
+artifact and the ten desk reports are both gone** — the artifact URL returns
+"not found" and the reports were in a previous session's scratchpad, which has
+been cleaned. What follows is what survives in the thread itself.
+
+**What could not be recovered:** the ranked findings list had thirteen items and
+only the *answers* to them survive, not the titles. Items 3, 5, 7, 12 and 13 are
+unrecoverable — the replies were "lower priority", "good catch, let's do this",
+"make a note to work on all of these", "sounds good to check this" and "ok, yes
+lets do that", none of which names its subject. The "seven items in This week"
+were never enumerated in the thread either. If the artifact is ever reachable
+again, that is what to look for.
+
+Three of the thirteen were verified first-hand and are all closed: CI red for 23
+hours on `cargo fmt` (69f6a68), `licenses/README.md:3` granting the app under
+AGPL-3.0 (a2cfd25), and the `dragDropEnabled` fix written twice by two sessions
+hours apart (08c28de).
+
+### AUD-1 : EU Cyber Resilience Act reporting, 11 September (not triggered)
+
+Vulnerability-reporting duties attach on 11 September to anyone monetising into
+the EU. **Decision 2 is a true donation with nothing unlocked**, which is not a
+supply, so this does not attach. Recorded because it re-arms the moment money
+buys anything at all — that is the same trigger that would bring EU VAT with no
+threshold and withdrawal rights with it.
+
+**Waiting for:** Nothing, unless decision 2 changes.
+
+### AUD-2 : Google Play developer verification, 30 September (not triggered)
+
+Attaches to Play distribution. **Decision 3 is direct download for v1**, so it
+does not apply. Re-arms if Play is ever the channel; decision 5 already puts one
+manual Android run on real hardware ahead of that.
+
+**Waiting for:** Nothing, unless decision 3 changes.
+
+### AUD-3 : what the supporter actually gets (open)
+
+Four desks independently rejected a donation button that unlocks customisation:
+money that unlocks features is consideration, which buys the whole legal and tax
+profile of a paid app while capping revenue at donation levels, and calling a
+sale a gift adds a misleading-practice exposure on top. Decision 2 took the
+no-strings route.
+
+Dylan still wants to give something back. **The rule that keeps it a gift:
+nothing contingent on payment.** Candidates that survive it — a supporter credit
+in About from an opt-in list, early access to a build everyone gets anyway
+(time-shifted, not withheld), a separate cosmetic download on itch such as
+wallpapers or a Camelot wheel print. What breaks it is any feature only a payer
+can reach, whatever the button says.
+
+The UX desk's locked-swatch treatment — 45% opacity, dissolving on unlock — was
+designed for the rejected model and is worth reading before designing this one,
+but it is gone with the reports.
+
+**Waiting for:** Dylan to pick one.
+
+### AUD-4 : delete the Godot tree (decided, not done)
+
+The QA and Architecture desks disagreed. Architecture won on the numbers; QA's
+point that the CI ratchet script is sound was also true, and "delete it" is
+irreversible in a way "nightly dispatch" is not. Dylan decided delete, keep the
+tag — see DECISIONS.md §6.
+
+498 tracked files: `addons/` 248, `scripts/` 87, `tests/` 59, `scenes/` 16, plus
+`src/`, `autoloads/`, `godot-cpp/`, `project.godot`, `SConstruct`. The archive
+tag `godot-final-v1.78` exists and is on origin, so the tree survives deletion.
+Closes TD-41, TD-42 and TD-45, which exist only because that tree does, and
+drops the `godot (stub path)` job from `ci.yml`.
+
+**Waiting for:** Nothing.
+
+### AUD-5 : the four named UI findings (open)
+
+Titles reconstructed from Dylan's answers; the desks' own wording is gone.
+
+* **Onboarding.** "Without a WebDAV server you can't really use the app" — the
+  first-run path assumes a server that a new person does not have. Improve the
+  flow generally, not only that one screen.
+* **The texts.** Copy throughout, approved without reservation ("Love it").
+* **Contrast.** Believed already fixed once; to be re-checked rather than
+  re-fixed. `docs/DESIGN_LANGUAGE.md` commits to WCAG 2.1 AA and names 4.5:1 for
+  `--text-primary` on `--bg-glass`.
+* **The library view.** Playlists, groups, albums and artists — and in no case a
+  wall of rows. Horizontal scrolling on those shelves should pull more in
+  lazily.
+
+**Waiting for:** The `screens` and `components` lanes; all four land there and
+another session has been in both.
+
