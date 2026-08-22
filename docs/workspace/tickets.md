@@ -2941,3 +2941,105 @@ Two hazards before merging:
 **Waiting for:** Nothing. Merge `37369ec`, resolve, and confirm on both
 platforms — mobile is the one that has never been checked, and the Pixel 9 now
 runs the app.
+
+### AUD-26 : drum and bass is detected at half tempo, and the fix does not fire (open)
+
+Three DnB tracks read 86/87/87 on the Vibe cards. Doubled, all three are
+squarely in the genre's range. Investigated 2026-08-22; the chain is longer
+than it looks and **AUD-24 is a precondition, not a cosmetic sibling.**
+
+**The detector is not wrong.** All three tracks are in
+`fixtures/essentia_ground_truth.json` and Essentia reports 85.90, 86.99 and
+86.99 for them. `vapor-dsp` is reproducing the reference exactly. No clamp is
+responsible — `MIN_BPM 60 / MAX_BPM 200` (`tempo.rs:21`) leaves 174 well
+inside. The octave prior is not responsible either: prior(87) is 0.8429 against
+prior(174) 0.7960, a 5.9% tilt the comb clears easily. The comb genuinely
+prefers 87, because in an amen pattern the kick/snare alternation makes the
+two-beat span the dominant periodicity. `FINDINGS.md` measured this already.
+
+**The corpus is not short of fast music** — 54 of 563 entries are above 160 BPM
+(verified). What it has is a **108-entry pile in the 84–90 band, 19% of the
+whole corpus**, full of half-read drum and bass: Delta Heavy, Calibre, Break,
+Lenzman, Alix Perez, High Contrast all at 85.8–87.0, while Keeno and Camo &
+Krooked sit at 172.27. Essentia is internally inconsistent on this genre, and
+the 81%-agreement figure **scores reproducing its half-tempo reading as
+correct**. That is why this was accepted rather than solved: the metric could
+not see it.
+
+**The correction already exists and never runs.**
+`vapor_library::octave_correct` (`genre.rs:165`) with a
+`("drum & bass", 160.0, 185.0)` band maps 87 → 174. `tempo_band`
+(`genre.rs:91`) matches on **exact string equality** after trim and lowercase,
+so "Electronic" — which is all Deezer ever returns for this music, per AUD-24 —
+misses every band. So does "DnB", "D&B", "Drum n Bass", "Breakbeat".
+
+**And where it does fire, it only fixes the label.** `octave_correct` appears
+exactly once in the shell, at `lib.rs:4869` in `track_meta_pool`, which feeds
+the cards. `beat_grid` (`lib.rs:3738`) and the Tempo Morph target
+(`lib.rs:4021`) read only `bpm_override`. So correcting the genre today would
+make a card read 174 while the stretcher still meets a genuine 87 BPM record at
+87 — **visibly right and audibly wrong, which is worse than now.**
+
+Damage as it stands: `exit_between` (`lib.rs:5095`) compares raw BPM, so
+87-DnB reads as adjacent to 87-hip-hop and the DJ will pick it. Energy is
+unaffected — `energy_level` is loudness, not tempo.
+
+**Order matters.** Aliases first (`dnb`, `d&b`, `drum n bass`, `drum'n'bass`,
+`breakbeat`, punctuation stripped in `tempo_band`) — pure table work, no DSP
+risk, and `octave_correct` still refuses when the tempo is already in band.
+Then route `bpm_of` and `beat_grid` through the same correction, or the two
+numbers stay inconsistent. **Do not touch `TEMPO_SIGMA`**; `FINDINGS.md`
+records the prior as load-bearing, with the rival's comb score over twice the
+truth's on at least one track.
+
+Also connects to AUD-27: no beat grid means no ribbon pulse, and a BPM
+corrected without retracking leaves the grid stale.
+
+**Waiting for:** Nothing. The aliases are the first move and are self-contained.
+
+### AUD-27 : the Vibe ribbon reacts to brightness, not to tempo (open)
+
+Reported as "not behaving correctly" 2026-08-22. It is fully wired and mapped
+to the wrong signals — no missing plumbing anywhere.
+
+The chain is real: the audio thread publishes realtime peak level and
+brightness (fraction of block energy above 1500 Hz, allocation-free,
+`audio.rs:846-876`) into atomics; `PlaybackState` carries `level`,
+`brightness`, `beatPeriod`, `nextBeat`; `Vibe.tsx:104` converts the beat into a
+`performance.now()` timestamp; `vapor-ribbon.js` extrapolates it per frame.
+
+The intended mapping is beat interval → speed, with volume and frequency on
+other effects. What `vapor-ribbon.js:476` does:
+
+```js
+twistRate = TWIST_BASE + TWIST_BRIGHT * bright + TWIST_BEAT * this._beatPulse(time);
+```
+
+Brightness drives speed. Level drives *turn count*, not motion. And **beat
+period never affects speed at all** — it scales only the decay window of a
+kick, whose mean contribution works out to ~0.32 rad/s regardless of period, so
+60 BPM and 180 BPM produce the same average ribbon speed. That is the reported
+symptom exactly: it reacts to beats and never to tempo.
+
+A comment at `vapor-ribbon.js:471` records the divergence as deliberate —
+"Level moved OFF the rate and onto `turns`: loudness and brightness both
+driving speed made them indistinguishable". The reasoning is sound and it
+solved the collision by removing the wrong one: it took *level* off the rate
+and left *brightness* on it, when the design says the rate belongs to tempo.
+Tempo was never a candidate.
+
+Two things mask it independently of any fix:
+
+* `prefers-reduced-motion: reduce` freezes the whole element — read once at
+  connect (`:327`), `_frozen` zeroes the pulse. Checked on Dylan's machine
+  2026-08-22: **off**, so not the current cause.
+* No beat grid, no pulse. `beat_window` returns `(0,0)` unless the track is
+  analysed *and* the grid matches the current BPM, so a BPM corrected without
+  retracking kills it — see AUD-26.
+
+Only `Vibe.tsx` passes any of these. `NowPlaying.tsx:205` passes `energy`
+alone; `App.tsx:658` and `Settings.tsx:672` pass nothing.
+
+**Waiting for:** Dylan on the mapping. Proposed: tempo → rate, brightness →
+hue, level → turns, which gives each signal its own channel — what the old
+comment was reaching for. No shell changes needed; all three already arrive.
