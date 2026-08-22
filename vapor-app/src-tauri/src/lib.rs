@@ -8240,7 +8240,15 @@ fn new_id(prefix: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Desktop only: the updater replaces the application bundle on disk, which
+    // is not something a phone lets a program do. Android and iOS update
+    // through their stores, so on those targets the plugin is not built at all.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .setup(|app| {
             // Tauri resolves this per platform: ~/Library/Application Support
             // on macOS, %APPDATA% on Windows, ~/.local/share on Linux.
@@ -8388,6 +8396,54 @@ pub fn run() {
                 if let Ok(mut state) = shared.lock() {
                     state.sync_session = started;
                 }
+            }
+
+            /*
+             * Take a newer version if there is one.
+             *
+             * The public key and the endpoint are compiled into the binary
+             * (`tauri.conf.json`), so this is the one feature that cannot be
+             * added later by shipping an update: a build handed to someone
+             * without it can only ever be replaced by hand.
+             *
+             * Silent on purpose. There is no update UI yet, and a check that
+             * only reports to a screen nobody built would never install
+             * anything. The new version is written next to the running one and
+             * takes over at the next launch; nothing restarts underneath a
+             * person mid-track.
+             *
+             * Every failure here is survivable and none of them are worth
+             * interrupting anyone for — the endpoint 404s while the repository
+             * is private, and a machine that is offline simply has no update
+             * today. They are logged, not raised.
+             */
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_updater::UpdaterExt;
+
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let updater = match handle.updater() {
+                        Ok(updater) => updater,
+                        Err(e) => {
+                            eprintln!("updater: not configured: {e}");
+                            return;
+                        }
+                    };
+                    match updater.check().await {
+                        Ok(Some(update)) => {
+                            let version = update.version.clone();
+                            match update.download_and_install(|_, _| {}, || {}).await {
+                                Ok(()) => eprintln!(
+                                    "updater: {version} installed, and runs from the next launch"
+                                ),
+                                Err(e) => eprintln!("updater: could not install {version}: {e}"),
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => eprintln!("updater: could not ask for a newer version: {e}"),
+                    }
+                });
             }
 
             app.manage(shared);

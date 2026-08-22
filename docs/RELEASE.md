@@ -86,6 +86,57 @@ The stakes depend entirely on how it ships, and this was overstated once already
 **Enrol in Play App Signing if it ever goes to Play.** It is the default for new
 apps and it converts the worst case into a support ticket.
 
+### The updater key
+
+Separate from both of the above, and generated 2026-08-21:
+
+| | |
+|---|---|
+| Private key | `~/.tauri/vapor-music-updater.key`, `chmod 600`, **outside the repository** |
+| Password | none — one fewer secret to hold in CI, and the file never leaves the machine or GitHub's secret store |
+| Public key | compiled into every desktop binary via `plugins.updater.pubkey` in `tauri.conf.json` |
+
+**Back it up the same way as the Android key** — a file attachment in a password
+manager. Losing it is the fatal kind: the public key is already inside every
+build that has gone out, and only the matching private key can sign an update
+those builds will accept. A new keypair means everyone reinstalls by hand.
+
+To release, CI needs the private key as a repository secret. The two names are
+Tauri's own, read by `tauri build` without further configuration:
+
+```
+TAURI_SIGNING_PRIVATE_KEY           the contents of the key file
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD  empty string
+```
+
+`bundle.createUpdaterArtifacts` is on, so `tauri build` emits a `.sig` beside
+each bundle. The manifest the app actually reads is `latest.json`, listing a
+version, notes, a date and a `{ signature, url }` per platform; it has to be
+published at the endpoint below, next to the bundles. Nothing generates it yet
+— that belongs with the release workflow, which does not exist.
+
+### The endpoint is baked in, and points somewhere that does not exist yet
+
+```
+https://github.com/Ghigog/vapor-music/releases/latest/download/latest.json
+```
+
+Compiled into the binary, so it cannot be changed by shipping an update — only
+by handing out a new build. Two things have to become true before it answers:
+
+1. **The repository has to be public.** Release assets on a private repository
+   need an authenticated request, and the updater sends none. Public also buys
+   free Actions minutes and free asset hosting, which is the whole reason v1
+   costs nothing to ship. `docs/LICENSING.md` has the precondition: settle
+   contributions — disable pull requests or require a CLA — before flipping it,
+   because one accepted outside contribution freezes the licence choice.
+   Proprietary and public is a normal combination; public does not mean
+   open-source.
+2. **A release has to exist** with `latest.json` attached to it.
+
+Until then the URL 404s, the check fails, and the app logs one line and carries
+on. That is the intended state, not a fault.
+
 ---
 
 ## 2. Licensing — resolved 2026-08-20
@@ -190,11 +241,18 @@ Decisions, not oversights. Each is recorded where it was made.
   `vapor-app/package.json`, `vapor-app/src-tauri/tauri.conf.json`,
   `vapor-app/src-tauri/Cargo.toml`. Nothing enforces that they agree. A release
   that disagrees with itself is confusing in a way that surfaces weeks later.
-* **There is no updater.** `plugins` in `tauri.conf.json` is empty. Shipping
-  without one means every user is on whatever build they installed, for ever.
-  Tauri's updater needs a signing key of its own and a place to host a manifest;
-  decide before the first release, because retrofitting it means the first cohort
-  can never be updated automatically.
+* **The updater is configured, and silent.** Desktop only —
+  `tauri-plugin-updater` is not built for Android or iOS, which update through
+  their stores. It checks once at launch on a background task and installs what
+  it finds; the new version takes over at the next launch, so nothing restarts
+  underneath anyone mid-track. There is no update UI, which is deliberate: a
+  check that only reported to a screen nobody has built would never install
+  anything. Every failure is logged with an `updater:` prefix and swallowed.
+* **The release half has not been built.** No workflow builds on a tag, so
+  nothing produces the bundles, the `.sig` files, or the `latest.json` the app
+  goes looking for. The updater is inert until that exists — which is fine, and
+  is why the config went in first: the key and the endpoint are compiled into
+  the binary and cannot be added to a build that has already been handed out.
 * **`[profile.dev.package."*"] opt-level = 2`** exists because unoptimised image
   decoding made thumbnail generation 330 ms per cover. It affects dev builds
   only; release is unaffected.
@@ -222,7 +280,12 @@ Decisions, not oversights. Each is recorded where it was made.
 - [ ] Play App Signing enrolled, if Play.
 - [ ] Privacy declaration covering the lookup services; lookups still off by
       default.
-- [ ] Decide on an updater, or decide knowingly to ship without one.
+- [x] ~~Decide on an updater, or decide knowingly to ship without one.~~ Done
+      2026-08-21: configured, desktop only, silent. See §1.
+- [ ] Make the repository public, so the updater endpoint and free CI both
+      work. Settle contributions first — see `docs/LICENSING.md`.
+- [ ] A release workflow that builds on a tag and publishes `latest.json`
+      alongside the bundles. Until it exists the updater has nothing to find.
 - [ ] Version agreed across all three files.
 - [ ] Reconsider TD-56 — the LAN decision was made for a single trusted network.
 - [ ] Run on a real iOS device, or state plainly that iOS is unsupported.

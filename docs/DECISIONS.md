@@ -68,10 +68,10 @@ Wanted: macOS, Windows, Linux, Android, and iOS eventually.
 
 * **Windows and Linux** already compile in CI. Adding them to a release is
   cheap.
-* **Android** compiles but has never run on a device, has no tests, and carries
-  359 lines of hand-transcribed JNI where a wrong signature aborts on the phone
-  rather than failing to build. One manual run on real hardware before it ships
-  to anyone.
+* **Android** compiles in CI and was unproven on hardware when this was decided
+  (2026-08-21): no device run, no automated coverage, and 359 lines of
+  hand-transcribed JNI where a wrong signature aborts on the phone rather than
+  failing to build. One manual run on real hardware before it ships to anyone.
 * **iOS is out for v1**, and not on preference. There is no sideloading route,
   so it requires the Apple Developer Program and App Store review — which is
   exactly the paid channel decision 3 avoids. Revisit only if the app is ever

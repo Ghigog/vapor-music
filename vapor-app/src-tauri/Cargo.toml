@@ -107,6 +107,18 @@ keyring = { version = "3", features = ["windows-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
+# The self-updater, desktop only.
+#
+# Tauri's updater replaces the application bundle on disk, which is a thing
+# only a desktop OS lets a program do; Android and iOS update through their
+# stores. Declared per target for that reason, not as a feature toggle.
+#
+# It has to ship in v1. The public key and the endpoint below are compiled
+# into the binary, so a build handed to someone without them can never be
+# updated — every later version would be a manual re-download.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+
 # Optimise dependencies even in a debug build.
 #
 # `image` decodes, resizes and re-encodes an album cover, and unoptimised that
