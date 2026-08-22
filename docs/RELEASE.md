@@ -112,8 +112,21 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD  empty string
 `bundle.createUpdaterArtifacts` is on, so `tauri build` emits a `.sig` beside
 each bundle. The manifest the app actually reads is `latest.json`, listing a
 version, notes, a date and a `{ signature, url }` per platform; it has to be
-published at the endpoint below, next to the bundles. Nothing generates it yet
-— that belongs with the release workflow, which does not exist.
+published at the endpoint below, next to the bundles.
+
+`.github/workflows/release.yml` generates and publishes it, via
+`tauri-action`'s `includeUpdaterJson`. It runs on a `v*.*.*` tag: `verify`
+checks that the three version declarations agree with the tag and that the
+signing secret is set, three platforms build into one draft release, then
+`finalise` attaches `SHA256SUMS`, publishes the draft, and fetches the endpoint
+to report what the updater will now answer. The draft is deliberate — a release
+that goes public mid-matrix offers a download that does not exist yet for
+somebody's machine.
+
+Its actions are pinned by commit SHA rather than tag, which no other workflow
+here does. It is the only one holding the signing key at the same time as
+`contents: write`, and a moveable tag is the supply-chain path that matters
+once both are in one job.
 
 ### The endpoint is baked in, and points somewhere that does not exist yet
 
@@ -293,9 +306,14 @@ Decisions, not oversights. Each is recorded where it was made.
       work.~~ Already public — confirmed 2026-08-21.
 - [ ] Settle contributions now the repository is public: disable pull requests
       or require a CLA, before anyone opens one. See `docs/LICENSING.md`.
-- [ ] A release workflow that builds on a tag and publishes `latest.json`
-      alongside the bundles. Until it exists the updater has nothing to find.
-- [ ] Version agreed across all three files.
+- [x] ~~A release workflow that builds on a tag and publishes `latest.json`
+      alongside the bundles.~~ Done 2026-08-22: `.github/workflows/release.yml`.
+      See §1. The first tag should be an `-rc`: a mistake then costs a draft
+      rather than the release `releases/latest` resolves to, which is the URL
+      every shipped binary has baked in.
+- [x] ~~Version agreed across all three files.~~ 2.0.0 in `package.json`,
+      `tauri.conf.json` and `Cargo.toml`; the `verify` job now gates it against
+      the tag on every release.
 - [ ] Reconsider TD-56 — the LAN decision was made for a single trusted network.
 - [ ] Run on a real iOS device, or state plainly that iOS is unsupported.
 - [ ] Two machines on two different builds, syncing, before anyone else has two.

@@ -1,0 +1,236 @@
+name: Release
+
+# Builds the installers a person actually downloads, and the `latest.json` the
+# shipped updater reads. Nothing else in CI does either: `app.yml` compiles the
+# shell and stops short of `tauri build`, deliberately, because bundling is slow
+# and produces artefacts nobody consumes on a normal push.
+#
+# The updater went in before this workflow existed, which means every desktop
+# binary already carries a public key and an endpoint pointing at
+# `releases/latest/download/latest.json`. Until a release publishes that file
+# the endpoint 404s and the app logs a line and carries on — intended, but it
+# also means the updater cannot do its job until this runs once.
+#
+# Actions are pinned by SHA rather than tag. This is the only workflow holding
+# the signing key, and a moveable tag is the supply-chain path that matters
+# once a job has `contents: write` and a secret in the same environment.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build everything, publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# Never cancel a release in flight. A cancelled run can leave a draft holding
+# some platforms' bundles and not others, which is worse than a slow queue —
+# the concurrency default elsewhere in this repo is the opposite for exactly
+# the opposite reason.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Cheap checks that would otherwise fail fifteen minutes into a build, or —
+  # worse — after half the platforms have already uploaded.
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Three files carry the version and the updater compares the one in
+      # `latest.json` against the one compiled into the running app. If they
+      # disagree the update either never offers itself or offers itself
+      # forever, and both look like the updater is broken rather than the
+      # release being wrong.
+      - name: The version is the same in all three places
+        run: |
+          pkg=$(jq -r .version vapor-app/package.json)
+          conf=$(jq -r .version vapor-app/src-tauri/tauri.conf.json)
+          cargo=$(grep -m1 '^version' vapor-app/src-tauri/Cargo.toml | cut -d'"' -f2)
+
+          echo "package.json      $pkg"
+          echo "tauri.conf.json   $conf"
+          echo "Cargo.toml        $cargo"
+
+          if [ "$pkg" != "$conf" ] || [ "$pkg" != "$cargo" ]; then
+            echo "::error::the three version declarations disagree"
+            exit 1
+          fi
+
+          # On a tag push the tag is the fourth declaration, and the one the
+          # download URLs are built from.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "tag               $tag"
+            if [ "$tag" != "$pkg" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match version $pkg"
+              exit 1
+            fi
+          fi
+
+      # `bundle.createUpdaterArtifacts` is on, so `tauri build` signs each
+      # bundle and fails without the key. Finding that out here costs seconds;
+      # finding it out in the build costs the whole matrix.
+      - name: The signing key is present
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. It is the contents of"
+            echo "::error::~/.tauri/vapor-music-updater.key — see docs/RELEASE.md §1."
+            exit 1
+          fi
+          echo "present"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One bundle for both Apple architectures. Two separate downloads
+          # would make the download page ask a question most people cannot
+          # answer about their own machine.
+          - name: macOS (universal)
+            os: macos-latest
+            target: universal-apple-darwin
+            args: --target universal-apple-darwin
+
+          # Pinned, not `ubuntu-latest`. glibc is forward-compatible only: a
+          # binary built against a newer one refuses to start on an older
+          # distribution, and the AppImage is supposed to be the build that
+          # runs anywhere. If this label is ever retired the replacement is the
+          # oldest supported ubuntu label — not `ubuntu-latest`.
+          - name: Linux (x86_64)
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+
+          - name: Windows (x86_64)
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vapor-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: vapor-app/src-tauri
+          key: release-${{ matrix.target }}
+
+      # Tauri's Linux backend is WebKitGTK; cpal needs ALSA; keyring and
+      # souvlaki both need D-Bus. Same set as the shell job in app.yml.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libdbus-1-dev
+
+      # `tauri.conf.json` runs `npm run build` as its beforeBuildCommand, which
+      # needs node_modules to exist first.
+      - name: Install frontend dependencies
+        working-directory: vapor-app
+        run: npm ci
+
+      # Creates or reuses one draft release per tag and uploads this platform's
+      # bundles into it, plus the `.sig` beside each. `includeUpdaterJson`
+      # writes `latest.json` — the file the endpoint compiled into every binary
+      # actually points at.
+      - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: vapor-app
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
+          releaseName: Vapor Music ${{ github.ref_name }}
+          releaseBody: |
+            Install notes and checksums are below the asset list.
+
+            macOS builds are not notarised yet, so the first open needs
+            right-click → Open. See docs/RELEASE.md.
+          # Published by the `finalise` job, once every platform has uploaded.
+          # A release that goes public mid-matrix offers people a download that
+          # does not exist for their machine yet.
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
+
+  finalise:
+    name: finalise
+    needs: build
+    if: github.ref_type == 'tag' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # One checksums file for the whole release rather than a hash per asset
+      # buried in the notes — it is what a person can actually verify against
+      # with `sha256sum -c`.
+      - name: Checksums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets && cd assets
+          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --pattern '*' --clobber
+          # latest.json is the updater's manifest, not something anyone
+          # downloads by hand, and it is signed content in its own right.
+          rm -f latest.json SHA256SUMS
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "${GITHUB_REF_NAME}" SHA256SUMS --repo "${GITHUB_REPOSITORY}" --clobber
+
+      # Only now does the release become the one `releases/latest` resolves to,
+      # which is the URL every shipped binary has baked in.
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          echo "published ${GITHUB_REF_NAME}"
+
+      - name: What the updater will now answer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
+          echo "endpoint: $url"
+          code=$(curl -sSL -o /tmp/latest.json -w '%{http_code}' "$url" || true)
+          echo "http $code"
+          if [ "$code" = "200" ]; then
+            jq -r '"version \(.version), platforms: \(.platforms | keys | join(", "))"' /tmp/latest.json
+          else
+            echo "::warning::the endpoint did not answer 200; the updater will not see this release"
+          fi
