@@ -227,15 +227,18 @@ nothing to bite on and the families keep their names.
 > Check this again before vendoring a fourth font. It is a per-font fact, not a
 > general property of the OFL.
 
-### The archived Godot tree
+### The Godot tree, removed 2026-08-21
 
-The Godot tree in this repository is **archived, not built or distributed**. It
-linked Essentia (AGPL-3.0), Rubber Band (GPL-2.0-or-later) and their transitive
-dependencies (FFmpeg, TagLib, Chromaprint, FFTW3, libsamplerate, libyaml), and
-used Godot Engine, godot-cpp and GUT, all MIT. Their licence texts remain in
-`licenses/` for the record. None of them is part of any binary produced today,
-so no attribution is owed for them and they were dropped from the user-facing
-notices.
+The Godot tree was deleted from this repository on 2026-08-21, and its five
+licence texts with it. It linked Essentia (AGPL-3.0), Rubber Band
+(GPL-2.0-or-later) and their transitive dependencies (FFmpeg, TagLib,
+Chromaprint, FFTW3, libsamplerate, libyaml), and used Godot Engine, godot-cpp
+and GUT, all MIT.
+
+None of them was ever part of a binary produced by the Rust build, so nothing
+that has been distributed is missing a notice, and they had already been dropped
+from the user-facing ones. The tag `godot-final-v1.78` carries the tree and the
+texts if the history is needed.
 
 ---
 

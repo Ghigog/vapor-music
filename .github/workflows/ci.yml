@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, godot-legacy]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -95,77 +95,3 @@ jobs:
 
       - name: Build vapor-library for wasm
         run: cargo build --release --target wasm32-unknown-unknown -p vapor-library --lib
-
-  # Regression gate for the Godot app while it is still the shipping version.
-  #
-  # IMPORTANT: this runs WITHOUT the AudioDSP GDExtension, so the suite takes
-  # the audio_dsp_stub.gd path. That is a deliberate trade, not an oversight:
-  # building the extension needs Essentia from a HEAD-only third-party tap plus
-  # the whole ffmpeg / taglib / chromaprint / fftw closure — the exact
-  # dependency tail the migration exists to delete. Compiling it on every run
-  # would be slow and would break whenever that tap moves.
-  #
-  # The cost is real and must not be forgotten: DSP-dependent tests are NOT
-  # covered here. Run the full suite locally with the dylib present before
-  # trusting a change to analysis or transitions — that run is a *different*
-  # baseline, 211 pass / 12 fail, not the 190/19 pinned below. Both numbers are
-  # correct; they describe runs with and without the GDExtension (TD-45).
-  # The twelve are diagnosed in docs/TECH_DEBT.md (TD-42): all stale tests.
-  godot:
-    name: godot (stub path)
-    runs-on: macos-latest
-
-    env:
-      GODOT_VERSION: 4.7.1
-      # Baseline measured at godot-final-v1.78 on the stub path — i.e. WITHOUT
-      # the GDExtension, which is why it is worse than the local 211/12.
-      # These are pinned so the suite gates on *regressions* immediately rather
-      # than waiting for a green board. Lower them as failures get fixed.
-      EXPECTED_PASS: 190
-      EXPECTED_FAIL: 19
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Godot
-        id: cache-godot
-        uses: actions/cache@v4
-        with:
-          path: ~/godot
-          key: godot-${{ env.GODOT_VERSION }}-macos
-
-      - name: Download Godot
-        if: steps.cache-godot.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/godot && cd ~/godot
-          url="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
-          curl -fsSL -o godot.zip "$url"
-          unzip -q godot.zip
-
-      - name: Import project
-        # First run generates .godot/; it is expected to be noisy and may exit
-        # non-zero while resources are still importing.
-        run: |
-          GODOT=~/godot/Godot.app/Contents/MacOS/Godot
-          "$GODOT" --headless --path . --import || true
-
-      - name: Run GUT suite
-        id: gut
-        run: |
-          GODOT=~/godot/Godot.app/Contents/MacOS/Godot
-          # GUT exits non-zero when any test fails; the baseline comparison
-          # below is the actual gate, so do not let that abort the step.
-          "$GODOT" --headless --path . \
-            -s addons/gut/gut_cmdln.gd \
-            -gdir=res://tests/unit -ginclude_subdirs -gexit \
-            2>&1 | tee gut-output.txt || true
-
-      - name: Compare against baseline
-        run: python3 tools/check-gut-baseline.py gut-output.txt
-
-      - name: Upload GUT output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gut-output
-          path: gut-output.txt

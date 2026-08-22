@@ -1,15 +1,5 @@
-# Godot 4+ specific ignores
-.godot/
-/android/
+# Aider's chat history and tag cache
 .aider*
-external/
-bin/libaudio_dsp.*
-
-# Build artifacts — SCons object files and its build database.
-# These churn on every compile and .sconsign.dblite is multi-megabyte.
-*.os
-*.o
-.sconsign.dblite
 
 # macOS Finder metadata
 .DS_Store
@@ -37,3 +27,14 @@ bin/libaudio_dsp.*
 # vapor-app/src/lib/generated/ and compared by `npm run types:check`.
 /vapor-app/src-tauri/bindings/
 /vapor-core/bindings/
+/vapor-core/crates/*/bindings/
+
+# Left behind by the Godot build, deleted 2026-08-21. None of it is produced by
+# anything here any more; these lines only keep a machine that once built that
+# tree from showing four untracked entries for ever. Safe to delete by hand:
+#   rm -rf .godot bin external android .sconsign.dblite
+.godot/
+/android/
+/bin/
+external/
+.sconsign.dblite

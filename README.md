@@ -2,7 +2,7 @@
 
 > *Own your music. Own your vibe.*
 
-A local-first, AI-enhanced music player built in Godot for desktop and mobile. Vapor Music is for people who are done renting their music from corporate algorithms — and who refuse to sacrifice the premium, intelligent listening experience that comes with modern streaming.
+A local-first, AI-enhanced music player for desktop and mobile, written in Rust with a React interface. Vapor Music is for people who are done renting their music from corporate algorithms — and who refuse to sacrifice the premium, intelligent listening experience that comes with modern streaming.
 
 ---
 
@@ -130,10 +130,10 @@ Vapor's UI is built for focused, distraction-free listening.
 ## Ideal Architecture
 
 ### Technology Stack
-- **Engine:** Godot 4.x (GDScript / C# where performance-critical)
-- **Target Platforms:** Windows, macOS, Linux (Desktop) · Android, iOS (Mobile)
-- **Audio Backend:** Godot's built-in AudioStreamPlayer with custom DSP nodes for BPM sync, pitch shifting, and EQ
-- **Local Analysis:** Background-threaded analyzer running in Godot (GDScript/C#) to parse audio files, extract PCM data, and calculate BPM/key/energy values with zero external dependencies.
+- **Shell:** Tauri 2 — a Rust backend and a React 19 frontend in one desktop binary
+- **Target Platforms:** macOS, Windows, Linux (Desktop) · Android (Mobile)
+- **Audio Backend:** `cpal` for the device, with mixing, crossfade, time-stretching and limiting in `vapor-engine`
+- **Local Analysis:** `vapor-dsp` — tempo, key, energy and loudness computed in-process, with no external toolchain and no Homebrew tail.
 - **Cloud Sync Layer:** Abstract provider interface with per-backend drivers (WebDAV, rclone-compatible)
 - **Database:** Serialized JSON database catalog (`metadata_cache.json`) for maximum portability and zero-config deployment on desktop and mobile platforms, storing track metadata, energy profiles, and listening history.
 
@@ -197,11 +197,11 @@ the keychain, the filesystem cache, media keys, and the network. Commands are
 the only way in, and `tests/command_bindings.rs` fails the build if one has no
 frontend binding.
 
-**`scripts/`, `src/`, `scenes/`** — the original Godot build and its C++
-`AudioDSP` GDExtension (Essentia, Rubber Band). Kept for reference while the
-port is checked against it, and scheduled for archiving. Everything it does now
-lives in the Rust core, which is what removed the Homebrew dependency tail and
-the macOS-only DSP.
+The original Godot build and its C++ `AudioDSP` GDExtension (Essentia, Rubber
+Band) were removed from the tree on 2026-08-21, once everything they did lived
+in the Rust core — which is what removed the Homebrew dependency tail and the
+macOS-only DSP. The tag `godot-final-v1.78` holds that build in full, and the
+version history below is its history.
 
 The full account of what was measured and decided along the way is in
 [docs/FINDINGS.md](docs/FINDINGS.md).
@@ -413,4 +413,4 @@ Source: <https://github.com/Ghigog/vapor-music>
 
 ---
 
-*Built with Godot 4 · Designed for music lovers who remember owning things.*
+*Built with Rust and Tauri · Designed for music lovers who remember owning things.*
