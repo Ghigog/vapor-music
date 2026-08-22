@@ -2,7 +2,9 @@
 
 use tauri::State;
 
-use crate::{new_id, tracks_in_group, Error, Result, Row, Shared};
+// These modules are `lib.rs` split up, not new boundaries — the glob is
+// what says so. Narrowing it to forty named symbols would read as a design.
+use crate::*;
 
 #[tauri::command]
 pub fn dynamic_groups(state: State<'_, Shared>) -> Result<Vec<vapor_library::DynamicGroup>> {

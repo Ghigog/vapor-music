@@ -2,7 +2,9 @@
 
 use tauri::State;
 
-use crate::{queue_view_for, Error, QueueState, QueueView, Result, Shared};
+// These modules are `lib.rs` split up, not new boundaries — the glob is
+// what says so. Narrowing it to forty named symbols would read as a design.
+use crate::*;
 
 #[tauri::command]
 pub fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {

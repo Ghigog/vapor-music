@@ -20,7 +20,11 @@
 //! Shared state stays in `lib.rs` as `crate::AppState`, reachable because a
 //! private item is visible to its own module and every descendant.
 
+pub(crate) mod analysis;
+pub(crate) mod artwork;
 pub(crate) mod cache;
+pub(crate) mod dj;
 pub(crate) mod groups;
+pub(crate) mod playback;
 pub(crate) mod playlists;
 pub(crate) mod queue;

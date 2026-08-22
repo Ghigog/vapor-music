@@ -877,7 +877,7 @@ fn unix_now() -> i64 {
 /// without becoming a different playlist, and its count should follow it.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CollectionRef {
+pub(crate) struct CollectionRef {
     /// `"playlist"` or `"group"`. Anything else is ignored rather than
     /// rejected — a set played from somewhere the backend has no name for is
     /// still a set that should play.
@@ -889,7 +889,7 @@ struct CollectionRef {
 ///
 /// `None` for a kind this does not know, which is what keeps an unrecognised
 /// value out of the map rather than inventing a shelf for it.
-fn collection_key(reference: &CollectionRef) -> Option<String> {
+pub(crate) fn collection_key(reference: &CollectionRef) -> Option<String> {
     let id = reference.id.trim();
     if id.is_empty() {
         return None;
@@ -1416,37 +1416,6 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
         .collect()
 }
 
-/// The embedded cover for one track, if analysis has read it.
-///
-/// One call per card rather than a field on every row. Artwork is capped at
-/// 2 MB by the tag reader, so a 563-row `library_view` carrying covers would
-/// move hundreds of megabytes through IPC on every keystroke.
-#[tauri::command]
-fn track_cover(href: String, state: State<'_, Shared>) -> Result<Option<String>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.covers.get(&href))
-}
-
-/// The same cover at row size (PERF-004).
-///
-/// A table row draws artwork at 48 px, and handing it the full stored cover is
-/// what made opening Songs pause — see `Covers::thumb` for the measurements.
-/// Now Playing and Liner Notes still ask for the full one, which is the only
-/// place the resolution is wanted.
-#[tauri::command]
-fn track_thumb(href: String, state: State<'_, Shared>) -> Result<Option<String>> {
-    // The lock is taken to find *where* covers live and dropped before any
-    // image is touched. Generating one is about 38 ms — measured — and a
-    // screenful of rows asks for 26 at once; holding the state across that
-    // would freeze the transport and every other command for a second, which
-    // is the fault this change removes rather than one to move somewhere else.
-    let dir = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.covers.dir().to_path_buf()
-    };
-    Ok(covers::Covers::new(dir).thumb(&href))
-}
-
 // ---------------------------------------------------------------------------
 // Lyrics and artwork looked up from public services
 // ---------------------------------------------------------------------------
@@ -1618,18 +1587,6 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
     );
     app.save_looked()?;
     Ok(LookedUp::of(&app, &href))
-}
-
-/// Whether hardware media keys will reach this build (MIG-023).
-///
-/// False on macOS when the process is not inside a `.app` bundle: the keys go
-/// to the Now Playing *application*, and a bare binary from `tauri dev` is not
-/// one. Reported rather than left to be discovered, because souvlaki registers
-/// successfully either way and the only other symptom is a keyboard that does
-/// nothing.
-#[tauri::command]
-fn media_keys_available() -> bool {
-    media::bundled()
 }
 
 /// Progress of the library identification pass.
@@ -1848,119 +1805,6 @@ fn startup_problems(state: State<'_, Shared>) -> Result<Vec<String>> {
     Ok(app.damaged.iter().map(|d| d.message()).collect())
 }
 
-/// Choose the energy curve the set is conducted along.
-///
-/// Selecting one *is* the action. There is no "conduct from here" button any
-/// more: a curve that has been chosen and not applied is a control that lies
-/// about what it did.
-///
-/// The tail is dropped and re-planned, because the curve is the set's
-/// destination and the tracks queued behind it were routes to a different one.
-/// What is playing, and what is mixing into it right now, are left alone.
-#[tauri::command]
-fn set_curve(
-    curve: String,
-    app_handle: tauri::AppHandle,
-    state: State<'_, Shared>,
-) -> Result<Settings> {
-    let (settings, generation, plan) = {
-        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.settings.curve = vapor_library::Curve::parse(&curve).as_str().to_string();
-        app.save_settings()?;
-        app.curve_plan = app.curve_plan.wrapping_add(1);
-
-        // Everything after the track playing is a route to the old destination.
-        let keep = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
-        let head: Vec<String> = app.queue.tracks().iter().take(keep).cloned().collect();
-        if !head.is_empty() {
-            let playing = app.playing.clone();
-            app.queue.set_tracks(head, playing.as_deref());
-        }
-
-        // Gathered here, searched elsewhere. Building the pool needs the state;
-        // walking it does not.
-        // Built once and used twice. This runs under the state lock on a press
-        // that already has history for being slow, and walking the whole
-        // library to answer one lookup and then walking it again to plan the
-        // route would be paying that cost twice for one press.
-        let pool = track_meta_pool(&app);
-        // Where this route starts from, kept so the curve can be evaluated
-        // later — see `AppState::curve_start`.
-        if let Some(playing) = app.playing.clone() {
-            app.curve_start = pool.get(&playing).map_or(0.5, |t| t.energy_level);
-        }
-        let plan = app
-            .playing
-            .clone()
-            .filter(|_| app.settings.dj_mode)
-            .map(|current| {
-                (
-                    current,
-                    pool,
-                    skip_penalties(&app),
-                    vapor_library::Curve::parse(&app.settings.curve),
-                    app.settings.vibe_limit,
-                )
-            });
-        (app.settings.clone(), app.curve_plan, plan)
-    };
-
-    // The search runs off the command thread, and off the lock.
-    //
-    // It used to run right here: an A* over the whole library, seconds of work,
-    // with the state lock held for all of it. So the press did not return until
-    // the set had been re-planned — the button appeared dead for five seconds
-    // and then caught up — and every poll that wanted the same lock stalled
-    // behind it, which is why the screen froze rather than just the control.
-    // The setting itself is saved above and returned at once; the route
-    // arrives when it arrives, and says so with an event.
-    if let Some((current, pool, penalties, chosen, limit)) = plan {
-        let shared: Shared = Arc::clone(&state);
-        tauri::async_runtime::spawn_blocking(move || {
-            use tauri::Emitter as _;
-            if !pool.contains_key(&current) {
-                return;
-            }
-            let planned =
-                vapor_library::generate_mood_path(&pool, &current, chosen, limit, &penalties);
-
-            let Ok(mut app) = shared.lock() else {
-                return;
-            };
-            // A newer press is already on its way somewhere else.
-            if app.curve_plan != generation {
-                return;
-            }
-            // Skip the head: `generate_mood_path` starts from the track playing.
-            let added = planned
-                .iter()
-                .skip(1)
-                .take(PLAN_AHEAD)
-                .filter(|href| app.queue.append(href))
-                .count();
-            drop(app);
-            if added > 0 {
-                let _ = app_handle.emit("playback-changed", ());
-            }
-        });
-    }
-
-    Ok(settings)
-}
-
-/// Turn the DJ on or off.
-///
-/// Persisted, because it decides what the *supervisor* does — it lived in the
-/// frontend as component state until 2026-08-17, which meant the half of the
-/// app that chooses what plays next had never heard of it.
-#[tauri::command]
-fn set_dj_mode(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.dj_mode = enabled;
-    app.save_settings()?;
-    Ok(app.settings.clone())
-}
-
 /// Turn local-network sync on or off.
 ///
 /// Turning it on starts the beacon and the server there and then, because
@@ -2029,51 +1873,6 @@ fn set_sync_enabled(enabled: bool, state: State<'_, Shared>) -> Result<Settings>
     Ok(app.settings.clone())
 }
 
-/// Set the Vibe Limit — §6's Mix Tuner.
-///
-/// Refused rather than clamped when it is not a number at all: a slider cannot
-/// produce one, so a NaN here means something else is wrong and quietly
-/// substituting a value would hide it. Out-of-range *is* clamped, because the
-/// ends of the slider are exactly the ends of the band.
-#[tauri::command]
-fn set_vibe_limit(limit: f32, state: State<'_, Shared>) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if !limit.is_finite() {
-        return Err(Error("That is not a Vibe Limit.".to_string()));
-    }
-    app.settings.vibe_limit = limit.clamp(
-        vapor_library::settings::MIN_VIBE_LIMIT,
-        vapor_library::settings::MAX_VIBE_LIMIT,
-    );
-    app.save_settings()?;
-    Ok(app.settings.clone())
-}
-
-/// A looked-up image as a `data:` URI, read from the file it was cached in.
-///
-/// Takes a URL rather than an href because one sleeve serves every track on
-/// the album, and the file is named after the URL for that reason.
-///
-/// **Only a URL that a previous lookup actually stored will be served.**
-/// Without that check this command is a general "read any file the app can
-/// name" primitive reachable from the webview, and its argument comes from the
-/// page.
-#[tauri::command]
-fn looked_up_image(url: String, state: State<'_, Shared>) -> Result<Option<String>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let known = app
-        .looked
-        .values()
-        .any(|l| l.artist_image == url || l.album_art == url);
-    if !known || url.is_empty() {
-        return Ok(None);
-    }
-    Ok(metadata::image_data_uri(&metadata::image_path(
-        app.store.dir(),
-        &url,
-    )))
-}
-
 /// Artwork for an album, as a `data:` URI.
 ///
 /// Three sources, in an order that respects both the file and the person:
@@ -2120,7 +1919,7 @@ fn resolve_album_cover(app: &AppState, album: &str, lead: &str) -> Option<String
 #[derive(Debug, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct AlbumArt {
+pub(crate) struct AlbumArt {
     /// The picture, as a `data:` URI. `None` when there is none to show.
     src: Option<String>,
     /// Whether this is a cover someone chose by hand rather than the file's own.
@@ -2131,101 +1930,11 @@ struct AlbumArt {
     chosen: bool,
 }
 
-fn album_art(app: &AppState, album: &str, lead: &str) -> AlbumArt {
+pub(crate) fn album_art(app: &AppState, album: &str, lead: &str) -> AlbumArt {
     AlbumArt {
         src: resolve_album_cover(app, album, lead),
         chosen: app.settings.album_art_for(album, lead).is_some(),
     }
-}
-
-/// Artwork for one album, resolved. See [`resolve_album_cover`].
-#[tauri::command]
-fn album_cover(album: String, lead: String, state: State<'_, Shared>) -> Result<AlbumArt> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(album_art(&app, &album, &lead))
-}
-
-/// Search the services for an album's artwork and use what comes back.
-///
-/// **Deliberately not gated on `metadata_lookup_enabled`.** That setting
-/// governs whether the app may go looking *on its own*; this is someone
-/// pressing a button labelled to say what it does, which is the asking that the
-/// setting exists to require. Gating it would mean answering "search for the
-/// real cover" with "turn on a setting first", for a request that is already
-/// the consent.
-///
-/// The choice is recorded so it survives a restart and so the next track on the
-/// album resolves to it too.
-#[tauri::command]
-async fn find_album_art(
-    album: String,
-    artist: String,
-    lead: String,
-    state: State<'_, Shared>,
-) -> Result<AlbumArt> {
-    let dir = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.store.dir().to_path_buf()
-    };
-
-    /*
-     * On a blocking thread, not in the async body.
-     *
-     * Two faults in one line. `Lookup::new` builds a
-     * `reqwest::blocking::Client`, which cannot be constructed on a runtime
-     * worker without panicking the process — see `crate::http`. And the calls
-     * themselves are blocking network I/O run directly on the runtime, which
-     * is what the comment this replaced claimed to have avoided by dropping
-     * the lock: the lock was released and the *runtime* was held instead, so
-     * every other command queued behind this one regardless.
-     *
-     * `crate::http` makes the first survivable wherever it happens. This is
-     * what stops it happening here, and gives the runtime its worker back for
-     * the seconds the lookup spends on the network.
-     */
-    let (query_album, query_artist) = (album.clone(), artist.clone());
-    let url = tauri::async_runtime::spawn_blocking(move || {
-        let lookup = metadata::Lookup::new()?;
-        let (url, _genre) = lookup.album(&query_artist, &query_album);
-        if !url.is_empty() {
-            lookup.download_image(&url, &dir);
-        }
-        Ok::<String, String>(url)
-    })
-    .await
-    .map_err(|e| Error(e.to_string()))?
-    .map_err(Error)?;
-
-    if url.is_empty() {
-        return Err(Error(format!(
-            "Nothing came back for “{album}”. The album or artist may be \
-             spelled differently on the service than in your tags."
-        )));
-    }
-
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.set_album_art(&album, &lead, &url);
-    app.save_settings()?;
-    Ok(album_art(&app, &album, &lead))
-}
-
-/// Forget a hand-chosen cover and go back to what the file carries.
-#[tauri::command]
-fn clear_album_art(album: String, lead: String, state: State<'_, Shared>) -> Result<AlbumArt> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if app.settings.set_album_art(&album, &lead, "") {
-        app.save_settings()?;
-    }
-    Ok(album_art(&app, &album, &lead))
-}
-
-/// Whether looked-up artwork outranks the file's own.
-#[tauri::command]
-fn set_prefer_looked_up_art(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.prefer_looked_up_art = enabled;
-    app.save_settings()?;
-    Ok(app.settings.clone())
 }
 
 /// Daylight, Lamplight, or follow the OS.
@@ -2256,37 +1965,6 @@ fn set_hide_duplicates(enabled: bool, state: State<'_, Shared>) -> Result<Settin
     app.settings.hide_duplicates = enabled;
     app.save_settings()?;
     Ok(app.settings.clone())
-}
-
-/// A looked-up portrait for an artist, as a `data:` URI (TD-53).
-///
-/// Keyed by name rather than by href, because that is what an artist is here —
-/// the Artists tab has a name and a lead track, and the portrait was fetched
-/// against whichever track happened to be looked up first. Any track by that
-/// artist will do, so the first one that carries a picture answers for all of
-/// them.
-///
-/// `None` is the ordinary case: nothing has been looked up, or lookups are off
-/// entirely. The tile draws its placeholder, which is what it does for a track
-/// with no embedded cover too.
-#[tauri::command]
-fn artist_portrait(name: String, state: State<'_, Shared>) -> Result<Option<String>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if name.trim().is_empty() || !app.settings.metadata_lookup_enabled {
-        return Ok(None);
-    }
-
-    let url = app.rows.iter().find_map(|row| {
-        if row.artist != name {
-            return None;
-        }
-        app.looked
-            .get(&row.href)
-            .filter(|l| !l.artist_image.is_empty())
-            .map(|l| l.artist_image.clone())
-    });
-
-    Ok(url.and_then(|url| metadata::image_data_uri(&metadata::image_path(app.store.dir(), &url))))
 }
 
 /// Turn lookups on or off.
@@ -3410,7 +3088,7 @@ const PREFETCH_WAIT_TICKS: usize = 100;
 /// Three: the track playing has to be mixed *out of*, and the exits the Vibe
 /// screen offers are Stay, Follow and Switch. Analysing further ahead than the
 /// set has been planned is work for a route nobody has chosen yet.
-const MIX_LOOKAHEAD: usize = 3;
+pub(crate) const MIX_LOOKAHEAD: usize = 3;
 
 /// Whether anything in the next few tracks still needs describing.
 ///
@@ -3418,7 +3096,7 @@ const MIX_LOOKAHEAD: usize = 3;
 /// is how the upcoming tracks get to the front. Asking about a window rather
 /// than only the current track is what stops the DJ arriving at a record it
 /// cannot mix.
-fn needs_analysis_soon(app: &AppState, lookahead: usize) -> bool {
+pub(crate) fn needs_analysis_soon(app: &AppState, lookahead: usize) -> bool {
     let from = app.queue.current_index().unwrap_or(0);
     app.queue
         .tracks()
@@ -3451,85 +3129,6 @@ struct Scope {
     tracks: std::collections::HashSet<String>,
 }
 
-#[tauri::command]
-fn play_tracks(
-    app_handle: tauri::AppHandle,
-    hrefs: Vec<String>,
-    start: Option<String>,
-    scope: Option<String>,
-    collection: Option<CollectionRef>,
-    state: State<'_, Shared>,
-) -> Result<()> {
-    let shared: Shared = Arc::clone(&state);
-
-    let jump_the_queue = {
-        let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
-        // A named scope confines the set to what was played from; no name is
-        // the library, which is what an unfiltered list means.
-        app.scope = scope.filter(|n| !n.trim().is_empty()).map(|name| Scope {
-            name,
-            tracks: hrefs.iter().cloned().collect(),
-        });
-        // Which shelf this was put on from, if it was one. Set before the
-        // queue moves, because `begin_playback` reads it to decide what the
-        // listen it is about to earn should be credited to.
-        //
-        // Assigned unconditionally, `None` included: playing an album after a
-        // playlist has to stop crediting the playlist, and only overwriting
-        // when a collection is named would leave the previous one attached to
-        // everything played afterwards.
-        app.collection = collection.as_ref().and_then(collection_key);
-        app.queue.set_tracks(hrefs, start.as_deref());
-        let current = app.queue.current().map(str::to_string);
-        if let Some(current) = current.clone() {
-            begin_playback(&shared, &mut app, current);
-        }
-        // The track being started, and the few behind it.
-        //
-        // This used to ask only about the current track, which meant a queue
-        // whose *next* records were undescribed never re-ordered the pass — so
-        // the DJ reached a track it knew nothing about and could not mix into
-        // it. `plan_mix` needs the incoming track analysed before it arrives,
-        // not while it is arriving.
-        //
-        // Still bounded, for the reason the old comment gave: restarting costs
-        // the track in flight, and paying that to re-order a queue that is
-        // already described would be worse than leaving the pass alone.
-        needs_analysis_soon(&app, MIX_LOOKAHEAD)
-    };
-
-    if jump_the_queue {
-        // Lock released above: `start_analysis` takes it.
-        start_analysis(&app_handle, &shared)?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn next_track(state: State<'_, Shared>) -> Result<Option<String>> {
-    let shared: Shared = Arc::clone(&state);
-    let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
-
-    record_skip_if_reacting_to_a_blend(&mut app);
-
-    let next = app.queue.next(None).map(str::to_string);
-    if let Some(href) = next.clone() {
-        begin_playback(&shared, &mut app, href);
-    }
-    Ok(next)
-}
-
-#[tauri::command]
-fn previous_track(state: State<'_, Shared>) -> Result<Option<String>> {
-    let shared: Shared = Arc::clone(&state);
-    let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
-    let previous = app.queue.previous().map(str::to_string);
-    if let Some(href) = previous.clone() {
-        begin_playback(&shared, &mut app, href);
-    }
-    Ok(previous)
-}
-
 // ---------------------------------------------------------------------------
 // Playback (TD-03)
 // ---------------------------------------------------------------------------
@@ -3544,7 +3143,7 @@ const SUPERVISOR_POLL: std::time::Duration = std::time::Duration::from_millis(25
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct PlaybackState {
+pub(crate) struct PlaybackState {
     href: Option<String>,
     /// Resolved from the library rows, so the transport can name what is
     /// playing without the UI holding its own copy of the table.
@@ -3753,7 +3352,7 @@ fn stream_from_server(
     )
 }
 
-fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
+pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     // A new track is a new listen to earn. Whatever the previous one had
     // accrued is dropped rather than banked: it did not reach `CREDIT_AFTER`,
     // which is the whole of what "listened to" means here.
@@ -3902,7 +3501,7 @@ fn player(app: &AppState) -> Result<&audio::Player> {
 /// it was not.
 /// `analysis` is the one for the track the shell is showing, so this says
 /// nothing about a length when nothing is playing.
-fn playing_duration(
+pub(crate) fn playing_duration(
     snapshot: Option<&audio::Snapshot>,
     analysis: Option<&analysis::Analysis>,
 ) -> f64 {
@@ -3910,148 +3509,6 @@ fn playing_duration(
         Some(measured) if measured > 0.0 => measured,
         _ => snapshot.map_or(0.0, |s| s.duration),
     }
-}
-
-#[tauri::command]
-fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    let snapshot = app.player.as_ref().map(|p| p.snapshot());
-    let row = app
-        .playing
-        .as_ref()
-        .and_then(|href| app.rows.iter().find(|r| &r.href == href));
-    let next = app
-        .queue
-        .peek_next(None)
-        .and_then(|href| app.rows.iter().find(|r| r.href == href));
-    let analysis = app.playing.as_ref().and_then(|href| app.analysis.get(href));
-
-    let beat = match (analysis, snapshot.as_ref()) {
-        (Some(a), Some(s)) => beat_window(
-            a,
-            s.position,
-            app.settings
-                .bpm_override(app.playing.as_deref().unwrap_or_default())
-                .unwrap_or(a.bpm),
-        ),
-        _ => (0.0, 0.0),
-    };
-
-    /*
-     * Where the set is, along the curve it was planned on.
-     *
-     * Read off the queue rather than kept as its own list: the queue IS the
-     * plan once `generate_mood_path` has appended to it, and a second copy
-     * would be a second thing to keep in step. Off in shuffle, where there is
-     * no curve and a position along one would be fiction.
-     */
-    let set = if app.settings.dj_mode {
-        let total = app.queue.tracks().len();
-        let index = app.queue.current_index().unwrap_or(0);
-        if total > 1 {
-            (
-                index as u32,
-                total as u32,
-                vapor_library::Curve::parse(&app.settings.curve).target_energy(
-                    app.curve_start,
-                    index,
-                    total,
-                ),
-            )
-        } else {
-            (0, 0, app.curve_start)
-        }
-    } else {
-        (0, 0, 0.0)
-    };
-
-    Ok(PlaybackState {
-        href: app.playing.clone(),
-        title: row.map(|r| r.title.clone()).unwrap_or_default(),
-        // The same rule the table follows: unknown renders as a dash, never as
-        // a guess.
-        artist: row
-            .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
-            .map(|r| r.artist.clone())
-            .unwrap_or_default(),
-        status: snapshot.map_or(audio::Status::Idle, |s| s.status),
-        loading: app.loading,
-        position: snapshot.map_or(0.0, |s| s.position),
-        duration: playing_duration(snapshot.as_ref(), analysis),
-        volume: snapshot.map_or(1.0, |s| s.volume),
-        error: app.playback_error.clone(),
-        available: app.player.is_some(),
-        mixing: app.player.as_ref().is_some_and(|p| p.transition_armed()),
-        level: snapshot.map_or(0.0, |s| s.level),
-        brightness: snapshot.map_or(0.0, |s| s.brightness),
-        beat_period: beat.0,
-        next_beat: beat.1,
-        set_index: set.0,
-        set_total: set.1,
-        set_energy: set.2,
-        waveform: analysis.map(|a| a.waveform.clone()).unwrap_or_default(),
-        next_title: next.map(|r| r.title.clone()).unwrap_or_default(),
-        next_artist: next
-            .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
-            .map(|r| r.artist.clone())
-            .unwrap_or_default(),
-        next_album: next
-            .filter(|r| r.album_source.is_known())
-            .map(|r| r.album.clone())
-            .unwrap_or_default(),
-        next_href: next.map(|r| r.href.clone()).unwrap_or_default(),
-        cover: app.playing.as_deref().and_then(|href| app.covers.get(href)),
-        scope: app
-            .scope
-            .as_ref()
-            .map(|s| s.name.clone())
-            .unwrap_or_default(),
-    })
-}
-
-#[tauri::command]
-fn pause_playback(state: State<'_, Shared>) -> Result<()> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    player(&app)?.pause();
-    Ok(())
-}
-
-#[tauri::command]
-fn resume_playback(state: State<'_, Shared>) -> Result<()> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    player(&app)?.play();
-    Ok(())
-}
-
-/// Stop and forget what was playing.
-///
-/// Deliberately not a pause: the position returns to the start and the
-/// transport reads as idle, which is what the Godot build's stop button did.
-#[tauri::command]
-fn stop_playback(state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    player(&app)?.stop();
-    // Any load still in flight now belongs to nothing, so retire its
-    // generation rather than let it start playing after a stop.
-    app.generation += 1;
-    app.loading = false;
-    app.playing = None;
-    Ok(())
-}
-
-#[tauri::command]
-fn seek(seconds: f64, state: State<'_, Shared>) -> Result<()> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    player(&app)?.seek(seconds);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_volume(volume: f32, state: State<'_, Shared>) -> Result<()> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    player(&app)?.set_volume(volume);
-    Ok(())
 }
 
 /// How long before a mix begins to start decoding the incoming track.
@@ -4094,7 +3551,7 @@ const TRANSITION_ARM_LEAD: f64 = 30.0;
 /// A mix that should be an Echo Out is a Filter Sweep today. That is a
 /// downgrade rather than a design, it is visible — the Vibe screen names the
 /// mix it will perform — and it resolves when TD-20 lands.
-fn choose_transition(
+pub(crate) fn choose_transition(
     from_key: &str,
     to_key: &str,
     bpm_diff: f32,
@@ -4178,7 +3635,7 @@ fn genre_of(app: &AppState, href: &str) -> String {
         .unwrap_or_default()
 }
 
-fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
+pub(crate) fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
     let (ga, gb) = (genre_of(app, a), genre_of(app, b));
     // Unknown on either side is not evidence of a jump.
     if vapor_library::is_unknown_genre(&ga) || vapor_library::is_unknown_genre(&gb) {
@@ -4251,7 +3708,7 @@ const ARTIST_JUMP: f32 = 28.0;
 ///
 /// Returns zeros past the last beat and for an unanalysed track. The caller
 /// reads zero as "no grid" and leaves the mark on its steady rate.
-fn beat_window(analysis: &analysis::Analysis, position: f64, bpm: f32) -> (f32, f64) {
+pub(crate) fn beat_window(analysis: &analysis::Analysis, position: f64, bpm: f32) -> (f32, f64) {
     if !analysis.beats_are_for(bpm) || analysis.beats.len() < 2 {
         return (0.0, 0.0);
     }
@@ -4274,7 +3731,10 @@ fn beat_window(analysis: &analysis::Analysis, position: f64, bpm: f32) -> (f32, 
     (period, analysis.beats[next] as f64)
 }
 
-fn beat_grid(analysis: &analysis::Analysis, override_bpm: Option<f32>) -> vapor_engine::BeatGrid {
+pub(crate) fn beat_grid(
+    analysis: &analysis::Analysis,
+    override_bpm: Option<f32>,
+) -> vapor_engine::BeatGrid {
     let bpm = override_bpm.unwrap_or(analysis.bpm);
     // A tracked grid follows real tempo drift and real downbeat phase, and is
     // what mixing wants — but only if it was tracked at the tempo now in force.
@@ -4394,7 +3854,7 @@ fn dj_pick(app: &AppState) -> Option<String> {
 /// to say what is coming rather than only what is next. Short enough that
 /// choosing a different exit re-plans something recent rather than discarding
 /// half an hour of decisions.
-const PLAN_AHEAD: usize = 10;
+pub(crate) const PLAN_AHEAD: usize = 10;
 
 /// Keep the set going: append the DJ's pick when nothing follows the current
 /// track.
@@ -5270,100 +4730,20 @@ pub(crate) fn queue_view_for(app: &AppState) -> QueueView {
     }
 }
 
-#[tauri::command]
-fn set_repeat(mode: String, state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.queue.set_repeat(match mode.as_str() {
-        "off" => vapor_library::Repeat::Off,
-        "one" => vapor_library::Repeat::One,
-        _ => vapor_library::Repeat::All,
-    });
-    Ok(())
-}
-
-/// Shuffle the queue, or put it back.
-///
-/// The permutation is generated here rather than in the core, which owns no
-/// randomness on purpose — `randi()` inside a library is what made the
-/// GDScript's mood paths reshuffle for no reason.
-#[tauri::command]
-fn set_shuffled(shuffled: bool, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if !shuffled {
-        return Ok(app.queue.unshuffle());
-    }
-
-    let n = app.queue.tracks().len();
-    if n < 2 {
-        return Ok(false);
-    }
-    let mut order: Vec<usize> = (0..n).collect();
-    // Fisher-Yates over a cheap PRNG. Nothing here is security-sensitive and
-    // pulling in `rand` for one shuffle is not worth the dependency.
-    let mut seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x2545F4914F6CDD1D)
-        | 1;
-    for i in (1..n).rev() {
-        // xorshift64*
-        seed ^= seed >> 12;
-        seed ^= seed << 25;
-        seed ^= seed >> 27;
-        let j = (seed.wrapping_mul(0x2545F4914F6CDD1D) >> 33) as usize % (i + 1);
-        order.swap(i, j);
-    }
-    Ok(app.queue.shuffle(&order))
-}
-
-/// Put a track next without disturbing the rest of the order.
-#[tauri::command]
-fn play_next(href: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.queue.set_next(&href))
-}
-
 // ---------------------------------------------------------------------------
 // Vibe DJ
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct MoodPathRequest {
+pub(crate) struct MoodPathRequest {
     tracks: std::collections::HashMap<String, TrackMeta>,
     start: String,
     /// "build" | "chill" | "wave" | anything else = flat.
     curve: String,
 }
 
-/// Order a set of tracks along an energy and tempo curve.
-///
-/// The BPM overrides in settings are applied before pathfinding rather than
-/// after: tempo detection lands a metrical relative on roughly 10% of a real
-/// library, and a wrong BPM does not merely mislabel a track — it changes
-/// which transitions the pathfinder believes are cheap, so a correction has to
-/// reach the cost model to be worth anything.
-#[tauri::command]
-fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<String>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    let mut tracks = req.tracks;
-    for (href, meta) in tracks.iter_mut() {
-        if let Some(bpm) = app.settings.bpm_override(href) {
-            meta.bpm = bpm;
-        }
-    }
-
-    Ok(vapor_library::generate_mood_path(
-        &tracks,
-        &req.start,
-        Curve::parse(&req.curve),
-        app.settings.vibe_limit,
-        &skip_penalties(&app),
-    ))
-}
-
-fn transition_name(kind: vapor_engine::TransitionType) -> String {
+pub(crate) fn transition_name(kind: vapor_engine::TransitionType) -> String {
     use vapor_engine::TransitionType as T;
     match kind {
         T::StandardCrossfade => "crossfade",
@@ -5415,7 +4795,7 @@ fn skip_key(from: &str, to: &str) -> String {
 /// Outside that window, pressing next is a judgement about the *track* — heard
 /// too often, wrong mood — and recording it would teach the pathfinder to avoid
 /// a transition nobody objected to.
-fn record_skip_if_reacting_to_a_blend(app: &mut AppState) {
+pub(crate) fn record_skip_if_reacting_to_a_blend(app: &mut AppState) {
     let Some((from, to)) = app.last_mix.clone() else {
         return;
     };
@@ -5436,7 +4816,7 @@ fn record_skip_if_reacting_to_a_blend(app: &mut AppState) {
 }
 
 /// The skip map in the shape the pathfinder wants.
-fn skip_penalties(app: &AppState) -> std::collections::HashMap<(String, String), f32> {
+pub(crate) fn skip_penalties(app: &AppState) -> std::collections::HashMap<(String, String), f32> {
     app.skips
         .iter()
         .filter_map(|(key, penalty)| {
@@ -5453,7 +4833,7 @@ fn skip_penalties(app: &AppState) -> std::collections::HashMap<(String, String),
 /// harness and suits no real screen — the frontend would have to hold a copy of
 /// the whole library's analysis to ask a question about it. Building it here
 /// keeps that where it already lives.
-fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMeta> {
+pub(crate) fn track_meta_pool(app: &AppState) -> std::collections::HashMap<String, TrackMeta> {
     let pool: std::collections::HashMap<String, TrackMeta> = app
         .rows
         .iter()
@@ -5640,7 +5020,7 @@ fn dedupe_recordings(
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct VibePath {
+pub(crate) struct VibePath {
     hrefs: Vec<String>,
     /// How many library tracks were eligible — analysed, with a tempo. The
     /// screen says "1,284 read", and it should be the true number.
@@ -5649,34 +5029,6 @@ struct VibePath {
     /// quietly dropped: a set built from a tenth of the library looks the same
     /// as one built from all of it (TD-43b).
     skipped: usize,
-}
-
-/// Order a set of tracks along an energy and tempo curve, from what is known.
-#[tauri::command]
-fn vibe_path(start: String, curve: String, state: State<'_, Shared>) -> Result<VibePath> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let pool = track_meta_pool(&app);
-
-    if !pool.contains_key(&start) {
-        return Err(Error(
-            "That track has not been analysed yet, so the DJ has nothing to plan from.".to_string(),
-        ));
-    }
-
-    let considered = pool.len();
-    let skipped = app.rows.len().saturating_sub(considered);
-    Ok(VibePath {
-        hrefs: vapor_library::generate_mood_path(
-            &pool,
-            &start,
-            Curve::parse(&curve),
-            app.settings.vibe_limit,
-            // What the app has learned from being skipped (TD-14).
-            &skip_penalties(&app),
-        ),
-        considered,
-        skipped,
-    })
 }
 
 /// The three ways out of the track that is playing.
@@ -5756,7 +5108,7 @@ fn exit_between(from: &TrackMeta, to: &TrackMeta, similar_genre: bool) -> Exit {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct MixCandidate {
+pub(crate) struct MixCandidate {
     href: String,
     title: String,
     artist: String,
@@ -5779,27 +5131,11 @@ struct MixCandidate {
     cover: Option<String>,
 }
 
-/// The three ways out of the playing track, and which one the DJ would take.
-///
-/// §2–§4 of `docs/ai_dj_workflow.md`. The curve decides where the set is going;
-/// this decides the next step. Both existed in the original — `play_harmonic_
-/// shuffle` planned the arc and this chose each transition — and the rewrite
-/// shipped only the first, so the screen could plan a set but never show the
-/// choice it was making or let anyone overrule it.
-///
-/// One candidate per kind, each the best of its kind rather than the best
-/// overall, because the point is to offer three genuinely different exits.
-#[tauri::command]
-fn mix_candidates(state: State<'_, Shared>) -> Result<Vec<MixCandidate>> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(mix_candidates_for(&mut app))
-}
-
 /// The body of [`mix_candidates`], reachable from a test.
 ///
 /// A `#[tauri::command]` takes `State`, which cannot be built outside a running
 /// app, so logic left in a command body is logic no test can see.
-fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
+pub(crate) fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
     let Some(current) = app.playing.clone() else {
         return Vec::new();
     };
@@ -6051,112 +5387,15 @@ fn card_for(
 /// * and the mix has not become audible yet. Once it has, abandoning it snaps
 ///   the outgoing deck back to full gain mid-crossfade, which is worse than
 ///   honouring the press one track late.
-fn mix_must_be_rearmed(armed_next: Option<&str>, chosen: &str, running: bool) -> bool {
+pub(crate) fn mix_must_be_rearmed(armed_next: Option<&str>, chosen: &str, running: bool) -> bool {
     !running && armed_next.is_some_and(|armed| armed != chosen)
-}
-
-#[tauri::command]
-fn choose_next(
-    href: String,
-    curve: String,
-    app_handle: tauri::AppHandle,
-    state: State<'_, Shared>,
-) -> Result<()> {
-    let (generation, plan) = {
-        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-        if !app.queue.set_next(&href) {
-            return Err(Error("That track is no longer in the queue.".to_string()));
-        }
-
-        // The queue is not the whole story: a mix armed for a different track
-        // has that track loaded on the deck already, and the queue does not
-        // reach it. Drop it so the supervisor arms the chosen one instead.
-        let running = app.player.as_ref().is_some_and(|p| p.transition_running());
-        if mix_must_be_rearmed(app.armed_next.as_deref(), &href, running) {
-            if let Some(player) = app.player.as_ref() {
-                player.cancel_transition();
-            }
-            // Cleared as well as cancelled: an `arm_mix` still in flight checks
-            // this before handing its decoder over, so clearing it is what
-            // makes that one stand down too.
-            app.armed_next = None;
-        }
-
-        app.curve_plan = app.curve_plan.wrapping_add(1);
-
-        let pool = track_meta_pool(&app);
-        // The tail is re-planned from the chosen track, so that track is what
-        // the curve is now relative to.
-        if let Some(t) = pool.get(&href) {
-            app.curve_start = t.energy_level;
-        }
-        // Unanalysed: it can still play next, there is simply nothing to plan
-        // a route from.
-        let plan = pool
-            .contains_key(&href)
-            .then(|| (pool, skip_penalties(&app), app.settings.vibe_limit));
-        (app.curve_plan, plan)
-    };
-
-    // The exit takes effect above; the route behind it is planned off the lock.
-    //
-    // Same reason as `set_curve`: `generate_mood_path` is an A* over the whole
-    // library and it used to run with the state lock held, so pressing Stay or
-    // Switch did nothing visible for several seconds. The queue's next track is
-    // already set by the time this returns — which is the part the press was
-    // actually asking for.
-    let Some((pool, penalties, limit)) = plan else {
-        return Ok(());
-    };
-    let shared: Shared = Arc::clone(&state);
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter as _;
-        let tail = vapor_library::generate_mood_path(
-            &pool,
-            &href,
-            Curve::parse(&curve),
-            limit,
-            &penalties,
-        );
-
-        let Ok(mut app) = shared.lock() else {
-            return;
-        };
-        // Something else has been chosen since; this route starts in the wrong
-        // place.
-        if app.curve_plan != generation {
-            return;
-        }
-
-        // Everything up to and including the track playing is history and stays
-        // put; the tail is what the DJ is still free to arrange.
-        let played: Vec<String> = app
-            .queue
-            .tracks()
-            .iter()
-            .take(app.queue.current_index().unwrap_or(0) + 1)
-            .cloned()
-            .collect();
-        let mut next: Vec<String> = played;
-        for h in tail {
-            if !next.contains(&h) {
-                next.push(h);
-            }
-        }
-        let current = app.queue.current().map(str::to_string);
-        app.queue.set_tracks(next, current.as_deref());
-        drop(app);
-        let _ = app_handle.emit("playback-changed", ());
-    });
-    Ok(())
 }
 
 /// What the next blend will do, in the terms the Vibe screen states them.
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct BlendPreview {
+pub(crate) struct BlendPreview {
     from_title: String,
     to_title: String,
     #[serde(serialize_with = "finite")]
@@ -6177,98 +5416,6 @@ struct BlendPreview {
     reason: String,
     /// Which of the three mixes this pair would get (TD-27).
     transition: String,
-}
-
-/// Describe the mix between what is playing and what is next.
-///
-/// Read-only: this asks the same questions `plan_mix` asks and answers them for
-/// a person instead of for the audio thread, so the screen cannot claim a blend
-/// the engine would refuse.
-#[tauri::command]
-fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    let Some(current) = app.playing.clone() else {
-        return Ok(None);
-    };
-    let Some(next) = app.queue.peek_next(None).map(str::to_string) else {
-        return Ok(None);
-    };
-    if next == current {
-        return Ok(None);
-    }
-
-    let title_of = |href: &str| {
-        app.rows
-            .iter()
-            .find(|r| r.href == href)
-            .map(|r| r.title.clone())
-            .unwrap_or_default()
-    };
-
-    let (Some(out), Some(inc)) = (app.analysis.get(&current), app.analysis.get(&next)) else {
-        return Ok(Some(BlendPreview {
-            from_title: title_of(&current),
-            to_title: title_of(&next),
-            from_bpm: 0.0,
-            to_bpm: 0.0,
-            from_key: String::new(),
-            to_key: String::new(),
-            shift_percent: 0.0,
-            gain_delta: 0.0,
-            matchable: false,
-            reason: "Not analysed yet".to_string(),
-            transition: "crossfade".to_string(),
-        }));
-    };
-
-    let from_bpm = app.settings.bpm_override(&current).unwrap_or(out.bpm);
-    let to_bpm = app.settings.bpm_override(&next).unwrap_or(inc.bpm);
-
-    let out_grid = beat_grid(out, app.settings.bpm_override(&current));
-    let in_grid = beat_grid(inc, app.settings.bpm_override(&next));
-    let matched = vapor_engine::Mixer::tempo_ratio(&out_grid, &in_grid);
-
-    let (matchable, reason, shift_percent) = match matched {
-        Ok(ratio) => (true, String::new(), ((ratio - 1.0) * 100.0) as f32),
-        Err(vapor_engine::MatchError::TempoTooFar) => (
-            false,
-            "Too far apart to beat-match".to_string(),
-            if to_bpm > 0.0 {
-                (from_bpm / to_bpm - 1.0) * 100.0
-            } else {
-                0.0
-            },
-        ),
-        Err(vapor_engine::MatchError::NoGrid) => (false, "No usable beat grid".to_string(), 0.0),
-    };
-
-    Ok(Some(BlendPreview {
-        from_title: title_of(&current),
-        to_title: title_of(&next),
-        from_bpm,
-        to_bpm,
-        from_key: out.key.clone(),
-        to_key: inc.key.clone(),
-        shift_percent,
-        gain_delta: inc.lufs - out.lufs,
-        matchable,
-        reason,
-        transition: transition_name(choose_transition(
-            if out.outro_key.is_empty() {
-                &out.key
-            } else {
-                &out.outro_key
-            },
-            if inc.intro_key.is_empty() {
-                &inc.key
-            } else {
-                &inc.intro_key
-            },
-            (from_bpm - to_bpm).abs(),
-            same_genre(&app, &current, &next),
-        )),
-    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -6496,38 +5643,6 @@ fn settings(state: State<'_, Shared>) -> Result<Settings> {
     Ok(app.settings.clone())
 }
 
-/// Correct a track's tempo by hand, or clear the correction with 0.
-///
-/// A refused value is an error rather than a silent no-op: the person is
-/// looking at the number they just typed, and a correction that appeared to be
-/// accepted but was not is worse than no correction at all.
-///
-/// The number is stored here and returns immediately; the beat grid it implies
-/// is re-tracked in the background by [`retrack_after_correction`], because a
-/// correction that only changed the label would leave mixing aligned to the
-/// tempo it was made to reject.
-#[tauri::command]
-fn set_bpm_override(
-    href: String,
-    bpm: f32,
-    app_handle: tauri::AppHandle,
-    state: State<'_, Shared>,
-) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if !app.settings.set_bpm_override(&href, bpm) {
-        return Err(Error(format!(
-            "A BPM has to be between {} and {}.",
-            vapor_library::MIN_MANUAL_BPM as u32,
-            vapor_library::MAX_MANUAL_BPM as u32
-        )));
-    }
-    app.save_settings()?;
-    drop(app);
-
-    retrack_grids(&app_handle, state.inner(), vec![href]);
-    Ok(())
-}
-
 /// Why a track has no local bytes, in words a person can act on.
 ///
 /// Two quite different things arrive as a `CacheError` and only one of them is
@@ -6584,7 +5699,7 @@ fn stale_grids(app: &AppState, hrefs: &[String]) -> Vec<(String, f32)> {
 /// would make the app stutter while music is playing. The corrections
 /// themselves are already saved, so nothing waits on this — a failure costs the
 /// grid quality and not the number.
-fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, hrefs: Vec<String>) {
+pub(crate) fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, hrefs: Vec<String>) {
     use tauri::Emitter;
 
     let Ok(app) = shared.lock() else { return };
@@ -6970,7 +6085,7 @@ struct Stall {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct AnalysisFailure {
+pub(crate) struct AnalysisFailure {
     href: String,
     /// From the library row, so the list names tracks rather than paths. Falls
     /// back to the href for a failure whose row has since gone.
@@ -6988,7 +6103,7 @@ struct AnalysisFailure {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct AnalysisStatus {
+pub(crate) struct AnalysisStatus {
     analysed: usize,
     total: usize,
     /// Whether a pass is running right now, whoever started it.
@@ -7087,7 +6202,7 @@ fn prune_audio(app: &AppState) {
 ///
 /// A permanently refused file counts as done. It is not outstanding work, and
 /// leaving it out of the numerator means the total can never be reached.
-fn analysis_counts(app: &AppState) -> (usize, usize) {
+pub(crate) fn analysis_counts(app: &AppState) -> (usize, usize) {
     let total = app.rows.len();
     let outstanding = app
         .rows
@@ -7103,41 +6218,12 @@ fn analysis_counts(app: &AppState) -> (usize, usize) {
     (total.saturating_sub(outstanding), total)
 }
 
-#[tauri::command]
-fn analysis_status(state: State<'_, Shared>) -> Result<AnalysisStatus> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let (analysed, total) = analysis_counts(&app);
-    Ok(AnalysisStatus {
-        analysed,
-        total,
-        running: app.analysing,
-        current: app.analysing_title.clone(),
-        stopped_because: app.analysis_stopped_because.clone(),
-    })
-}
-
-/// Every track analysis could not describe, and why.
-///
-/// Both kinds together, permanent first, because the person looking at this
-/// asked "which ones didn't work" and does not yet know there are two kinds.
-/// Within each kind, ordered by title so the list is the same twice running.
-///
-/// Joined against `rows` so the modal names tracks. A failure whose row has
-/// gone — the file was removed from the library after it failed — keeps its
-/// href as the title rather than being dropped: it is still a thing the count
-/// is missing, and silently omitting it makes the numbers disagree.
-#[tauri::command]
-fn analysis_failures(state: State<'_, Shared>) -> Result<Vec<AnalysisFailure>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(failure_list(&app))
-}
-
 /// The body of [`analysis_failures`], against state rather than a `State`.
 ///
 /// Split out so the ordering and the row join can be tested by calling the
 /// thing the command calls. A test that rebuilds this from `failures` and
 /// `stalls` itself would agree with its own copy and not with the command.
-fn failure_list(app: &AppState) -> Vec<AnalysisFailure> {
+pub(crate) fn failure_list(app: &AppState) -> Vec<AnalysisFailure> {
     let rows: std::collections::HashMap<&str, &Row> =
         app.rows.iter().map(|r| (r.href.as_str(), r)).collect();
 
@@ -7175,32 +6261,6 @@ fn failure_list(app: &AppState) -> Vec<AnalysisFailure> {
     out
 }
 
-#[tauri::command]
-fn cancel_analysis(state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.cancel.stop();
-    // Reported stopped now, not when the pass gets round to noticing.
-    //
-    // The pass clears this itself on the way out and will do so again, which is
-    // harmless. But it winds down asynchronously — it has a chunk of a download
-    // to finish reading — and a screen that goes on saying "Listening…" until
-    // then is a screen ignoring the button that was just pressed.
-    app.analysing = false;
-    app.analysing_title = String::new();
-    Ok(())
-}
-
-/// Analyse everything not already done, emitting progress as it goes.
-///
-/// Runs on a blocking thread rather than the async runtime: analysis is
-/// CPU-bound, and occupying an async worker for ten minutes starves every other
-/// task sharing it.
-#[tauri::command]
-async fn analyse_library(app_handle: tauri::AppHandle, state: State<'_, Shared>) -> Result<()> {
-    let shared: Shared = Arc::clone(&state);
-    start_analysis(&app_handle, &shared)
-}
-
 /// Whether the track is one analysis still owes an answer for.
 ///
 /// Used to decide if starting playback is worth restarting a pass for: if the
@@ -7230,7 +6290,7 @@ fn needs_analysis(app: &AppState, href: &str) -> bool {
 ///
 /// Ordering comes from the play queue, so the track being listened to is
 /// described first — see `analysis::pending_first`.
-fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> {
+pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> {
     use tauri::Emitter;
 
     // Snapshot what needs doing and release the lock: the pass takes minutes,
@@ -8085,23 +7145,23 @@ pub fn run() {
             commands::playlists::set_playlist_folder,
             track_lookup,
             look_up_track,
-            looked_up_image,
-            album_cover,
-            find_album_art,
-            clear_album_art,
-            set_prefer_looked_up_art,
+            commands::artwork::looked_up_image,
+            commands::artwork::album_cover,
+            commands::artwork::find_album_art,
+            commands::artwork::clear_album_art,
+            commands::artwork::set_prefer_looked_up_art,
             set_hide_duplicates,
             set_appearance,
-            analysis_failures,
-            artist_portrait,
+            commands::analysis::analysis_failures,
+            commands::artwork::artist_portrait,
             set_metadata_lookup,
-            set_vibe_limit,
-            set_curve,
-            set_dj_mode,
+            commands::dj::set_vibe_limit,
+            commands::dj::set_curve,
+            commands::dj::set_dj_mode,
             set_sync_enabled,
             startup_problems,
             identify_library,
-            media_keys_available,
+            commands::playback::media_keys_available,
             sync_view,
             open_pairing,
             cancel_pairing,
@@ -8113,42 +7173,42 @@ pub fn run() {
             commands::queue::queue_view,
             commands::queue::remove_from_queue,
             commands::queue::move_in_queue,
-            set_repeat,
-            set_shuffled,
-            play_next,
-            vibe_path,
-            blend_preview,
+            commands::playback::set_repeat,
+            commands::playback::set_shuffled,
+            commands::playback::play_next,
+            commands::dj::vibe_path,
+            commands::dj::blend_preview,
             track_details,
             search,
             data_breakdown,
             reveal_data_folder,
-            play_tracks,
-            next_track,
-            previous_track,
-            playback_state,
-            pause_playback,
-            resume_playback,
-            stop_playback,
-            seek,
-            set_volume,
-            mood_path,
+            commands::playback::play_tracks,
+            commands::playback::next_track,
+            commands::playback::previous_track,
+            commands::playback::playback_state,
+            commands::playback::pause_playback,
+            commands::playback::resume_playback,
+            commands::playback::stop_playback,
+            commands::playback::seek,
+            commands::playback::set_volume,
+            commands::dj::mood_path,
             settings,
-            set_bpm_override,
+            commands::analysis::set_bpm_override,
             data_location,
             delete_all_data,
             save_webdav_password,
             has_webdav_password,
             set_remote_config,
             scan_library,
-            analyse_library,
-            cancel_analysis,
+            commands::analysis::analyse_library,
+            commands::analysis::cancel_analysis,
             library_entities,
             home_shelves,
-            mix_candidates,
-            choose_next,
-            track_cover,
-            track_thumb,
-            analysis_status,
+            commands::dj::mix_candidates,
+            commands::dj::choose_next,
+            commands::artwork::track_cover,
+            commands::artwork::track_thumb,
+            commands::analysis::analysis_status,
             commands::cache::cache_status,
             commands::cache::set_cache_max_bytes,
             commands::cache::clear_audio_cache,
