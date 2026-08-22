@@ -228,11 +228,39 @@ jobs:
           if (-not $exe) { Write-Host 'no test binary found'; exit 0 }
           Write-Host "binary: $($exe.FullName)"
 
+          # Which CRT the loader would actually pick, before anything clever.
+          # STATUS_ENTRYPOINT_NOT_FOUND means a DLL was found and did not export
+          # a name the binary imports, and the usual cause on a CI image is an
+          # older redistributable earlier on PATH than the system one. This is
+          # the cheap question and it was never asked.
+          foreach ($dll in 'vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll') {
+            Write-Host "--- $dll ---"
+            $found = (where.exe $dll) 2>$null
+            if (-not $found) { Write-Host '  not on PATH'; continue }
+            foreach ($path in $found) {
+              $v = (Get-Item $path).VersionInfo.FileVersion
+              Write-Host "  $path  ($v)"
+            }
+          }
+          Write-Host "--- PATH ---"
+          $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
+
+          # Host x64, explicitly. The previous run sorted by name descending and
+          # picked Hostx86\x86, whose dumpbin needs its own x86 runtime to start
+          # — it produced no parseable output at all, and the step reported
+          # nothing missing because it had parsed no DLLs rather than because
+          # everything resolved.
           $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' `
                        -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -like '*Hostx64\x64*' } |
                      Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $dumpbin) { Write-Host 'dumpbin not on this image'; exit 0 }
+          if (-not $dumpbin) { Write-Host 'no x64 dumpbin on this image'; exit 0 }
           Write-Host "dumpbin: $($dumpbin.FullName)"
+
+          # Proof the parser ran at all, so a silent zero cannot read as a pass.
+          $depends = & $dumpbin.FullName /dependents $exe.FullName
+          Write-Host "--- dependents ---"
+          $depends | Select-String -Pattern '\.dll' | ForEach-Object { Write-Host "  $_" }
 
           # Every name the binary imports, grouped by the DLL it wants it from.
           $imports = & $dumpbin.FullName /imports $exe.FullName
@@ -353,3 +381,87 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --target aarch64-linux-android
+
+  # An installer you can actually run, on demand.
+  #
+  # Separate from `shell` because that job dies at `cargo test` on Windows —
+  # STATUS_ENTRYPOINT_NOT_FOUND at DLL load, tracked as AUD-19 — and takes
+  # `Release build` down with it, so nothing has ever proved Windows *bundles*.
+  # `cargo check` passes there, so the compiler is fine; it is running a test
+  # binary that fails. This job answers the other question.
+  #
+  # Not on push. Bundling is slow and produces installers nobody consumes on a
+  # normal commit, which is the same reason `shell` stops at a release build.
+  # Run it from the Actions tab when a build is wanted.
+  installers:
+    name: installers (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vapor-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vapor-app/src-tauri
+          key: installers-${{ matrix.os }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libdbus-1-dev
+
+      - run: npm ci
+        working-directory: vapor-app
+
+      # `bundle.createUpdaterArtifacts` is on, so `tauri build` signs the
+      # updater tarball and fails at the very last step without a key — after
+      # producing every installer. The real key is deliberately not in CI (see
+      # AUD-21: it is not managed at all until distribution is real), so a
+      # throwaway one is generated here.
+      #
+      # The `.sig` this produces is worthless and is not uploaded. It exists so
+      # the build reaches exit 0 rather than reporting failure for a step that
+      # has nothing to do with whether the app compiled.
+      - name: A throwaway updater key, so bundling completes
+        shell: bash
+        working-directory: vapor-app
+        run: |
+          npx tauri signer generate -w /tmp/throwaway.key -f --password "" > /dev/null 2>&1
+          echo "TAURI_SIGNING_PRIVATE_KEY=/tmp/throwaway.key" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> "$GITHUB_ENV"
+
+      - name: Build
+        working-directory: vapor-app
+        run: npx tauri build
+
+      # Everything a person downloads, and nothing that pretends to be signed.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vapor-music-${{ matrix.os }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            vapor-app/src-tauri/target/release/bundle/nsis/*.exe
+            vapor-app/src-tauri/target/release/bundle/msi/*.msi
+            vapor-app/src-tauri/target/release/bundle/deb/*.deb
+            vapor-app/src-tauri/target/release/bundle/appimage/*.AppImage
