@@ -31,3 +31,9 @@ bin/libaudio_dsp.*
 
 # Playwright, run from the repo root instead of vapor-app/
 /test-results/
+
+# ts-rs output. `cargo test` without TS_RS_EXPORT_DIR writes the generated
+# TypeScript here; the copies that count are checked in under
+# vapor-app/src/lib/generated/ and compared by `npm run types:check`.
+/vapor-app/src-tauri/bindings/
+/vapor-core/bindings/

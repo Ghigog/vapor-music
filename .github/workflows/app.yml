@@ -64,13 +64,20 @@ jobs:
       - name: Component tests
         run: npm test
 
-      # `npm run build` rather than `npx vite build`: the script also runs
+      # An npm script rather than `npx vite build`: the script also runs
       # `scripts/verify-dist.mjs`, which checks that index.html points at files
       # that exist. A torn bundle starts, serves the page, loads no JavaScript
       # and shows an empty window — no React, so not even the error boundary
       # reports it. Nothing else in this workflow can see that.
+      #
+      # `build:web` and not `build`, because `build` also runs the ts-rs drift
+      # check, which compiles the whole Rust shell and so needs the ALSA,
+      # WebKitGTK and D-Bus headers this job deliberately does not install.
+      # b3714f4 put that check into `npm run build` and every run of this job
+      # since has died on `alsa-sys` — in the one job whose point is to report
+      # fast without waiting for Rust. The check moved to the shell job.
       - name: Build
-        run: npm run build
+        run: npm run build:web
 
   # Whole journeys through the real UI, plus a seeded monkey.
   #
@@ -196,8 +203,58 @@ jobs:
       - name: Test
         run: cargo test
 
+      # Windows exits 0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND) before any test
+      # runs: the loader found a DLL the binary imports from, but not a symbol
+      # it wanted out of it. The harness prints nothing, because it never
+      # started.
+      #
+      # Not caused by anything in this repository, as far as the evidence goes.
+      # The last run where this step reached the test binary was 4bad6f4c on
+      # 2026-08-20, on runner image win25-vs2026/20260810.198; every run between
+      # then and 50004e6 died earlier, at `cargo fmt` or at clippy, so the first
+      # execution since the image moved to 20260818.207 is also the first
+      # failure. No `windows-*` crate changed version in that range.
+      #
+      # This lists what the binary imports so the next failure names the DLL
+      # instead of a hex code. It costs nothing when the job is green.
+      - name: Which DLL is missing an export
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        working-directory: vapor-app/src-tauri
+        run: |
+          $exe = Get-ChildItem target/debug/deps -Filter 'vapor_app_lib-*.exe' |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $exe) { Write-Host 'no test binary found'; exit 0 }
+          Write-Host "binary: $($exe.FullName)"
+          $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' `
+                       -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+          if ($dumpbin) { & $dumpbin.FullName /dependents $exe.FullName }
+          else { Write-Host 'dumpbin not on this image' }
+
       - name: Clippy
         run: cargo clippy --all-targets
+
+      # The generated TypeScript under vapor-app/src/lib/generated/ is committed
+      # so the frontend builds without a Rust toolchain, which is exactly how it
+      # can go stale. `types:check` regenerates it and diffs, so it needs cargo
+      # and the headers installed above — this is the only job that has both.
+      #
+      # Linux only: it compares generated text, so running it on three platforms
+      # would prove the same thing three times.
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vapor-app/package-lock.json
+
+      - name: Frontend types still match the Rust
+        if: runner.os == 'Linux'
+        working-directory: vapor-app
+        run: |
+          npm ci
+          npm run types:check
 
       # Debug and release are different compilations, and `tauri build` — the
       # thing that produces an app anyone can open — only ever runs release.
