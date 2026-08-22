@@ -31,10 +31,19 @@
 
 # Left behind by the Godot build, deleted 2026-08-21. None of it is produced by
 # anything here any more; these lines only keep a machine that once built that
-# tree from showing four untracked entries for ever. Safe to delete by hand:
-#   rm -rf .godot bin external android .sconsign.dblite
+# tree from showing untracked entries for ever.
+#
+# About 2 GB on the machine this was removed on: android/ 1.8 GB, godot-cpp/
+# 240 MB (a deregistered submodule checkout), .godot/ 5.5 MB, .sconsign.dblite
+# 5.4 MB, bin/ 808 KB, and three SCons object files in src/. Safe to delete:
+#
+#   rm -rf .godot bin external android godot-cpp src .sconsign.dblite
+#
+# Nothing regenerates them, and `godot-final-v1.78` has the sources.
 .godot/
 /android/
 /bin/
+/src/
+/godot-cpp/
 external/
 .sconsign.dblite
