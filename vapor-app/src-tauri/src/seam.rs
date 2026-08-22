@@ -22,10 +22,11 @@
 
 use super::*;
 
-// The commands moved into `commands/` on 2026-08-22. `generate_handler!` below
-// takes them by bare name, so they are imported rather than path-qualified —
-// keeping this list readable as the set of round trips under test.
-use crate::commands::{cache::*, groups::*, playlists::*, queue::*};
+// The commands moved into `commands/` on 2026-08-22, so the handler list below
+// names them by path. A glob import would also work — `generate_handler!`
+// resolves the hidden macro `#[tauri::command]` generates, not the function —
+// but the compiler does not count that as a use, so it warns on an import the
+// build genuinely needs. Paths avoid arguing with it.
 
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 use tauri::utils::acl::ExecutionContext;
@@ -90,16 +91,16 @@ fn seam() -> Seam {
     let app = mock_builder()
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
-            playlists,
-            create_playlist,
-            rename_playlist,
-            delete_playlist,
-            playlist_folders,
-            create_folder,
-            set_playlist_folder,
-            dynamic_groups,
-            create_group,
-            add_to_group,
+            crate::commands::playlists::playlists,
+            crate::commands::playlists::create_playlist,
+            crate::commands::playlists::rename_playlist,
+            crate::commands::playlists::delete_playlist,
+            crate::commands::playlists::playlist_folders,
+            crate::commands::playlists::create_folder,
+            crate::commands::playlists::set_playlist_folder,
+            crate::commands::groups::dynamic_groups,
+            crate::commands::groups::create_group,
+            crate::commands::groups::add_to_group,
             settings,
         ])
         // `mock_context`, not `generate_context!`: the real one embeds the

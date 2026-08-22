@@ -257,8 +257,7 @@ fn to_snake(s: &str) -> String {
 
 #[test]
 fn every_command_the_frontend_calls_is_registered() {
-    let lib = read("src/lib.rs");
-    let handlers = registered(&lib);
+    let handlers = registered(&read("src/lib.rs"));
     let calls = typescript_calls();
 
     assert!(
@@ -278,8 +277,7 @@ fn every_command_the_frontend_calls_is_registered() {
 
 #[test]
 fn every_registered_command_exists() {
-    let lib = read("src/lib.rs");
-    let handlers = registered(&lib);
+    let handlers = registered(&read("src/lib.rs"));
     let defined = rust_commands(&shell_source());
 
     let ghosts: Vec<&String> = handlers
@@ -295,7 +293,6 @@ fn every_registered_command_exists() {
 /// The one that would have caught renaming an argument on one side only.
 #[test]
 fn argument_names_agree_on_both_sides() {
-    let lib = read("src/lib.rs");
     let defined = rust_commands(&shell_source());
     let calls = typescript_calls();
 

@@ -1,8 +1,6 @@
 //! Cache commands — what is held locally, and letting go of it.
 
-use serde::Serialize;
 use tauri::State;
-use ts_rs::TS;
 
 use crate::{CacheStatus, Error, Result, Shared};
 

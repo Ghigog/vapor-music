@@ -7220,13 +7220,6 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    // The commands these tests drive now live in `commands/`. Imported as a
-    // group rather than moved with them: they are integration-flavoured tests
-    // that reach across domains — a playlist test that also asserts on the
-    // queue — so splitting them by module would put each one somewhere it only
-    // half belongs.
-    use crate::commands::{cache::*, groups::*, playlists::*, queue::*};
-
     /// The last thirty seconds of every track, and what a press means in them.
     ///
     /// A mix is armed `TRANSITION_ARM_LEAD` ahead of its start, so there is
