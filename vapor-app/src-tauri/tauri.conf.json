@@ -37,6 +37,15 @@
       "icons/icon.ico"
     ],
     "copyright": "Copyright (c) 2026 Dylan Growcoot. All rights reserved.",
-    "category": "Music"
+    "category": "Music",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYzNUVDRkI2NDBCMjk1REYKUldUZmxiSkF0czllODl3eVlTQnlkMUdFSVArbk5xNWpYbTVYd2NqdmdtVlo5dFNKYklOK0hseVIK",
+      "endpoints": [
+        "https://github.com/Ghigog/vapor-music/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

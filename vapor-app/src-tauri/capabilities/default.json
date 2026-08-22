@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Capabilities the main window needs.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "updater:default"]
 }
