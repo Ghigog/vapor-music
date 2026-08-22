@@ -30,7 +30,9 @@ fn source() -> Vec<f32> {
 }
 
 fn peak(out: &[f32]) -> (usize, f32) {
-    out.chunks_exact(2)
+    out.as_chunks::<2>()
+        .0
+        .iter()
         .enumerate()
         .map(|(i, f)| (i, f[0].abs()))
         .fold((0, 0.0), |acc, x| if x.1 > acc.1 { x } else { acc })

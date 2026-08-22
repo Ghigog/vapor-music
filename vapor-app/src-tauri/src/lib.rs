@@ -5554,7 +5554,7 @@ fn queue_view_for(app: &AppState) -> QueueView {
         .queue
         .tracks()
         .iter()
-        .skip(current.map_or(0, |c| c))
+        .skip(current.unwrap_or(0))
         .filter_map(|href| app.analysis.get(href))
         .map(|a| a.duration)
         .sum();
