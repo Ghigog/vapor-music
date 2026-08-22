@@ -76,6 +76,33 @@ function isEntityTab(group: GroupBy): group is "album" | "artist" | "genre" {
 }
 
 /**
+ * Whole records, then the ones with gaps in them.
+ *
+ * A lot of this library arrived as one-off downloads — a single track of a
+ * nineteen-track album, filed under that album's name. Shown in the same shape
+ * as a complete record, those tiles claim something untrue, and there are
+ * enough of them to bury the albums actually owned.
+ *
+ * The backend has already put them in order and marked them; this only draws
+ * the line. It returns a single unheaded group for every other tab, and for an
+ * Albums tab where nothing is missing — a heading over the whole list would be
+ * a label, not a division.
+ */
+function splitByCompleteness(
+  entities: LibraryEntity[],
+): { header: string; items: LibraryEntity[] }[] {
+  const whole = entities.filter((e) => !e.incomplete);
+  const partial = entities.filter((e) => e.incomplete);
+  if (partial.length === 0) return [{ header: "", items: whole }];
+  // `whole` can be empty — a library where every album is a stray track — and
+  // an empty grid above the heading would be a hole on the screen.
+  return [
+    ...(whole.length > 0 ? [{ header: "", items: whole }] : []),
+    { header: "Incomplete", items: partial },
+  ];
+}
+
+/**
  * The album or artist being looked inside.
  *
  * Exported because App holds it: it is a place in the app, so it belongs in the
@@ -492,31 +519,40 @@ export function Library({
             <EmptyLibrary query={query} kind={groupBy} />
           )}
 
-          {entities !== null && entities.length > 0 && (
-            <div className="library__grid">
-              {entities.map((entity) => (
-                <EntityCard
-                  /* Name *and* subtitle. Two albums can share a title — the
-                     backend already keeps them apart by artist, so keying on
-                     name alone collided them back together and React warned
-                     about duplicate keys on exactly the case the album-identity
-                     test covers. */
-                  key={`${entity.name}\u0000${entity.subtitle}`}
-                  entity={entity}
-                  kind={groupBy}
-                  onOpen={() =>
-                    setOpened({
-                      kind: groupBy,
-                      name: entity.name,
-                      lead: entity.lead,
-                      artist: groupBy === "album" ? entity.subtitle : entity.name,
-                    })
-                  }
-                  onPlay={() => void playEntity(entity)}
-                />
-              ))}
-            </div>
-          )}
+          {entities !== null &&
+            entities.length > 0 &&
+            splitByCompleteness(entities).map(({ header, items }) => (
+              <section key={header || "whole"} className="library__section">
+                {header && (
+                  <h2 className="library__section-head label">
+                    {header} <span className="library__section-count">{items.length}</span>
+                  </h2>
+                )}
+                <div className="library__grid">
+                  {items.map((entity) => (
+                    <EntityCard
+                      /* Name *and* subtitle. Two albums can share a title — the
+                         backend already keeps them apart by artist, so keying on
+                         name alone collided them back together and React warned
+                         about duplicate keys on exactly the case the
+                         album-identity test covers. */
+                      key={`${entity.name}\u0000${entity.subtitle}`}
+                      entity={entity}
+                      kind={groupBy}
+                      onOpen={() =>
+                        setOpened({
+                          kind: groupBy,
+                          name: entity.name,
+                          lead: entity.lead,
+                          artist: groupBy === "album" ? entity.subtitle : entity.name,
+                        })
+                      }
+                      onPlay={() => void playEntity(entity)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
         </div>
       ) : (
         <div className="library__body">
@@ -785,6 +821,22 @@ function EntityCard({
           {entity.subtitle ||
             `${entity.tracks} ${entity.tracks === 1 ? "track" : "tracks"}`}
         </span>
+        {/* How much of it is actually here.
+         *
+         * Under the heading rather than instead of it: "Incomplete" says which
+         * pile a record is in, and this says how far off it is — 4 of 8 is a
+         * different proposition from 1 of 19, and the sort order alone cannot
+         * tell you which you are looking at. `recordType` is named because
+         * missing one track of a two-track single is not the same failure as
+         * missing eighteen of an album. */}
+        {entity.incomplete && (
+          <span className="card__gap">
+            {entity.tracks} of {entity.totalTracks}
+            {entity.recordType === "single" || entity.recordType === "ep"
+              ? ` on this ${entity.recordType.toUpperCase()}`
+              : ""}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -173,6 +173,13 @@ export function makeEntity(
     lead: "/dav/Koofr/Music/track.m4a",
     plays: 0,
     lastPlayed: 0n,
+    // A library nobody has identified, which is what the backend reports until
+    // the lookup pass has run. Zero means "no idea how long this record is",
+    // so the default tile is whole — a fake that defaulted to incomplete would
+    // put every test's album under a heading it never asked for.
+    totalTracks: 0,
+    recordType: "",
+    incomplete: false,
     ...over,
   };
 }

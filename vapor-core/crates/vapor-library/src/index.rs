@@ -31,6 +31,16 @@ pub enum Source {
     Cache,
     File,
     Folder,
+    /// A public service said so — nothing local did.
+    ///
+    /// The weakest kind of known. A loose track in the library root has no
+    /// album in its path and none in its tags, and the only thing that can say
+    /// it is track three of *Split The Atom* is Deezer. That is worth showing,
+    /// and it is worth being able to tell apart from what the file itself
+    /// carries: this app keeps measured, tagged and looked-up facts in separate
+    /// stores precisely so a person can be told which is which, and folding a
+    /// stranger's answer in as `File` would throw that away at the last step.
+    Service,
     #[default]
     Unknown,
 }
