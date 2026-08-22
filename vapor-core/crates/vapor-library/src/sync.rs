@@ -566,7 +566,11 @@ pub struct Shared {
 /// document in which every deletion had been undone. Refusing to read it is the
 /// only safe thing an older build can do, and that refusal is what the version
 /// check is for.
-pub const SHARED_VERSION: u32 = 2;
+///
+/// 3 added `Tombstones::tracks`, and the same argument applies unchanged: a
+/// version-2 build drops the per-track removals on the floor and writes back a
+/// document that puts every one of those tracks back into its playlist.
+pub const SHARED_VERSION: u32 = 3;
 
 /// Records of things that were deleted, and when.
 ///
@@ -586,6 +590,21 @@ pub struct Tombstones {
     /// Folder id → when it was deleted.
     #[serde(default)]
     pub folders: std::collections::HashMap<String, Millis>,
+    /// Playlist id → href → when that track was taken out of that playlist.
+    ///
+    /// The same argument one level down. Deleting a playlist travelled; taking
+    /// a track *out* of one did not, because [`merge_shared`] only ever adds
+    /// and there is nothing to add for a track that is gone. Remove a track on
+    /// the laptop and the phone still has it, writes it back, and the laptop
+    /// puts it there again on the next sync — for ever, and silently, which is
+    /// worse than the whole-playlist version of this bug because nothing on
+    /// screen ever says a merge happened.
+    ///
+    /// Nested rather than a `"{id}\t{href}"` key so there is no separator to
+    /// collide with a path, and so a deleted playlist's removals can be dropped
+    /// in one step if that is ever wanted.
+    #[serde(default)]
+    pub tracks: std::collections::HashMap<String, std::collections::HashMap<String, Millis>>,
 }
 
 impl Tombstones {
@@ -594,7 +613,7 @@ impl Tombstones {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.playlists.is_empty() && self.folders.is_empty()
+        self.playlists.is_empty() && self.folders.is_empty() && self.tracks.is_empty()
     }
 
     pub fn record_playlist(&mut self, id: impl Into<String>, at: Millis) {
@@ -605,8 +624,37 @@ impl Tombstones {
         keep_earliest(&mut self.folders, id.into(), at);
     }
 
+    /// One track taken out of one playlist.
+    pub fn record_track(
+        &mut self,
+        playlist_id: impl Into<String>,
+        href: impl Into<String>,
+        at: Millis,
+    ) {
+        keep_earliest(
+            self.tracks.entry(playlist_id.into()).or_default(),
+            href.into(),
+            at,
+        );
+    }
+
     pub fn playlist_deleted(&self, id: &str) -> bool {
         self.playlists.contains_key(id)
+    }
+
+    pub fn track_removed(&self, playlist_id: &str, href: &str) -> bool {
+        self.tracks
+            .get(playlist_id)
+            .is_some_and(|hrefs| hrefs.contains_key(href))
+    }
+
+    /// Forget the removals for a playlist.
+    ///
+    /// Called when the playlist itself is deleted: the whole-playlist tombstone
+    /// already stops it being recreated, so the per-track records under it can
+    /// never be consulted again and would otherwise accumulate for ever.
+    pub fn forget_tracks_of(&mut self, playlist_id: &str) {
+        self.tracks.remove(playlist_id);
     }
 
     pub fn folder_deleted(&self, id: &str) -> bool {
@@ -622,6 +670,12 @@ impl Tombstones {
         }
         for (id, at) in &other.folders {
             keep_earliest(&mut self.folders, id.clone(), *at);
+        }
+        for (playlist_id, hrefs) in &other.tracks {
+            let mine = self.tracks.entry(playlist_id.clone()).or_default();
+            for (href, at) in hrefs {
+                keep_earliest(mine, href.clone(), *at);
+            }
         }
         (
             self.playlists.len() - before.0,
@@ -648,6 +702,8 @@ pub struct MergeReport {
     /// Deleted here because another device deleted them (TD-57).
     pub playlists_deleted: usize,
     pub folders_deleted: usize,
+    /// Taken out of a playlist here because another device took them out.
+    pub tracks_removed: usize,
 }
 
 impl MergeReport {
@@ -694,6 +750,20 @@ impl MergeReport {
 /// Both directions converge and neither depends on sync order: the tombstone
 /// sets are unioned first, and both the incoming and the local list are then
 /// filtered against the union.
+/// The incoming playlist's tracks, minus anything some device has taken out.
+///
+/// Without it a removal and an addition are not symmetric: the removal is
+/// recorded, and then the next merge puts the track straight back, because a
+/// peer that has not heard about it yet still lists it in its copy.
+fn wanted_tracks(deleted: &Tombstones, incoming: &crate::playlist::Playlist) -> Vec<String> {
+    incoming
+        .tracks
+        .iter()
+        .filter(|href| !deleted.track_removed(&incoming.id, href))
+        .cloned()
+        .collect()
+}
+
 pub fn merge_shared(
     playlists: &mut crate::playlist::PlaylistStore,
     folders: &mut crate::group::FolderStore,
@@ -736,6 +806,24 @@ pub fn merge_shared(
         }
     }
 
+    // The same rule one level down, and for the same reason: a track this
+    // device took out is not put back by the copy that still lists it, and a
+    // track another device took out goes now. `remove_track` is by index, so
+    // the href is resolved first — and the lookup ends before the mutable call
+    // rather than being held across it.
+    for (playlist_id, hrefs) in &deleted.tracks {
+        for href in hrefs.keys() {
+            let index = playlists
+                .get(playlist_id)
+                .and_then(|p| p.tracks.iter().position(|t| t == href));
+            if let Some(index) = index {
+                if playlists.remove_track(playlist_id, index) {
+                    report.tracks_removed += 1;
+                }
+            }
+        }
+    }
+
     for folder in &remote.folders {
         if deleted.folder_deleted(&folder.id) {
             continue;
@@ -761,14 +849,14 @@ pub fn merge_shared(
                     incoming.name.clone(),
                     incoming.folder_id.clone(),
                 );
-                let added = playlists.add_tracks(&incoming.id, &incoming.tracks);
+                let added = playlists.add_tracks(&incoming.id, &wanted_tracks(deleted, incoming));
                 let _ = added;
                 report.playlists_added += 1;
             }
             Some(_) => {
                 // `add_tracks` skips what is already there and returns how
                 // many actually landed, which is exactly the question here.
-                let added = playlists.add_tracks(&incoming.id, &incoming.tracks);
+                let added = playlists.add_tracks(&incoming.id, &wanted_tracks(deleted, incoming));
                 if added > 0 {
                     report.playlists_extended += 1;
                 }
@@ -1340,6 +1428,91 @@ mod tests {
     // -----------------------------------------------------------------------
     // TD-57 — deletions that travel
     // -----------------------------------------------------------------------
+
+    /// The same bug one level down, and the reason `Tombstones::tracks`
+    /// exists. Take a track out here, sync with a device that has not heard,
+    /// and the additive merge put it straight back — every time.
+    ///
+    /// Worse than the whole-playlist version: a playlist reappearing is
+    /// visible, a track sliding back into a forty-track playlist is not.
+    #[test]
+    fn a_track_removed_here_is_not_restored_by_a_device_that_still_lists_it() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        // The playlist exists here, with the track already taken out.
+        playlists.create("p1", "Late Night");
+        playlists.add_tracks("p1", &["/a.m4a".to_string(), "/c.m4a".to_string()]);
+        deleted.record_track("p1", "/b.m4a", 100);
+
+        // The peer still has all three.
+        let remote = shared_with(vec![(
+            "p1",
+            "Late Night",
+            vec!["/a.m4a", "/b.m4a", "/c.m4a"],
+        )]);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        let tracks = &playlists.get("p1").expect("playlist").tracks;
+        assert!(
+            !tracks.iter().any(|t| t == "/b.m4a"),
+            "the removed track came back: {tracks:?}"
+        );
+        assert_eq!(tracks.len(), 2);
+    }
+
+    /// And the other direction: the removal was made elsewhere, so it has to
+    /// be applied here rather than merely not undone.
+    #[test]
+    fn a_track_removed_elsewhere_is_taken_out_here() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        playlists.create("p1", "Late Night");
+        playlists.add_tracks(
+            "p1",
+            &[
+                "/a.m4a".to_string(),
+                "/b.m4a".to_string(),
+                "/c.m4a".to_string(),
+            ],
+        );
+
+        let mut remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a", "/c.m4a"])]);
+        remote.deleted.record_track("p1", "/b.m4a", 100);
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.tracks_removed, 1);
+        let tracks = &playlists.get("p1").expect("playlist").tracks;
+        assert_eq!(tracks, &["/a.m4a".to_string(), "/c.m4a".to_string()]);
+
+        // And it stays gone on a second pass, having been absorbed locally.
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+        assert_eq!(playlists.get("p1").expect("playlist").tracks.len(), 2);
+    }
 
     /// The bug, stated as a test: this device deleted a playlist, the other
     /// device has not heard and still has it, and the merge must not bring it

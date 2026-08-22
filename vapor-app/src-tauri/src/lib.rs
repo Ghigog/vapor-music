@@ -3584,6 +3584,9 @@ fn delete_playlist(id: String, state: State<'_, Shared>) -> Result<bool> {
         // sync takes the playlist back from a device that had not heard, and
         // the deletion has to be done again on every device in turn.
         app.tombstones.record_playlist(&id, peers::now());
+        // The playlist tombstone already stops it being recreated, so the
+        // per-track records under it can never be consulted again.
+        app.tombstones.forget_tracks_of(&id);
         app.save_playlists()?;
         app.save_tombstones()?;
     }
@@ -3593,8 +3596,24 @@ fn delete_playlist(id: String, state: State<'_, Shared>) -> Result<bool> {
 #[tauri::command]
 fn remove_playlist_track(id: String, index: usize, state: State<'_, Shared>) -> Result<bool> {
     let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+
+    // Read before removing: the tombstone is keyed by href, and after
+    // `remove_track` the index no longer names anything.
+    let href = app
+        .playlists
+        .get(&id)
+        .and_then(|p| p.tracks.get(index).cloned());
+
     let removed = app.playlists.remove_track(&id, index);
     if removed {
+        // The same reason `delete_playlist` writes one, one level down.
+        // Without it the next sync takes the track back from a device that had
+        // not heard — and unlike a whole playlist reappearing, nothing on
+        // screen makes that visible.
+        if let Some(href) = href {
+            app.tombstones.record_track(&id, href, peers::now());
+            app.save_tombstones()?;
+        }
         app.save_playlists()?;
     }
     Ok(removed)
