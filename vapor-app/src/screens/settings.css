@@ -423,6 +423,18 @@
   color: var(--ink);
 }
 
+/* Version and commit.
+   Monospace because it exists to be read back character by character and then
+   typed into a message, and a proportional face makes a short hex string
+   ambiguous about which glyph it just showed. Selectable for the same reason:
+   everything else in this lockup is a label, and this one is data. */
+.settings__build {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  user-select: text;
+  -webkit-user-select: text;
+  margin-top: 2px;
+}
+
 /* The way into the full notices.
    A button rather than a link: it opens a sheet in the app, and styling it as
    a link would promise a navigation that does not happen. */

@@ -1,6 +1,7 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { buildStamp } from "./scripts/build-stamp.mjs";
 
 // Tauri drives the dev server, so the port is fixed and failures must be loud:
 // silently falling back to another port leaves the app window pointing at
@@ -8,6 +9,8 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  // Version and commit, for the About screen. See scripts/build-stamp.mjs.
+  define: buildStamp(),
   server: {
     port: 1420,
     strictPort: true,

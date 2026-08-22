@@ -573,3 +573,23 @@ describe("the analyse row", () => {
     expect(screen.getByText("not downloaded yet")).toBeInTheDocument();
   });
 });
+
+/**
+ * There is no telemetry and no crash reporting, both on purpose. That makes a
+ * person reading a version back the only way a report ever names a build, so
+ * the stamp has to actually be on screen — and it is exactly the kind of
+ * detail that survives a redesign of the About lockup only by accident.
+ */
+describe("which build this is", () => {
+  it("names the version and commit in About", async () => {
+    render(<Settings />);
+
+    const stamp = await screen.findByTestId("build-stamp");
+
+    expect(stamp).toHaveTextContent(__APP_VERSION__);
+    expect(stamp).toHaveTextContent(__APP_COMMIT__);
+    // A semver-looking version rather than the literal, so bumping the
+    // version does not fail this test.
+    expect(stamp.textContent).toMatch(/\d+\.\d+\.\d+/);
+  });
+});

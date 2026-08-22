@@ -673,6 +673,16 @@ export function Settings() {
           <div className="settings__lockup-text">
             <span className="settings__lockup-name">Vapor Music</span>
             <span className="label">Music, continuous</span>
+            {/*
+              Which build this is. There is no telemetry and no crash
+              reporting, on purpose, so the only channel for a fault is a
+              person describing it — and "it crashed" cannot be acted on
+              while "it crashed, 2.0.0, a3f9c21" names the tree. Selectable
+              so it can be copied into a message.
+            */}
+            <span className="label settings__build" data-testid="build-stamp">
+              {__APP_VERSION__} · {__APP_COMMIT__}
+            </span>
           </div>
         </div>
         {/*

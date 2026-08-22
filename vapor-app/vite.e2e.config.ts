@@ -11,6 +11,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { buildStamp } from "./scripts/build-stamp.mjs";
 
 /*
  * The port is per-session. Several Claude sessions share this machine, and a
@@ -22,6 +23,8 @@ const port = Number(process.env.VAPOR_E2E_PORT ?? 1421);
 
 export default defineConfig({
   plugins: [react()],
+  // The same stamp as the real build; the About screen renders it either way.
+  define: buildStamp(),
   resolve: {
     alias: {
       "@tauri-apps/api/core": path.resolve(__dirname, "src/test/browser-ipc.ts"),
