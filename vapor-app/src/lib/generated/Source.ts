@@ -4,4 +4,4 @@
  * Where a derived field came from, so the UI can distinguish verified
  * metadata from a guess and from honest ignorance.
  */
-export type Source = "cache" | "file" | "folder" | "unknown";
+export type Source = "cache" | "file" | "folder" | "service" | "unknown";
