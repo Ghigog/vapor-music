@@ -15,6 +15,22 @@
  * idea in the platform's own vocabulary — a JSON array of hrefs on
  * `application/x-vapor-tracks`.
  *
+ * ## Why `dragDropEnabled` is false
+ *
+ * None of this fires inside the app window unless
+ * `src-tauri/tauri.conf.json` sets `dragDropEnabled: false`. The default is
+ * true, which makes wry subclass the WKWebView and override
+ * `draggingEntered`/`performDragOperation`; Tauri's handler returns `true`
+ * unconditionally (`tauri-runtime-wry`), so `super` is never called and
+ * WebKit never turns the AppKit drag session into DOM `dragover`/`drop`. The
+ * drag starts and the ghost follows the cursor, and then nothing accepts it.
+ * Tauri documents this for Windows; macOS behaves the same way. Nothing here
+ * listens for a file dropped onto the window, so switching it off costs
+ * nothing.
+ *
+ * It is invisible in `npm run test` and `npm run e2e`, both of which run the
+ * frontend in a plain browser where the drop works.
+ *
  * ## Dropping a selection, not just a row
  *
  * The Godot original drags one track. Here a drag that starts on a *selected*
