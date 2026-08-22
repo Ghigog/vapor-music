@@ -2786,6 +2786,19 @@ fn run_sync(
 }
 
 /// Pull one track, a chunk at a time, resuming from whatever is on disk.
+/// The largest track this will pull into memory from a peer.
+///
+/// The whole file is collected before its digest is checked — deliberately, so
+/// nothing unverified reaches the cache — which means `total` decides how much
+/// memory this allocates, and `total` is a number the peer chose. A peer that
+/// claims a huge total and keeps sending drives the process out of memory, and
+/// on the LAN path there is nothing signed to contradict it.
+///
+/// A GiB is roughly half an hour of 24-bit/192 kHz stereo FLAC, so a real track
+/// that trips this does not exist yet. Raising it is one line; the point is
+/// that the ceiling is ours rather than the sender's.
+const MAX_PULLED_TRACK: u64 = 1024 * 1024 * 1024;
+
 fn pull_track(
     shared: &Shared,
     address: &str,
@@ -2815,6 +2828,15 @@ fn pull_track(
             _ => return Err("that device answered with something else".to_string()),
         };
         expected_digest = digest;
+
+        // Checked every round, not only the first: the peer restates `total`
+        // in each reply and nothing obliges it to give the same answer twice.
+        if total > MAX_PULLED_TRACK {
+            return Err(format!(
+                "that device says the track is {total} bytes, which is larger \
+                 than this will pull into memory"
+            ));
+        }
 
         if len == 0 {
             if have < total {

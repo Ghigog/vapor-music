@@ -83,6 +83,23 @@ const MAX_REQUEST: u64 = 64 * 1024;
 /// also be a broken one.
 const MAX_REPLY: u64 = 32 * 1024 * 1024;
 
+/// The largest `Reply::Bytes` body accepted, and the largest length that will
+/// be believed enough to reserve for.
+///
+/// [`MAX_REPLY`] bounds the JSON *line*; the body arrives after it and was
+/// bounded by nothing. `len` is a `u64` chosen by the peer and it went straight
+/// into `Vec::reserve`, which gives the sender a choice of two failures:
+/// anything above `isize::MAX` panics with "capacity overflow" (measured), and
+/// anything below it that is still large — a terabyte, say — is a real
+/// allocation request that ends in the process being killed. Neither needs
+/// pairing. Answering is enough, and the person only has to have pressed Pair
+/// on something.
+///
+/// Eight times `sync::CHUNK`, which is what a fetch actually asks for. Honest
+/// replies are one chunk, so this is only generous enough that raising the
+/// chunk size does not silently start refusing transfers.
+const MAX_BODY: u64 = 8 * 1024 * 1024;
+
 /// Milliseconds since the epoch. The one place the wall clock is read.
 pub fn now() -> u64 {
     std::time::SystemTime::now()
@@ -631,6 +648,14 @@ pub fn ask(address: &str, request: &Request) -> Result<(Reply, Vec<u8>), String>
 
     let mut body = Vec::new();
     if let Reply::Bytes { len, .. } = &reply {
+        // Checked before it is believed. See [`MAX_BODY`] — this number comes
+        // from the network and the next line hands it to the allocator.
+        if *len > MAX_BODY {
+            return Err(format!(
+                "that device offered a {len}-byte chunk, which is more than any \
+                 honest reply sends"
+            ));
+        }
         body.reserve(*len as usize);
         reader
             .take(*len)
@@ -1082,6 +1107,57 @@ mod tests {
         assert!(
             err.contains("too large") || err.contains("cut short"),
             "the error has to name the shape of the problem, got {err:?}"
+        );
+    }
+
+    /// `len` came off the wire and went straight into `Vec::reserve`.
+    ///
+    /// `u64::MAX` is the cheap end of it — that panics with "capacity
+    /// overflow" before any memory is asked for. The expensive end is a length
+    /// under `isize::MAX` that is still enormous, which is a genuine allocation
+    /// request and takes the process with it. This test uses the cheap end
+    /// because it is the one a test can survive asserting on.
+    ///
+    /// The peer does not need to be paired. Answering is enough.
+    #[test]
+    fn an_absurd_chunk_length_is_refused_rather_than_reserved() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut sink = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut sink)
+                .ok();
+
+            // Serialised from the real type: a hand-written line would test the
+            // wrong shape the moment the enum's tagging changes.
+            let reply = Reply::Bytes {
+                len: u64::MAX,
+                total: u64::MAX,
+                digest: "not reached".into(),
+            };
+            let line = format!("{}\n", serde_json::to_string(&reply).expect("serialise"));
+            stream.write_all(line.as_bytes()).ok();
+            stream.flush().ok();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+
+        let err = ask(
+            &address,
+            &Request::Fetch {
+                device_id: "them".into(),
+                href: "/music/a.m4a".into(),
+                offset: 0,
+                len: sync::CHUNK,
+            },
+        )
+        .expect_err("a u64::MAX chunk length must not be believed");
+
+        assert!(
+            err.contains("honest"),
+            "the error should say the reply was implausible, got {err:?}"
         );
     }
 }
