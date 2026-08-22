@@ -8413,9 +8413,10 @@ pub fn run() {
              * person mid-track.
              *
              * Every failure here is survivable and none of them are worth
-             * interrupting anyone for — the endpoint 404s while the repository
-             * is private, and a machine that is offline simply has no update
-             * today. They are logged, not raised.
+             * interrupting anyone for — the endpoint returns 404 until a
+             * release exists to attach `latest.json` to, and a machine that is
+             * offline simply has no update that day. They are logged, not
+             * raised.
              */
             #[cfg(desktop)]
             {

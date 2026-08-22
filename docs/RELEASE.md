@@ -122,20 +122,22 @@ https://github.com/Ghigog/vapor-music/releases/latest/download/latest.json
 ```
 
 Compiled into the binary, so it cannot be changed by shipping an update — only
-by handing out a new build. Two things have to become true before it answers:
+by handing out a new build.
 
-1. **The repository has to be public.** Release assets on a private repository
-   need an authenticated request, and the updater sends none. Public also buys
-   free Actions minutes and free asset hosting, which is the whole reason v1
-   costs nothing to ship. `docs/LICENSING.md` has the precondition: settle
-   contributions — disable pull requests or require a CLA — before flipping it,
-   because one accepted outside contribution freezes the licence choice.
-   Proprietary and public is a normal combination; public does not mean
-   open-source.
-2. **A release has to exist** with `latest.json` attached to it.
+**The repository is public**, confirmed 2026-08-21 with `gh repo view`, which
+settles the first half: release assets on a private repository need an
+authenticated request and the updater sends none. Public also buys free Actions
+minutes and free asset hosting, which is the whole reason v1 costs nothing to
+ship. Proprietary and public is a normal combination; public does not mean
+open-source, and `LICENSE` still reserves all rights.
 
-Until then the URL 404s, the check fails, and the app logs one line and carries
-on. That is the intended state, not a fault.
+Since it is already public, `docs/LICENSING.md`'s precondition applies now
+rather than later: settle contributions — disable pull requests or require a
+CLA — because one accepted outside contribution freezes the licence choice.
+
+What is left is a release with `latest.json` attached. Until one exists the URL
+returns 404, the check fails, and the app logs one line and carries on. That is
+the intended state, not a fault.
 
 ---
 
@@ -287,8 +289,10 @@ Decisions, not oversights. Each is recorded where it was made.
       default.
 - [x] ~~Decide on an updater, or decide knowingly to ship without one.~~ Done
       2026-08-21: configured, desktop only, silent. See §1.
-- [ ] Make the repository public, so the updater endpoint and free CI both
-      work. Settle contributions first — see `docs/LICENSING.md`.
+- [x] ~~Make the repository public, so the updater endpoint and free CI both
+      work.~~ Already public — confirmed 2026-08-21.
+- [ ] Settle contributions now the repository is public: disable pull requests
+      or require a CLA, before anyone opens one. See `docs/LICENSING.md`.
 - [ ] A release workflow that builds on a tag and publishes `latest.json`
       alongside the bundles. Until it exists the updater has nothing to find.
 - [ ] Version agreed across all three files.

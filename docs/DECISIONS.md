@@ -123,10 +123,14 @@ anyone wants it.
 
 The one that follows from this and is easy to miss: **a public repository is not
 an open-source one.** GitHub Actions minutes and GitHub Releases hosting are
-free for public repos regardless of licence, so making the repository public
-while keeping `LICENSE` as all rights reserved buys free CI and free updater
-hosting at no cost to the licence position. Before doing it, `docs/LICENSING.md`
-names the precondition: disable pull requests or require a CLA, because a single
+free for public repos regardless of licence, so a public repository with
+`LICENSE` reserving all rights buys free CI and free updater hosting at no cost
+to the licence position.
+
+This repository is already public — `gh repo view` on 2026-08-21 — which was
+assumed the other way round when the seven answers above were written. So
+`docs/LICENSING.md`'s precondition is not something to do before flipping a
+switch; it is overdue. Disable pull requests or require a CLA, because a single
 accepted outside contribution freezes the licence choice.
 
 The remaining unavoidable cost is Apple's $99/year, needed only for macOS
