@@ -222,15 +222,44 @@ jobs:
         shell: pwsh
         working-directory: vapor-app/src-tauri
         run: |
+          $ErrorActionPreference = 'Continue'
           $exe = Get-ChildItem target/debug/deps -Filter 'vapor_app_lib-*.exe' |
                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $exe) { Write-Host 'no test binary found'; exit 0 }
           Write-Host "binary: $($exe.FullName)"
+
           $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' `
                        -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
-                     Select-Object -First 1
-          if ($dumpbin) { & $dumpbin.FullName /dependents $exe.FullName }
-          else { Write-Host 'dumpbin not on this image' }
+                     Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { Write-Host 'dumpbin not on this image'; exit 0 }
+          Write-Host "dumpbin: $($dumpbin.FullName)"
+
+          # Every name the binary imports, grouped by the DLL it wants it from.
+          $imports = & $dumpbin.FullName /imports $exe.FullName
+          $wanted = @{}
+          $dll = $null
+          foreach ($line in $imports) {
+            if ($line -match '^\s{4}(\S+\.dll)\s*$') { $dll = $Matches[1]; $wanted[$dll] = @() ; continue }
+            if ($dll -and $line -match '^\s+[0-9A-Fa-f]{8}\s+\w+\s+(\S+)\s*$') { $wanted[$dll] += $Matches[1] }
+          }
+
+          # For each, what the DLL the loader would actually pick exports.
+          foreach ($d in $wanted.Keys | Sort-Object) {
+            $path = (Get-Command $d -ErrorAction SilentlyContinue).Source
+            if (-not $path) { $path = Join-Path $env:SystemRoot "System32\$d" }
+            if (-not (Test-Path $path)) { Write-Host "$d : not found on PATH"; continue }
+            $exports = & $dumpbin.FullName /exports $path |
+                       ForEach-Object { if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]{8}\s+(\S+)') { $Matches[1] } }
+            $missing = $wanted[$d] | Where-Object { $exports -notcontains $_ }
+            if ($missing) {
+              Write-Host ""
+              Write-Host "MISSING from $path :"
+              $missing | ForEach-Object { Write-Host "    $_" }
+            }
+          }
+          Write-Host ""
+          Write-Host "(nothing listed above means every imported name resolves;"
+          Write-Host " the failure is then a load-time dependency of a dependency)"
 
       - name: Clippy
         run: cargo clippy --all-targets

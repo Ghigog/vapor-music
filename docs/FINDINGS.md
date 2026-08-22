@@ -547,3 +547,42 @@ which is the stretcher's passthrough path — a bit-exact copy. Only a
 beat-matched move (Bass Swap, Tempo Morph) runs the vocoder, and only the
 vocoder manufactures gain. When every exit on the Vibe screen reads "echo out",
 no pair reachable from that track can reproduce it.
+
+## The Windows test binary stopped loading (2026-08-22)
+
+`shell (windows-latest)` exits 127 with `0xc0000139`,
+`STATUS_ENTRYPOINT_NOT_FOUND`. That is the loader refusing to start the process:
+it found every DLL the binary imports, but one of them no longer exports a name
+the binary asks for. No test runs, so the harness prints nothing.
+
+**It is not attributable to any commit here**, and the archaeology is worth
+keeping so nobody repeats it:
+
+* The last run in which this step reached the test binary was `4bad6f4c`, on
+  2026-08-20, runner image `win25-vs2026/20260810.198`. It passed.
+* Every run between that one and `50004e6` died earlier — at `cargo fmt`, then
+  at clippy — so the step did not execute at all for two days.
+* By `50004e6` the image was `win25-vs2026/20260818.207`. The first execution
+  after the image moved is also the first failure.
+* No `windows-*` crate changed version in that range; `git diff 4bad6f4c..HEAD`
+  on `Cargo.lock` shows none.
+* The updater plugin added in `bc5a1c5` brought in `minisign-verify`, `tar` and
+  `zip`, and no Windows crates. It is not the cause.
+
+**What the binary imports**, from `dumpbin /dependents` on the runner:
+`KERNEL32`, `MSVCP140`, `VCRUNTIME140`, `advapi32`, `bcrypt`,
+`bcryptprimitives`, `comctl32`, `dwmapi`, `gdi32`, `ntdll`, `ole32`, `shell32`,
+`user32`, `userenv`, `ws2_32`, and the usual `api-ms-win-crt-*` sets.
+
+`MSVCP140` and `VCRUNTIME140` are the ones worth suspicion: they ship with the
+Visual C++ redistributable rather than with Windows, and a binary linked by a
+newer toolset than the redist on the machine produces exactly this error.
+Nothing in this repository compiles C++ — no `build.rs` in `vapor-core`, no
+`.cpp` anywhere — so it arrives through a dependency.
+
+A step in `app.yml` runs on failure and diffs each imported name against what
+the DLL the loader would pick actually exports. It should name the symbol on the
+next red Windows run. Read that before trying anything else; the obvious fixes
+(`+crt-static`, pinning a runner label) each have consequences and none of them
+should be attempted while the missing export is still unknown.
+
