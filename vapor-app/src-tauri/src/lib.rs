@@ -717,6 +717,17 @@ impl AppState {
         Some(digest)
     }
 
+    /// Point the cache at the folders settings currently names.
+    ///
+    /// Called after any change to `settings.folders`. The cache resolves a
+    /// local href through these roots, so one holding a stale set cannot find
+    /// a folder just added and would still find one just removed.
+    pub(crate) fn rebuild_cache_roots(&mut self) {
+        let dir = self.cache.dir().to_path_buf();
+        let max = self.cache.max_bytes();
+        self.cache = cache::Cache::new(dir, max, local::roots(&self.settings.folders));
+    }
+
     pub(crate) fn save_settings(&self) -> Result<()> {
         self.store.save("settings", &self.settings)?;
         Ok(())
@@ -6979,6 +6990,7 @@ pub fn run() {
     // is not something a phone lets a program do. Android and iOS update
     // through their stores, so on those targets the plugin is not built at all.
     #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
@@ -7277,6 +7289,9 @@ pub fn run() {
             commands::artwork::track_cover,
             commands::artwork::track_thumb,
             commands::analysis::analysis_status,
+            commands::folders::add_local_folder,
+            commands::folders::remove_local_folder,
+            commands::folders::local_folders,
             commands::cache::cache_status,
             commands::cache::set_cache_max_bytes,
             commands::cache::clear_audio_cache,
