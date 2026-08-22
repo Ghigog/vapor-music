@@ -40,20 +40,35 @@ That rule did not fail through carelessness. A session holding a dirty tree it
 cannot attribute has to choose between leaving the tree dirty and committing it,
 and tidiness wins. A worktree removes the choice.
 
-**If you are in the main checkout and `git status` shows work you did not do:
-leave it, and say so in your reply.** Do not stage it, stash it, or commit it
-under your message. You cannot tell your own older edits from someone else's —
-`git status` has no author column — so if you are unsure, it is not yours.
-`?? test-results/` is Playwright output and belongs to nobody.
+**If you are in the main checkout and `git status` shows work you did not do,
+you may commit it — on three conditions.** Relaxed 2026-08-21, at Dylan's
+request: the priority is that the tree stays current and conflict-free, not that
+loose work sits untouched out of politeness.
 
-**Stage explicit paths. Never `git add -A`, `git add .`, `git commit -a`, or
-`git stash`.** Stash is the worst of them: it takes another session's work out
-of the tree entirely, and they watch it vanish mid-task.
+1. **Its own commit**, never folded into yours. That was 278cb5d's actual
+   mistake — not that it committed someone else's work, but that the work
+   arrived inside a message about something else and nobody could see it.
+2. **Say whose it is** in the message, and say you could not verify it. You
+   cannot tell your own older edits from someone else's; `git status` has no
+   author column.
+3. **Check it first.** Committing in-flight work can capture a half-finished
+   state. Run whatever gate covers it — `npm run typecheck`, `cargo check`, the
+   test suite — and if it does not pass, leave it and say so in your reply.
+   A red commit helps nobody.
 
-This one is enforced rather than trusted — `.claude/hooks/guard-git-staging.sh`
-blocks those commands, plus `git reset --hard` and whole-tree `checkout`/
-`restore`, and tells you what to run instead. If it fires, it is not a hurdle to
-work around; the command was about to take something that was not yours.
+`?? test-results/` is Playwright output and belongs to nobody; leave it.
+
+**The hard rules did not move. Stage explicit paths; never `git add -A`,
+`git add .`, `git commit -a`, `git stash`, `git reset --hard`, or a whole-tree
+`checkout`/`restore`.** These are a different thing from committing: a blanket
+stage sweeps up work nobody looked at, and `stash` is worse still — it takes
+another session's changes out of the tree entirely, and they watch their edits
+vanish mid-task. Committing leaves everything where it is.
+
+Those are enforced rather than trusted — `.claude/hooks/guard-git-staging.sh`
+denies each of them and names what to run instead. If it fires, it is not a
+hurdle to work around; the command was about to take something out of the tree
+that was not yours.
 
 It ignores prose — heredoc bodies and quoted `-m` arguments are stripped before
 matching, so a commit message may name the commands it blocks. If you change the

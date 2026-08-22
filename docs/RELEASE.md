@@ -277,6 +277,11 @@ Decisions, not oversights. Each is recorded where it was made.
       tested against real audio output.
 - [ ] Android keystore created, backed up, gitignored; release APK built and its
       size confirmed sane.
+- [ ] **Updater key backed up** — `~/.tauri/vapor-music-updater.key` copied into
+      a password manager as a file attachment. Costs nothing to lose before the
+      first build goes out and cannot be replaced after it, because the matching
+      public key is compiled into every copy already handed over. Dylan's to do;
+      no session can do it for him. See §1.
 - [ ] Play App Signing enrolled, if Play.
 - [ ] Privacy declaration covering the lookup services; lookups still off by
       default.

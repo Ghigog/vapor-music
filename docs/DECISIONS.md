@@ -103,6 +103,16 @@ and broke its intent completely.
 
 Stated priority: making sessions behave with each other is the top one.
 
+**Relaxed the same day, after using it.** The original wording forbade a session
+from touching another's uncommitted work at all. Dylan: the priority is that the
+tree stays current and conflict-free, not that loose work sits untouched. A
+session may now commit work it did not do, provided it lands in its own commit,
+names whose it is, and passes whatever gate covers it first — committing leaves
+everything where it was, which is what separates it from `stash`.
+
+The hook did not move. What it denies destroys or removes work; committing does
+neither.
+
 ---
 
 ## Constraint on all of the above
