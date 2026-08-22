@@ -198,6 +198,11 @@ fn rust_commands(src: &str) -> BTreeMap<String, BTreeSet<String>> {
 }
 
 /// The names listed in `generate_handler!`.
+///
+/// An entry is a bare name or a path — `commands::cache::cache_status` — since
+/// the commands are being moved out of `lib.rs` a domain at a time. Tauri
+/// registers a command under its function name either way, so the last segment
+/// is the name on the wire and the only thing worth comparing.
 fn registered(src: &str) -> BTreeSet<String> {
     let at = src
         .find("generate_handler![")
@@ -207,8 +212,33 @@ fn registered(src: &str) -> BTreeSet<String> {
     body.split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && !s.starts_with("//"))
-        .map(str::to_string)
+        .map(|s| s.rsplit("::").next().unwrap_or(s).to_string())
         .collect()
+}
+
+/// Every file a `#[tauri::command]` can live in, concatenated.
+///
+/// Was `lib.rs` alone. When the first four domains moved to `commands/`, all
+/// three tests here started reporting every moved command as a ghost — which
+/// is the guard doing its job with a stale idea of where commands live, and
+/// exactly the kind of failure that gets silenced by deleting the test.
+///
+/// Read from the directory rather than a list, so the next domain to move
+/// needs no edit here.
+fn shell_source() -> String {
+    let mut src = read("src/lib.rs");
+    let dir = root().join("src/commands");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    files.sort();
+    for path in files {
+        src.push('\n');
+        src.push_str(&std::fs::read_to_string(&path).expect("a readable command module"));
+    }
+    src
 }
 
 /// `camelCase` as Rust would spell it. Tauri accepts either on the wire.
@@ -250,7 +280,7 @@ fn every_command_the_frontend_calls_is_registered() {
 fn every_registered_command_exists() {
     let lib = read("src/lib.rs");
     let handlers = registered(&lib);
-    let defined = rust_commands(&lib);
+    let defined = rust_commands(&shell_source());
 
     let ghosts: Vec<&String> = handlers
         .iter()
@@ -266,7 +296,7 @@ fn every_registered_command_exists() {
 #[test]
 fn argument_names_agree_on_both_sides() {
     let lib = read("src/lib.rs");
-    let defined = rust_commands(&lib);
+    let defined = rust_commands(&shell_source());
     let calls = typescript_calls();
 
     let mut wrong: Vec<String> = Vec::new();

@@ -21,6 +21,11 @@ const LIB_RS: &str = include_str!("../src/lib.rs");
 const CORE_TS: &str = include_str!("../../src/lib/core.ts");
 
 /// Command names inside `invoke_handler(tauri::generate_handler![ ... ])`.
+///
+/// Entries may be a bare name or a path — `commands::cache::cache_status` —
+/// since the commands are being moved out of `lib.rs` one domain at a time.
+/// Tauri registers a command under its function name either way, so the name
+/// the frontend calls is the last segment, and that is what is compared.
 fn registered_commands() -> Vec<String> {
     let start = LIB_RS
         .find("generate_handler![")
@@ -33,7 +38,8 @@ fn registered_commands() -> Vec<String> {
         .skip(1) // the `generate_handler![` line itself
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with("//"))
-        .map(|l| l.trim_end_matches(',').to_string())
+        .map(|l| l.trim_end_matches(','))
+        .map(|l| l.rsplit("::").next().unwrap_or(l).to_string())
         .filter(|l| !l.is_empty())
         .collect()
 }

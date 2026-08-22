@@ -22,6 +22,11 @@
 
 use super::*;
 
+// The commands moved into `commands/` on 2026-08-22. `generate_handler!` below
+// takes them by bare name, so they are imported rather than path-qualified —
+// keeping this list readable as the set of round trips under test.
+use crate::commands::{cache::*, groups::*, playlists::*, queue::*};
+
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 use tauri::utils::acl::ExecutionContext;
 use tauri::webview::InvokeRequest;

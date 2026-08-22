@@ -23,6 +23,7 @@ mod android;
 /// device. Nothing outside the crate uses it.
 pub mod audio;
 mod cache;
+mod commands;
 mod covers;
 /// Public for the same reason as `audio`: the real-time test drives a real
 /// streaming deck rather than a stand-in for one.
@@ -59,31 +60,31 @@ use vapor_library::{
 /// One lock rather than one per collection: commands are user-driven and
 /// short, so contention is not a concern, and a single lock cannot deadlock
 /// against itself the way a set of finer ones can.
-struct AppState {
-    settings: Settings,
-    playlists: PlaylistStore,
+pub(crate) struct AppState {
+    pub(crate) settings: Settings,
+    pub(crate) playlists: PlaylistStore,
     /// Folders that playlists are filed into. A folder owns no tracks — a
     /// playlist carries a `folder_id` pointing at one.
-    folders: FolderStore,
+    pub(crate) folders: FolderStore,
     /// Tracks whose audio was downloaded on purpose, and must survive
     /// eviction. Everything else in the audio cache is there because something
     /// needed to read it once. See `keeps_audio`.
-    pinned: std::collections::HashSet<String>,
+    pub(crate) pinned: std::collections::HashSet<String>,
     /// Dynamic groups: saved sets of artists, albums and genres.
     ///
     /// A group holds *entities*, not tracks, which is what makes it different
     /// from a playlist — membership is resolved against the library when it is
     /// read, so a group stays current as the library grows. `group.rs` has been
     /// complete and tested since the port and nothing was wired to it.
-    groups: GroupStore,
+    pub(crate) groups: GroupStore,
     /// Lyrics and artwork looked up from public services, keyed by href.
     ///
     /// Kept apart from `analysis` and `tags` on purpose: those are what this
     /// device measured and what the file itself carries, and this is what a
     /// stranger said. Merging them would make the screen unable to tell a
     /// person which is which.
-    looked: metadata::Cache,
-    queue: Queue,
+    pub(crate) looked: metadata::Cache,
+    pub(crate) queue: Queue,
     /// The three exits as last offered, and what was playing then.
     ///
     /// The cards used to be recomputed on every read, a second apart. Choosing
@@ -96,7 +97,7 @@ struct AppState {
     /// deliberate shift in what the Follow card means — "the exit the plan
     /// offered", not "whatever is queued right now" — which is the price of a
     /// board that holds still long enough to choose from.
-    offered: Option<Offered>,
+    pub(crate) offered: Option<Offered>,
     /// What the DJ is conducting over — the set the queue was started from.
     ///
     /// `audio_manager.gd` had this as `current_playlist`: the DJ chose its
@@ -108,7 +109,7 @@ struct AppState {
     ///
     /// `None` is the library itself, which is both the default and what
     /// playing from an unfiltered list means.
-    scope: Option<Scope>,
+    pub(crate) scope: Option<Scope>,
     /// The store key of the playlist or group the set was started from.
     ///
     /// Beside `scope` rather than inside it, and for the same span: everything
@@ -116,26 +117,26 @@ struct AppState {
     /// playlist, including the tracks the DJ appended, because that is what
     /// putting a playlist on means. `None` for a set started from anywhere
     /// else — an album tile, the Songs table, the queue.
-    collection: Option<String>,
+    pub(crate) collection: Option<String>,
     /// The library table's rows, rebuilt on scan.
-    rows: Vec<Row>,
+    pub(crate) rows: Vec<Row>,
     /// Analysis results, keyed by href. Persisted so a library is analysed
     /// once rather than on every launch.
-    analysis: analysis::Cache,
+    pub(crate) analysis: analysis::Cache,
     /// The most recent blend, as (outgoing, incoming), until it is judged.
     ///
     /// A skip is a verdict on a *transition*, so the pair has to outlive the
     /// transition: by the time a person reacts, the mixer has already swapped
     /// decks and forgotten which two tracks were involved.
-    last_mix: Option<(String, String)>,
+    pub(crate) last_mix: Option<(String, String)>,
     /// When that blend finished, for the ten-second window.
-    last_mix_ended: Option<std::time::Instant>,
+    pub(crate) last_mix_ended: Option<std::time::Instant>,
     /// Learned dislike of specific transitions, keyed "from\u{1f}to" (TD-14).
     ///
     /// Persisted, because the whole value is that it accumulates. A tuple key
     /// cannot be a JSON object key, so the pair is joined by a unit separator —
     /// a character no href contains.
-    skips: std::collections::HashMap<String, f32>,
+    pub(crate) skips: std::collections::HashMap<String, f32>,
     /// How often each track has been listened to, and when it last was.
     ///
     /// Persisted. The whole value of a play count is that it accumulates
@@ -147,7 +148,7 @@ struct AppState {
     /// listening to it, and counting at the start means someone hunting for a
     /// record through twenty tiles has just told the app those are their
     /// twenty favourites.
-    plays: std::collections::HashMap<String, Play>,
+    pub(crate) plays: std::collections::HashMap<String, Play>,
     /// The same, for a playlist or a dynamic group that was played from.
     ///
     /// Keyed `"playlist:<id>"` or `"group:<id>"` — see [`collection_key`] —
@@ -158,27 +159,27 @@ struct AppState {
     /// on it". A playlist someone puts on for three hours and one they bounce
     /// off after a track should not score the same, and pressing play counts
     /// them equal.
-    collection_plays: std::collections::HashMap<String, Play>,
+    pub(crate) collection_plays: std::collections::HashMap<String, Play>,
     /// The track currently earning its play, and where it was played from.
     ///
     /// Set by [`begin_playback`] and cleared by the supervisor once the credit
     /// is given, so a track that is paused, resumed and finished is counted
     /// once. Not persisted: a play interrupted by quitting the app is a play
     /// that did not happen.
-    crediting: Option<Crediting>,
+    pub(crate) crediting: Option<Crediting>,
     /// Embedded tags and artwork, keyed by href (TD-39).
     ///
     /// Persisted beside the analysis and for the same reason: reading them
     /// costs a file open, and the answer does not change unless the file does.
-    tags: std::collections::HashMap<String, StoredTags>,
+    pub(crate) tags: std::collections::HashMap<String, StoredTags>,
     /// Cover art, on disk rather than in `tags`. See [`covers`].
-    covers: covers::Covers,
+    pub(crate) covers: covers::Covers,
     /// Tracks that were read and could not be used, and why (TD-12).
     ///
     /// Persisted, because the answer does not change between launches and the
     /// alternative is downloading a broken file again to rediscover it. Only
     /// permanent failures land here — "not downloaded yet" is not one.
-    failures: std::collections::HashMap<String, String>,
+    pub(crate) failures: std::collections::HashMap<String, String>,
     /// The other kind: what went wrong for a track the pass means to try again.
     ///
     /// Retryable errors used to be discarded outright — the arm that records a
@@ -192,23 +193,23 @@ struct AppState {
     /// mean different things to [`analysis_counts`]: a permanent failure is
     /// done, and this is outstanding work. Counting these as done would hide
     /// exactly the tracks this exists to surface.
-    stalls: std::collections::HashMap<String, Stall>,
+    pub(crate) stalls: std::collections::HashMap<String, Stall>,
     /// Cancels a running analysis pass.
-    cancel: analysis::Cancel,
+    pub(crate) cancel: analysis::Cancel,
     /// Which pass is current. A replaced pass finishes some time after the one
     /// that replaced it starts, and without this its "I have stopped" would
     /// clear the flag belonging to the pass still running.
-    analysis_generation: u64,
+    pub(crate) analysis_generation: u64,
     /// Whether a pass is in flight, and what it is working on.
     ///
     /// Analysis starts by itself after a scan now, so "did someone press the
     /// button" is no longer the same question as "is it running" — and the
     /// screen used to answer the second by checking the first, which meant an
     /// automatic pass was invisible.
-    analysing: bool,
-    analysing_title: String,
+    pub(crate) analysing: bool,
+    pub(crate) analysing_title: String,
     /// Why the last pass ended early, if it did. Empty otherwise.
-    analysis_stopped_because: String,
+    pub(crate) analysis_stopped_because: String,
     /// Where the four-step choice cycle has got to (§3 of the workflow doc).
 
     /// This installation's identity on the local network (SYNC-001).
@@ -217,59 +218,59 @@ struct AppState {
     /// hostname, the user or the hardware: it is broadcast in clear on a
     /// shared network, so it must say "a copy of Vapor" and nothing else about
     /// whose it is.
-    device_id: String,
+    pub(crate) device_id: String,
     /// Devices this one has paired with (SYNC-002). Persisted.
-    trust: vapor_library::sync::Trust,
+    pub(crate) trust: vapor_library::sync::Trust,
     /// A pairing in progress, if this device is currently showing a code.
-    pairing: Option<vapor_library::sync::Pairing>,
+    pub(crate) pairing: Option<vapor_library::sync::Pairing>,
     /// The code on screen. Held separately because `Pairing` deliberately does
     /// not hand its PIN back out — the only thing that may read it is the
     /// person looking at the screen.
-    pin: Option<String>,
+    pub(crate) pin: Option<String>,
     /// Who is on the network, kept by the beacon thread.
-    peers: peers::Peers,
+    pub(crate) peers: peers::Peers,
     /// Files that could not be read at startup and were moved aside.
     ///
     /// Empty on every normal launch. Non-empty means the app is running on a
     /// default for something the person had data for, and they need telling —
     /// silently starting with no playlists is the failure this exists to stop.
-    damaged: Vec<store::Quarantined>,
+    pub(crate) damaged: Vec<store::Quarantined>,
     /// What this device has deleted, so the deletion travels (TD-57).
     ///
     /// Kept beside the stores rather than inside them: a store holds what
     /// exists, and this is a record of what does not.
-    tombstones: vapor_library::sync::Tombstones,
+    pub(crate) tombstones: vapor_library::sync::Tombstones,
     /// The beacon and server threads, while sync is on (TD-58).
     ///
     /// Held so the switch can stop them. `None` means either sync is off or the
     /// ports could not be bound, and both mean there is nothing to stop.
-    sync_session: Option<peers::Session>,
+    pub(crate) sync_session: Option<peers::Session>,
     /// Content digests, keyed by href, with the size they were computed at.
     ///
     /// Hashing a library is not free and the answer does not change unless the
     /// file does, so it is memoised beside the analysis and for the same
     /// reason. The size is the invalidation: a file that changed length is a
     /// different file.
-    digests: std::collections::HashMap<String, (u64, String)>,
+    pub(crate) digests: std::collections::HashMap<String, (u64, String)>,
     /// What a running sync is doing, for the dashboard to draw.
-    sync: SyncProgress,
+    pub(crate) sync: SyncProgress,
 
-    cache: cache::Cache,
-    store: Store,
+    pub(crate) cache: cache::Cache,
+    pub(crate) store: Store,
 
     /// The audio device, absent when the machine has none. Playback commands
     /// then fail with a message instead of the app refusing to start — a
     /// library you cannot hear is still one you can scan and analyse.
-    player: Option<audio::Player>,
+    pub(crate) player: Option<audio::Player>,
     /// What the audio thread is playing, or is being loaded to play.
-    playing: Option<String>,
+    pub(crate) playing: Option<String>,
     /// Increments on every load request. A load whose generation is stale lost
     /// a race with a newer one and must discard its result rather than
     /// interrupt the track a person actually asked for.
-    generation: u64,
+    pub(crate) generation: u64,
     /// Bumped by every curve press, so a re-plan that finishes after a newer
     /// press can tell that its route is for a destination nobody chose.
-    curve_plan: u64,
+    pub(crate) curve_plan: u64,
     /// Energy the current plan was seeded from — the intensity of the track
     /// playing when the route was walked.
     ///
@@ -280,16 +281,16 @@ struct AppState {
     /// set already at 0.9 cannot Build much further, `target_energy` clamps,
     /// and the honest readout is a hue that flattens rather than one that goes
     /// on promising a climb.
-    curve_start: f32,
+    pub(crate) curve_start: f32,
     /// True while a track is being fetched and decoded, which can take seconds
     /// on a cold cache. The UI has to be able to say so.
-    loading: bool,
+    pub(crate) loading: bool,
     /// Why the last load failed, surfaced instead of silence with no
     /// explanation.
-    playback_error: Option<String>,
+    pub(crate) playback_error: Option<String>,
     /// The track cued on the other deck for a beat-matched mix, if one is
     /// arranged. Cleared when the mix completes or is abandoned.
-    armed_next: Option<String>,
+    pub(crate) armed_next: Option<String>,
 
     /// The decoder threads feeding the two decks (TD-09).
     ///
@@ -299,11 +300,11 @@ struct AppState {
     /// which must happen somewhere allowed to wait, never on the audio thread.
     ///
     /// They swap roles when a transition completes, exactly as the decks do.
-    playing_stream: Option<decoder::Streamer>,
-    next_stream: Option<decoder::Streamer>,
+    pub(crate) playing_stream: Option<decoder::Streamer>,
+    pub(crate) next_stream: Option<decoder::Streamer>,
     /// The drift correction running for the current mix (TD-21). Dropped when
     /// the mix ends, which stops its thread and clears the correction.
-    drift: Option<sync::DriftCorrection>,
+    pub(crate) drift: Option<sync::DriftCorrection>,
 }
 
 impl AppState {
@@ -312,7 +313,7 @@ impl AppState {
     /// A corrupt file is surfaced rather than swallowed — see `Store::load`.
     /// Starting empty on a read failure would show a person an empty library
     /// while their data sits unreadable on disk.
-    fn load(store: Store) -> Self {
+    pub(crate) fn load(store: Store) -> Self {
         // `sanitised` on the way in, not on the way out. The core has always
         // had it and nothing called it, so a hand-edited settings file's
         // nonsense reached the app unchecked — including, now, a cache bound
@@ -462,7 +463,7 @@ impl AppState {
     ///
     /// Opened once rather than per track: acquiring a device takes long enough
     /// to hear as a gap, and holding one open is what every other player does.
-    fn open_audio(&mut self) {
+    pub(crate) fn open_audio(&mut self) {
         match audio::Player::start() {
             Ok(p) => self.player = Some(p),
             Err(e) => eprintln!("audio output unavailable: {e}"),
@@ -475,27 +476,27 @@ impl AppState {
     /// rows carry what the *path* said; tags and analysis are applied on read
     /// from their own files, so this stays small — a few hundred KB for a
     /// library of thousands — and cannot go stale against them.
-    fn save_index(&self) -> Result<()> {
+    pub(crate) fn save_index(&self) -> Result<()> {
         self.store.save("index", &self.rows)?;
         Ok(())
     }
 
-    fn save_analysis(&self) -> Result<()> {
+    pub(crate) fn save_analysis(&self) -> Result<()> {
         self.store.save("analysis", &self.analysis)?;
         Ok(())
     }
 
-    fn save_skips(&self) -> Result<()> {
+    pub(crate) fn save_skips(&self) -> Result<()> {
         self.store.save("skips", &self.skips)?;
         Ok(())
     }
 
-    fn save_plays(&self) -> Result<()> {
+    pub(crate) fn save_plays(&self) -> Result<()> {
         self.store.save("plays", &self.plays)?;
         Ok(())
     }
 
-    fn save_collection_plays(&self) -> Result<()> {
+    pub(crate) fn save_collection_plays(&self) -> Result<()> {
         self.store
             .save("collection_plays", &self.collection_plays)?;
         Ok(())
@@ -507,7 +508,7 @@ impl AppState {
     /// morning out of records someone has worn out has no plays *of its own*
     /// and should still not sit below one they have never opened, so when
     /// direct plays cannot separate two shelves this does.
-    fn member_plays(&self, hrefs: impl IntoIterator<Item = impl AsRef<str>>) -> u32 {
+    pub(crate) fn member_plays(&self, hrefs: impl IntoIterator<Item = impl AsRef<str>>) -> u32 {
         hrefs
             .into_iter()
             .filter_map(|h| self.plays.get(h.as_ref()))
@@ -519,7 +520,7 @@ impl AppState {
     ///
     /// Both halves or neither: a collection's count means "tracks listened to
     /// from it", so it moves exactly when a track's does.
-    fn credit_play(&mut self, href: &str, collection: Option<&str>) {
+    pub(crate) fn credit_play(&mut self, href: &str, collection: Option<&str>) {
         let at = unix_now();
         let play = self.plays.entry(href.to_string()).or_default();
         play.count = play.count.saturating_add(1);
@@ -543,7 +544,7 @@ impl AppState {
     /// serialised whole on every write and held in memory for the life of the
     /// process, which is how `tags.json` reached 155 MB and how the phone ran
     /// out of heap. See [`covers`].
-    fn set_tags(&mut self, href: &str, tags: tags::Tags) {
+    pub(crate) fn set_tags(&mut self, href: &str, tags: tags::Tags) {
         if let Some(cover) = &tags.cover {
             if let Err(e) = self.covers.put(href, cover) {
                 eprintln!("cover for {href} could not be saved: {e}");
@@ -552,17 +553,17 @@ impl AppState {
         self.tags.insert(href.to_string(), tags.into());
     }
 
-    fn save_tags(&self) -> Result<()> {
+    pub(crate) fn save_tags(&self) -> Result<()> {
         self.store.save("tags", &self.tags)?;
         Ok(())
     }
 
-    fn save_failures(&self) -> Result<()> {
+    pub(crate) fn save_failures(&self) -> Result<()> {
         self.store.save("failures", &self.failures)?;
         Ok(())
     }
 
-    fn save_stalls(&self) -> Result<()> {
+    pub(crate) fn save_stalls(&self) -> Result<()> {
         self.store.save("stalls", &self.stalls)?;
         Ok(())
     }
@@ -578,7 +579,7 @@ impl AppState {
     /// how it should be organised, and a tag that disagrees is usually the tag
     /// being wrong — a compilation track carrying its original album. So the
     /// derived value wins wherever there is one.
-    fn apply_tags(&self, row: &mut Row) {
+    pub(crate) fn apply_tags(&self, row: &mut Row) {
         let Some(tags) = self.tags.get(&row.href) else {
             return;
         };
@@ -606,7 +607,7 @@ impl AppState {
         }
     }
 
-    fn apply_analysis(&self, row: &mut Row) {
+    pub(crate) fn apply_analysis(&self, row: &mut Row) {
         if let Some(a) = self.analysis.get(&row.href) {
             row.bpm = self.settings.bpm_override(&row.href).unwrap_or(a.bpm);
             row.key = a.key.clone();
@@ -619,37 +620,37 @@ impl AppState {
 
     /// Persist playlists. Called after every mutation, which is why the write
     /// has to be atomic.
-    fn save_playlists(&self) -> Result<()> {
+    pub(crate) fn save_playlists(&self) -> Result<()> {
         self.store.save("playlists", &self.playlists)?;
         Ok(())
     }
 
-    fn save_folders(&self) -> Result<()> {
+    pub(crate) fn save_folders(&self) -> Result<()> {
         self.store.save("folders", &self.folders)?;
         Ok(())
     }
 
-    fn save_groups(&self) -> Result<()> {
+    pub(crate) fn save_groups(&self) -> Result<()> {
         self.store.save("groups", &self.groups)?;
         Ok(())
     }
 
-    fn save_pinned(&self) -> Result<()> {
+    pub(crate) fn save_pinned(&self) -> Result<()> {
         self.store.save("pinned", &self.pinned)?;
         Ok(())
     }
 
-    fn save_looked(&self) -> Result<()> {
+    pub(crate) fn save_looked(&self) -> Result<()> {
         self.store.save("metadata", &self.looked)?;
         Ok(())
     }
 
-    fn save_trust(&self) -> Result<()> {
+    pub(crate) fn save_trust(&self) -> Result<()> {
         self.store.save("trust", &self.trust)?;
         Ok(())
     }
 
-    fn save_tombstones(&self) -> Result<()> {
+    pub(crate) fn save_tombstones(&self) -> Result<()> {
         self.store.save("tombstones", &self.tombstones)?;
         Ok(())
     }
@@ -674,7 +675,7 @@ impl AppState {
     /// and it goes out with every advert while sync is on. Two things bound it
     /// — sync is off by default, and the beacon only runs on private
     /// addresses ([`peers::is_local`]) — but neither makes it private.
-    fn device_name(&self) -> String {
+    pub(crate) fn device_name(&self) -> String {
         let folder = self
             .settings
             .remote
@@ -698,7 +699,7 @@ impl AppState {
     /// cloud-first library is most of them. That is a real answer, not a
     /// failure — [`vapor_library::sync::reconcile`] treats a missing digest as
     /// "no opinion" rather than as a disagreement.
-    fn digest_of(&mut self, href: &str) -> Option<String> {
+    pub(crate) fn digest_of(&mut self, href: &str) -> Option<String> {
         let path = self.cache.get(href)?;
         let size = std::fs::metadata(&path).ok()?.len();
 
@@ -714,7 +715,7 @@ impl AppState {
         Some(digest)
     }
 
-    fn save_settings(&self) -> Result<()> {
+    pub(crate) fn save_settings(&self) -> Result<()> {
         self.store.save("settings", &self.settings)?;
         Ok(())
     }
@@ -768,7 +769,7 @@ impl From<tags::Tags> for StoredTags {
 /// An `Arc` rather than a bare `Mutex` because the analysis pass moves a handle
 /// onto a worker thread that outlives the command that started it — a borrow
 /// from `State` cannot.
-type Shared = Arc<Mutex<AppState>>;
+pub(crate) type Shared = Arc<Mutex<AppState>>;
 
 /// Tests that go through the real `invoke_handler` — see `seam.rs`.
 #[cfg(test)]
@@ -780,7 +781,7 @@ mod seam;
 /// a person, and a structured error would have to be re-stringified there
 /// anyway. Anything the UI needs to *branch* on gets its own return shape.
 #[derive(Debug, Serialize)]
-struct Error(String);
+pub(crate) struct Error(String);
 
 impl<E: std::fmt::Display> From<E> for Error {
     fn from(e: E) -> Self {
@@ -788,7 +789,7 @@ impl<E: std::fmt::Display> From<E> for Error {
     }
 }
 
-type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 // ---------------------------------------------------------------------------
 // Play counts
@@ -3056,32 +3057,6 @@ fn parse_group_by(s: &str) -> Option<GroupBy> {
 // Playlists
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-fn playlists(state: State<'_, Shared>) -> Result<Vec<vapor_library::Playlist>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.playlists.all().to_vec())
-}
-
-#[tauri::command]
-fn create_playlist(
-    name: String,
-    folder_id: Option<String>,
-    state: State<'_, Shared>,
-) -> Result<vapor_library::Playlist> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    // Ids are generated here rather than in the core so the core stays
-    // deterministic and testable — see the note on PlaylistStore::create.
-    let id = new_id("playlist");
-    // A folder that has since been deleted would file the playlist somewhere
-    // the rail cannot draw, so an unknown one means the top level.
-    let folder = folder_id
-        .filter(|f| app.folders.get(f).is_some())
-        .unwrap_or_default();
-    let created = app.playlists.create_in_folder(id, name, folder).clone();
-    app.save_playlists()?;
-    Ok(created)
-}
-
 // ---------------------------------------------------------------------------
 // Playlist folders
 // ---------------------------------------------------------------------------
@@ -3099,12 +3074,6 @@ fn create_playlist(
 // `parent_id` is representable so nesting needs no later migration, but
 // nothing here creates a nested folder and the rail draws one level, which is
 // what the original did too.
-
-#[tauri::command]
-fn playlist_folders(state: State<'_, Shared>) -> Result<Vec<vapor_library::Folder>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.folders.all().to_vec())
-}
 
 /* ---- Dynamic groups ----------------------------------------------------
  *
@@ -3326,127 +3295,7 @@ fn duplicate_count(state: State<'_, Shared>) -> Result<usize> {
     Ok(duplicate_hrefs(&app).len())
 }
 
-#[tauri::command]
-fn dynamic_groups(state: State<'_, Shared>) -> Result<Vec<vapor_library::DynamicGroup>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.groups.all().to_vec())
-}
-
-#[tauri::command]
-fn create_group(name: String, state: State<'_, Shared>) -> Result<vapor_library::DynamicGroup> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(Error("A group needs a name.".to_string()));
-    }
-    let id = new_id("group");
-    let created = app.groups.create(id, name).clone();
-    app.save_groups()?;
-    Ok(created)
-}
-
-#[tauri::command]
-fn rename_group(id: String, name: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(Error("A group needs a name.".to_string()));
-    }
-    let renamed = app.groups.rename(&id, name);
-    if renamed {
-        app.save_groups()?;
-    }
-    Ok(renamed)
-}
-
-#[tauri::command]
-fn delete_group(id: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let Some(gone) = app.groups.delete(&id) else {
-        return Ok(false);
-    };
-    // `group.rs` asks the caller to clear any cover override keyed to this id,
-    // because a stale image outliving its group is what the GDScript's inline
-    // call prevented. There is nothing to clear yet: overrides are keyed by
-    // album and href, and a group has neither — it has no artwork of its own.
-    // When it gets some, this is where letting go of it belongs.
-    let _ = gone;
-    app.save_groups()?;
-    Ok(true)
-}
-
-/// Add an artist, album or genre to a group.
-///
-/// A track is refused rather than quietly turned into its album: a group holds
-/// entities, and resolving one for the caller would make the set contain
-/// something nobody put in it.
-#[tauri::command]
-fn add_to_group(
-    id: String,
-    entity_type: String,
-    value: String,
-    state: State<'_, Shared>,
-) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let Some(kind) = vapor_library::EntityType::parse(&entity_type) else {
-        return Err(Error(format!(
-            "A dynamic group holds artists, albums and genres. \"{entity_type}\" is none of those."
-        )));
-    };
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(Error("There is nothing named here to add.".to_string()));
-    }
-    let added = app.groups.add_entity(&id, kind, value);
-    if added {
-        app.save_groups()?;
-    }
-    Ok(added)
-}
-
-#[tauri::command]
-fn remove_from_group(
-    id: String,
-    entity_type: String,
-    value: String,
-    state: State<'_, Shared>,
-) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let Some(kind) = vapor_library::EntityType::parse(&entity_type) else {
-        return Ok(false);
-    };
-    let removed = app.groups.remove_entity(&id, kind, &value);
-    if removed {
-        app.save_groups()?;
-    }
-    Ok(removed)
-}
-
-#[tauri::command]
-fn reorder_groups(from: usize, to: usize, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let moved = app.groups.reorder(from, to);
-    if moved {
-        app.save_groups()?;
-    }
-    Ok(moved)
-}
-
-/// Every track a group currently resolves to.
-///
-/// Worked out on read rather than stored, which is the point of the feature: a
-/// record added to the library after the group was made belongs to it without
-/// anyone saying so.
-#[tauri::command]
-fn group_tracks(id: String, state: State<'_, Shared>) -> Result<Vec<Row>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let Some(group) = app.groups.get(&id) else {
-        return Ok(Vec::new());
-    };
-    Ok(tracks_in_group(&app, group))
-}
-
-fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGroup) -> Vec<Row> {
+pub(crate) fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGroup) -> Vec<Row> {
     use vapor_library::EntityType;
     app.rows
         .iter()
@@ -3461,55 +3310,10 @@ fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGroup) -> Vec<R
         .collect()
 }
 
-#[tauri::command]
-fn create_folder(name: String, state: State<'_, Shared>) -> Result<vapor_library::Folder> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(Error("A folder needs a name.".to_string()));
-    }
-    let id = new_id("folder");
-    let created = app.folders.create(id, name, "").clone();
-    app.save_folders()?;
-    Ok(created)
-}
-
-#[tauri::command]
-fn rename_folder(id: String, name: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if name.trim().is_empty() {
-        return Err(Error("A folder needs a name.".to_string()));
-    }
-    let renamed = app.folders.rename(&id, name.trim());
-    if renamed {
-        app.save_folders()?;
-    }
-    Ok(renamed)
-}
-
-/// Delete a folder. The playlists inside it move to the top level.
-///
-/// Deleting a container must not delete what it contains — a folder is an
-/// organisational convenience, and losing playlists to one would make filing
-/// them a risk rather than a tidy-up. `FolderStore::delete` deliberately
-/// returns the ids it orphaned instead of cascading, so reassigning them is
-/// this layer's job.
-#[tauri::command]
-fn delete_folder(id: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if !remove_folder(&mut app, &id) {
-        return Ok(false);
-    }
-    app.save_folders()?;
-    app.save_playlists()?;
-    app.save_tombstones()?;
-    Ok(true)
-}
-
 /// The body of [`delete_folder`], split out so it is reachable from a test —
 /// a `#[tauri::command]` takes `State`, which cannot be built outside a
 /// running app.
-fn remove_folder(app: &mut AppState, id: &str) -> bool {
+pub(crate) fn remove_folder(app: &mut AppState, id: &str) -> bool {
     if app.folders.get(id).is_none() {
         return false;
     }
@@ -3531,138 +3335,6 @@ fn remove_folder(app: &mut AppState, id: &str) -> bool {
     true
 }
 
-/// File a playlist into a folder, or out of one with an empty `folder_id`.
-#[tauri::command]
-fn set_playlist_folder(id: String, folder_id: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if !folder_id.is_empty() && app.folders.get(&folder_id).is_none() {
-        return Err(Error("That folder no longer exists.".to_string()));
-    }
-    let moved = app.playlists.set_folder(&id, folder_id);
-    if moved {
-        app.save_playlists()?;
-    }
-    Ok(moved)
-}
-
-#[tauri::command]
-fn add_tracks_to_playlist(
-    id: String,
-    hrefs: Vec<String>,
-    state: State<'_, Shared>,
-) -> Result<usize> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let added = app.playlists.add_tracks(&id, &hrefs);
-    // Only write when something changed — the core returns a count precisely so
-    // a no-op bulk add does not cost a disk write.
-    if added > 0 {
-        app.save_playlists()?;
-    }
-    Ok(added)
-}
-
-#[tauri::command]
-fn rename_playlist(id: String, name: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    // An empty name would leave a row nobody can identify or click.
-    if name.trim().is_empty() {
-        return Err(Error("A playlist needs a name.".to_string()));
-    }
-    let renamed = app.playlists.rename(&id, name.trim());
-    if renamed {
-        app.save_playlists()?;
-    }
-    Ok(renamed)
-}
-
-#[tauri::command]
-fn delete_playlist(id: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let deleted = app.playlists.delete(&id).is_some();
-    if deleted {
-        // Written down before it is forgotten (TD-57). Without this the next
-        // sync takes the playlist back from a device that had not heard, and
-        // the deletion has to be done again on every device in turn.
-        app.tombstones.record_playlist(&id, peers::now());
-        // The playlist tombstone already stops it being recreated, so the
-        // per-track records under it can never be consulted again.
-        app.tombstones.forget_tracks_of(&id);
-        app.save_playlists()?;
-        app.save_tombstones()?;
-    }
-    Ok(deleted)
-}
-
-#[tauri::command]
-fn remove_playlist_track(id: String, index: usize, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    // Read before removing: the tombstone is keyed by href, and after
-    // `remove_track` the index no longer names anything.
-    let href = app
-        .playlists
-        .get(&id)
-        .and_then(|p| p.tracks.get(index).cloned());
-
-    let removed = app.playlists.remove_track(&id, index);
-    if removed {
-        // The same reason `delete_playlist` writes one, one level down.
-        // Without it the next sync takes the track back from a device that had
-        // not heard — and unlike a whole playlist reappearing, nothing on
-        // screen makes that visible.
-        if let Some(href) = href {
-            app.tombstones.record_track(&id, href, peers::now());
-            app.save_tombstones()?;
-        }
-        app.save_playlists()?;
-    }
-    Ok(removed)
-}
-
-#[tauri::command]
-fn reorder_playlist_track(
-    id: String,
-    from: usize,
-    to: usize,
-    state: State<'_, Shared>,
-) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let moved = app.playlists.reorder_tracks(&id, from, to);
-    if moved {
-        app.save_playlists()?;
-    }
-    Ok(moved)
-}
-
-/// A playlist's tracks as table rows, in playlist order.
-///
-/// Rows rather than hrefs: the screen shows title, artist, BPM and key like
-/// every other table, and rebuilding that on the frontend from a list of hrefs
-/// would be a second implementation of what `apply_tags`/`apply_analysis`
-/// already do.
-///
-/// An href with no matching row is skipped rather than rendered blank — it
-/// means the file left the library since it was added, and a row that cannot be
-/// played is worse than an absent one. The count difference is visible because
-/// the playlist's own length is shown beside it.
-#[tauri::command]
-fn playlist_rows(id: String, state: State<'_, Shared>) -> Result<Vec<Row>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let Some(playlist) = app.playlists.get(&id) else {
-        return Ok(Vec::new());
-    };
-
-    Ok(rows_in_order(&app.rows, &playlist.tracks)
-        .into_iter()
-        .cloned()
-        .map(|mut row| {
-            app.apply_tags(&mut row);
-            app.apply_analysis(&mut row);
-            row
-        })
-        .collect())
-}
-
 /// The library rows for `hrefs`, in the order `hrefs` gives them.
 ///
 /// Separate from the command so the rule it encodes can be tested: an href with
@@ -3671,7 +3343,7 @@ fn playlist_rows(id: String, state: State<'_, Shared>) -> Result<Vec<Row>> {
 /// and a row that cannot be played is worse than an absent one. The count is
 /// shown beside the title, so a playlist of 12 displaying 11 rows says so
 /// rather than hiding it.
-fn rows_in_order<'a>(rows: &'a [Row], hrefs: &[String]) -> Vec<&'a Row> {
+pub(crate) fn rows_in_order<'a>(rows: &'a [Row], hrefs: &[String]) -> Vec<&'a Row> {
     let by_href: std::collections::HashMap<&str, &Row> =
         rows.iter().map(|r| (r.href.as_str(), r)).collect();
     hrefs
@@ -3687,21 +3359,11 @@ fn rows_in_order<'a>(rows: &'a [Row], hrefs: &[String]) -> Vec<&'a Row> {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct QueueState {
+pub(crate) struct QueueState {
     current: Option<String>,
     tracks: Vec<String>,
     /// What plays next, so the UI can show it without asking again.
     next: Option<String>,
-}
-
-#[tauri::command]
-fn queue_state(state: State<'_, Shared>) -> Result<QueueState> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(QueueState {
-        current: app.queue.current().map(str::to_string),
-        tracks: app.queue.tracks().to_vec(),
-        next: app.queue.peek_next(None).map(str::to_string),
-    })
 }
 
 /// How many played tracks keep their audio, so going back is instant.
@@ -5537,7 +5199,7 @@ struct QueueEntry {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct QueueView {
+pub(crate) struct QueueView {
     entries: Vec<QueueEntry>,
     /// "off" | "all" | "one".
     repeat: String,
@@ -5549,14 +5211,8 @@ struct QueueView {
     remaining_secs: f64,
 }
 
-#[tauri::command]
-fn queue_view(state: State<'_, Shared>) -> Result<QueueView> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(queue_view_for(&app))
-}
-
 /// The body of [`queue_view`], reachable from a test.
-fn queue_view_for(app: &AppState) -> QueueView {
+pub(crate) fn queue_view_for(app: &AppState) -> QueueView {
     let current = app.queue.current_index();
 
     let entries: Vec<QueueEntry> = app
@@ -5612,18 +5268,6 @@ fn queue_view_for(app: &AppState) -> QueueView {
         current,
         remaining_secs,
     }
-}
-
-#[tauri::command]
-fn remove_from_queue(href: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.queue.remove(&href))
-}
-
-#[tauri::command]
-fn move_in_queue(from: usize, to: usize, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.queue.move_track(from, to))
 }
 
 #[tauri::command]
@@ -7983,7 +7627,7 @@ fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> Result<()> 
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-struct CacheStatus {
+pub(crate) struct CacheStatus {
     // A JSON number over IPC, not a `bigint`: serde_json writes u64 as a
     // plain number and the webview parses it as one. Values here are byte
     // counts and millisecond timestamps, far below 2^53.
@@ -8000,86 +7644,6 @@ struct CacheStatus {
     tracks_cached: usize,
     tracks_total: usize,
     location: String,
-}
-
-#[tauri::command]
-fn cache_status(state: State<'_, Shared>) -> Result<CacheStatus> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let cached = app
-        .rows
-        .iter()
-        .filter(|r| app.cache.contains(&r.href))
-        .count();
-    Ok(CacheStatus {
-        bytes: app.cache.size(),
-        max_bytes: app.cache.max_bytes(),
-        tracks_cached: cached,
-        tracks_total: app.rows.len(),
-        location: app.cache.dir().display().to_string(),
-    })
-}
-
-/// Change how much of the device the cache may use.
-///
-/// Takes effect for every later fetch, and trims immediately rather than
-/// waiting for the next download: someone who has just lowered the bound to
-/// reclaim space expects the space back now, not eventually.
-#[tauri::command]
-fn set_cache_max_bytes(bytes: u64, state: State<'_, Shared>) -> Result<u64> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    app.settings.cache_max_bytes = bytes;
-    // The core decides what is too small to be worth having, so the answer is
-    // the same here as it would be for a hand-edited settings file.
-    app.settings = std::mem::take(&mut app.settings).sanitised();
-    let applied = app.settings.cache_max_bytes;
-
-    let dir = app.cache.dir().to_path_buf();
-    app.cache = cache::Cache::new(dir, applied);
-    app.cache.trim().map_err(|e| Error(e.to_string()))?;
-    app.save_settings()?;
-
-    Ok(applied)
-}
-
-/// Empty the audio cache, keeping everything else.
-///
-/// Distinct from "delete everything": the cached audio is the only part of the
-/// data directory that is *re-fetchable*, and it is the part that gets large.
-/// Someone reclaiming space wants it gone; they do not want to lose ten minutes
-/// of analysis, their playlists and their server password with it.
-#[tauri::command]
-fn clear_audio_cache(state: State<'_, Shared>) -> Result<u64> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let freed = app.cache.size();
-
-    app.cache.clear().map_err(|e| Error(e.to_string()))?;
-    // Anything mid-flight is now pointing at files that no longer exist.
-    app.generation += 1;
-    app.loading = false;
-    app.armed_next = None;
-    // The cued track's decoder is reading a file that has just been deleted.
-    // The track that is *playing* keeps its decoder: its file handle is already
-    // open, and stopping the music because someone reclaimed disk space would
-    // be a worse answer than letting the song finish.
-    app.next_stream = None;
-    app.drift = None;
-    if let Some(p) = app.player.as_ref() {
-        p.cancel_transition();
-    }
-
-    Ok(freed)
-}
-
-/// Drop one track's local copy, keeping its analysis.
-///
-/// Analysis is small and expensive; the audio is large and cheap to re-fetch.
-/// Evicting them together would throw away ten minutes of work to reclaim
-/// space that the audio alone accounts for.
-#[tauri::command]
-fn evict_track(href: String, state: State<'_, Shared>) -> Result<()> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.cache.remove(&href).map_err(|e| Error(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -8268,7 +7832,7 @@ fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
 /// Monotonic time plus a counter. The Godot version used
 /// `Time.get_ticks_usec()` and `randi()`, which could collide within a
 /// microsecond; the counter removes that.
-fn new_id(prefix: &str) -> String {
+pub(crate) fn new_id(prefix: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -8493,32 +8057,32 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             library_view,
-            playlists,
-            create_playlist,
-            add_tracks_to_playlist,
-            rename_playlist,
-            delete_playlist,
-            remove_playlist_track,
-            reorder_playlist_track,
-            playlist_rows,
-            playlist_folders,
-            create_folder,
+            commands::playlists::playlists,
+            commands::playlists::create_playlist,
+            commands::playlists::add_tracks_to_playlist,
+            commands::playlists::rename_playlist,
+            commands::playlists::delete_playlist,
+            commands::playlists::remove_playlist_track,
+            commands::playlists::reorder_playlist_track,
+            commands::playlists::playlist_rows,
+            commands::playlists::playlist_folders,
+            commands::playlists::create_folder,
             duplicate_count,
             lookup_counts,
             downloaded_tracks,
             download_collection,
             remove_download,
-            dynamic_groups,
-            create_group,
-            rename_group,
-            delete_group,
-            add_to_group,
-            remove_from_group,
-            reorder_groups,
-            group_tracks,
-            rename_folder,
-            delete_folder,
-            set_playlist_folder,
+            commands::groups::dynamic_groups,
+            commands::groups::create_group,
+            commands::groups::rename_group,
+            commands::groups::delete_group,
+            commands::groups::add_to_group,
+            commands::groups::remove_from_group,
+            commands::groups::reorder_groups,
+            commands::groups::group_tracks,
+            commands::playlists::rename_folder,
+            commands::playlists::delete_folder,
+            commands::playlists::set_playlist_folder,
             track_lookup,
             look_up_track,
             looked_up_image,
@@ -8545,10 +8109,10 @@ pub fn run() {
             forget_peer,
             sync_with,
             sync_shared_document,
-            queue_state,
-            queue_view,
-            remove_from_queue,
-            move_in_queue,
+            commands::queue::queue_state,
+            commands::queue::queue_view,
+            commands::queue::remove_from_queue,
+            commands::queue::move_in_queue,
             set_repeat,
             set_shuffled,
             play_next,
@@ -8585,10 +8149,10 @@ pub fn run() {
             track_cover,
             track_thumb,
             analysis_status,
-            cache_status,
-            set_cache_max_bytes,
-            clear_audio_cache,
-            evict_track,
+            commands::cache::cache_status,
+            commands::cache::set_cache_max_bytes,
+            commands::cache::clear_audio_cache,
+            commands::cache::evict_track,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vapor Music");
@@ -8596,6 +8160,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    // The commands these tests drive now live in `commands/`. Imported as a
+    // group rather than moved with them: they are integration-flavoured tests
+    // that reach across domains — a playlist test that also asserts on the
+    // queue — so splitting them by module would put each one somewhere it only
+    // half belongs.
+    use crate::commands::{cache::*, groups::*, playlists::*, queue::*};
 
     /// The last thirty seconds of every track, and what a press means in them.
     ///
