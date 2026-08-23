@@ -2696,7 +2696,7 @@ side of this were closed in `30ba440`.
 **Waiting for:** Nothing. This is the one security item that should land before
 the app runs on a network Dylan does not own.
 
-### AUD-8: the end-to-end suite never reaches Rust (done 2026-08-23)
+### AUD-8 : the end-to-end suite never reaches Rust (done 2026-08-23)
 
 `vite.e2e.config.ts` aliases `@tauri-apps/api/core` to `src/test/browser-ipc.ts`
 — the same fake the component tests use. So the e2e suite drives the real UI
@@ -2724,7 +2724,7 @@ structurally cannot.
 **Waiting for:** Nothing. A `failureRate` on the fake plus a fourth seed is
 about thirty lines.
 
-### AUD-10: four modules with no tests (3 of 4 done 2026-08-23)
+### AUD-10 : four modules with no tests (3 of 4 done 2026-08-23)
 
 `decoder.rs` (seek offsets, silence gating), `sync.rs`'s drift-thread lifecycle,
 `android.rs` (359 lines of JNI), and `secrets/{mod,desktop}.rs` (137 lines).
@@ -2737,7 +2737,7 @@ around the keyring.
 
 **Closed:** 26 tests across `secrets/`, `decoder.rs` and `sync.rs`. The keyring came first as the ticket asked, and needed two inline `match` blocks extracted into named functions before it could be tested at all — without touching the real keychain. `android.rs` is deliberately still untested: 359 lines of JNI that cannot run off-device, where a test mocking the JNI boundary would assert the mock.
 
-### AUD-11: dynamic groups do not sync at all (done 2026-08-23)
+### AUD-11 : dynamic groups do not sync at all (done 2026-08-23)
 
 `sync::Shared` carries playlists, folders, bpm overrides and tombstones. It does
 not mention groups — zero occurrences in `sync.rs`. Groups are a first-class
