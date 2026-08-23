@@ -2452,7 +2452,7 @@ rather than removing it.
 **Waiting for:** Nothing.
 
 
-### REL-001 : (open)
+### REL-001 : (closed 2026-08-23 — moved to the release pipeline)
 
 **There is no release signing, on either platform, so every build is a
 throwaway.** Wanted for later; recorded 2026-08-20 so it is not rediscovered.
@@ -2480,8 +2480,14 @@ blocking.
 key lives so it is not lost — a lost upload key cannot be replaced for an app
 already on Play.
 
-**Waiting for:** Nothing technical. Deferred until release builds are actually
-wanted.
+**Closed as a ticket 2026-08-23, at Dylan's direction**, and for the same
+reason as AUD-21: it belongs to the release pipeline rather than to the board.
+It is **step 2** in `docs/workspace/release-epic.md`, where the macOS and
+Android halves are written out separately — the macOS one has a free part and a
+paid part, and they should not be decided as though they were one thing.
+
+The debug builds are not an accident to be corrected. They are what a build for
+Dylan's own device is, and they stay that way until the release steps run.
 
 ---
 
@@ -2523,7 +2529,7 @@ manual Android run on real hardware ahead of that.
 
 **Waiting for:** Nothing, unless decision 3 changes.
 
-### AUD-3 : what the supporter actually gets (open)
+### AUD-3 : what the supporter actually gets (decided 2026-08-23 — building the logic first)
 
 Four desks independently rejected a donation button that unlocks customisation:
 money that unlocks features is consideration, which buys the whole legal and tax
@@ -2542,7 +2548,26 @@ The UX desk's locked-swatch treatment — 45% opacity, dissolving on unlock — 
 designed for the rejected model and is worth reading before designing this one,
 but it is gone with the reports.
 
-**Waiting for:** Dylan to pick one.
+**Decided 2026-08-23.** The thank-you is **a pin at the bottom of Settings, one
+added per donation.** No feature behind it, nothing withheld, nothing gated —
+just a visible record that somebody contributed. Dylan's framing: it gets people
+to feel like they truly contributed to something.
+
+**The work is the donation logic first**, and the pin after it. What the pin
+looks like is a smaller question than whether money can arrive at all, and the
+second one has no code behind it whatsoever today — a grep for donate, supporter,
+ko-fi, patreon, paypal and itch across `src/` and `src-tauri/src/` returns
+nothing.
+
+**One thing to keep straight while building it.** A pin awarded *because* money
+arrived is the same sentence as a purchase, and the rule from `DECISIONS.md` §2
+is that nothing may be contingent on payment. What keeps this on the right side
+of the line is that the pin does nothing and gates nothing — it is a receipt,
+not a good. That distinction is load-bearing and should survive into whatever
+the button and the copy end up saying.
+
+**Still open:** which payment channel. That decides whether the app can even
+observe a donation, and therefore what "the logic" is.
 
 ### AUD-4 : delete the Godot tree (done 2026-08-21)
 
@@ -3079,7 +3104,7 @@ release epic: `app.yml` 17 of 17 pinned, `ci.yml` 9 of 9, `release.yml` 7 of 7,
 SHAs pointed at commits that do not exist upstream, so the pinning that made
 the workflow safe would have failed it on the first tag push.
 
-### AUD-21 : the updater keypair is mismatched, and deliberately unmanaged (open)
+### AUD-21 : the updater keypair is mismatched, and deliberately unmanaged (closed 2026-08-23 — moved to the release pipeline)
 
 On 2026-08-22 a session printed the updater private key into a transcript while
 verifying it, and rotated it in response. `~/.tauri/` now holds a new keypair;
@@ -3094,9 +3119,17 @@ Dylan's decision, same day: no private key gets saved or managed until
 distribution is actually on the table, because every handling of it is a chance
 to leak it. That is the right trade while nothing ships.
 
-**Waiting for:** Distribution. At that point: generate the keypair fresh, put the
-public half in `tauri.conf.json` and the private half straight into a password
-manager, and never read it back out into a terminal.
+**Closed as a ticket 2026-08-23, at Dylan's direction.** It is not a defect
+somebody forgot to fix, it is the last step of shipping, and a row that can only
+be closed at the very end reads as neglect every time anyone scans the board.
+It is now **step 1 of the release pipeline** in
+`docs/workspace/release-epic.md`, with the key-location decision and the
+mismatched public key recorded there in full.
+
+Nothing about the state of the world changed with this edit: `tauri.conf.json`
+still carries the old public key, the private half of it is still the
+`.COMPROMISED-2026-08-22` file, and the first signed build is still where that
+bites.
 
 ### AUD-22 : nothing has been released, and the pipeline is unexercised (open)
 
@@ -3109,10 +3142,17 @@ including the `.sig`. It has never run on a tag.
 mistake costs a draft rather than the release `releases/latest` resolves to,
 which is the URL compiled into every binary.
 
-**Waiting for:** AUD-21, since `verify` fails without the signing secret, and a
-decision that v1 is worth cutting.
+**Waiting for:** Steps 1 and 2 of the release pipeline in
+`docs/workspace/release-epic.md` — `verify` fails without the signing secret —
+and a decision about what v1 contains.
 
-### AUD-23 : the app has no front door (open)
+That last one was asked on 2026-08-23 and turned out to have no answer on
+record: **no document anywhere names a feature set for v1.** `DECISIONS.md` §3
+picks a distribution channel for it, §2 defers a question to v1.1, and
+`RELEASE.md` costs it. Donation and onboarding are the first two things anybody
+has said are in it.
+
+### AUD-23 : the app has no front door (redefined 2026-08-23 — it is onboarding, not marketing)
 
 No landing page, no domain, no demo. The README was rewritten on 2026-08-22 to
 stop describing a product that does not exist, and is now a developer's README
@@ -3124,7 +3164,28 @@ lead with the mix rather than the manifesto, because it is demonstrable in eight
 seconds and is the only claim with measurement behind it. A recording of one
 transition is probably the single highest-leverage artefact that does not exist.
 
-**Waiting for:** Dylan, and only when there is something worth pointing at.
+**Redefined 2026-08-23.** Not a landing page, not a domain, no recording of a
+transition — **no theatrics.** The front door is inside the app:
+
+* A **small onboarding window that appears as a person moves around the app**,
+  rather than one wall of explanation at the start.
+* **No opening "connect your music" modal.** Send a new person to Settings and
+  to the connection settings, with a help modal, instead.
+
+The marketing position above is kept for whenever an outside-facing page is
+actually wanted, and is explicitly not what this ticket is any more.
+
+**Read this before starting.** First run is not bare today — AUD-5's onboarding
+item landed a two-path chooser: "Choose a folder on this device" first, and
+"Connect a server instead" beneath it, so that the flow no longer assumes a
+WebDAV server a new person does not have. What is proposed here **replaces** that
+opening modal rather than filling an empty space, and the reason that chooser
+exists — a person with no server must have a way in — has to survive whatever
+replaces it.
+
+**Order:** after the donation work.
+
+**Waiting for:** Nothing.
 
 ---
 
