@@ -707,9 +707,16 @@ impl AppState {
     /// A name nobody can tell apart fails the one job the name has, so the
     /// trade has been made the other way. It is worth knowing it *is* a trade:
     /// on a Mac this is the Sharing name, which is often "<Owner>'s MacBook",
-    /// and it goes out with every advert while sync is on. Two things bound it
-    /// — sync is off by default, and the beacon only runs on private
-    /// addresses ([`peers::is_local`]) — but neither makes it private.
+    /// and it goes out with every advert while sync is on.
+    ///
+    /// One thing bounds it, not two: sync is off by default. This used to
+    /// claim the beacon "only runs on private addresses ([`peers::is_local`])",
+    /// and it never did. `is_local` has two callers, both in
+    /// `commands/sync.rs`, and both gate an *outbound* connection to a peer
+    /// that was already found. The beacon binds `0.0.0.0` and sends to
+    /// `Ipv4Addr::BROADCAST` on whatever network this machine has joined —
+    /// a café's included. It stays on the local link, because that is what a
+    /// broadcast datagram does, and that is the whole of the bound.
     pub(crate) fn device_name(&self) -> String {
         let folder = self
             .settings
