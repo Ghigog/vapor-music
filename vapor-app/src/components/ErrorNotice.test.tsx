@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ErrorNotice, messageOf } from "./ErrorNotice";
 
 describe("ErrorNotice", () => {
@@ -37,6 +38,39 @@ describe("ErrorNotice", () => {
   it("shows the message when there is one", () => {
     render(<ErrorNotice error="the index would not open" />);
     expect(screen.getByRole("alert")).toHaveTextContent(/would not open/i);
+  });
+
+  /*
+   * The defect that reached the first outside user: an error bar with no way
+   * out. It sat there, and the only thing left to do about it was restart.
+   *
+   * There was no test for it. The monkey can now produce error bars — a random
+   * walk with the backend failing under it (AUD-9) — but notices are rare in a
+   * random walk, and it is luck whether any given run sees one. Luck is not a
+   * regression test. This is deterministic, and it is the one that would have
+   * caught it.
+   */
+  it("offers a way out when the caller can dismiss it", async () => {
+    const user = userEvent.setup();
+    let dismissed = false;
+    render(
+      <ErrorNotice error="the server closed the connection" onDismiss={() => (dismissed = true)} />,
+    );
+
+    const out = screen.getByRole("button", { name: "Dismiss" });
+    await user.click(out);
+    expect(dismissed).toBe(true);
+  });
+
+  /*
+   * And the other half: a notice nobody can dismiss must not pretend otherwise.
+   * A dead × is worse than none — it reads as a way out and is not one.
+   */
+  it("shows no dismiss control when there is nothing to dismiss to", () => {
+    render(<ErrorNotice error="the server closed the connection" />);
+    expect(
+      screen.queryByRole("button", { name: "Dismiss" }),
+    ).not.toBeInTheDocument();
   });
 
   it("unwraps a thrown Error", () => {
