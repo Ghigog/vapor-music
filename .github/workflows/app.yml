@@ -354,6 +354,13 @@ jobs:
             foreach ($v in $imports.Values) { $names += $v.Count }
             Write-Host ("  {0}: {1} DLLs, {2} names" -f $leaf, $imports.Keys.Count, $names)
             foreach ($d in $imports.Keys) {
+              # API-set names are resolved by the loader through the apiset
+              # schema and never by searching directories, so whatever a path
+              # search turns up for one is the wrong file. It found a stray
+              # api-ms-win-eventing-controller-l1-1-0.dll in the Windows
+              # Performance Toolkit and reported five exports missing from it,
+              # none of which meant anything.
+              if ($d -like 'api-ms-*' -or $d -like 'ext-ms-*') { continue }
               $path = Resolve-Dll $d $dir
               if (-not $path) { [void]$unresolved.Add("$d (wanted by $leaf)"); continue }
               $key = $path.ToLower()
