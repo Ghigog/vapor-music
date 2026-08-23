@@ -223,8 +223,13 @@ music files themselves.
 The repository is public. These are the searches behind the claims above:
 
 - **Every host the app can contact:** `grep -rn "https\?://" --include='*.rs'
-  vapor-app/src-tauri/src` — the only non-test, non-comment hits are
-  `lrclib.net`, `api.deezer.com` and the WebDAV address you typed. The
+  vapor-app/src-tauri/src`. The only hosts actually requested are
+  `lrclib.net`, `api.deezer.com`, `cdn-images.dzcdn.net` and the WebDAV address
+  you typed. That search also returns two strings that are not requests, and
+  they are named here so the list can be checked without a puzzle:
+  `github.com` appears inside the `User-Agent` the app sends, and
+  `app.koofr.net` is an example in the help text beside the server field. The
+  rest are test fixtures — `example.com`, `example.invalid` and similar. The
   updater's endpoint is in `vapor-app/src-tauri/tauri.conf.json`.
 - **No telemetry:** searching the whole of `vapor-app/src`,
   `vapor-app/src-tauri/src`, `vapor-core`, `package.json` and `Cargo.toml` for
