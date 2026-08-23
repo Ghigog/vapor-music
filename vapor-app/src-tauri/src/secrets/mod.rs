@@ -96,3 +96,54 @@ compile_error!(
      keyring with no backend silently becomes a mock that reports success and \
      stores nothing (TD-50)."
 );
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn the_error_shows_the_words_it_was_built_from() {
+        // The whole type is a message for a person to read. A `Display` that
+        // rendered anything else — a struct name, a wrapper — would leave the
+        // Settings screen showing text nobody can act on.
+        assert_eq!(
+            Error("the keychain could not be opened".to_string()).to_string(),
+            "the keychain could not be opened"
+        );
+    }
+
+    #[test]
+    fn the_error_is_a_std_error_so_callers_can_carry_it() {
+        let error = Error("locked".to_string());
+        let carried: &dyn std::error::Error = &error;
+        assert_eq!(carried.to_string(), "locked");
+    }
+
+    /// Every platform must expose the same three functions.
+    ///
+    /// `secrets::get` is `desktop::get` on this machine and `android::get` on
+    /// a phone. Nothing states that interface — there is no trait, because a
+    /// trait would need an implementor on a target that has none — so the two
+    /// are held together only by both being spelled the same way. Coercing
+    /// them to `fn` pointers is that statement, written where a signature that
+    /// drifted on one platform fails on the other.
+    #[test]
+    fn the_store_has_the_shape_every_caller_assumes() {
+        let _: fn(&str, &str, &str) -> Result<(), Error> = super::set;
+        let _: fn(&str, &str) -> Result<Option<String>, Error> = super::get;
+        let _: fn(&str, &str) -> Result<(), Error> = super::delete;
+    }
+
+    /// The same three, on the implementation this machine does not use.
+    ///
+    /// Only under `android-check`, which is the feature that exists so the JNI
+    /// half type-checks on a machine with no NDK. Without this the Android
+    /// signatures are checked by nothing until an Android build runs.
+    #[cfg(all(feature = "android-check", not(target_os = "android")))]
+    #[test]
+    fn the_android_store_has_that_shape_too() {
+        let _: fn(&str, &str, &str) -> Result<(), Error> = super::android::set;
+        let _: fn(&str, &str) -> Result<Option<String>, Error> = super::android::get;
+        let _: fn(&str, &str) -> Result<(), Error> = super::android::delete;
+    }
+}
