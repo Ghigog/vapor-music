@@ -548,41 +548,90 @@ beat-matched move (Bass Swap, Tempo Morph) runs the vocoder, and only the
 vocoder manufactures gain. When every exit on the Vibe screen reads "echo out",
 no pair reachable from that track can reproduce it.
 
-## The Windows test binary stopped loading (2026-08-22)
+## The Windows test binary stopped loading (2026-08-20, fixed 2026-08-23)
 
-`shell (windows-latest)` exits 127 with `0xc0000139`,
-`STATUS_ENTRYPOINT_NOT_FOUND`. That is the loader refusing to start the process:
-it found every DLL the binary imports, but one of them no longer exports a name
-the binary asks for. No test runs, so the harness prints nothing.
+`shell (windows-latest)` exited 127 with `0xc0000139`,
+`STATUS_ENTRYPOINT_NOT_FOUND` — the loader refusing to start the process because
+a DLL it found does not export a name the binary asks for. No test runs, so the
+harness printed nothing for three days.
 
-**It is not attributable to any commit here**, and the archaeology is worth
-keeping so nobody repeats it:
+**The first account of this, kept below in outline because the reasoning was
+wrong in an instructive way, blamed the runner image.** It does not survive
+measurement. Both sides of the green-to-red boundary ran the same image:
 
-* The last run in which this step reached the test binary was `4bad6f4c`, on
-  2026-08-20, runner image `win25-vs2026/20260810.198`. It passed.
-* Every run between that one and `50004e6` died earlier — at `cargo fmt`, then
-  at clippy — so the step did not execute at all for two days.
-* By `50004e6` the image was `win25-vs2026/20260818.207`. The first execution
-  after the image moved is also the first failure.
-* No `windows-*` crate changed version in that range; `git diff 4bad6f4c..HEAD`
-  on `Cargo.lock` shows none.
-* The updater plugin added in `bc5a1c5` brought in `minisign-verify`, `tar` and
-  `zip`, and no Windows crates. It is not the cause.
+    4bad6f4  2026-08-20 15:11  win25-vs2026 20260810.198.2  green
+    89b0fb5  2026-08-20 18:58  win25-vs2026 20260810.198.2  red
 
-**What the binary imports**, from `dumpbin /dependents` on the runner:
-`KERNEL32`, `MSVCP140`, `VCRUNTIME140`, `advapi32`, `bcrypt`,
-`bcryptprimitives`, `comctl32`, `dwmapi`, `gdi32`, `ntdll`, `ole32`, `shell32`,
-`user32`, `userenv`, `ws2_32`, and the usual `api-ms-win-crt-*` sets.
+The earlier note compared the last green run against a much later red one,
+by which point the image *had* moved to `20260818.207`, and read the
+correlation off that. The image is not implicated at all.
 
-`MSVCP140` and `VCRUNTIME140` are the ones worth suspicion: they ship with the
-Visual C++ redistributable rather than with Windows, and a binary linked by a
-newer toolset than the redist on the machine produces exactly this error.
-Nothing in this repository compiles C++ — no `build.rs` in `vapor-core`, no
-`.cpp` anywhere — so it arrives through a dependency.
+**The actual cause.** `tauri_build::build()` writes a Windows resource
+containing the icon, the version strings, and an application manifest whose
+entire content is a dependency on Microsoft.Windows.Common-Controls 6.0.0.0. It
+hands that resource to cargo with `cargo:rustc-link-arg-bins=`. `-bins` means
+bins: `vapor-app.exe` gets the manifest and the unit-test binary does not.
 
-A step in `app.yml` runs on failure and diffs each imported name against what
-the DLL the loader would pick actually exports. It should name the symbol on the
-next red Windows run. Read that before trying anything else; the obvious fixes
-(`+crt-static`, pinning a runner label) each have consequences and none of them
-should be attempted while the missing export is still unknown.
+That gap was harmless for as long as nothing in the graph needed comctl32
+version 6. `tauri-plugin-dialog`, added for the folder picker, brought in `rfd`,
+which imports `TaskDialogIndirect`. Only version 6 exports it; the copy in
+System32 is 5.82 and never had it. Version 6 lives in WinSxS and the loader
+reaches it only through the activation context the manifest creates. No
+manifest, no activation context, no `TaskDialogIndirect`, no process.
 
+So the trigger was a dependency, and the fault was a two-year-old asymmetry in
+how the manifest reaches link targets.
+
+**`cargo:rustc-link-arg-tests=` is not the fix**, and this cost a CI round trip.
+`-tests` reaches integration targets under `tests/`; the binary that fails is the
+lib unit-test harness, which it does not reach. Measured with a throwaway crate
+emitting a deliberately invalid linker flag:
+
+    -tests   cargo test --test integration   link fails   (applied)
+             cargo test --lib                links        (not applied)
+    plain    cargo test --lib                link fails   (applied)
+             cargo build --bin thing         link fails   (applied)
+
+Plain `rustc-link-arg` reaches the app binary too, which already had tauri's
+manifest — so rather than hand link.exe a generated manifest and an RT_MANIFEST
+resource saying the same thing, `build.rs` now asks tauri-build for
+`WindowsAttributes::new_without_app_manifest()` and declares the dependency
+through `/MANIFESTDEPENDENCY` for every target. One source. The resource still
+carries the icon and the version strings.
+
+**Two more failures were queued behind it**, neither a regression, both invisible
+for as long as the binary could not start:
+
+* Every `seam` test invoked with a hard-coded `tauri://localhost`. `is_local_url`
+  compares against the platform's protocol URL, and wry cannot register a
+  `tauri://` scheme on Windows or Android — those serve the webview from
+  `http://tauri.localhost`. So each request arrived looking remote and the ACL
+  refused a command it had been told to allow.
+* The throwaway updater key was written to `/tmp`, which on Windows is a
+  Git-bash fiction. The CLI reads `TAURI_SIGNING_PRIVATE_KEY` as a path when the
+  path exists and as key material when it does not, so it tried to base64-decode
+  the string `/tmp/throwaway.key` and failed on "Invalid symbol 46, offset 14" —
+  symbol 46 is `.`, offset 14 is where `.key` starts. `$RUNNER_TEMP` is real on
+  all three runners.
+
+**The diagnostic that found it** walks the whole load graph and diffs each
+imported name against what the DLL the loader would pick actually exports. Its
+first two versions reported nothing useful and had to be corrected twice, which
+is most of what made this slow:
+
+* An import regex wanting eight hex digits parsed zero of the binary's imports,
+  and "nothing missing" then read as a clean bill of health.
+* The delay-load section header parses as a symbol, so it reported
+  `Characteristics` missing from thirty System32 DLLs. That section cannot hold
+  the answer anyway — a delay-load import is not bound at load time, so it fails
+  on first call, not before `main`.
+* `api-ms-*` names resolve through the apiset schema and never by searching
+  directories, so a path search answers with the wrong file. It found a stray
+  `api-ms-win-eventing-controller-l1-1-0.dll` in the Windows Performance Toolkit
+  and reported five exports missing from it.
+
+With all three corrected the walk prints one line, and it is the one that
+matters. The step is still there, still `if: failure()`.
+
+**Result:** 284 tests pass on `windows-latest`, and `installers
+(windows-latest)` produces an NSIS installer for the first time.

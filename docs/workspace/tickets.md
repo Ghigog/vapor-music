@@ -2781,21 +2781,31 @@ already lists reviewing the rate limits and terms as outstanding.
 **Waiting for:** Reading Deezer's current API terms, then either registering or
 moving to MusicBrainz plus the Cover Art Archive, which are built for this.
 
-### AUD-19 : Windows CI has been red since a runner image moved (open)
+### AUD-19 : Windows CI was red for three days (done 2026-08-23)
 
-`shell (windows-latest)` exits `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`)
-before any test runs — a DLL load failure, so no user code executes and nothing
-is printed. Every other job is green as of 2026-08-22.
+`shell (windows-latest)` exited `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`)
+before any test ran, from 2026-08-20 to 2026-08-23. Both Windows jobs, since
+`installers` reaches the same binary through `types:check`.
 
-The archaeology in `FINDINGS.md` (see `3a03ce0`) ties the first failure to the
-runner image moving from `20260810.198` to `20260818.207`, with no windows-\*
-crate changing version. `MSVCP140`/`VCRUNTIME140` are the plausible suspects.
-The diagnostic step added to name the missing export finished in 1.5 seconds
-having parsed no DLLs, so it is inconclusive rather than clean.
+Not the runner image, which is what this ticket and `FINDINGS.md` both said:
+the green and red sides of the boundary ran the same image, `20260810.198.2`.
+The real cause was that `tauri-build` hands its application manifest to cargo
+with `cargo:rustc-link-arg-bins=`, so the app binary carried the
+Common-Controls 6.0.0.0 declaration and the test binary did not — harmless
+until `tauri-plugin-dialog` brought in `rfd` and its `TaskDialogIndirect`
+import, which only comctl32 version 6 exports.
 
-**Waiting for:** A decision — keep digging at roughly twenty minutes an
-iteration, or mark the job non-blocking with this ticket attached so the board
-reports honestly again. A permanently-red column is a gate nobody reads.
+`build.rs` now takes the manifest off tauri-build and declares the dependency
+through the linker for every target. Two failures queued behind it were fixed
+in the same pass: `seam` invoked from `tauri://localhost`, which is not the
+local origin on Windows, and the throwaway signing key was written to `/tmp`,
+which does not exist there.
+
+Full account, including the two false positives that made the diagnostic step
+lie twice, in `docs/FINDINGS.md`.
+
+**Result:** 284 tests pass on `windows-latest`; `installers (windows-latest)`
+produces an NSIS installer. All eight jobs green in run 32630969786.
 
 ### AUD-20 : CI actions float on tags, and nothing watches dependencies (open)
 
