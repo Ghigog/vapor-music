@@ -2817,7 +2817,7 @@ not: `lib.rs` is still 9,170 lines and every command still goes through one
 mutex on one `AppState`. Whether two sessions may now share the backend is
 Dylan's call, not the line count's.
 
-### AUD-16 : no privacy policy, EULA or support route (open)
+### AUD-16 : no privacy policy, EULA or support route (partly done 2026-08-23)
 
 None of the three exists. Verified 2026-08-22: no policy or terms file anywhere,
 no `mailto:` in the app or the README.
@@ -2831,9 +2831,47 @@ no `mailto:` in the app or the README.
   which makes a person describing a fault the only channel there is. The app can
   now name its build (`b8eddb6`); nothing tells them where to send it.
 
-**Waiting for:** Dylan. The privacy policy is a factual description of what the
-code already does and can be drafted from the code; the EULA wants a template
-and, before anything is sold, a lawyer.
+**Done: the privacy policy.** `PRIVACY.md`, written from the code rather than
+from a template. Every claim in it is checkable and the last section says how.
+It found one thing the ticket did not have: **the desktop updater is a third
+network destination**, it runs at every launch, and it is the only one with no
+switch — `lib.rs`'s `#[cfg(desktop)]` updater block asks GitHub for
+`latest.json` and installs silently. `RELEASE.md` §3's "the app talks to two
+strangers, both off by default" is therefore short by one, and that one is not
+off by default. Documented as such rather than smoothed over. Confirmed on the
+way: `metadata_lookup_enabled` and `sync_enabled` are both `false` in
+`Settings::default` (`vapor-library/src/settings.rs`), and lookups send exactly
+three strings — artist, album, title — never a path, never an id.
+
+**Done: the support route.** `SUPPORT.md`, a separate file rather than a section
+of the privacy policy, because the two stores ask for them in two different
+fields and a person hunting a bug should not have to read a data-protection
+notice to find where to write. Names the five things a report needs, starting
+with the build stamp the About lockup already prints.
+
+**Done: the EULA groundwork, not the EULA.** `docs/EULA-NOTES.md` states what
+`LICENSE` does and does not grant, the nine things a binary distribution needs
+that it has none of, and the six questions actually worth a lawyer's time —
+including the MPL-2.0 set inside a proprietary binary, and the silent
+auto-update, which no template will know about.
+
+**Waiting for:** Dylan, on two things and only two.
+
+1. **A contact address.** `SUPPORT.md` carries
+   `<CONTACT ADDRESS — Dylan to fill in>` and is otherwise finished. Not a
+   session's to invent.
+2. **The EULA itself**, which still wants a template and a lawyer before
+   anything is sold. `docs/EULA-NOTES.md` is the brief to hand over, not a
+   substitute for one.
+
+`docs/EULA-NOTES.md` also carries `<JURISDICTION — Dylan to confirm>` and
+`<LEGAL ENTITY AND ADDRESS — Dylan to fill in>`. Neither blocks anything today;
+both are inputs the lawyer will ask for first.
+
+Untouched deliberately: `docs/RELEASE.md` §3 and its §7 checkbox
+("Privacy declaration covering the lookup services"). That checkbox is the
+store's own data-safety form, which is Dylan's to fill in, and `RELEASE.md` is
+the platform lane.
 
 ### AUD-17 : contributions are unsettled, on a public repository (open, overdue)
 
