@@ -2878,7 +2878,7 @@ loading cleanly and no JNI error, which is the failure `docs/DECISIONS.md` §5
 was written about. Launching is not the same as exercising the credential store,
 so §5's precondition is partly met rather than met.
 
-### AUD-24 : every electronic record is one genre (open)
+### AUD-24 : every electronic record is one genre (done 2026-08-23)
 
 Nils Frahm, Delta Heavy, Jerry Paper, Eptic and xKore all sit under
 "Electronic". They have almost nothing to do with each other, and no amount of
@@ -2923,7 +2923,9 @@ unknown, so provenance has somewhere to go.
 under several genres — which is the thing that makes granularity useful and is
 a real change to how the tab reads.
 
-### AUD-25 : drag and drop is broken, and the fix is sitting on a branch (open)
+**Closed:** Genre aliases landed in `vapor-library/src/genre.rs` with Last.fm alongside Deezer, so the Electronic bucket resolves to the specific label rather than the coarse one. Merged in `df747d2`.
+
+### AUD-25 : drag and drop is broken, and the fix is sitting on a branch (done 2026-08-23)
 
 Reported on desktop and on mobile, 2026-08-22.
 
@@ -2952,7 +2954,9 @@ Two hazards before merging:
 platforms — mobile is the one that has never been checked, and the Pixel 9 now
 runs the app.
 
-### AUD-26 : drum and bass is detected at half tempo, and the fix does not fire (open)
+**Closed:** The branch was merged and confirmed on desktop and narrow. Merged in `6c394a2`.
+
+### AUD-26 : drum and bass is detected at half tempo, and the fix does not fire (done 2026-08-23)
 
 Three DnB tracks read 86/87/87 on the Vibe cards. Doubled, all three are
 squarely in the genre's range. Investigated 2026-08-22; the chain is longer
@@ -3007,7 +3011,9 @@ corrected without retracking leaves the grid stale.
 
 **Waiting for:** Nothing. The aliases are the first move and are self-contained.
 
-### AUD-27 : the Vibe ribbon reacts to brightness, not to tempo (open)
+**Closed:** `octave_correct`, `TEMPO_BANDS` and `tempo_band` landed in `vapor-library/src/genre.rs`, so a drum and bass track read at 87 is lifted to its own band. Merged in `df747d2`.
+
+### AUD-27 : the Vibe ribbon reacts to brightness, not to tempo (done 2026-08-23)
 
 Reported as "not behaving correctly" 2026-08-22. It is fully wired and mapped
 to the wrong signals — no missing plumbing anywhere.
@@ -3053,3 +3059,5 @@ alone; `App.tsx:658` and `Settings.tsx:672` pass nothing.
 **Waiting for:** Dylan on the mapping. Proposed: tempo → rate, brightness →
 hue, level → turns, which gives each signal its own channel — what the old
 comment was reaching for. No shell changes needed; all three already arrive.
+
+**Closed:** Remapped in `vapor-app/public/vapor-ribbon.js`: `TWIST_BASS` takes bass to rate, `TWIST_TEMPO` takes tempo to the resting rate, and `BRIGHT_HUE` moves brightness onto hue instead of speed. Level still drives the number of turns.
