@@ -915,9 +915,7 @@ impl Lookup {
         read: impl Fn(reqwest::blocking::Response) -> Option<T>,
         again: impl Fn(&T) -> bool,
     ) -> Option<T> {
-        let Some(service) = Service::of(url) else {
-            return None;
-        };
+        let service = Service::of(url)?;
         let mut backoff = BACKOFF;
         let mut owed = Duration::ZERO;
 
@@ -1166,7 +1164,9 @@ mod tests {
     #[test]
     fn the_user_agent_names_the_app_its_version_and_somewhere_to_complain() {
         assert!(USER_AGENT.starts_with("VaporMusic/"), "{USER_AGENT}");
-        let (_, rest) = USER_AGENT.split_once('/').expect("a version after the name");
+        let (_, rest) = USER_AGENT
+            .split_once('/')
+            .expect("a version after the name");
         let (version, contact) = rest.split_once(' ').expect("a contact after the version");
         assert!(
             version.split('.').count() >= 3 && version.starts_with(|c: char| c.is_ascii_digit()),
