@@ -548,6 +548,14 @@ pub struct Shared {
     pub playlists: Vec<crate::playlist::Playlist>,
     #[serde(default)]
     pub folders: Vec<crate::group::Folder>,
+    /// Dynamic groups — saved sets of artists, albums and genres (AUD-11).
+    ///
+    /// They were absent here until version 4, which meant a group lived on
+    /// exactly one device and nothing on screen said so. A group is a set of
+    /// entities, so it merges the same way a playlist's tracks do: the union,
+    /// with deletion carried by a tombstone.
+    #[serde(default)]
+    pub groups: Vec<crate::group::DynamicGroup>,
     /// Tempo corrections, keyed by href. A person's own claim about a track
     /// (TD-10), and the thing most worth carrying between devices — it is the
     /// one piece of analysis a human typed rather than a machine measured.
@@ -570,7 +578,15 @@ pub struct Shared {
 /// 3 added `Tombstones::tracks`, and the same argument applies unchanged: a
 /// version-2 build drops the per-track removals on the floor and writes back a
 /// document that puts every one of those tracks back into its playlist.
-pub const SHARED_VERSION: u32 = 3;
+///
+/// 4 added `groups` and `Tombstones::groups` (AUD-11), and the argument is the
+/// same a third time: a version-3 build does not know the field, reads it as
+/// absent, and writes back a document in which every dynamic group on every
+/// device has been deleted. What it does instead is refuse — the shell's
+/// `sync_shared_document` compares `version` against this constant and returns
+/// before it puts anything, so the document it could not fully read is left on
+/// the server exactly as it found it.
+pub const SHARED_VERSION: u32 = 4;
 
 /// Records of things that were deleted, and when.
 ///
@@ -590,6 +606,16 @@ pub struct Tombstones {
     /// Folder id → when it was deleted.
     #[serde(default)]
     pub folders: std::collections::HashMap<String, Millis>,
+    /// Dynamic group id → when it was deleted.
+    ///
+    /// Groups need the whole-record tombstone for the same reason playlists
+    /// do. They do **not** need the per-entity one: dragging an artist off a
+    /// group is rare, and the per-track machinery exists because a track
+    /// sliding back into a forty-track playlist is invisible, where a group
+    /// with four chips is not. If that turns out to be wrong, `tracks` is the
+    /// template.
+    #[serde(default)]
+    pub groups: std::collections::HashMap<String, Millis>,
     /// Playlist id → href → when that track was taken out of that playlist.
     ///
     /// The same argument one level down. Deleting a playlist travelled; taking
@@ -613,7 +639,10 @@ impl Tombstones {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.playlists.is_empty() && self.folders.is_empty() && self.tracks.is_empty()
+        self.playlists.is_empty()
+            && self.folders.is_empty()
+            && self.groups.is_empty()
+            && self.tracks.is_empty()
     }
 
     pub fn record_playlist(&mut self, id: impl Into<String>, at: Millis) {
@@ -622,6 +651,10 @@ impl Tombstones {
 
     pub fn record_folder(&mut self, id: impl Into<String>, at: Millis) {
         keep_earliest(&mut self.folders, id.into(), at);
+    }
+
+    pub fn record_group(&mut self, id: impl Into<String>, at: Millis) {
+        keep_earliest(&mut self.groups, id.into(), at);
     }
 
     /// One track taken out of one playlist.
@@ -661,15 +694,23 @@ impl Tombstones {
         self.folders.contains_key(id)
     }
 
-    /// Take in everything `other` knows about. Returns how many records are new
-    /// here, which is how many things this device is about to delete.
-    pub fn absorb(&mut self, other: &Tombstones) -> (usize, usize) {
-        let before = (self.playlists.len(), self.folders.len());
+    pub fn group_deleted(&self, id: &str) -> bool {
+        self.groups.contains_key(id)
+    }
+
+    /// Take in everything `other` knows about. Returns how many playlist,
+    /// folder and group records are new here, which is how many things this
+    /// device is about to delete.
+    pub fn absorb(&mut self, other: &Tombstones) -> (usize, usize, usize) {
+        let before = (self.playlists.len(), self.folders.len(), self.groups.len());
         for (id, at) in &other.playlists {
             keep_earliest(&mut self.playlists, id.clone(), *at);
         }
         for (id, at) in &other.folders {
             keep_earliest(&mut self.folders, id.clone(), *at);
+        }
+        for (id, at) in &other.groups {
+            keep_earliest(&mut self.groups, id.clone(), *at);
         }
         for (playlist_id, hrefs) in &other.tracks {
             let mine = self.tracks.entry(playlist_id.clone()).or_default();
@@ -680,6 +721,7 @@ impl Tombstones {
         (
             self.playlists.len() - before.0,
             self.folders.len() - before.1,
+            self.groups.len() - before.2,
         )
     }
 }
@@ -698,10 +740,15 @@ pub struct MergeReport {
     pub playlists_added: usize,
     pub playlists_extended: usize,
     pub folders_added: usize,
+    pub groups_added: usize,
+    /// Groups that were already here and gained entities from the other
+    /// device.
+    pub groups_extended: usize,
     pub tempos_added: usize,
     /// Deleted here because another device deleted them (TD-57).
     pub playlists_deleted: usize,
     pub folders_deleted: usize,
+    pub groups_deleted: usize,
     /// Taken out of a playlist here because another device took them out.
     pub tracks_removed: usize,
 }
@@ -716,8 +763,8 @@ impl MergeReport {
 ///
 /// **Additive for everything that exists.** Nothing is overwritten: a playlist
 /// absent here is taken, a playlist present here gains any tracks it was
-/// missing, and a tempo correction is accepted only where this device has none
-/// of its own.
+/// missing, a group present here gains any entities it was missing, and a
+/// tempo correction is accepted only where this device has none of its own.
 ///
 /// The alternative — last writer wins per record — needs a modification time
 /// on every playlist, and without one it degrades into "whichever device
@@ -767,6 +814,7 @@ fn wanted_tracks(deleted: &Tombstones, incoming: &crate::playlist::Playlist) -> 
 pub fn merge_shared(
     playlists: &mut crate::playlist::PlaylistStore,
     folders: &mut crate::group::FolderStore,
+    groups: &mut crate::group::GroupStore,
     overrides: &mut std::collections::HashMap<String, f32>,
     deleted: &mut Tombstones,
     remote: &Shared,
@@ -806,6 +854,14 @@ pub fn merge_shared(
         }
     }
 
+    // A group owns nothing but its own set of entities, so there is nobody to
+    // rehome — deleting it is the whole of the work.
+    for id in deleted.groups.keys() {
+        if groups.delete(id).is_some() {
+            report.groups_deleted += 1;
+        }
+    }
+
     // The same rule one level down, and for the same reason: a track this
     // device took out is not put back by the copy that still lists it, and a
     // track another device took out goes now. `remove_track` is by index, so
@@ -835,6 +891,33 @@ pub fn merge_shared(
                 folder.parent_id.clone(),
             );
             report.folders_added += 1;
+        }
+    }
+
+    // Groups merge like playlists rather than like folders, because a group
+    // has contents: the set of entities is unioned, so an artist added on the
+    // phone and an album added on the laptop both survive. `add_entity` is
+    // already idempotent and returns whether anything landed, which is exactly
+    // the question here.
+    for incoming in &remote.groups {
+        if deleted.group_deleted(&incoming.id) {
+            continue;
+        }
+        let known = groups.get(&incoming.id).is_some();
+        if !known {
+            groups.create(incoming.id.clone(), incoming.name.clone());
+            report.groups_added += 1;
+        }
+        let mut landed = 0;
+        for entity in &incoming.entities {
+            if groups.add_entity(&incoming.id, entity.entity_type, &entity.value) {
+                landed += 1;
+            }
+        }
+        // A group that arrived whole is reported once, as added — the same
+        // rule the playlist arm follows.
+        if known && landed > 0 {
+            report.groups_extended += 1;
         }
     }
 
@@ -1234,7 +1317,7 @@ mod tests {
 
     // --- The shared document (SYNC-006) ------------------------------------
 
-    use crate::group::FolderStore;
+    use crate::group::{DynamicGroup, Entity, EntityType, FolderStore, GroupStore};
     use crate::playlist::PlaylistStore;
 
     fn shared_with(playlists: Vec<(&str, &str, Vec<&str>)>) -> Shared {
@@ -1250,6 +1333,7 @@ mod tests {
             updated: 10,
             playlists: store.all().to_vec(),
             folders: Vec::new(),
+            groups: Vec::new(),
             bpm_overrides: Default::default(),
             deleted: Tombstones::new(),
         }
@@ -1259,6 +1343,7 @@ mod tests {
     fn a_playlist_only_the_server_has_arrives() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
         let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a", "/b.m4a"])]);
@@ -1266,6 +1351,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1285,6 +1371,7 @@ mod tests {
         playlists.create("p1", "Late Night");
         playlists.add_tracks("p1", &["/here.m4a".to_string()]);
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1292,6 +1379,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1309,6 +1397,7 @@ mod tests {
     fn merging_the_same_document_twice_changes_nothing_the_second_time() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
         let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
@@ -1316,6 +1405,7 @@ mod tests {
         merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1323,6 +1413,7 @@ mod tests {
         let again = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1339,6 +1430,7 @@ mod tests {
     fn a_local_tempo_correction_is_not_overruled_by_a_remote_one() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
         overrides.insert("/a.m4a".to_string(), 128.0);
@@ -1350,6 +1442,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1367,6 +1460,7 @@ mod tests {
     fn a_tempo_that_is_not_a_number_is_not_taken() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1378,6 +1472,7 @@ mod tests {
         merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1390,6 +1485,7 @@ mod tests {
     fn a_folder_only_the_server_has_arrives_once() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1404,6 +1500,7 @@ mod tests {
             merge_shared(
                 &mut playlists,
                 &mut folders,
+                &mut groups,
                 &mut overrides,
                 &mut deleted,
                 &remote
@@ -1415,6 +1512,7 @@ mod tests {
             merge_shared(
                 &mut playlists,
                 &mut folders,
+                &mut groups,
                 &mut overrides,
                 &mut deleted,
                 &remote
@@ -1423,6 +1521,235 @@ mod tests {
             0
         );
         assert_eq!(folders.all().len(), 1);
+    }
+
+    // --- Dynamic groups (AUD-11) -------------------------------------------
+
+    fn group(id: &str, name: &str, entities: Vec<(EntityType, &str)>) -> DynamicGroup {
+        DynamicGroup {
+            id: id.into(),
+            name: name.into(),
+            entities: entities
+                .into_iter()
+                .map(|(entity_type, value)| Entity {
+                    entity_type,
+                    value: value.into(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The bug AUD-11 names: a group made on the laptop was never in the
+    /// document at all, so the phone never heard of it.
+    #[test]
+    fn a_group_only_the_server_has_arrives_with_its_entities() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.groups.push(group(
+            "g1",
+            "Braindance",
+            vec![
+                (EntityType::Artist, "Aphex Twin"),
+                (EntityType::Genre, "IDM"),
+            ],
+        ));
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.groups_added, 1);
+        let landed = groups.get("g1").expect("arrived");
+        assert_eq!(landed.name, "Braindance");
+        assert_eq!(landed.entities.len(), 2);
+
+        // And converges: the second pass has nothing to say.
+        let again = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(groups.all().len(), 1);
+    }
+
+    /// Additive on contents, the same as a playlist's tracks: a group both
+    /// devices edited ends up with both edits rather than one of them.
+    #[test]
+    fn a_group_edited_on_both_devices_keeps_both_edits() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        groups.create("g1", "Braindance");
+        groups.add_entity("g1", EntityType::Artist, "Aphex Twin");
+
+        let mut remote = shared_with(vec![]);
+        remote.groups.push(group(
+            "g1",
+            "Braindance",
+            vec![
+                // Already here, and must not become a second chip.
+                (EntityType::Artist, "Aphex Twin"),
+                (EntityType::Album, "Selected Ambient Works"),
+            ],
+        ));
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.groups_added, 0, "it was already here");
+        assert_eq!(report.groups_extended, 1);
+        let merged = groups.get("g1").expect("still here");
+        assert_eq!(merged.entities.len(), 2, "{:?}", merged.entities);
+        assert!(groups.has_entity("g1", EntityType::Artist, "Aphex Twin"));
+        assert!(groups.has_entity("g1", EntityType::Album, "Selected Ambient Works"));
+    }
+
+    /// An artist and a genre with the same name are different entities, and
+    /// the merge has to keep them apart the way `add_entity` does.
+    #[test]
+    fn a_merged_entity_is_matched_on_type_as_well_as_value() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        groups.create("g1", "Jungle");
+        groups.add_entity("g1", EntityType::Artist, "Jungle");
+
+        let mut remote = shared_with(vec![]);
+        remote
+            .groups
+            .push(group("g1", "Jungle", vec![(EntityType::Genre, "Jungle")]));
+
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(groups.get("g1").expect("here").entities.len(), 2);
+    }
+
+    /// This device deleted a group, the other still has it, and the merge must
+    /// not bring it back — the whole reason `Tombstones::groups` exists.
+    #[test]
+    fn a_group_deleted_here_is_not_restored_by_a_device_that_still_has_it() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        deleted.record_group("g1", 100);
+
+        let mut remote = shared_with(vec![]);
+        remote.groups.push(group(
+            "g1",
+            "Braindance",
+            vec![(EntityType::Artist, "Aphex Twin")],
+        ));
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.groups_added, 0);
+        assert!(
+            groups.get("g1").is_none(),
+            "a deleted group came back from the other device"
+        );
+    }
+
+    /// And the other direction: the deletion happened elsewhere, so it has to
+    /// arrive and take effect here, then keep travelling.
+    #[test]
+    fn a_group_deleted_elsewhere_is_deleted_here() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        groups.create("g1", "Braindance");
+        groups.create("g2", "Kept");
+
+        let mut remote = shared_with(vec![]);
+        remote.deleted.record_group("g1", 100);
+        // The other device still lists it, since it has not heard.
+        remote
+            .groups
+            .push(group("g1", "Braindance", vec![(EntityType::Genre, "IDM")]));
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.groups_deleted, 1);
+        assert!(groups.get("g1").is_none(), "the group came back");
+        assert!(groups.get("g2").is_some(), "took the wrong one");
+        // Kept, so the next device to sync also hears about it.
+        assert!(deleted.group_deleted("g1"));
+
+        let second = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+        assert!(
+            second.is_empty(),
+            "the second merge did something: {second:?}"
+        );
+    }
+
+    /// `Tombstones::is_empty` gates whether the shell bothers to save, so a
+    /// group deletion that it calls empty is a deletion that never reaches
+    /// disk.
+    #[test]
+    fn a_group_tombstone_alone_is_not_an_empty_set() {
+        let mut deleted = Tombstones::new();
+        assert!(deleted.is_empty());
+        deleted.record_group("g1", 100);
+        assert!(!deleted.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -1439,6 +1766,7 @@ mod tests {
     fn a_track_removed_here_is_not_restored_by_a_device_that_still_lists_it() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1456,6 +1784,7 @@ mod tests {
         merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1475,6 +1804,7 @@ mod tests {
     fn a_track_removed_elsewhere_is_taken_out_here() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1494,6 +1824,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1507,6 +1838,7 @@ mod tests {
         merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1521,6 +1853,7 @@ mod tests {
     fn a_playlist_deleted_here_is_not_restored_by_a_device_that_still_has_it() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1531,6 +1864,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1551,6 +1885,7 @@ mod tests {
         playlists.create("p1", "Late Night");
         playlists.create("p2", "Kept");
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1560,6 +1895,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1578,6 +1914,7 @@ mod tests {
     fn a_folder_deleted_elsewhere_is_deleted_here() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         folders.create("f1", "Sets", String::new());
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
@@ -1594,6 +1931,7 @@ mod tests {
         let report = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1611,6 +1949,7 @@ mod tests {
         let mut playlists = PlaylistStore::new();
         playlists.create("p1", "Late Night");
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
 
@@ -1620,6 +1959,7 @@ mod tests {
         let first = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1627,6 +1967,7 @@ mod tests {
         let second = merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1647,6 +1988,7 @@ mod tests {
     fn a_deletion_beats_a_concurrent_edit_and_that_is_deliberate() {
         let mut playlists = PlaylistStore::new();
         let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
         let mut overrides = std::collections::HashMap::new();
         let mut deleted = Tombstones::new();
         deleted.record_playlist("p1", 100);
@@ -1659,6 +2001,7 @@ mod tests {
         merge_shared(
             &mut playlists,
             &mut folders,
+            &mut groups,
             &mut overrides,
             &mut deleted,
             &remote,
@@ -1685,7 +2028,13 @@ mod tests {
 
     #[test]
     fn the_shared_document_round_trips_through_json() {
-        let remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
+        let mut remote = shared_with(vec![("p1", "Late Night", vec!["/a.m4a"])]);
+        remote.groups.push(group(
+            "g1",
+            "Braindance",
+            vec![(EntityType::Artist, "Aphex Twin")],
+        ));
+        remote.deleted.record_group("g2", 100);
         let text = serde_json::to_string(&remote).expect("write");
 
         assert_eq!(serde_json::from_str::<Shared>(&text).expect("read"), remote);
@@ -1700,6 +2049,8 @@ mod tests {
         let parsed: Shared = serde_json::from_str(bare).expect("read");
         assert!(parsed.playlists.is_empty());
         assert!(parsed.bpm_overrides.is_empty());
+        assert!(parsed.groups.is_empty());
+        assert!(parsed.deleted.groups.is_empty());
     }
 
     // --- Transfer ----------------------------------------------------------

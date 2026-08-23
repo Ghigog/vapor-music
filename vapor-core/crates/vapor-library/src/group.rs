@@ -56,7 +56,10 @@ pub struct Entity {
     pub value: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+// `PartialEq` for the same reason [`Folder`] has it: a group now travels in
+// the shared document (SYNC-006, AUD-11), and a round trip that cannot be
+// asserted is a serialisation format nobody checked.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct DynamicGroup {
     pub id: String,

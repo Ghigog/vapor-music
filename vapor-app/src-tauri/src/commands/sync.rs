@@ -323,6 +323,7 @@ pub fn sync_shared_document(
         let AppState {
             playlists,
             folders,
+            groups,
             settings,
             tombstones,
             ..
@@ -330,6 +331,7 @@ pub fn sync_shared_document(
         let report = vapor_library::sync::merge_shared(
             playlists,
             folders,
+            groups,
             &mut settings.bpm_overrides,
             tombstones,
             &incoming,
@@ -344,6 +346,10 @@ pub fn sync_shared_document(
         if !report.is_empty() {
             app.save_playlists()?;
             app.save_folders()?;
+            // A group that arrived from another device is only real once it is
+            // on disk — the rail reads the saved store on the next start
+            // (AUD-11).
+            app.save_groups()?;
             app.save_settings()?;
             // Tombstones learned from the document are kept, so this device
             // passes the deletion on to the next one it syncs with rather than

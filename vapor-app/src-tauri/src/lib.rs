@@ -2281,6 +2281,7 @@ fn shared_document(app: &AppState) -> vapor_library::sync::Shared {
         updated: peers::now(),
         playlists: app.playlists.all().to_vec(),
         folders: app.folders.all().to_vec(),
+        groups: app.groups.all().to_vec(),
         bpm_overrides: app.settings.bpm_overrides.clone(),
         // Published every time, not only when something was just deleted: a
         // device that has been off for a year still has the playlist, and the
