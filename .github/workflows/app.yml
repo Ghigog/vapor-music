@@ -273,11 +273,19 @@ jobs:
           # per imported symbol as "<hex hint> <name>", or "Ordinal <n>" when
           # the import is by ordinal. The trailing Summary section has lines
           # that look like symbols, hence the break.
+          #
+          # The delay-load section is skipped, and not only because its header
+          # fields parse as symbols — the run that found this reported
+          # "Characteristics" missing from thirty System32 DLLs, which is that
+          # header. It cannot hold the answer either way: the loader does not
+          # bind a delay-load import at load time, so a missing one raises its
+          # error on first call, not as STATUS_ENTRYPOINT_NOT_FOUND before main.
           function Get-Imports($file) {
             $map = @{}
             $dll = $null
             foreach ($line in (& $dumpbin.FullName /imports $file 2>$null)) {
               if ($line -match '^\s+Summary\s*$') { break }
+              if ($line -match 'delay load imports') { break }
               if ($line -match '^\s{4}(\S+\.dll)\s*$') {
                 $dll = $Matches[1].ToLower()
                 if (-not $map.ContainsKey($dll)) { $map[$dll] = New-Object System.Collections.ArrayList }
