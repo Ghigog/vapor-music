@@ -55,7 +55,6 @@ pub const MAX_CACHE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024 * 1024;
 /// no cache, because it pays the download twice and reports itself as working.
 pub const MIN_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
-
 /// A folder on this device the library reads from.
 ///
 /// Sits alongside [`RemoteConfig`] rather than replacing it. A person can have
