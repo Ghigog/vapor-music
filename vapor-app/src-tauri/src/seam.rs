@@ -491,7 +491,10 @@ fn the_library_view_reads_the_camel_cased_keys_the_frontend_sends() {
     let sections = descending["sections"].as_array().expect("sections");
     assert_eq!(sections.len(), 1, "ungrouped is one section: {descending}");
     assert_eq!(sections[0]["header"], "", "and its header is empty");
-    assert_eq!(descending["total"], 4, "and the count is of the whole result");
+    assert_eq!(
+        descending["total"], 4,
+        "and the count is of the whole result"
+    );
     assert_eq!(descending["offset"], 0, "starting at the top");
 
     let titles: Vec<&str> = sections[0]["rows"]
@@ -533,7 +536,10 @@ fn the_library_view_reads_the_camel_cased_keys_the_frontend_sends() {
         serde_json::json!({ "view": { "album": "All Melody" } }),
     );
     assert_eq!(
-        one_album["sections"][0]["rows"].as_array().expect("rows").len(),
+        one_album["sections"][0]["rows"]
+            .as_array()
+            .expect("rows")
+            .len(),
         2,
         "exactly that album, not a substring match: {one_album}"
     );
@@ -550,7 +556,10 @@ fn the_library_view_reads_the_camel_cased_keys_the_frontend_sends() {
             "window": { "offset": 2, "limit": 1 },
         }),
     );
-    assert_eq!(windowed["total"], 4, "the count is of the result: {windowed}");
+    assert_eq!(
+        windowed["total"], 4,
+        "the count is of the result: {windowed}"
+    );
     assert_eq!(windowed["offset"], 2);
     let rows = windowed["sections"][0]["rows"].as_array().expect("rows");
     assert_eq!(rows.len(), 1, "one row asked for, one row sent");

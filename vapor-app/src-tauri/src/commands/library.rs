@@ -528,7 +528,10 @@ mod tests {
                 limit: Some(40),
             },
         );
-        assert_eq!(window.total, 500, "the count is of the result, not the slice");
+        assert_eq!(
+            window.total, 500,
+            "the count is of the result, not the slice"
+        );
         assert_eq!(window.offset, 120);
         assert_eq!(hrefs(&window), all[120..160], "offset 120, forty rows");
     }
