@@ -1063,27 +1063,52 @@ describe("Your Data", () => {
 
 describe("Onboarding", () => {
   /**
-   * Onboarding is a welcome, not a form.
+   * Onboarding is a welcome, not a form — and it offers both ways in.
    *
-   * It says what the app is and hands off to Settings — the connection details
-   * are filled in there. Worth a test precisely because it is easy to assume
-   * otherwise and write the form tests against the wrong screen, which is what
-   * happened first here.
+   * The folder path is first and is finished here: pick, scan, done. The server
+   * path still hands off to Settings, where an address and a password are
+   * typed. Worth a test precisely because it is easy to assume otherwise and
+   * write the form tests against the wrong screen, which is what happened first
+   * here.
    */
-  it("explains the premise and hands off to Settings", async () => {
+  it("explains the premise and hands off to Settings for a server", async () => {
     useBackend({ connected: false });
     const user = userEvent.setup();
     let handedOff = false;
-    render(<Onboarding onConnect={() => { handedOff = true; }} />);
+    render(
+      <Onboarding
+        onConnect={() => {
+          handedOff = true;
+        }}
+        onLibraryReady={() => {}}
+      />,
+    );
 
     expect(
       await screen.findByText(/no account. nothing to sign up for./i),
     ).toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: /choose where music lives/i }),
+      screen.getByRole("button", { name: /connect a server instead/i }),
     );
     expect(handedOff).toBe(true);
+  });
+
+  /**
+   * The path that needs nothing, and the reason this screen changed.
+   *
+   * Until 2026-08-22 there was only the server, so a person with music on their
+   * disk and no WebDAV server could not use the app at all. This offers the
+   * folder first because it asks for no address, no password and no
+   * infrastructure.
+   */
+  it("offers the folder first, and it needs no server", async () => {
+    useBackend({ connected: false });
+    render(<Onboarding onConnect={() => {}} onLibraryReady={() => {}} />);
+
+    const buttons = await screen.findAllByRole("button");
+    expect(buttons[0]).toHaveAccessibleName(/folder on this device/i);
+    expect(buttons[1]).toHaveAccessibleName(/server/i);
   });
 });
 

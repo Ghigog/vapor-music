@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import * as core from "../lib/core";
 import { YourData } from "./YourData";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
@@ -54,6 +55,106 @@ type Card = "remote" | "analysis" | "data" | "dupes";
  */
 export function withoutDoubledScheme(value: string): string {
   return value.replace(/^(https?:\/\/)(?=https?:\/\/)/i, "");
+}
+
+/**
+ * Folders on this device the library reads from.
+ *
+ * Additive to the server above it, not an alternative — a person can have
+ * both, and the music already on the laptop and the music on the NAS are one
+ * library from where they are standing.
+ *
+ * Removing forgets where to look. It does not delete anything, and says so:
+ * these are somebody's own files, and a settings screen that might be deleting
+ * music is one nobody will touch twice.
+ */
+function FoldersCard() {
+  const [folders, setFolders] = useState<core.LocalFolder[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+
+  useEffect(() => {
+    core.localFolders().then(setFolders).catch(() => {});
+  }, []);
+
+  async function add() {
+    setProblem("");
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked !== "string") return;
+    setBusy(true);
+    try {
+      setFolders(await core.addLocalFolder(picked));
+      // Scanned here rather than left for the person to remember. A folder in
+      // the list whose tracks are not in the library is a lie the screen tells.
+      await core.scanLibrary();
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function forget(id: string) {
+    setProblem("");
+    setBusy(true);
+    try {
+      setFolders(await core.removeLocalFolder(id));
+      await core.scanLibrary();
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings__card glass">
+      <h2 className="settings__section">Music on this device</h2>
+
+      {folders.length === 0 ? (
+        <p className="settings__hint">
+          No folders yet. Add one and Vapor reads what is already there —
+          no server, no account, nothing to set up.
+        </p>
+      ) : (
+        <ul className="folders">
+          {folders.map((folder) => (
+            <li key={folder.id} className="folders__row">
+              <span className="folders__path" title={folder.path}>
+                {folder.path}
+              </span>
+              <button
+                type="button"
+                className="settings__button"
+                onClick={() => forget(folder.id)}
+                disabled={busy}
+              >
+                Forget
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {problem && <p className="settings__error">{problem}</p>}
+
+      <div className="settings__actions">
+        <button
+          type="button"
+          className="settings__button settings__button--primary"
+          onClick={add}
+          disabled={busy}
+        >
+          {busy ? "Reading…" : "Add a folder"}
+        </button>
+      </div>
+
+      <p className="settings__hint">
+        Forgetting a folder removes it from the library. Your files are not
+        touched.
+      </p>
+    </section>
+  );
 }
 
 export function Settings() {
@@ -371,6 +472,13 @@ export function Settings() {
       <header className="settings__head">
         <h1 className="settings__title">Settings</h1>
       </header>
+
+      {/*
+        Folders first, and above the server, because the server card is a form
+        and this is a list. A person arriving here to add a second folder should
+        not have to read past four fields about WebDAV to find out they can.
+      */}
+      <FoldersCard />
 
       <section className="settings__card glass">
         <h2 className="settings__section">Where your music lives</h2>

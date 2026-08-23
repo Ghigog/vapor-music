@@ -37,7 +37,8 @@ pub fn set_cache_max_bytes(bytes: u64, state: State<'_, Shared>) -> Result<u64> 
     let applied = app.settings.cache_max_bytes;
 
     let dir = app.cache.dir().to_path_buf();
-    app.cache = crate::cache::Cache::new(dir, applied);
+    let roots = crate::local::roots(&app.settings.folders);
+    app.cache = crate::cache::Cache::new(dir, applied, roots);
     app.cache.trim().map_err(|e| Error(e.to_string()))?;
     app.save_settings()?;
 

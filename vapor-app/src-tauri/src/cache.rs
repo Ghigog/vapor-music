@@ -29,6 +29,16 @@ use std::path::{Path, PathBuf};
 pub struct Cache {
     dir: PathBuf,
     max_bytes: u64,
+    /// Where each local source's files actually are, by source id.
+    ///
+    /// A library can read from folders on this device as well as from a
+    /// server, and a track that is already on the disk needs no cache entry —
+    /// it needs its path. Resolving that here rather than at each call site is
+    /// deliberate: ten places ask this type for a file, and exactly one rule
+    /// has to hold for all of them, which is that **a file inside a person's
+    /// own music folder is never written to and never deleted.** See `remove`
+    /// and `store`.
+    roots: std::collections::HashMap<String, PathBuf>,
 }
 
 #[derive(Debug)]
@@ -61,8 +71,37 @@ impl Cache {
     /// 8 GB after a person had asked for 2. Requiring it here makes that
     /// mistake unrepresentable rather than merely unlikely; the default now
     /// lives in `Settings`, which is the thing a person actually edits.
-    pub fn new(dir: PathBuf, max_bytes: u64) -> Self {
-        Cache { dir, max_bytes }
+    /// `roots` is where each local source's files are, by source id.
+    ///
+    /// A required argument rather than a setter that callers may forget.
+    /// Several background threads build their own `Cache` from a directory and
+    /// a size copied out of the lock, and one that was constructed without
+    /// roots would fail to find local tracks *only in that code path* — the
+    /// prefetcher, say, but not playback. That is the kind of bug that reads as
+    /// haunted rather than broken.
+    pub fn new(
+        dir: PathBuf,
+        max_bytes: u64,
+        roots: std::collections::HashMap<String, PathBuf>,
+    ) -> Self {
+        Cache {
+            dir,
+            max_bytes,
+            roots,
+        }
+    }
+
+    /// The real file behind a local href, if this href is local at all.
+    ///
+    /// `None` for a WebDAV href, and also for a local href whose source has
+    /// been removed from settings — a playlist can outlive the folder it was
+    /// built from, and that is a track this device cannot play rather than an
+    /// error.
+    fn local_file(&self, href: &str) -> Option<PathBuf> {
+        let (source, relative) = crate::local::parse_href(href)?;
+        let root = self.roots.get(source)?;
+        let path = crate::local::resolve(root, relative);
+        path.is_file().then_some(path)
     }
 
     pub fn max_bytes(&self) -> u64 {
@@ -115,6 +154,11 @@ impl Cache {
     /// Downloads first: when a track is both, the kept copy is the one that
     /// should be read, and the cached one is about to be evicted anyway.
     pub fn get(&self, href: &str) -> Option<PathBuf> {
+        // A local track is already on the disk. There is nothing to cache, and
+        // caching it would keep a second copy of a file the person already has.
+        if let Some(path) = self.local_file(href) {
+            return Some(path);
+        }
         let downloaded = self.download_path_for(href);
         if downloaded.is_file() {
             return Some(downloaded);
@@ -181,6 +225,16 @@ impl Cache {
     {
         if let Some(existing) = self.get(href) {
             return Ok(existing);
+        }
+
+        // A local href that did not resolve above is a file that has been moved
+        // or deleted since the scan. Fetching is not the answer — there is
+        // nowhere to fetch it from — and falling through would write a cache
+        // entry under a local href, which `get` would then prefer for ever.
+        if crate::local::is_local(href) {
+            return Err(CacheError::Fetch(
+                "that file is no longer where the library found it".to_string(),
+            ));
         }
 
         fs::create_dir_all(&self.dir)?;
@@ -277,7 +331,17 @@ impl Cache {
     }
 
     /// Remove one entry.
+    ///
+    /// Refuses local hrefs, and this is the load-bearing line of the whole
+    /// type. `remove` is reached from evicting a track, from clearing space and
+    /// from replacing a copy that failed its digest — all reasonable things to
+    /// do to a cached download, and all of them catastrophic against a file
+    /// sitting in somebody's own music folder. The cache does not own those
+    /// files and must never delete one.
     pub fn remove(&self, href: &str) -> Result<(), CacheError> {
+        if crate::local::is_local(href) {
+            return Ok(());
+        }
         match fs::remove_file(self.path_for(href)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -343,7 +407,7 @@ mod tests {
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        (Cache::new(dir.clone(), max_bytes), dir)
+        (Cache::new(dir.clone(), max_bytes, Default::default()), dir)
     }
 
     /// Synthetic audio: a WAV header plus silence. Real enough to be a file of

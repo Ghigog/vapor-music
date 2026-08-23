@@ -30,6 +30,7 @@ mod covers;
 pub mod decoder;
 /// A blocking HTTP client that survives being dropped on a runtime thread.
 mod http;
+mod local;
 mod media;
 mod metadata;
 mod peers;
@@ -339,6 +340,7 @@ impl AppState {
             .unwrap_or_else(Settings::default)
             .sanitised();
         let cache_max_bytes = settings.cache_max_bytes;
+        let roots = local::roots(&settings.folders);
         let playlists = quarantined!("playlists").unwrap_or_default();
         let folders = quarantined!("folders").unwrap_or_default();
         let groups = quarantined!("groups").unwrap_or_default();
@@ -432,7 +434,7 @@ impl AppState {
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
             // small to be worth having.
-            cache: cache::Cache::new(store.dir().join("audio"), cache_max_bytes),
+            cache: cache::Cache::new(store.dir().join("audio"), cache_max_bytes, roots),
             store,
             // No device yet. `load` reads this app's files; acquiring hardware
             // is [`AppState::open_audio`], called once from `run`.
@@ -713,6 +715,17 @@ impl AppState {
         self.digests
             .insert(href.to_string(), (size, digest.clone()));
         Some(digest)
+    }
+
+    /// Point the cache at the folders settings currently names.
+    ///
+    /// Called after any change to `settings.folders`. The cache resolves a
+    /// local href through these roots, so one holding a stale set cannot find
+    /// a folder just added and would still find one just removed.
+    pub(crate) fn rebuild_cache_roots(&mut self) {
+        let dir = self.cache.dir().to_path_buf();
+        let max = self.cache.max_bytes();
+        self.cache = cache::Cache::new(dir, max, local::roots(&self.settings.folders));
     }
 
     pub(crate) fn save_settings(&self) -> Result<()> {
@@ -2843,13 +2856,14 @@ async fn download_collection(
 ) -> Result<()> {
     use tauri::Emitter;
 
-    let (hrefs, remote, dir, max) = {
+    let (hrefs, remote, dir, max, roots) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
         (
             collection_tracks(&app, &kind, &id),
             app.settings.remote.clone(),
             app.cache.dir().to_path_buf(),
             app.cache.max_bytes(),
+            local::roots(&app.settings.folders),
         )
     };
 
@@ -2861,7 +2875,7 @@ async fn download_collection(
 
     let shared: Shared = Arc::clone(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(dir, max);
+        let cache = cache::Cache::new(dir, max, roots);
         let total = hrefs.len();
 
         let fetcher = match webdav::Fetcher::new(&remote) {
@@ -3444,11 +3458,12 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
     let rate = player.sample_rate();
     let cache_dir = app.cache.dir().to_path_buf();
     let cache_max = app.cache.max_bytes();
+    let roots = local::roots(&app.settings.folders);
     let remote = app.settings.remote.clone();
     let shared = Arc::clone(shared);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = cache::Cache::new(cache_dir, cache_max, roots);
 
         /*
          * Play it from where it already is, or from the server as it arrives.
@@ -4096,11 +4111,12 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
     let rate = player.sample_rate();
     let cache_dir = app.cache.dir().to_path_buf();
     let cache_max = app.cache.max_bytes();
+    let roots = local::roots(&app.settings.folders);
     let remote = app.settings.remote.clone();
     let shared = Arc::clone(shared);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = cache::Cache::new(cache_dir, cache_max, roots);
         // Decoded from where the mix will actually start, not from the top of
         // the track. A transition cues the incoming track minutes in, and
         // decoding the run-up to it would be the whole cost streaming avoids.
@@ -4313,18 +4329,19 @@ fn spawn_prefetcher(shared: Shared) {
                                 app.settings.remote.clone(),
                                 app.cache.dir().to_path_buf(),
                                 app.settings.cache_max_bytes,
+                                local::roots(&app.settings.folders),
                             )
                         })
                 };
 
-                let Some((href, remote, dir, max_bytes)) = wanted else {
+                let Some((href, remote, dir, max_bytes, roots)) = wanted else {
                     failures = 0;
                     continue;
                 };
 
                 // Fetched with the lock released: this is a network round trip
                 // measured in seconds, and every command would block behind it.
-                let cache = cache::Cache::new(dir, max_bytes);
+                let cache = cache::Cache::new(dir, max_bytes, roots);
                 match cache.store(&href, || webdav::fetch_blocking(&remote, &href)) {
                     Ok(_) => failures = 0,
                     Err(e) => {
@@ -5744,6 +5761,7 @@ pub(crate) fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, href
         return;
     }
     let (cache_dir, cache_max) = (app.cache.dir().to_path_buf(), app.cache.max_bytes());
+    let roots = local::roots(&app.settings.folders);
     let remote = app.settings.remote.clone();
     drop(app);
 
@@ -5763,7 +5781,7 @@ pub(crate) fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, href
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = cache::Cache::new(cache_dir, cache_max, roots);
         // One session for the batch, as the analysis pass does: one keychain
         // read and one connection rather than one of each per track.
         let fetcher = webdav::Fetcher::new(&remote);
@@ -5831,6 +5849,15 @@ struct ScanReport {
     directories: usize,
     /// Folders that could not be read and were walked past (TD-49).
     unreadable: usize,
+    /// Sources that failed outright, named, one line each.
+    ///
+    /// A library can have several sources now. One unreachable server used to
+    /// fail the whole command, which with folders configured would throw away a
+    /// scan that had already succeeded — and a person whose NAS is asleep still
+    /// wants the music on their laptop. So a failure is reported beside the
+    /// result instead of replacing it.
+    #[serde(default)]
+    problems: Vec<String>,
 }
 
 /// Point the app at a server.
@@ -5950,31 +5977,72 @@ async fn scan_library(
     app_handle: tauri::AppHandle,
     state: State<'_, Shared>,
 ) -> Result<ScanReport> {
-    // The remote config is copied out and the lock released before the network
-    // call: holding it across an await would block every other command for the
-    // length of a scan, which can be minutes on a large library.
-    let (url, username, folder) = {
+    // Copied out and the lock released before any I/O: holding it across an
+    // await blocks every other command for the length of a scan, which can be
+    // minutes on a large library.
+    let (remote, folders) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        let r = &app.settings.remote;
-        if !r.is_configured() {
-            return Err(Error(
-                "No server configured. Add one in Settings.".to_string(),
-            ));
-        }
-        (r.url.clone(), r.username.clone(), r.folder.clone())
+        (app.settings.remote.clone(), app.settings.folders.clone())
     };
 
-    let result = webdav::scan(&url, &username, &folder)
-        .await
-        .map_err(|e| Error(e.to_string()))?;
+    let has_server = remote.is_configured();
+    if !has_server && folders.is_empty() {
+        return Err(Error(
+            "No music yet. Add a folder on this device, or a server, in Settings.".to_string(),
+        ));
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
+    let mut directories = 0usize;
+    let mut unreadable = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    // Folders first, and not only because they are quicker. They cannot fail
+    // the way a network can, so the common case — a laptop with music on it and
+    // a NAS that may or may not be awake — produces a usable library before
+    // anything is allowed to go wrong.
+    for folder in &folders {
+        match local::scan(std::path::Path::new(&folder.path)) {
+            Ok(found) => {
+                directories += found.directories;
+                unreadable += found.unreadable;
+                rows.extend(
+                    found
+                        .files
+                        .iter()
+                        .map(|relative| build_row(&local::href(&folder.id, relative), "")),
+                );
+            }
+            Err(e) => problems.push(format!("{}: {e}", folder.label())),
+        }
+    }
+
+    if has_server {
+        match webdav::scan(&remote.url, &remote.username, &remote.folder).await {
+            Ok(found) => {
+                directories += found.directories;
+                unreadable += found.unreadable;
+                rows.extend(
+                    found
+                        .files
+                        .iter()
+                        .map(|href| build_row(href, &remote.folder)),
+                );
+            }
+            Err(e) => problems.push(format!("{}: {e}", remote.url)),
+        }
+    }
+
+    // Every source failing is a failed scan. Some failing is a partial library
+    // and a message, which is the difference between "your NAS is asleep" and
+    // "nothing works".
+    if rows.is_empty() && !problems.is_empty() {
+        return Err(Error(problems.join("; ")));
+    }
 
     let report = {
         let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.rows = result
-            .files
-            .iter()
-            .map(|href| build_row(href, &folder))
-            .collect();
+        app.rows = rows;
 
         // Saved here rather than at exit: a scan is the only thing that
         // changes the index, and writing it now means a crash mid-analysis
@@ -5983,8 +6051,9 @@ async fn scan_library(
 
         ScanReport {
             tracks: app.rows.len(),
-            directories: result.directories,
-            unreadable: result.unreadable,
+            directories,
+            unreadable,
+            problems,
         }
     };
 
@@ -6011,7 +6080,16 @@ async fn scan_library(
 /// says "unknown", not a guess. That distinction is the whole reason the Godot
 /// stub fabricating 120 BPM was a bug rather than a convenience.
 fn build_row(href: &str, base_folder: &str) -> Row {
-    let info = vapor_library::parse_path(href, base_folder);
+    // Artist and album are inferred from the directory structure, and a local
+    // href carries a source id in front of that structure — parse the path, not
+    // the prefix. The base folder is a WebDAV notion (the server path the
+    // library starts at) and a local href is already relative to its own root,
+    // so it has none.
+    let (path, base) = match local::parse_href(href) {
+        Some((_, relative)) => (relative, ""),
+        None => (href, base_folder),
+    };
+    let info = vapor_library::parse_path(path, base);
     Row {
         href: href.to_string(),
         title: if info.title.is_empty() {
@@ -6331,7 +6409,7 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
 
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
-    let (todo, (cache_dir, cache_max), cancel, remote, generation) = {
+    let (todo, (cache_dir, cache_max), cancel, remote, generation, roots) = {
         let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
         let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
 
@@ -6356,6 +6434,7 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
             app.cancel.clone(),
             app.settings.remote.clone(),
             app.analysis_generation,
+            local::roots(&app.settings.folders),
         )
     };
 
@@ -6389,7 +6468,7 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = std::sync::Arc::new(cache::Cache::new(cache_dir, cache_max));
+        let cache = std::sync::Arc::new(cache::Cache::new(cache_dir, cache_max, roots));
 
         // One session for the whole pass: one keychain read and one connection,
         // rather than one of each per track. See `webdav::Fetcher`.
@@ -6947,6 +7026,7 @@ pub fn run() {
     // is not something a phone lets a program do. Android and iOS update
     // through their stores, so on those targets the plugin is not built at all.
     #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
@@ -7245,6 +7325,9 @@ pub fn run() {
             commands::artwork::track_cover,
             commands::artwork::track_thumb,
             commands::analysis::analysis_status,
+            commands::folders::add_local_folder,
+            commands::folders::remove_local_folder,
+            commands::folders::local_folders,
             commands::cache::cache_status,
             commands::cache::set_cache_max_bytes,
             commands::cache::clear_audio_cache,

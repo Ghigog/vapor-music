@@ -503,3 +503,43 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Folders on this device.
+ *
+ * A list, not a form. Each row is a path and the one thing you can do to it —
+ * and the path is the whole identity of the row, so it gets the width and the
+ * button gets what is left. */
+.folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folders__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  background: var(--fill-quiet);
+  border: 1px solid var(--glass-rim);
+}
+
+/* Truncated from the left: the end of a path says which folder this is, and
+   the start of it says the same thing about every row. */
+.folders__path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}

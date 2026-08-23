@@ -398,6 +398,14 @@ export function App() {
               setScreen("settings");
               setStatus({ kind: "ready" });
             }}
+              // A folder is different from a server: by the time this fires
+              // the scan has already run and found tracks, so "ready" is a
+              // fact rather than a hope. The server path still lands in
+              // Settings, where the address and password are typed.
+              onLibraryReady={() => {
+                setScreen("library");
+                setStatus({ kind: "ready" });
+              }}
           />
         </main>
       </div>
