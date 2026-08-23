@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { Cover } from "../components/Cover";
+import { useEntityDrag } from "../components/entityDrag";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import type { HomeShelves, Shelf } from "../lib/core";
 import type { Opened } from "./Library";
@@ -244,6 +245,7 @@ export function Home({
         }
         onPlay={(tile) => void playEntity("artist", tile)}
         opens="artist"
+        pickUp="artist"
       />
 
       <ShelfRow
@@ -261,6 +263,7 @@ export function Home({
         }
         onPlay={(tile) => void playEntity("album", tile)}
         opens="album"
+        pickUp="album"
       />
     </div>
   );
@@ -282,6 +285,7 @@ function ShelfRow({
   round,
   empty,
   opens,
+  pickUp,
   onOpen,
   onPlay,
 }: {
@@ -299,6 +303,13 @@ function ShelfRow({
   empty?: string;
   /** The noun for the accessible name: "Open the playlist Late night". */
   opens: string;
+  /**
+   * The kind these tiles can be picked up as, for the two shelves that hold
+   * entities. A playlist and a group are collections rather than things a
+   * group can hold, so their shelves leave this unset and their tiles do not
+   * drag.
+   */
+  pickUp?: "artist" | "album";
   onOpen: (tile: Shelf) => void;
   onPlay: (tile: Shelf) => void;
 }) {
@@ -312,47 +323,88 @@ function ShelfRow({
       ) : (
         <div className={`shelf__row shelf__row--of-${per}`}>
           {tiles.map((tile) => (
-            <div
+            <ShelfTile
               /* Id *and* subtitle. Two albums can share a title, and an
                  album tile's id is its title — so keying on it alone
                  collides them and React warns about a duplicate key, which
                  is the same bug the album grid had and for the same
                  reason. */
               key={`${tile.id}\u0000${tile.subtitle}`}
-              className={"card card--entity shelf__tile" + (round ? " card--round" : "")}
-            >
-              <button
-                type="button"
-                className="card__open"
-                onClick={() => onOpen(tile)}
-                aria-label={`Open the ${opens} ${tile.title}`}
-              >
-                <Cover
-                  href={tile.lead}
-                  label={tile.title}
-                  {...(round ? { artist: tile.title } : {})}
-                />
-              </button>
-              <button
-                type="button"
-                className="card__play"
-                onClick={() => onPlay(tile)}
-                aria-label={`Play ${tile.title}`}
-              >
-                <span className="icon icon--play" aria-hidden="true" />
-              </button>
-              <div className="card__meta">
-                <span className="card__title" title={tile.title}>
-                  {tile.title}
-                </span>
-                <span className="card__sub" title={tile.subtitle}>
-                  {tile.subtitle}
-                </span>
-              </div>
-            </div>
+              tile={tile}
+              round={round}
+              opens={opens}
+              pickUp={pickUp}
+              onOpen={() => onOpen(tile)}
+              onPlay={() => onPlay(tile)}
+            />
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * One tile on a shelf.
+ *
+ * Its own component only so that it can call a hook: `useEntityDrag` cannot be
+ * called inside the `map` above, and the alternative — wiring the drag by hand
+ * on every shelf — is how the mouse path and the touch path drift apart.
+ */
+function ShelfTile({
+  tile,
+  round,
+  opens,
+  pickUp,
+  onOpen,
+  onPlay,
+}: {
+  tile: Shelf;
+  /* `| undefined` on the optional two because `exactOptionalPropertyTypes` is
+     on: the shelves pass them through whether or not they have one. */
+  round?: boolean | undefined;
+  opens: string;
+  pickUp?: "artist" | "album" | undefined;
+  onOpen: () => void;
+  onPlay: () => void;
+}) {
+  // Always called, as a hook must be; the props it returns are only spread on
+  // for the shelves that hold something a group could take.
+  const grab = useEntityDrag(pickUp ?? "artist", tile.title);
+
+  return (
+    <div
+      className={"card card--entity shelf__tile" + (round ? " card--round" : "")}
+      {...(pickUp ? grab : {})}
+    >
+      <button
+        type="button"
+        className="card__open"
+        onClick={onOpen}
+        aria-label={`Open the ${opens} ${tile.title}`}
+      >
+        <Cover
+          href={tile.lead}
+          label={tile.title}
+          {...(round ? { artist: tile.title } : {})}
+        />
+      </button>
+      <button
+        type="button"
+        className="card__play"
+        onClick={onPlay}
+        aria-label={`Play ${tile.title}`}
+      >
+        <span className="icon icon--play" aria-hidden="true" />
+      </button>
+      <div className="card__meta">
+        <span className="card__title" title={tile.title}>
+          {tile.title}
+        </span>
+        <span className="card__sub" title={tile.subtitle}>
+          {tile.subtitle}
+        </span>
+      </div>
+    </div>
   );
 }

@@ -1,17 +1,22 @@
 /**
- * Dragging, on a touch screen.
+ * Dragging: the rules, and the two ways a drag arrives.
  *
  * HTML5 drag-and-drop does not exist on touch — `dragstart` never fires — so
- * the desktop path in `PlaylistRail` is inert on a phone and this is the other
- * half. It is deliberately only the *input*: the rules about what may be
- * dropped where live in `dropOn` below, and the desktop adapter is meant to
- * call the same function, so the two paths cannot come to different answers
+ * the desktop path is inert on a phone and `DragLayer` is the other half. The
+ * rules about what may be dropped where live in `accepts` and `dropOn` below,
+ * and both input paths call them, so the two cannot come to different answers
  * about whether a track belongs in a dynamic group.
  *
- * What the browser gives away for free on desktop and has to be built here: the
- * thing that follows the finger, working out what is under it, opening a
- * target that needs opening, and scrolling a list while still holding
- * something over it.
+ * `writeDrag`/`readDrag` are the desktop half of that: the rails used to read
+ * a bare array of hrefs off the `dataTransfer` and call `addTracksToPlaylist`
+ * themselves, which is how a track could be dropped on a playlist but an album
+ * could not be dropped on anything — the entity kinds existed only in the
+ * touch payload, and nothing on a desktop window could produce one.
+ *
+ * What the browser gives away for free on desktop and has to be built for
+ * touch: the thing that follows the finger, working out what is under it,
+ * opening a target that needs opening, and scrolling a list while still
+ * holding something over it.
  */
 import * as core from "./core";
 
@@ -30,6 +35,62 @@ export interface DragPayload {
   label: string;
 }
 
+/** Every kind, in one place, so `kindOf` can look for all of them. */
+const KINDS = ["track", "artist", "album", "genre"] as const;
+
+/**
+ * The native drag type carrying a payload of this kind.
+ *
+ * The kind is in the type string and not only inside the JSON because a
+ * `dragover` handler may not read a payload: `getData` returns "" until the
+ * drop, deliberately, so that a page cannot see what is merely passing over
+ * it. The list of `types` is all a target gets beforehand, and it has to be
+ * enough to answer "would I take this?" — which is what `accepts` asks, and
+ * what decides whether a group lights up under the cursor.
+ */
+export function dragType(kind: DragPayload["kind"]): string {
+  return `application/x-vapor-${kind}`;
+}
+
+/**
+ * Put a payload on a native drag.
+ *
+ * `text/plain` goes on as well because Firefox refuses to begin a drag without
+ * a standard type present — the same reason the Queue's reorder sets it.
+ */
+export function writeDrag(data: DataTransfer, payload: DragPayload) {
+  data.effectAllowed = "copy";
+  data.setData(dragType(payload.kind), JSON.stringify(payload));
+  data.setData("text/plain", payload.values.join("\n"));
+}
+
+/**
+ * What kind is being dragged, or null when the drag is not ours.
+ *
+ * The only question answerable during `dragover`, where the payload itself is
+ * not readable — see `dragType`.
+ */
+export function kindOf(data: DataTransfer): DragPayload["kind"] | null {
+  return KINDS.find((kind) => data.types.includes(dragType(kind))) ?? null;
+}
+
+/** Read the payload back, or null when the drag is not ours or is malformed. */
+export function readDrag(data: DataTransfer): DragPayload | null {
+  const kind = kindOf(data);
+  if (!kind) return null;
+  try {
+    const parsed: unknown = JSON.parse(data.getData(dragType(kind)));
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { values, label } = parsed as Partial<DragPayload>;
+    // Nothing to act on, and everything below is written assuming `values[0]`
+    // is there.
+    if (!Array.isArray(values) || values.length === 0) return null;
+    return { kind, values: values as string[], label: String(label ?? "") };
+  } catch {
+    return null;
+  }
+}
+
 /** Long enough to be deliberate, short enough not to feel stuck. */
 export const DWELL_MS = 500;
 
@@ -41,7 +102,25 @@ const EDGE_SPEED = 6;
 
 export type DropTarget =
   | { kind: "tab"; tab: "playlist" | "group" }
-  | { kind: "item"; menu: "playlist" | "group"; id: string }
+  | {
+      kind: "item";
+      menu: "playlist" | "group";
+      id: string;
+      /** What to call it afterwards. Carried on the element as
+       *  `data-drop-name` rather than scraped out of its text, which is a
+       *  name plus a track count and would read as "Added 2 to Late Night 14". */
+      name: string;
+      /**
+       * The row itself, for the highlight.
+       *
+       * Handed back rather than looked up again by id, because the same id is
+       * now on two elements: the sidebar rail and the tab menu draw the same
+       * playlist, and only one of them is on screen at a given width. A
+       * `querySelector` for the id found whichever came first in the document
+       * and marked the hidden one.
+       */
+      el: HTMLElement;
+    }
   | null;
 
 /**
@@ -64,7 +143,13 @@ export function targetAt(x: number, y: number, preview: Element | null): DropTar
   if (item) {
     const menu = item.closest<HTMLElement>("[data-menu]")?.dataset.menu;
     if (menu === "playlist" || menu === "group") {
-      return { kind: "item", menu, id: item.dataset.dropId ?? "" };
+      return {
+        kind: "item",
+        menu,
+        id: item.dataset.dropId ?? "",
+        name: item.dataset.dropName ?? "",
+        el: item,
+      };
     }
   }
 
@@ -74,13 +159,21 @@ export function targetAt(x: number, y: number, preview: Element | null): DropTar
   return null;
 }
 
-/** Whether this payload may be dropped on this menu at all. */
-export function accepts(payload: DragPayload, menu: "playlist" | "group"): boolean {
+/**
+ * Whether a drag of this kind may be dropped on this menu at all.
+ *
+ * The kind rather than the whole payload, because `dragover` is where this
+ * question has to be answered and the payload is unreadable until the drop.
+ */
+export function accepts(
+  kind: DragPayload["kind"],
+  menu: "playlist" | "group",
+): boolean {
   if (menu === "playlist") return true;
   // A dynamic group holds artists, albums and genres. A single track is not one
   // of those, and turning it into its album would put something in the set
   // that nobody chose.
-  return payload.kind !== "track";
+  return kind !== "track";
 }
 
 /** Why not, for the person holding it. */
@@ -119,26 +212,47 @@ export function edgeScroll(list: HTMLElement, y: number): number {
  * The one place either input path decides what a drop means, so the touch
  * adapter and the desktop one cannot disagree. Throws with a readable reason
  * rather than returning a flag: every caller shows the message.
+ *
+ * Both outcomes are said plainly, including the one where nothing happened.
+ * Dropping six tracks onto a playlist that already has them looks identical to
+ * a drop that missed, and a person who cannot tell those apart tries again.
  */
 export async function dropOn(
   payload: DragPayload,
-  target: { menu: "playlist" | "group"; id: string },
+  target: { menu: "playlist" | "group"; id: string; name?: string },
 ): Promise<string> {
-  if (!accepts(payload, target.menu)) throw new Error(refusal(payload));
+  if (!accepts(payload.kind, target.menu)) throw new Error(refusal(payload));
+  const where = target.name || (target.menu === "group" ? "the group" : "the playlist");
 
   if (target.menu === "group") {
     // `kind` is narrowed by `accepts` above, but the group API is explicit
     // about the three it takes.
     const kind = payload.kind as core.EntityType;
     const value = payload.values[0] ?? payload.label;
-    await core.addToGroup(target.id, kind, value);
-    return `Added ${payload.label} to the group.`;
+    const added = await core.addToGroup(target.id, kind, value);
+    changed("groups");
+    return added
+      ? `Added ${payload.label} to ${where}`
+      : `${payload.label} is already in ${where}`;
   }
 
   const hrefs = await tracksFor(payload);
   if (hrefs.length === 0) throw new Error(`${payload.label} has no tracks to add.`);
   const added = await core.addTracksToPlaylist(target.id, hrefs);
-  return added === 1 ? "Added 1 track." : `Added ${added} tracks.`;
+  changed("playlists");
+  return added === 0 ? `Already in ${where}` : `Added ${added} to ${where}`;
+}
+
+/**
+ * Tell the rails what just changed.
+ *
+ * Fired here rather than by each caller: a drop from the tab menu on a phone
+ * changes the same list the sidebar rail is drawing on a wide window, and a
+ * rail that only refreshed when *it* was the drop target showed a stale count
+ * for as long as the screen stayed put.
+ */
+function changed(what: "playlists" | "groups") {
+  window.dispatchEvent(new Event(`vapor:${what}-changed`));
 }
 
 /**

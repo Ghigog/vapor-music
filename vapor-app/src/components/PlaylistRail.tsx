@@ -54,38 +54,12 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import * as drag from "../lib/drag";
 import { messageOf } from "./ErrorNotice";
 import { Confirm } from "./Confirm";
 
-/** The drag payload: a JSON array of hrefs. */
-export const TRACK_DRAG_TYPE = "application/x-vapor-tracks";
-
 /** A playlist being filed: its id, as plain text under our own type. */
 export const PLAYLIST_DRAG_TYPE = "application/x-vapor-playlist";
-
-/** Read the dragged hrefs, or `null` when this drag is not ours. */
-export function draggedTracks(e: React.DragEvent): string[] | null {
-  const raw = e.dataTransfer.getData(TRACK_DRAG_TYPE);
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as string[]) : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Start a track drag carrying `hrefs`.
- *
- * `text/plain` is set as well because Firefox refuses to begin a drag without
- * a standard type present — the same reason the Queue's reorder sets it.
- */
-export function startTrackDrag(e: React.DragEvent, hrefs: string[]) {
-  e.dataTransfer.effectAllowed = "copy";
-  e.dataTransfer.setData(TRACK_DRAG_TYPE, JSON.stringify(hrefs));
-  e.dataTransfer.setData("text/plain", hrefs.join("\n"));
-}
 
 /** What a new-name box is being opened for. */
 type Creating = null | { kind: "playlist"; folderId: string } | { kind: "folder" };
@@ -183,22 +157,32 @@ export function PlaylistRail({
     }
   }
 
+  /**
+   * Take a drop.
+   *
+   * The payload is read and acted on by `lib/drag`, not here: an album dropped
+   * on a playlist has to become the tracks on it, and that resolution is the
+   * library's job rather than the rail's. The message it hands back — including
+   * the one for a drop that added nothing — is what goes in the flash.
+   */
   async function drop(e: React.DragEvent, playlist: core.Playlist) {
     e.preventDefault();
     setOver(null);
-    const hrefs = draggedTracks(e);
-    if (!hrefs || hrefs.length === 0) return;
+    const payload = drag.readDrag(e.dataTransfer);
+    if (!payload) return;
 
-    const added = await core.addTracksToPlaylist(playlist.id, hrefs).catch(() => 0);
+    try {
+      setFlash(
+        await drag.dropOn(payload, {
+          menu: "playlist",
+          id: playlist.id,
+          name: playlist.name,
+        }),
+      );
+    } catch (err: unknown) {
+      setFlash(messageOf(err));
+    }
     refresh();
-
-    // Said plainly, including when nothing happened: dropping six tracks onto a
-    // playlist that already has them looks identical to a drop that missed.
-    setFlash(
-      added === 0
-        ? `Already in ${playlist.name}`
-        : `Added ${added} to ${playlist.name}`,
-    );
   }
 
   /** File the dragged playlist into `folder`, or out of one when it is null. */
@@ -269,6 +253,12 @@ export function PlaylistRail({
           (activeId === p.id ? " rail__item--on" : "") +
           (over === p.id ? " rail__item--over" : "")
         }
+        /* The touch path finds its targets by these rather than by React
+           handlers, because it is driven by pointer events on the window and
+           never sees a `drop` at all. On a window wide enough to show the rail
+           they point at the same rows the mouse does. */
+        data-drop-id={p.id}
+        data-drop-name={p.name}
         draggable
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = "move";
@@ -279,8 +269,10 @@ export function PlaylistRail({
         onClick={() => onOpen(p.id)}
         onDragOver={(e) => {
           // Only claim the drop when the payload is ours, or the cursor
-          // promises something this cannot accept.
-          if (!e.dataTransfer.types.includes(TRACK_DRAG_TYPE)) return;
+          // promises something this cannot accept. A playlist takes every
+          // kind, so the kind itself does not have to be checked here — a
+          // group is the one that refuses, and it asks `accepts`.
+          if (!drag.kindOf(e.dataTransfer)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = "copy";
           setOver(p.id);
@@ -384,7 +376,7 @@ export function PlaylistRail({
               </div>
 
               {open && (
-                <ul className="rail__sublist">
+                <ul className="rail__sublist" data-menu="playlist">
                   {inside.map(item)}
                   {inside.length === 0 && (
                     <li className="rail__empty rail__empty--in">
@@ -417,7 +409,9 @@ export function PlaylistRail({
           </p>
         )}
 
-        <ul className="rail__sublist">{itemsIn("").map(item)}</ul>
+        <ul className="rail__sublist" data-menu="playlist">
+          {itemsIn("").map(item)}
+        </ul>
       </div>
 
       {playlists.length === 0 && folders.length === 0 && !creating && (
