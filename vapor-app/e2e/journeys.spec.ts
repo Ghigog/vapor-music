@@ -54,8 +54,10 @@ test.describe("A first run", () => {
   test("connect, scan, analyse, play", async ({ page }) => {
     await boot(page, { connected: false });
 
-    // Onboarding hands off to Settings rather than asking for details itself.
-    await page.getByRole("button", { name: /choose where music lives/i }).click();
+    // Onboarding offers two ways in. This journey is the server one, which
+    // still hands off to Settings rather than asking for details itself; the
+    // folder path finishes on the onboarding screen and never comes here.
+    await page.getByRole("button", { name: /connect a server instead/i }).click();
 
     await page.getByLabel("Server address", { exact: true }).fill("https://app.koofr.net");
     await page.getByLabel("Username", { exact: true }).fill("someone@example.com");
@@ -98,7 +100,7 @@ test.describe("A first run", () => {
       ),
     );
 
-    await page.getByRole("button", { name: /choose where music lives/i }).click();
+    await page.getByRole("button", { name: /connect a server instead/i }).click();
     // A Koofr app password in the address field — the mistake that happens.
     await page.getByLabel("Server address", { exact: true }).fill("4wg9ie7xi8v7nbi6");
     await page.getByLabel("Username", { exact: true }).fill("someone@example.com");

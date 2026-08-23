@@ -7097,11 +7097,21 @@ pub(crate) fn new_id(prefix: &str) -> String {
 pub fn run() {
     let builder = tauri::Builder::default();
 
+    // Every platform. The folder picker is how a library gets added at all, and
+    // on Android it is the only way — there is no path a person could type.
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+
     // Desktop only: the updater replaces the application bundle on disk, which
     // is not something a phone lets a program do. Android and iOS update
     // through their stores, so on those targets the plugin is not built at all.
+    //
+    // The attribute binds to the statement that follows it, so anything
+    // inserted between the two takes the guard and leaves the updater
+    // unguarded. That is exactly what happened when the dialog plugin was added
+    // here: `cargo check --target aarch64-linux-android` failed with
+    // `cannot find module or crate tauri_plugin_updater`, on a line nobody had
+    // edited.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_dialog::init());
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
