@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use store::Store;
 
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, State};
+use tauri::Manager;
 use ts_rs::TS;
 
 use vapor_engine::TrackSource;
@@ -1141,16 +1141,6 @@ fn tracks_line(n: usize) -> String {
     format!("{n} {}", if n == 1 { "track" } else { "tracks" })
 }
 
-/// What the library screen opens on.
-///
-/// One call for all four shelves rather than four, because they are one screen
-/// and four round trips is four chances to paint a half-built page.
-#[tauri::command]
-fn home_shelves(state: State<'_, Shared>) -> Result<HomeShelves> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(home_shelves_for(&app))
-}
-
 // ---------------------------------------------------------------------------
 // Library
 // ---------------------------------------------------------------------------
@@ -1248,36 +1238,6 @@ struct LibrarySection {
     rows: Vec<Row>,
 }
 
-/// Filter, sort and group the library in one call.
-///
-/// One round trip rather than three: the table re-runs this per keystroke, and
-/// the predicates are the same ones a smart playlist uses, so splitting them
-/// would let the two disagree.
-#[tauri::command]
-fn library_view(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<LibrarySection>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    let mut rows = resolved_rows(&app, &view);
-
-    if let Some(key) = view.sort_key.as_deref().and_then(parse_sort_key) {
-        vapor_library::sort_rows(&mut rows, key, view.ascending);
-    }
-
-    let group = view
-        .group_by
-        .as_deref()
-        .and_then(parse_group_by)
-        .unwrap_or(GroupBy::None);
-
-    Ok(vapor_library::group_rows(&rows, group)
-        .into_iter()
-        .map(|(header, rows)| LibrarySection {
-            header,
-            rows: rows.into_iter().cloned().collect(),
-        })
-        .collect())
-}
-
 /// The library, filtered and with tags and analysis applied.
 ///
 /// Tags are applied *before* the album and artist filters, because until they
@@ -1311,19 +1271,6 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
         rows.retain(|r| !dupes.contains(&r.href));
     }
     rows
-}
-
-/// The albums or artists in the library, one entry each.
-///
-/// Grouping rows and drawing a card per row is what the Albums tab did, and it
-/// answers a different question: "which tracks are on this album" rather than
-/// "which albums do I have". Tracks whose album or artist is unknown are left
-/// out entirely — a tab called Albums listing things that are not albums is
-/// the complaint this exists to fix. They remain reachable under Songs.
-#[tauri::command]
-fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<LibraryEntity>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(library_entities_for(&app, &view))
 }
 
 /// The body of [`library_entities`], reachable from a test.
@@ -1650,107 +1597,6 @@ impl LookedUp {
     }
 }
 
-/// What has already been looked up for a track. Never makes a request.
-#[tauri::command]
-fn track_lookup(href: String, state: State<'_, Shared>) -> Result<LookedUp> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(LookedUp::of(&app, &href))
-}
-
-/// Look a track up, and remember what came back.
-///
-/// Refuses when the setting is off rather than quietly doing nothing, because
-/// a button that appears to work and does not is worse than one that explains
-/// itself. Returns the cached result unchanged when the track has been looked
-/// up before, so opening Liner Notes repeatedly is not repeated traffic —
-/// `attempted` is what distinguishes "found nothing" from "not yet asked", and
-/// without it a track with no lyrics would be requested on every visit.
-#[tauri::command]
-fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<LookedUp> {
-    // The lock is taken, the identity read, and the lock *dropped* before the
-    // request goes out. Holding it across an eight-second network call would
-    // freeze playback control, the queue and every other command behind it.
-    let (artist, album, title, dir) = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        if !app.settings.metadata_lookup_enabled {
-            return Err(Error(
-                "Looking up lyrics and artwork is switched off. Turn it on in Settings — \
-                 it sends the artist and title to LRCLIB and Deezer."
-                    .to_string(),
-            ));
-        }
-        if !force && app.looked.get(&href).is_some_and(|l| l.attempted) {
-            return Ok(LookedUp::of(&app, &href));
-        }
-        let row = app
-            .rows
-            .iter()
-            .find(|r| r.href == href)
-            .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
-        let mut row = row.clone();
-        app.apply_tags(&mut row);
-        (
-            row.artist,
-            row.album,
-            row.title,
-            app.store.dir().to_path_buf(),
-        )
-    };
-
-    let lookup = metadata::Lookup::new().map_err(Error)?;
-
-    // Three independent questions to two services, so they are asked at once
-    // rather than one after another (TD-52). Sequentially this was up to five
-    // round trips on one IPC call, and the button said "Looking…" for all of
-    // them; now it is two waits deep, because only the downloads depend on
-    // anything.
-    //
-    // `scope` rather than spawning detached threads: the borrows of `artist`,
-    // `title` and `lookup` are what make this readable, and the alternative is
-    // cloning three strings and an Arc to say the same thing.
-    let (lyrics, artist_image, album_art, genre) = std::thread::scope(|s| {
-        let words = s.spawn(|| lookup.lyrics(&artist, &title));
-        let portrait = s.spawn(|| lookup.artist_image(&artist));
-        let sleeve = s.spawn(|| lookup.album(&artist, &album));
-
-        // A panic in one lookup must not take the whole thing down: this is
-        // decoration on a screen that is already useful without it.
-        let lyrics = words.join().unwrap_or(None);
-        let artist_image = portrait.join().unwrap_or_default();
-        let found = sleeve.join().unwrap_or_default();
-        (lyrics, artist_image, found.art, found.genre)
-    });
-
-    // Fetched here, once, rather than by the webview: the window's CSP allows
-    // `data:` and no remote host, which is the right way round — the page
-    // should not be opening connections to Deezer on every render.
-    //
-    // Also at once, and for the same reason.
-    std::thread::scope(|s| {
-        for url in [&artist_image, &album_art] {
-            s.spawn(|| lookup.download_image(url, &dir));
-        }
-    });
-
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    // Left as they were: a per-track lookup is about this screen, and the tempo
-    // reference is gathered by the library-wide pass.
-    let previous = app.looked.get(&href).cloned().unwrap_or_default();
-    app.looked.insert(
-        href.clone(),
-        metadata::Looked {
-            lyrics,
-            artist_image,
-            album_art,
-            genre,
-            attempted: true,
-            ..previous
-        },
-    );
-    app.save_looked()?;
-    Ok(LookedUp::of(&app, &href))
-}
-
 /// Progress of the library identification pass.
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1766,29 +1612,6 @@ struct IdentifyProgress {
     genres: usize,
     /// Set on the final message.
     finished: bool,
-}
-
-/// Ask Deezer about every track in the library.
-///
-/// **This sends the artist and title of the whole library to a third party.**
-/// It is the largest thing the app ever discloses, so it is a deliberate act
-/// with its own button and its own sentence, rather than something the
-/// automatic-lookup setting quietly enables.
-///
-/// What it is for: the tempo octave. A beat tracker is reliable about the pulse
-/// and unreliable about whether a listener counts it at 87 or 174 — both this
-/// crate and Essentia read Delta Heavy's "Space Time" at 87, and neither is
-/// wrong. Nothing measurable on this device settles it. A per-track reference
-/// does, where one exists, and Deezer publishes one for some recordings.
-///
-/// Their number is never adopted as the tempo. It chooses between octaves of
-/// the tempo measured here, and only after the durations agree that both are
-/// describing the same recording. A wrong search hit is otherwise a stranger's
-/// tempo for music nobody is playing.
-#[tauri::command]
-async fn identify_library(app_handle: tauri::AppHandle, state: State<'_, Shared>) -> Result<()> {
-    let shared: Shared = Arc::clone(&state);
-    identify_library_in_background(&app_handle, &shared)
 }
 
 /// The body of [`identify_library`], callable without a `State`.
@@ -1991,86 +1814,6 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
     Ok(())
 }
 
-/// Files that could not be read at startup and were moved aside.
-///
-/// Empty on every normal launch. Non-empty means the app is running on a
-/// default for something the person had data for — an unreadable playlists
-/// file is indistinguishable from having no playlists, and the difference
-/// matters enormously. The bytes were kept; this is what says so.
-#[tauri::command]
-fn startup_problems(state: State<'_, Shared>) -> Result<Vec<String>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.damaged.iter().map(|d| d.message()).collect())
-}
-
-/// Turn local-network sync on or off.
-///
-/// Turning it on starts the beacon and the server there and then, because
-/// "restart the app" is not an answer to "I pressed the switch". Turning it off
-/// stops them the same way (TD-58): the trust is cleared and the two threads
-/// are stopped and joined, so the machine is neither announcing itself nor
-/// holding a port by the time this returns.
-#[tauri::command]
-fn set_sync_enabled(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
-    let shared: Shared = Arc::clone(&state);
-    let (start, session) = {
-        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-        let was = app.settings.sync_enabled;
-        app.settings.sync_enabled = enabled;
-        let session = if enabled {
-            None
-        } else {
-            // Off means off: a device that can no longer be discovered should
-            // not still be trusted by one that can.
-            app.trust = vapor_library::sync::Trust::new();
-            app.pairing = None;
-            app.pin = None;
-            app.save_trust()?;
-            app.sync_session.take()
-        };
-        app.save_settings()?;
-        (enabled && !was, session)
-    };
-
-    // Outside the lock. Stopping joins two threads, and one of them takes the
-    // peer registry's lock on the way round — holding the app lock across that
-    // is a deadlock waiting for the right moment.
-    if let Some(session) = session {
-        session.stop();
-    }
-
-    if start {
-        let (id, name, kind, registry) = {
-            let app = shared.lock().map_err(|e| Error(e.to_string()))?;
-            let kind = if cfg!(any(target_os = "ios", target_os = "android")) {
-                vapor_library::sync::DeviceKind::Phone
-            } else {
-                vapor_library::sync::DeviceKind::Desktop
-            };
-            let _ = app.store.save("device_id", &app.device_id);
-            (
-                app.device_id.clone(),
-                app.device_name(),
-                kind,
-                Arc::clone(&app.peers),
-            )
-        };
-        let started = peers::start(
-            registry,
-            id,
-            name,
-            kind,
-            Arc::new(ServedLibrary(Arc::clone(&shared))),
-        );
-        if let Ok(mut app) = shared.lock() {
-            app.sync_session = started;
-        }
-    }
-
-    let app = shared.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.settings.clone())
-}
-
 /// Artwork for an album, as a `data:` URI.
 ///
 /// Three sources, in an order that respects both the file and the person:
@@ -2133,57 +1876,6 @@ pub(crate) fn album_art(app: &AppState, album: &str, lead: &str) -> AlbumArt {
         src: resolve_album_cover(app, album, lead),
         chosen: app.settings.album_art_for(album, lead).is_some(),
     }
-}
-
-/// Daylight, Lamplight, or follow the OS.
-///
-/// Rejected rather than repaired, unlike a value read off disk: a word that is
-/// not one of the three did not come from the control, so writing it would
-/// persist a state the UI has no way to show. `sanitised` still has to cope
-/// with the same problem on load, because a settings file is a thing people
-/// edit, but a live command is not.
-#[tauri::command]
-fn set_appearance(appearance: String, state: State<'_, Shared>) -> Result<Settings> {
-    let choice = appearance.trim().to_ascii_lowercase();
-    if !APPEARANCES.contains(&choice.as_str()) {
-        return Err(Error(format!(
-            "unknown appearance {appearance:?}; expected one of {}",
-            APPEARANCES.join(", ")
-        )));
-    }
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.theme = choice;
-    app.save_settings()?;
-    Ok(app.settings.clone())
-}
-
-#[tauri::command]
-fn set_hide_duplicates(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.hide_duplicates = enabled;
-    app.save_settings()?;
-    Ok(app.settings.clone())
-}
-
-/// Turn lookups on or off.
-///
-/// Switching it off forgets what was found as well as stopping further
-/// requests: leaving a cache of third-party data behind after someone has said
-/// no is not what "off" means to the person pressing it.
-#[tauri::command]
-fn set_metadata_lookup(enabled: bool, state: State<'_, Shared>) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.settings.metadata_lookup_enabled = enabled;
-    if !enabled {
-        app.looked.clear();
-        app.save_looked()?;
-        // The downloaded sleeves go too. Forgetting the index and leaving the
-        // pictures on the disk would make "off" a claim the data directory
-        // contradicts — and `Your data` invites people to go and look.
-        let _ = std::fs::remove_dir_all(app.store.dir().join("metadata_images"));
-    }
-    app.save_settings()?;
-    Ok(app.settings.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -2383,197 +2075,6 @@ struct SyncView {
     pin: Option<String>,
     pairing_with: Option<String>,
     progress: SyncProgress,
-}
-
-#[tauri::command]
-fn sync_view(state: State<'_, Shared>) -> Result<SyncView> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    if !app.settings.sync_enabled {
-        return Ok(SyncView {
-            enabled: false,
-            device_id: app.device_id.clone(),
-            device_name: app.device_name(),
-            discovered: Vec::new(),
-            trusted: Vec::new(),
-            pin: None,
-            pairing_with: None,
-            progress: SyncProgress::default(),
-        });
-    }
-    let discovered = app
-        .peers
-        .lock()
-        .map(|mut registry| registry.live(peers::now()).to_vec())
-        .unwrap_or_default();
-
-    Ok(SyncView {
-        enabled: true,
-        device_id: app.device_id.clone(),
-        device_name: app.device_name(),
-        discovered,
-        trusted: app.trust.all().to_vec(),
-        pin: app.pin.clone(),
-        pairing_with: app.pairing.as_ref().map(|p| p.peer_id().to_string()),
-        progress: app.sync.clone(),
-    })
-}
-
-/// Show a code, for `peer_id` to type in.
-///
-/// The code is bound to that one device, so a PIN on screen is not an
-/// invitation to everything else on the subnet that can see it.
-#[tauri::command]
-fn open_pairing(peer_id: String, state: State<'_, Shared>) -> Result<String> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let pin = peers::new_pin();
-    app.pairing = Some(vapor_library::sync::Pairing::begin(
-        pin.clone(),
-        &peer_id,
-        peers::now(),
-    ));
-    app.pin = Some(pin.clone());
-    Ok(pin)
-}
-
-#[tauri::command]
-fn cancel_pairing(state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    app.pairing = None;
-    app.pin = None;
-    Ok(())
-}
-
-/// Type the code the other device is showing.
-#[tauri::command]
-fn pair_with(peer_id: String, pin: String, state: State<'_, Shared>) -> Result<String> {
-    let (address, me, my_name, kind) = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        let registry = app.peers.lock().map_err(|e| Error(e.to_string()))?;
-        let peer = registry
-            .get(&peer_id)
-            .ok_or_else(|| Error("That device is no longer on the network.".to_string()))?;
-        (
-            peer.address.clone(),
-            app.device_id.clone(),
-            app.device_name(),
-            peer.kind,
-        )
-    };
-
-    // A crafted advert must not be able to point this device at a host on the
-    // internet and have it open a connection there.
-    if !peers::is_local(&address) {
-        return Err(Error(
-            "That device is not on this local network.".to_string(),
-        ));
-    }
-
-    let (reply, _) = peers::ask(
-        &address,
-        &peers::Request::Pair {
-            device_id: me,
-            name: my_name,
-            device_kind: if cfg!(any(target_os = "ios", target_os = "android")) {
-                vapor_library::sync::DeviceKind::Phone
-            } else {
-                vapor_library::sync::DeviceKind::Desktop
-            },
-            pin,
-        },
-    )
-    .map_err(Error)?;
-
-    match reply {
-        peers::Reply::Paired { device_id, name } => {
-            let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-            app.trust.add(&device_id, &name, kind, peers::now());
-            app.save_trust()?;
-            Ok(name)
-        }
-        peers::Reply::Refused { reason } => Err(Error(reason)),
-        _ => Err(Error(
-            "That device answered with something else.".to_string(),
-        )),
-    }
-}
-
-#[tauri::command]
-fn forget_peer(peer_id: String, state: State<'_, Shared>) -> Result<bool> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let forgotten = app.trust.forget(&peer_id);
-    if forgotten {
-        app.save_trust()?;
-    }
-    Ok(forgotten)
-}
-
-/// Sync with a paired device, on a thread, reporting progress as it goes.
-#[tauri::command]
-fn sync_with(
-    peer_id: String,
-    what: Option<SyncWhat>,
-    app_handle: tauri::AppHandle,
-    state: State<'_, Shared>,
-) -> Result<()> {
-    use tauri::Emitter as _;
-
-    let shared: Shared = Arc::clone(&state);
-    let what = what.unwrap_or_default();
-
-    let (address, name) = {
-        let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
-        if app.sync.running {
-            return Err(Error("A sync is already running.".to_string()));
-        }
-        if !app.trust.allows(&peer_id) {
-            return Err(Error("That device is not paired.".to_string()));
-        }
-        let registry = app.peers.lock().map_err(|e| Error(e.to_string()))?;
-        let peer = registry
-            .get(&peer_id)
-            .ok_or_else(|| Error("That device is not on the network.".to_string()))?;
-        let found = (peer.address.clone(), peer.name.clone());
-        drop(registry);
-
-        if !peers::is_local(&found.0) {
-            return Err(Error(
-                "That device is not on this local network.".to_string(),
-            ));
-        }
-        app.sync = SyncProgress {
-            running: true,
-            peer: found.1.clone(),
-            ..Default::default()
-        };
-        found
-    };
-
-    let started = std::time::Instant::now();
-    let spawned = std::thread::Builder::new()
-        .name("vapor-sync".into())
-        .spawn(move || {
-            let outcome = run_sync(&shared, &address, what, started);
-            if let Ok(mut app) = shared.lock() {
-                app.sync.running = false;
-                app.sync.elapsed = started.elapsed().as_secs_f64();
-                if let Err(e) = outcome {
-                    app.sync.error = e;
-                }
-            }
-            let _ = app_handle.emit("sync-changed", ());
-        });
-
-    if let Err(e) = spawned {
-        // The thread never started, so nothing will ever clear the flag it was
-        // set under. Left running, the dashboard shows a sync that is not
-        // happening and refuses to start another.
-        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.sync.running = false;
-        app.sync.error = format!("could not start the sync: {e}");
-        return Err(Error(format!("could not start the sync: {e}")));
-    }
-    let _ = name;
-    Ok(())
 }
 
 /// The body of a sync. Runs on its own thread and holds the lock only in
@@ -2788,123 +2289,6 @@ fn shared_document(app: &AppState) -> vapor_library::sync::Shared {
     }
 }
 
-/// Pull the shared document, merge it in, and push the result back.
-///
-/// One round trip does both halves on purpose. Pulling without pushing leaves
-/// this device's playlists invisible to every other one; pushing without
-/// pulling overwrites theirs. Doing them separately means a person has to know
-/// to do both, in the right order.
-#[tauri::command]
-fn sync_shared_document(
-    app_handle: tauri::AppHandle,
-    state: State<'_, Shared>,
-) -> Result<SharedSyncResult> {
-    let (remote_config, href) = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        if !app.settings.remote.is_configured() {
-            return Err(Error(
-                "No server is configured, so there is nowhere to keep it.".to_string(),
-            ));
-        }
-        (
-            app.settings.remote.clone(),
-            webdav::shared_document_href(&app.settings.remote.folder),
-        )
-    };
-
-    // Built outside the lock: it reads the keychain and opens a client.
-    let fetcher = webdav::Fetcher::new(&remote_config).map_err(Error)?;
-    let existing = fetcher.fetch_optional(&href).map_err(Error)?;
-
-    let mut result = SharedSyncResult {
-        created: existing.is_none(),
-        ..Default::default()
-    };
-
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    if let Some(bytes) = existing {
-        let incoming: vapor_library::sync::Shared =
-            serde_json::from_slice(&bytes).map_err(|e| {
-                // Deliberately not overwritten with a fresh one. A document this
-                // build cannot read may be one a newer build wrote, and replacing
-                // it would delete another device's playlists to fix a parse error.
-                Error(format!(
-                    "The file on the server could not be read, so nothing was changed: {e}"
-                ))
-            })?;
-
-        if incoming.version > vapor_library::sync::SHARED_VERSION {
-            return Err(Error(
-                "That file was written by a newer version of Vapor. Update this device before \
-                 syncing, or it would write back less than it read."
-                    .to_string(),
-            ));
-        }
-
-        let AppState {
-            playlists,
-            folders,
-            settings,
-            tombstones,
-            ..
-        } = &mut *app;
-        let report = vapor_library::sync::merge_shared(
-            playlists,
-            folders,
-            &mut settings.bpm_overrides,
-            tombstones,
-            &incoming,
-        );
-        result.playlists_added = report.playlists_added;
-        result.playlists_extended = report.playlists_extended;
-        result.folders_added = report.folders_added;
-        result.tempos_added = report.tempos_added;
-        result.playlists_deleted = report.playlists_deleted;
-        result.folders_deleted = report.folders_deleted;
-
-        if !report.is_empty() {
-            app.save_playlists()?;
-            app.save_folders()?;
-            app.save_settings()?;
-            // Tombstones learned from the document are kept, so this device
-            // passes the deletion on to the next one it syncs with rather than
-            // being the place a deletion stops travelling.
-            app.save_tombstones()?;
-            // A merged playlist changes what the rows mean, and a corrected
-            // tempo changes what the table shows.
-            let overrides = app.settings.bpm_overrides.clone();
-            for row in app.rows.iter_mut() {
-                if let Some(bpm) = overrides.get(&row.href) {
-                    row.bpm = *bpm;
-                }
-            }
-        }
-    }
-
-    let outgoing = shared_document(&app);
-    // A tempo that arrived from another device is a correction like any other,
-    // and leaves this device's beat grid tracked at the number it replaced. The
-    // whole library is offered rather than only the merged hrefs — `stale_grids`
-    // is the predicate for what actually needs work, and the report only carries
-    // a count.
-    let corrected: Vec<String> = if result.tempos_added > 0 {
-        app.settings.bpm_overrides.keys().cloned().collect()
-    } else {
-        Vec::new()
-    };
-    drop(app);
-
-    if !corrected.is_empty() {
-        retrack_grids(&app_handle, state.inner(), corrected);
-    }
-
-    let bytes = serde_json::to_vec_pretty(&outgoing).map_err(|e| Error(e.to_string()))?;
-    fetcher.put(&href, bytes).map_err(Error)?;
-
-    Ok(result)
-}
-
 fn parse_sort_key(s: &str) -> Option<SortKey> {
     Some(match s {
         "title" => SortKey::Title,
@@ -2986,13 +2370,6 @@ struct DownloadProgress {
     error: String,
 }
 
-/// Every track whose audio is kept on the device.
-#[tauri::command]
-fn downloaded_tracks(state: State<'_, Shared>) -> Result<Vec<String>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.pinned.iter().cloned().collect())
-}
-
 fn collection_tracks(app: &AppState, kind: &str, id: &str) -> Vec<String> {
     match kind {
         "playlist" => app
@@ -3014,126 +2391,6 @@ fn collection_tracks(app: &AppState, kind: &str, id: &str) -> Vec<String> {
     }
 }
 
-/// Download every track in a playlist or dynamic group, and keep them.
-///
-/// Reported per track rather than as one long wait: on a slow connection this
-/// is minutes, and a button that goes quiet for minutes has failed as far as
-/// anyone can tell.
-#[tauri::command]
-async fn download_collection(
-    app_handle: tauri::AppHandle,
-    kind: String,
-    id: String,
-    state: State<'_, Shared>,
-) -> Result<()> {
-    use tauri::Emitter;
-
-    let (hrefs, remote, dir, max, roots) = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        (
-            collection_tracks(&app, &kind, &id),
-            app.settings.remote.clone(),
-            app.cache.dir().to_path_buf(),
-            app.cache.max_bytes(),
-            local::roots(&app.settings.folders),
-        )
-    };
-
-    if hrefs.is_empty() {
-        return Err(Error(
-            "There are no tracks in that to download.".to_string(),
-        ));
-    }
-
-    let shared: Shared = Arc::clone(&state);
-    tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(dir, max, roots);
-        let total = hrefs.len();
-
-        let fetcher = match webdav::Fetcher::new(&remote) {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = app_handle.emit(
-                    "download-progress",
-                    DownloadProgress {
-                        done: 0,
-                        total,
-                        title: String::new(),
-                        finished: true,
-                        error: e,
-                    },
-                );
-                return;
-            }
-        };
-
-        for (i, href) in hrefs.iter().enumerate() {
-            let title = shared
-                .lock()
-                .ok()
-                .and_then(|a| {
-                    a.rows
-                        .iter()
-                        .find(|r| &r.href == href)
-                        .map(|r| r.title.clone())
-                })
-                .unwrap_or_default();
-
-            let outcome = cache.download(href, || fetcher.fetch(href));
-
-            if outcome.is_ok() {
-                if let Ok(mut app) = shared.lock() {
-                    app.pinned.insert(href.clone());
-                    let _ = app.save_pinned();
-                }
-            }
-
-            let _ = app_handle.emit(
-                "download-progress",
-                DownloadProgress {
-                    done: i + 1,
-                    total,
-                    title,
-                    finished: i + 1 == total,
-                    error: outcome.err().map(|e| e.to_string()).unwrap_or_default(),
-                },
-            );
-        }
-    });
-
-    Ok(())
-}
-
-/// Stop keeping a collection's tracks.
-///
-/// Only where nothing else keeps them: a track in two downloaded playlists
-/// stays until both are removed.
-#[tauri::command]
-fn remove_download(kind: String, id: String, state: State<'_, Shared>) -> Result<usize> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let hrefs = collection_tracks(&app, &kind, &id);
-
-    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for p in app.playlists.all() {
-        if !(kind == "playlist" && p.id == id) {
-            wanted.extend(p.tracks.iter().cloned());
-        }
-    }
-
-    let mut removed = 0usize;
-    for href in hrefs {
-        if wanted.contains(&href) {
-            continue;
-        }
-        if app.pinned.remove(&href) {
-            let _ = app.cache.remove_download(&href);
-            removed += 1;
-        }
-    }
-    app.save_pinned()?;
-    Ok(removed)
-}
-
 /// How many files are second-or-later copies of a recording.
 ///
 /// So the switch that hides them can say what it would hide, and so someone
@@ -3150,26 +2407,6 @@ fn remove_download(kind: String, id: String, state: State<'_, Shared>) -> Result
 struct LookupCounts {
     fetched: usize,
     total: usize,
-}
-
-#[tauri::command]
-fn lookup_counts(state: State<'_, Shared>) -> Result<LookupCounts> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let fetched = app
-        .rows
-        .iter()
-        .filter(|r| app.looked.get(&r.href).is_some_and(|l| l.attempted))
-        .count();
-    Ok(LookupCounts {
-        fetched,
-        total: app.rows.len(),
-    })
-}
-
-#[tauri::command]
-fn duplicate_count(state: State<'_, Shared>) -> Result<usize> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(duplicate_hrefs(&app).len())
 }
 
 pub(crate) fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGroup) -> Vec<Row> {
@@ -5756,58 +4993,6 @@ struct TrackDetails {
     tagged: bool,
 }
 
-#[tauri::command]
-fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    let row = app
-        .rows
-        .iter()
-        .find(|r| r.href == href)
-        .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
-    let analysis = app.analysis.get(&href);
-    let manual = app.settings.bpm_override(&href);
-    // What the rest of the app is using for this track. `bpm_is_manual` stays
-    // tied to `manual` alone: a genre-resolved octave is this app's inference,
-    // not something the person typed, and the detail sheet must not claim it
-    // was theirs.
-    let in_force = tempo_in_force(&app, &href, analysis);
-
-    Ok(TrackDetails {
-        href: href.clone(),
-        title: row.title.clone(),
-        artist: if row.artist_source == vapor_library::index::Source::Unknown {
-            String::new()
-        } else {
-            row.artist.clone()
-        },
-        album: if row.album_source == vapor_library::index::Source::Unknown {
-            String::new()
-        } else {
-            row.album.clone()
-        },
-        year: row.year,
-        genre: row.genre.clone(),
-        analysed: analysis.is_some(),
-        bpm: in_force.or_else(|| analysis.map(|a| a.bpm)).unwrap_or(0.0),
-        bpm_is_manual: manual.is_some(),
-        key: analysis.map(|a| a.key.clone()).unwrap_or_default(),
-        lufs: analysis.map_or(0.0, |a| a.lufs),
-        duration: analysis.map_or(0.0, |a| a.duration),
-        cue_in: analysis.map_or(0.0, |a| a.cue_in),
-        cue_out: analysis.map_or(0.0, |a| a.cue_out),
-        energy: analysis.map_or(0.0, |a| a.energy),
-        beats: analysis.map_or(0, |a| a.beats.len()),
-        waveform: analysis.map(|a| a.waveform.clone()).unwrap_or_default(),
-        href_path: href.clone(),
-        cached: app.cache.contains(&href),
-        unplayable: app.failures.get(&href).cloned(),
-        cover: app.covers.get(&href),
-        notes: app.tags.get(&href).and_then(|t| t.comment.clone()),
-        tagged: app.tags.contains_key(&href),
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -5840,109 +5025,9 @@ struct Facet {
 /// and starts being the library again.
 const SEARCH_LIMIT: usize = 40;
 
-#[tauri::command]
-fn search(query: String, state: State<'_, Shared>) -> Result<SearchResults> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-
-    if query.trim().is_empty() {
-        return Ok(SearchResults {
-            top: None,
-            tracks: Vec::new(),
-            artists: Vec::new(),
-            albums: Vec::new(),
-            playlists: Vec::new(),
-            total: 0,
-        });
-    }
-
-    // The same predicate the table and smart playlists use, so a search and a
-    // filter cannot disagree about what matches.
-    let matched: Vec<Row> = vapor_library::filter(&app.rows, &query)
-        .into_iter()
-        .cloned()
-        .map(|mut row| {
-            app.apply_tags(&mut row);
-            app.apply_analysis(&mut row);
-            row
-        })
-        .collect();
-
-    let needle = query.trim().to_lowercase();
-    let facet = |pick: fn(&Row) -> &String| {
-        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for row in &matched {
-            let value = pick(row);
-            if !value.is_empty() {
-                *counts.entry(value.as_str()).or_default() += 1;
-            }
-        }
-        let mut facets: Vec<Facet> = counts
-            .into_iter()
-            .map(|(label, count)| Facet {
-                label: label.to_string(),
-                count,
-            })
-            .collect();
-        // Most evidence first, then alphabetically so the order is stable
-        // between identical searches rather than following a hash.
-        facets.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.label.cmp(&b.label)));
-        facets.truncate(6);
-        facets
-    };
-
-    let artists = facet(|r| &r.artist);
-    let albums = facet(|r| &r.album);
-
-    // The best row is the one whose title starts with what was typed; failing
-    // that, the one that merely contains it. Someone typing "salt" wants
-    // "Salt Flats" above "Asphalt Sunday".
-    let top = matched
-        .iter()
-        .find(|r| r.title.to_lowercase().starts_with(&needle))
-        .or_else(|| {
-            matched
-                .iter()
-                .find(|r| r.title.to_lowercase().contains(&needle))
-        })
-        .or(matched.first())
-        .cloned();
-
-    let playlists: Vec<vapor_library::Playlist> = app
-        .playlists
-        .all()
-        .iter()
-        .filter(|p| p.name.to_lowercase().contains(&needle))
-        .cloned()
-        .collect();
-
-    let total = matched.len();
-    let tracks: Vec<Row> = matched
-        .into_iter()
-        // The top result is shown separately; repeating it immediately below
-        // reads as a duplicate rather than as emphasis.
-        .filter(|r| top.as_ref().is_none_or(|t| t.href != r.href))
-        .take(SEARCH_LIMIT)
-        .collect();
-
-    Ok(SearchResults {
-        top,
-        tracks,
-        artists,
-        albums,
-        playlists,
-        total,
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
-
-#[tauri::command]
-fn settings(state: State<'_, Shared>) -> Result<Settings> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.settings.clone())
-}
 
 /// Why a track has no local bytes, in words a person can act on.
 ///
@@ -6108,24 +5193,6 @@ struct ScanReport {
     problems: Vec<String>,
 }
 
-/// Point the app at a server.
-///
-/// Separate from the password, which never touches this struct — see
-/// `save_webdav_password`. Without this command the app had no way to be
-/// configured at all: `settings` could report a server and nothing could set
-/// one.
-#[tauri::command]
-fn set_remote_config(
-    url: String,
-    username: String,
-    folder: String,
-    state: State<'_, Shared>,
-) -> Result<Settings> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    apply_remote_config(&mut app, &url, &username, &folder)?;
-    Ok(app.settings.clone())
-}
-
 /// The body of [`set_remote_config`], separated from the Tauri wrapper.
 ///
 /// A `#[tauri::command]` takes `State`, which cannot be built outside a running
@@ -6197,129 +5264,6 @@ pub(crate) fn apply_remote_config(
     // default rather than as "".
     app.settings = std::mem::take(&mut app.settings).sanitised();
     app.save_settings()
-}
-
-/// Whether a password is stored for `username`.
-///
-/// So the Settings screen can say which state it is in rather than always
-/// showing "unchanged", which claims a credential exists whether or not one
-/// does. Only the fact is returned; the password stays in `webdav`.
-#[tauri::command]
-fn has_webdav_password(username: String) -> bool {
-    webdav::has_password(username.trim())
-}
-
-/// Save the WebDAV password to the OS keychain.
-///
-/// Separate from the rest of settings on purpose: the credential is the one
-/// piece of state that must never be written to a settings file, and keeping
-/// its command separate makes that hard to undo by accident.
-#[tauri::command]
-fn save_webdav_password(username: String, password: String) -> Result<()> {
-    webdav::save_password(&username, &password).map_err(|e| Error(e.to_string()))
-}
-
-/// Walk the configured WebDAV tree and rebuild the library index.
-#[tauri::command]
-async fn scan_library(
-    app_handle: tauri::AppHandle,
-    state: State<'_, Shared>,
-) -> Result<ScanReport> {
-    // Copied out and the lock released before any I/O: holding it across an
-    // await blocks every other command for the length of a scan, which can be
-    // minutes on a large library.
-    let (remote, folders) = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        (app.settings.remote.clone(), app.settings.folders.clone())
-    };
-
-    let has_server = remote.is_configured();
-    if !has_server && folders.is_empty() {
-        return Err(Error(
-            "No music yet. Add a folder on this device, or a server, in Settings.".to_string(),
-        ));
-    }
-
-    let mut rows: Vec<Row> = Vec::new();
-    let mut directories = 0usize;
-    let mut unreadable = 0usize;
-    let mut problems: Vec<String> = Vec::new();
-
-    // Folders first, and not only because they are quicker. They cannot fail
-    // the way a network can, so the common case — a laptop with music on it and
-    // a NAS that may or may not be awake — produces a usable library before
-    // anything is allowed to go wrong.
-    for folder in &folders {
-        match local::scan(std::path::Path::new(&folder.path)) {
-            Ok(found) => {
-                directories += found.directories;
-                unreadable += found.unreadable;
-                rows.extend(
-                    found
-                        .files
-                        .iter()
-                        .map(|relative| build_row(&local::href(&folder.id, relative), "")),
-                );
-            }
-            Err(e) => problems.push(format!("{}: {e}", folder.label())),
-        }
-    }
-
-    if has_server {
-        match webdav::scan(&remote.url, &remote.username, &remote.folder).await {
-            Ok(found) => {
-                directories += found.directories;
-                unreadable += found.unreadable;
-                rows.extend(
-                    found
-                        .files
-                        .iter()
-                        .map(|href| build_row(href, &remote.folder)),
-                );
-            }
-            Err(e) => problems.push(format!("{}: {e}", remote.url)),
-        }
-    }
-
-    // Every source failing is a failed scan. Some failing is a partial library
-    // and a message, which is the difference between "your NAS is asleep" and
-    // "nothing works".
-    if rows.is_empty() && !problems.is_empty() {
-        return Err(Error(problems.join("; ")));
-    }
-
-    let report = {
-        let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.rows = rows;
-
-        // Saved here rather than at exit: a scan is the only thing that
-        // changes the index, and writing it now means a crash mid-analysis
-        // still leaves a library to come back to.
-        app.save_index()?;
-
-        ScanReport {
-            tracks: app.rows.len(),
-            directories,
-            unreadable,
-            problems,
-        }
-    };
-
-    // Analyse what was just found, without being asked.
-    //
-    // A scan produces rows that know a filename and nothing else — no tempo,
-    // no key, so no Vibe DJ and no blends. That used to wait behind a button on
-    // the Settings screen, which is a strange place to have to go to make the
-    // library work, and an easy one never to find. Starting here is also the
-    // only way the automatic pass can know there is new work.
-    //
-    // `pending` skips everything already done, so a rescan of a known library
-    // costs nothing. The lock is released above first: `start_analysis` takes
-    // it, and this mutex is not reentrant.
-    let shared: Shared = Arc::clone(&state);
-    start_analysis(&app_handle, &shared)?;
-
-    Ok(report)
 }
 
 /// Derive a table row from a path.
@@ -7073,16 +6017,6 @@ pub(crate) struct CacheStatus {
 // Your Data
 // ---------------------------------------------------------------------------
 
-/// Where the app keeps everything, so the Your Data screen can show it.
-///
-/// Naming the directory is part of the claim: "your data is local" is an
-/// assertion until a person can see the path and open it.
-#[tauri::command]
-fn data_location(state: State<'_, Shared>) -> Result<String> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    Ok(app.store.dir().display().to_string())
-}
-
 /// One line of the Your Data table: what it is, where it sits, how big.
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -7099,155 +6033,6 @@ struct DataRow {
     /// screen's whole claim is about what is on *this* device, so the
     /// distinction has to be visible rather than implied.
     local: bool,
-}
-
-/// Itemise what the app is storing.
-///
-/// The Your Data screen is where the sovereignty claim gets proved instead of
-/// asserted, and a single total proves nothing — a person has to be able to see
-/// which file is which, open it, and find it is plain JSON.
-#[tauri::command]
-fn data_breakdown(state: State<'_, Shared>) -> Result<Vec<DataRow>> {
-    let app = state.lock().map_err(|e| Error(e.to_string()))?;
-    let dir = app.store.dir();
-
-    let size_of = |name: &str| -> u64 {
-        std::fs::metadata(dir.join(name))
-            .map(|m| m.len())
-            .unwrap_or(0)
-    };
-
-    Ok(vec![
-        DataRow {
-            label: "Music files".to_string(),
-            path: if app.settings.remote.is_configured() {
-                format!(
-                    "{} / {}",
-                    app.settings.remote.url.trim_end_matches('/'),
-                    app.settings.remote.folder
-                )
-            } else {
-                "No server connected".to_string()
-            },
-            // The library is the one thing not measured: asking a WebDAV server
-            // for the size of every file is a scan, and a scan is not something
-            // to run because a screen was opened.
-            bytes: 0,
-            local: false,
-        },
-        // Downloads before the cache: they are the deliberate half, and on a
-        // device where somebody has kept a few playlists they will be most of
-        // the total. Separating them is the difference between "the app is
-        // holding two gigabytes" and "you asked it to keep two gigabytes".
-        DataRow {
-            label: "Downloads".to_string(),
-            path: app.cache.downloads_dir().display().to_string(),
-            bytes: app.cache.downloads_size(),
-            local: true,
-        },
-        DataRow {
-            label: "Offline cache".to_string(),
-            path: app.cache.dir().display().to_string(),
-            bytes: app.cache.size(),
-            local: true,
-        },
-        // Artwork, separate from the catalogue. It used to be inside
-        // `tags.json` and therefore invisible on this screen, which is how a
-        // 155 MB file went unnoticed until it killed the phone.
-        DataRow {
-            label: "Cover art".to_string(),
-            path: app.covers.dir().display().to_string(),
-            bytes: app.covers.size(),
-            local: true,
-        },
-        DataRow {
-            label: "Track tags".to_string(),
-            path: dir.join("tags.json").display().to_string(),
-            bytes: size_of("tags.json"),
-            local: true,
-        },
-        DataRow {
-            label: "Library catalogue".to_string(),
-            path: dir.join("analysis.json").display().to_string(),
-            bytes: size_of("analysis.json"),
-            local: true,
-        },
-        DataRow {
-            label: "Playlists".to_string(),
-            path: dir.join("playlists.json").display().to_string(),
-            bytes: size_of("playlists.json"),
-            local: true,
-        },
-        DataRow {
-            label: "Settings".to_string(),
-            path: dir.join("settings.json").display().to_string(),
-            bytes: size_of("settings.json"),
-            local: true,
-        },
-    ])
-}
-
-/// Open the data directory in the system file manager.
-///
-/// "Your data is local" is a claim until a person can go and look at it. No
-/// Tauri plugin for this, and shelling out to the platform's own opener is
-/// three lines — the path is one the app itself chose, never user input, so
-/// there is nothing here to inject into.
-#[tauri::command]
-fn reveal_data_folder(state: State<'_, Shared>) -> Result<()> {
-    let dir = {
-        let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.store.dir().to_path_buf()
-    };
-    std::fs::create_dir_all(&dir)?;
-
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-
-    std::process::Command::new(opener)
-        .arg(&dir)
-        .spawn()
-        .map_err(|e| Error(format!("Could not open the folder: {e}")))?;
-    Ok(())
-}
-
-/// Delete everything the app has stored.
-///
-/// In-memory state is reset too, so the UI reflects the deletion immediately
-/// rather than continuing to show data that no longer exists on disk.
-#[tauri::command]
-fn delete_all_data(state: State<'_, Shared>) -> Result<()> {
-    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-    // Silence first. Deleting the cache from under a playing track would leave
-    // the deck holding audio the person just asked to be rid of.
-    if let Some(p) = app.player.as_ref() {
-        p.stop();
-    }
-    app.generation += 1;
-    app.loading = false;
-    app.playing = None;
-    app.playback_error = None;
-    app.store.clear()?;
-    app.cache.clear().map_err(|e| Error(e.to_string()))?;
-    // The password lives in the keychain, not the data directory, so clearing
-    // one does not clear the other. "Delete my data" must mean both.
-    if !app.settings.remote.username.is_empty() {
-        let _ = webdav::delete_password(&app.settings.remote.username);
-    }
-    app.settings = Settings::default();
-    app.playlists = PlaylistStore::default();
-    app.folders = FolderStore::default();
-    app.groups = GroupStore::default();
-    app.pinned = std::collections::HashSet::new();
-    app.looked.clear();
-    app.queue = Queue::default();
-    app.rows.clear();
-    Ok(())
 }
 
 /// Id generator for entities the core deliberately does not name itself.
@@ -7490,7 +6275,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            library_view,
+            commands::library::library_view,
             commands::playlists::playlists,
             commands::playlists::create_playlist,
             commands::playlists::add_tracks_to_playlist,
@@ -7501,11 +6286,11 @@ pub fn run() {
             commands::playlists::playlist_rows,
             commands::playlists::playlist_folders,
             commands::playlists::create_folder,
-            duplicate_count,
-            lookup_counts,
-            downloaded_tracks,
-            download_collection,
-            remove_download,
+            commands::library::duplicate_count,
+            commands::lookup::lookup_counts,
+            commands::downloads::downloaded_tracks,
+            commands::downloads::download_collection,
+            commands::downloads::remove_download,
             commands::groups::dynamic_groups,
             commands::groups::create_group,
             commands::groups::rename_group,
@@ -7517,32 +6302,32 @@ pub fn run() {
             commands::playlists::rename_folder,
             commands::playlists::delete_folder,
             commands::playlists::set_playlist_folder,
-            track_lookup,
-            look_up_track,
+            commands::lookup::track_lookup,
+            commands::lookup::look_up_track,
             commands::artwork::looked_up_image,
             commands::artwork::album_cover,
             commands::artwork::find_album_art,
             commands::artwork::clear_album_art,
             commands::artwork::set_prefer_looked_up_art,
-            set_hide_duplicates,
-            set_appearance,
+            commands::settings::set_hide_duplicates,
+            commands::settings::set_appearance,
             commands::analysis::analysis_failures,
             commands::artwork::artist_portrait,
-            set_metadata_lookup,
+            commands::settings::set_metadata_lookup,
             commands::dj::set_vibe_limit,
             commands::dj::set_curve,
             commands::dj::set_dj_mode,
-            set_sync_enabled,
-            startup_problems,
-            identify_library,
+            commands::sync::set_sync_enabled,
+            commands::data::startup_problems,
+            commands::lookup::identify_library,
             commands::playback::media_keys_available,
-            sync_view,
-            open_pairing,
-            cancel_pairing,
-            pair_with,
-            forget_peer,
-            sync_with,
-            sync_shared_document,
+            commands::sync::sync_view,
+            commands::sync::open_pairing,
+            commands::sync::cancel_pairing,
+            commands::sync::pair_with,
+            commands::sync::forget_peer,
+            commands::sync::sync_with,
+            commands::sync::sync_shared_document,
             commands::queue::queue_state,
             commands::queue::queue_view,
             commands::queue::remove_from_queue,
@@ -7552,10 +6337,10 @@ pub fn run() {
             commands::playback::play_next,
             commands::dj::vibe_path,
             commands::dj::blend_preview,
-            track_details,
-            search,
-            data_breakdown,
-            reveal_data_folder,
+            commands::library::track_details,
+            commands::library::search,
+            commands::data::data_breakdown,
+            commands::data::reveal_data_folder,
             commands::playback::play_tracks,
             commands::playback::next_track,
             commands::playback::previous_track,
@@ -7566,18 +6351,18 @@ pub fn run() {
             commands::playback::seek,
             commands::playback::set_volume,
             commands::dj::mood_path,
-            settings,
+            commands::settings::settings,
             commands::analysis::set_bpm_override,
-            data_location,
-            delete_all_data,
-            save_webdav_password,
-            has_webdav_password,
-            set_remote_config,
-            scan_library,
+            commands::data::data_location,
+            commands::data::delete_all_data,
+            commands::settings::save_webdav_password,
+            commands::settings::has_webdav_password,
+            commands::settings::set_remote_config,
+            commands::library::scan_library,
             commands::analysis::analyse_library,
             commands::analysis::cancel_analysis,
-            library_entities,
-            home_shelves,
+            commands::library::library_entities,
+            commands::library::home_shelves,
             commands::dj::mix_candidates,
             commands::dj::choose_next,
             commands::artwork::track_cover,
