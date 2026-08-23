@@ -593,3 +593,39 @@ describe("which build this is", () => {
     expect(stamp.textContent).toMatch(/\d+\.\d+\.\d+/);
   });
 });
+
+/**
+ * Folders on this device, managed after the first run.
+ *
+ * Onboarding adds the first one; this is where a second is added and where one
+ * is removed. The wording of the removal is asserted because it is the whole
+ * reassurance: these are somebody's own music files, and a button that might be
+ * deleting them is one nobody presses twice.
+ */
+describe("music on this device", () => {
+  it("says what to do when there are no folders yet", async () => {
+    render(<Settings />);
+
+    expect(
+      await screen.findByRole("heading", { name: /music on this device/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/no server, no account, nothing to set up/i),
+    ).toBeInTheDocument();
+  });
+
+  it("lists a configured folder and offers to forget it, not delete it", async () => {
+    useBackend({
+      localFolders: [{ id: "folder-1", path: "/Users/dylan/Music", name: "" }],
+    });
+    render(<Settings />);
+
+    expect(await screen.findByText("/Users/dylan/Music")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /forget/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/your files are not touched/i),
+    ).toBeInTheDocument();
+  });
+});

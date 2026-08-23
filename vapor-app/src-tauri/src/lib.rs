@@ -30,6 +30,7 @@ mod covers;
 pub mod decoder;
 /// A blocking HTTP client that survives being dropped on a runtime thread.
 mod http;
+mod local;
 mod media;
 mod metadata;
 mod peers;
@@ -339,6 +340,7 @@ impl AppState {
             .unwrap_or_else(Settings::default)
             .sanitised();
         let cache_max_bytes = settings.cache_max_bytes;
+        let roots = local::roots(&settings.folders);
         let playlists = quarantined!("playlists").unwrap_or_default();
         let folders = quarantined!("folders").unwrap_or_default();
         let groups = quarantined!("groups").unwrap_or_default();
@@ -432,7 +434,7 @@ impl AppState {
             // The bound is what stops the cache filling a phone, and it is the
             // person's to set — `sanitised` has already refused a value too
             // small to be worth having.
-            cache: cache::Cache::new(store.dir().join("audio"), cache_max_bytes),
+            cache: cache::Cache::new(store.dir().join("audio"), cache_max_bytes, roots),
             store,
             // No device yet. `load` reads this app's files; acquiring hardware
             // is [`AppState::open_audio`], called once from `run`.
@@ -607,9 +609,15 @@ impl AppState {
         }
     }
 
+    /// Call *after* `apply_tags`: the genre the tag supplies is part of what
+    /// decides the tempo now, and a row whose genre has not been merged in yet
+    /// would be judged on the scan's blank.
     pub(crate) fn apply_analysis(&self, row: &mut Row) {
         if let Some(a) = self.analysis.get(&row.href) {
-            row.bpm = self.settings.bpm_override(&row.href).unwrap_or(a.bpm);
+            // The same tempo the mixer will meet this record at, not the raw
+            // reading — a table showing 87 for a record the stretcher treats
+            // as 174 is the disagreement AUD-26 is about.
+            row.bpm = tempo_in_force_for_row(self, row, Some(a)).unwrap_or(a.bpm);
             row.key = a.key.clone();
         } else if let Some(bpm) = self.settings.bpm_override(&row.href) {
             // A person can correct a track that was never successfully
@@ -713,6 +721,17 @@ impl AppState {
         self.digests
             .insert(href.to_string(), (size, digest.clone()));
         Some(digest)
+    }
+
+    /// Point the cache at the folders settings currently names.
+    ///
+    /// Called after any change to `settings.folders`. The cache resolves a
+    /// local href through these roots, so one holding a stale set cannot find
+    /// a folder just added and would still find one just removed.
+    pub(crate) fn rebuild_cache_roots(&mut self) {
+        let dir = self.cache.dir().to_path_buf();
+        let max = self.cache.max_bytes();
+        self.cache = cache::Cache::new(dir, max, local::roots(&self.settings.folders));
     }
 
     pub(crate) fn save_settings(&self) -> Result<()> {
@@ -2843,13 +2862,14 @@ async fn download_collection(
 ) -> Result<()> {
     use tauri::Emitter;
 
-    let (hrefs, remote, dir, max) = {
+    let (hrefs, remote, dir, max, roots) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
         (
             collection_tracks(&app, &kind, &id),
             app.settings.remote.clone(),
             app.cache.dir().to_path_buf(),
             app.cache.max_bytes(),
+            local::roots(&app.settings.folders),
         )
     };
 
@@ -2861,7 +2881,7 @@ async fn download_collection(
 
     let shared: Shared = Arc::clone(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(dir, max);
+        let cache = cache::Cache::new(dir, max, roots);
         let total = hrefs.len();
 
         let fetcher = match webdav::Fetcher::new(&remote) {
@@ -3444,11 +3464,12 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
     let rate = player.sample_rate();
     let cache_dir = app.cache.dir().to_path_buf();
     let cache_max = app.cache.max_bytes();
+    let roots = local::roots(&app.settings.folders);
     let remote = app.settings.remote.clone();
     let shared = Arc::clone(shared);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = cache::Cache::new(cache_dir, cache_max, roots);
 
         /*
          * Play it from where it already is, or from the server as it arrives.
@@ -3628,9 +3649,62 @@ pub(crate) fn choose_transition(
     }
 }
 
-/// A track's tempo, honouring a manual correction.
+/// A track's tempo, honouring a manual correction and the genre's verdict on
+/// which octave the detector's reading is in. See [`tempo_in_force`].
 fn bpm_of(analysis: &analysis::Analysis, app: &AppState, href: &str) -> f32 {
-    app.settings.bpm_override(href).unwrap_or(analysis.bpm)
+    tempo_in_force(app, href, Some(analysis)).unwrap_or(analysis.bpm)
+}
+
+/// The tempo actually in force for a track, or `None` when nothing overrides
+/// what the detector measured.
+///
+/// **One definition, and every consumer goes through it.** That is the whole
+/// point of the function existing rather than each caller reading
+/// `bpm_override` for itself. Until AUD-26 the octave correction ran in exactly
+/// one place — `track_meta_pool`, which feeds the Vibe cards — while
+/// `beat_grid` and the Tempo Morph target read only the manual override. A
+/// corrected genre would have made a card read 174 while the stretcher met the
+/// record at 87: visibly right and audibly wrong, which is worse than the bug.
+///
+/// Two things can override the measurement, in this order:
+///
+/// * **A hand correction wins outright.** Someone who typed a number has said
+///   the last word, and a genre table must not argue with them.
+/// * **Otherwise the genre resolves the octave.** A beat tracker is reliable
+///   about the pulse and unreliable about whether a listener counts it at 87 or
+///   174, and nothing else this app measures separates those two. See
+///   `vapor_library::octave_correct`, which returns `None` for every case it
+///   cannot answer unambiguously — including a tempo already inside the band.
+///
+/// `Option` rather than a bare `f32` so [`beat_grid`] keeps its existing
+/// meaning for `None`: no override, so the tracked grid stands.
+pub(crate) fn tempo_in_force(
+    app: &AppState,
+    href: &str,
+    analysis: Option<&analysis::Analysis>,
+) -> Option<f32> {
+    if let Some(manual) = app.settings.bpm_override(href) {
+        return Some(manual);
+    }
+    let bpm = analysis?.bpm;
+    vapor_library::octave_correct(bpm, &genre_of(app, href))
+}
+
+/// [`tempo_in_force`] for a caller that already has the row in hand.
+///
+/// Worth the second entry point: [`genre_of`] scans `app.rows` to find the row
+/// again, and the callers that have one are the ones running over every row in
+/// the library.
+fn tempo_in_force_for_row(
+    app: &AppState,
+    row: &Row,
+    analysis: Option<&analysis::Analysis>,
+) -> Option<f32> {
+    if let Some(manual) = app.settings.bpm_override(&row.href) {
+        return Some(manual);
+    }
+    let bpm = analysis?.bpm;
+    vapor_library::octave_correct(bpm, &genre_for_row(app, row))
 }
 
 /// Whether two tracks sit in the same genre family.
@@ -3650,15 +3724,31 @@ fn bpm_of(analysis: &analysis::Analysis, app: &AppState, href: &str) -> f32 {
 /// The looked-up genre counts too: it is the only source for a library whose
 /// files carry no tags, which is most of them here — 46 of 534.
 fn genre_of(app: &AppState, href: &str) -> String {
-    let scanned = app
-        .rows
-        .iter()
-        .find(|r| r.href == href)
-        .map(|r| r.genre.clone())
-        .unwrap_or_default();
-    if !scanned.trim().is_empty() {
-        return scanned;
+    match app.rows.iter().find(|r| r.href == href) {
+        Some(row) => genre_for_row(app, row),
+        None => genre_from_tag_or_lookup(app, href),
     }
+}
+
+/// [`genre_of`] for a caller that already has the row.
+///
+/// Same three sources in the same order, without the linear scan of `app.rows`
+/// to find a row the caller is holding. `track_meta_pool` and `apply_analysis`
+/// both run this per row over the whole library, so the scan made them
+/// quadratic in library size.
+///
+/// The order is the answer to AUD-24's "prefer the file's own tag over the
+/// service": the lookup is last, and only ever fills a gap. A library that
+/// tags its own files keeps "Neurofunk"; one that does not gets Deezer's
+/// "Electronic" rather than nothing.
+fn genre_for_row(app: &AppState, row: &Row) -> String {
+    if !row.genre.trim().is_empty() {
+        return row.genre.clone();
+    }
+    genre_from_tag_or_lookup(app, &row.href)
+}
+
+fn genre_from_tag_or_lookup(app: &AppState, href: &str) -> String {
     if let Some(tagged) = app.tags.get(href).and_then(|t| t.genre.clone()) {
         if !tagged.trim().is_empty() {
             return tagged;
@@ -4021,8 +4111,8 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
         return None;
     }
 
-    let out_grid = beat_grid(outgoing, app.settings.bpm_override(current));
-    let in_grid = beat_grid(incoming, app.settings.bpm_override(&next));
+    let out_grid = beat_grid(outgoing, tempo_in_force(app, current, Some(outgoing)));
+    let in_grid = beat_grid(incoming, tempo_in_force(app, &next, Some(incoming)));
 
     // Both of these are pure and live in the engine; running them here is what
     // keeps beat grids off the audio thread entirely.
@@ -4096,11 +4186,12 @@ fn arm_mix(shared: &Shared, app: &mut AppState, mix: ArmedMix) {
     let rate = player.sample_rate();
     let cache_dir = app.cache.dir().to_path_buf();
     let cache_max = app.cache.max_bytes();
+    let roots = local::roots(&app.settings.folders);
     let remote = app.settings.remote.clone();
     let shared = Arc::clone(shared);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = cache::Cache::new(cache_dir, cache_max, roots);
         // Decoded from where the mix will actually start, not from the top of
         // the track. A transition cues the incoming track minutes in, and
         // decoding the run-up to it would be the whole cost streaming avoids.
@@ -4313,18 +4404,19 @@ fn spawn_prefetcher(shared: Shared) {
                                 app.settings.remote.clone(),
                                 app.cache.dir().to_path_buf(),
                                 app.settings.cache_max_bytes,
+                                local::roots(&app.settings.folders),
                             )
                         })
                 };
 
-                let Some((href, remote, dir, max_bytes)) = wanted else {
+                let Some((href, remote, dir, max_bytes, roots)) = wanted else {
                     failures = 0;
                     continue;
                 };
 
                 // Fetched with the lock released: this is a network round trip
                 // measured in seconds, and every command would block behind it.
-                let cache = cache::Cache::new(dir, max_bytes);
+                let cache = cache::Cache::new(dir, max_bytes, roots);
                 match cache.store(&href, || webdav::fetch_blocking(&remote, &href)) {
                     Ok(_) => failures = 0,
                     Err(e) => {
@@ -4730,9 +4822,7 @@ pub(crate) fn queue_view_for(app: &AppState) -> QueueView {
                     .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
                     .map(|r| r.artist.clone())
                     .unwrap_or_default(),
-                bpm: app
-                    .settings
-                    .bpm_override(href)
+                bpm: tempo_in_force(app, href, analysis)
                     .or_else(|| analysis.map(|a| a.bpm))
                     .unwrap_or(0.0),
                 key: analysis.map(|a| a.key.clone()).unwrap_or_default(),
@@ -4884,7 +4974,7 @@ pub(crate) fn track_meta_pool(app: &AppState) -> std::collections::HashMap<Strin
         })
         .filter_map(|row| {
             let analysis = app.analysis.get(&row.href)?;
-            let genre = genre_of(app, &row.href);
+            let genre = genre_for_row(app, row);
             // An unanalysed track has no tempo and no key, so the cost model
             // cannot place it. Including it with zeros would not make the path
             // longer, it would make it wrong.
@@ -4895,15 +4985,12 @@ pub(crate) fn track_meta_pool(app: &AppState) -> std::collections::HashMap<Strin
                 row.href.clone(),
                 TrackMeta {
                     href: row.href.clone(),
-                    // A hand correction wins outright. Otherwise the genre gets
-                    // to resolve which octave the detected tempo is in: a beat
-                    // tracker is reliable about the pulse and unreliable about
-                    // whether a listener counts it at 87 or 174, and nothing
-                    // else the app measures can tell those apart. See
-                    // `vapor_library::octave_correct`.
-                    bpm: app.settings.bpm_override(&row.href).unwrap_or_else(|| {
-                        vapor_library::octave_correct(analysis.bpm, &genre).unwrap_or(analysis.bpm)
-                    }),
+                    // The one tempo every part of the app now reasons with —
+                    // the library table, the beat grid, the Tempo Morph target
+                    // and this pool all read `tempo_in_force`, so a card
+                    // cannot say 174 while the stretcher meets the record at
+                    // 87. That split is what AUD-26 was.
+                    bpm: tempo_in_force_for_row(app, row, Some(analysis)).unwrap_or(analysis.bpm),
                     musical_key: analysis.key.clone(),
                     // Real segment keys where analysis produced them (TD-13);
                     // the whole-track key only where the track was too short
@@ -5507,6 +5594,11 @@ fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails>
         .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
     let analysis = app.analysis.get(&href);
     let manual = app.settings.bpm_override(&href);
+    // What the rest of the app is using for this track. `bpm_is_manual` stays
+    // tied to `manual` alone: a genre-resolved octave is this app's inference,
+    // not something the person typed, and the detail sheet must not claim it
+    // was theirs.
+    let in_force = tempo_in_force(&app, &href, analysis);
 
     Ok(TrackDetails {
         href: href.clone(),
@@ -5524,7 +5616,7 @@ fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDetails>
         year: row.year,
         genre: row.genre.clone(),
         analysed: analysis.is_some(),
-        bpm: manual.or_else(|| analysis.map(|a| a.bpm)).unwrap_or(0.0),
+        bpm: in_force.or_else(|| analysis.map(|a| a.bpm)).unwrap_or(0.0),
         bpm_is_manual: manual.is_some(),
         key: analysis.map(|a| a.key.clone()).unwrap_or_default(),
         lufs: analysis.map_or(0.0, |a| a.lufs),
@@ -5722,7 +5814,7 @@ fn stale_grids(app: &AppState, hrefs: &[String]) -> Vec<(String, f32)> {
             // Never analysed is not stale. Whenever the pass reaches it, it
             // reads the correction and tracks against that from the start.
             let analysis = app.analysis.get(href)?;
-            let target = app.settings.bpm_override(href).unwrap_or(analysis.bpm);
+            let target = tempo_in_force(app, href, Some(analysis)).unwrap_or(analysis.bpm);
             (!analysis.beats_are_for(target)).then(|| (href.clone(), target))
         })
         .collect()
@@ -5744,6 +5836,7 @@ pub(crate) fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, href
         return;
     }
     let (cache_dir, cache_max) = (app.cache.dir().to_path_buf(), app.cache.max_bytes());
+    let roots = local::roots(&app.settings.folders);
     let remote = app.settings.remote.clone();
     drop(app);
 
@@ -5763,7 +5856,7 @@ pub(crate) fn retrack_grids(app_handle: &tauri::AppHandle, shared: &Shared, href
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = cache::Cache::new(cache_dir, cache_max);
+        let cache = cache::Cache::new(cache_dir, cache_max, roots);
         // One session for the batch, as the analysis pass does: one keychain
         // read and one connection rather than one of each per track.
         let fetcher = webdav::Fetcher::new(&remote);
@@ -5831,6 +5924,15 @@ struct ScanReport {
     directories: usize,
     /// Folders that could not be read and were walked past (TD-49).
     unreadable: usize,
+    /// Sources that failed outright, named, one line each.
+    ///
+    /// A library can have several sources now. One unreachable server used to
+    /// fail the whole command, which with folders configured would throw away a
+    /// scan that had already succeeded — and a person whose NAS is asleep still
+    /// wants the music on their laptop. So a failure is reported beside the
+    /// result instead of replacing it.
+    #[serde(default)]
+    problems: Vec<String>,
 }
 
 /// Point the app at a server.
@@ -5950,31 +6052,72 @@ async fn scan_library(
     app_handle: tauri::AppHandle,
     state: State<'_, Shared>,
 ) -> Result<ScanReport> {
-    // The remote config is copied out and the lock released before the network
-    // call: holding it across an await would block every other command for the
-    // length of a scan, which can be minutes on a large library.
-    let (url, username, folder) = {
+    // Copied out and the lock released before any I/O: holding it across an
+    // await blocks every other command for the length of a scan, which can be
+    // minutes on a large library.
+    let (remote, folders) = {
         let app = state.lock().map_err(|e| Error(e.to_string()))?;
-        let r = &app.settings.remote;
-        if !r.is_configured() {
-            return Err(Error(
-                "No server configured. Add one in Settings.".to_string(),
-            ));
-        }
-        (r.url.clone(), r.username.clone(), r.folder.clone())
+        (app.settings.remote.clone(), app.settings.folders.clone())
     };
 
-    let result = webdav::scan(&url, &username, &folder)
-        .await
-        .map_err(|e| Error(e.to_string()))?;
+    let has_server = remote.is_configured();
+    if !has_server && folders.is_empty() {
+        return Err(Error(
+            "No music yet. Add a folder on this device, or a server, in Settings.".to_string(),
+        ));
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
+    let mut directories = 0usize;
+    let mut unreadable = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    // Folders first, and not only because they are quicker. They cannot fail
+    // the way a network can, so the common case — a laptop with music on it and
+    // a NAS that may or may not be awake — produces a usable library before
+    // anything is allowed to go wrong.
+    for folder in &folders {
+        match local::scan(std::path::Path::new(&folder.path)) {
+            Ok(found) => {
+                directories += found.directories;
+                unreadable += found.unreadable;
+                rows.extend(
+                    found
+                        .files
+                        .iter()
+                        .map(|relative| build_row(&local::href(&folder.id, relative), "")),
+                );
+            }
+            Err(e) => problems.push(format!("{}: {e}", folder.label())),
+        }
+    }
+
+    if has_server {
+        match webdav::scan(&remote.url, &remote.username, &remote.folder).await {
+            Ok(found) => {
+                directories += found.directories;
+                unreadable += found.unreadable;
+                rows.extend(
+                    found
+                        .files
+                        .iter()
+                        .map(|href| build_row(href, &remote.folder)),
+                );
+            }
+            Err(e) => problems.push(format!("{}: {e}", remote.url)),
+        }
+    }
+
+    // Every source failing is a failed scan. Some failing is a partial library
+    // and a message, which is the difference between "your NAS is asleep" and
+    // "nothing works".
+    if rows.is_empty() && !problems.is_empty() {
+        return Err(Error(problems.join("; ")));
+    }
 
     let report = {
         let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-        app.rows = result
-            .files
-            .iter()
-            .map(|href| build_row(href, &folder))
-            .collect();
+        app.rows = rows;
 
         // Saved here rather than at exit: a scan is the only thing that
         // changes the index, and writing it now means a crash mid-analysis
@@ -5983,8 +6126,9 @@ async fn scan_library(
 
         ScanReport {
             tracks: app.rows.len(),
-            directories: result.directories,
-            unreadable: result.unreadable,
+            directories,
+            unreadable,
+            problems,
         }
     };
 
@@ -6011,7 +6155,16 @@ async fn scan_library(
 /// says "unknown", not a guess. That distinction is the whole reason the Godot
 /// stub fabricating 120 BPM was a bug rather than a convenience.
 fn build_row(href: &str, base_folder: &str) -> Row {
-    let info = vapor_library::parse_path(href, base_folder);
+    // Artist and album are inferred from the directory structure, and a local
+    // href carries a source id in front of that structure — parse the path, not
+    // the prefix. The base folder is a WebDAV notion (the server path the
+    // library starts at) and a local href is already relative to its own root,
+    // so it has none.
+    let (path, base) = match local::parse_href(href) {
+        Some((_, relative)) => (relative, ""),
+        None => (href, base_folder),
+    };
+    let info = vapor_library::parse_path(path, base);
     Row {
         href: href.to_string(),
         title: if info.title.is_empty() {
@@ -6331,7 +6484,7 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
 
     // Snapshot what needs doing and release the lock: the pass takes minutes,
     // and holding the lock would block every other command for its duration.
-    let (todo, (cache_dir, cache_max), cancel, remote, generation) = {
+    let (todo, (cache_dir, cache_max), cancel, remote, generation, roots) = {
         let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
         let hrefs: Vec<String> = app.rows.iter().map(|r| r.href.clone()).collect();
 
@@ -6356,6 +6509,7 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
             app.cancel.clone(),
             app.settings.remote.clone(),
             app.analysis_generation,
+            local::roots(&app.settings.folders),
         )
     };
 
@@ -6389,7 +6543,7 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
     let handle = app_handle.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = std::sync::Arc::new(cache::Cache::new(cache_dir, cache_max));
+        let cache = std::sync::Arc::new(cache::Cache::new(cache_dir, cache_max, roots));
 
         // One session for the whole pass: one keychain read and one connection,
         // rather than one of each per track. See `webdav::Fetcher`.
@@ -6943,9 +7097,20 @@ pub(crate) fn new_id(prefix: &str) -> String {
 pub fn run() {
     let builder = tauri::Builder::default();
 
+    // Every platform. The folder picker is how a library gets added at all, and
+    // on Android it is the only way — there is no path a person could type.
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+
     // Desktop only: the updater replaces the application bundle on disk, which
     // is not something a phone lets a program do. Android and iOS update
     // through their stores, so on those targets the plugin is not built at all.
+    //
+    // The attribute binds to the statement that follows it, so anything
+    // inserted between the two takes the guard and leaves the updater
+    // unguarded. That is exactly what happened when the dialog plugin was added
+    // here: `cargo check --target aarch64-linux-android` failed with
+    // `cannot find module or crate tauri_plugin_updater`, on a line nobody had
+    // edited.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
@@ -7245,6 +7410,9 @@ pub fn run() {
             commands::artwork::track_cover,
             commands::artwork::track_thumb,
             commands::analysis::analysis_status,
+            commands::folders::add_local_folder,
+            commands::folders::remove_local_folder,
+            commands::folders::local_folders,
             commands::cache::cache_status,
             commands::cache::set_cache_max_bytes,
             commands::cache::clear_audio_cache,
@@ -9025,6 +9193,126 @@ mod tests {
 
         let pool = track_meta_pool(&app);
         assert_eq!(pool.get("/dnb.mp3").expect("track").bpm, 88.0);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// AUD-26, whole. The half-read drum & bass track has to report the same
+    /// tempo to the table, the DJ's pool, the beat grid and the retracker —
+    /// because the failure this replaced was not a wrong number, it was two
+    /// different right-looking numbers in different parts of the app.
+    ///
+    /// 87 in, 174 everywhere out. The tag says "DnB" — a spelling the old
+    /// exact-match lookup could not match, and the one AUD-26 named first.
+    #[test]
+    fn a_half_read_dnb_track_reports_one_tempo_everywhere() {
+        let (mut app, dir) = app();
+        let mut r = row("/dnb.mp3", "d");
+        r.genre = "DnB".to_string();
+        app.rows.push(r.clone());
+        app.analysis
+            .insert("/dnb.mp3".to_string(), analysed_at(87.0, 240.0));
+        let analysis = app.analysis.get("/dnb.mp3").expect("analysis").clone();
+
+        // The tempo every consumer reads.
+        assert_eq!(
+            tempo_in_force(&app, "/dnb.mp3", Some(&analysis)),
+            Some(174.0)
+        );
+
+        // The library table.
+        let mut shown = r.clone();
+        app.apply_analysis(&mut shown);
+        assert_eq!(shown.bpm, 174.0, "the table still shows the half-time read");
+
+        // The DJ's pool, which feeds the Vibe cards.
+        let pool = track_meta_pool(&app);
+        assert_eq!(pool.get("/dnb.mp3").expect("track").bpm, 174.0);
+
+        // The grid the stretcher meets the record on. The tracked beats were
+        // laid down at 87, so they are refused and a 174 grid stands in —
+        // exactly what `beats_are_for` is for.
+        let grid = beat_grid(&analysis, tempo_in_force(&app, "/dnb.mp3", Some(&analysis)));
+        assert_eq!(grid.bpm, 174.0);
+        assert_ne!(
+            grid.beats, analysis.beats,
+            "a grid tracked at 87 must not be served as a 174 grid"
+        );
+
+        // And the retracker is told there is work to do, so the synthetic grid
+        // is temporary rather than permanent.
+        assert_eq!(
+            stale_grids(&app, &["/dnb.mp3".to_string()]),
+            vec![("/dnb.mp3".to_string(), 174.0)]
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The two numbers that used to disagree, asked directly. Before AUD-26 the
+    /// pool applied `octave_correct` and the grid did not, so this pair read
+    /// 174 and 87.
+    #[test]
+    fn the_displayed_tempo_and_the_mixed_tempo_cannot_diverge() {
+        let (mut app, dir) = app();
+        for (href, genre) in [("/dnb.mp3", "Drum & Bass"), ("/hop.mp3", "Hip Hop")] {
+            let mut r = row(href, "t");
+            r.genre = genre.to_string();
+            app.rows.push(r);
+            app.analysis
+                .insert(href.to_string(), analysed_at(87.0, 240.0));
+        }
+
+        let pool = track_meta_pool(&app);
+        for href in ["/dnb.mp3", "/hop.mp3"] {
+            let analysis = app.analysis.get(href).expect("analysis");
+            let grid = beat_grid(
+                &analysis.clone(),
+                tempo_in_force(&app, href, Some(analysis)),
+            );
+            assert_eq!(
+                pool.get(href).expect("track").bpm,
+                grid.bpm,
+                "{href}: the card and the stretcher disagree"
+            );
+        }
+        // And the hip hop track, genuinely at 87, is untouched — the two are
+        // only distinguishable by genre, which is the whole argument.
+        assert_eq!(pool.get("/hop.mp3").expect("track").bpm, 87.0);
+        assert_eq!(pool.get("/dnb.mp3").expect("track").bpm, 174.0);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// AUD-24's other half reaching the tempo table: the service answers with
+    /// its coarse shelf *and* the specific genre, and the specific one decides.
+    #[test]
+    fn a_second_genre_from_the_service_resolves_the_octave() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/x.mp3", "x"));
+        app.analysis
+            .insert("/x.mp3".to_string(), analysed_at(87.0, 240.0));
+
+        // "Electronic" alone is every electronic record Deezer knows, and says
+        // nothing about tempo.
+        app.looked.insert(
+            "/x.mp3".to_string(),
+            metadata::Looked {
+                genre: "Electronic".to_string(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(track_meta_pool(&app).get("/x.mp3").expect("t").bpm, 87.0);
+
+        // With the second genre kept, it does.
+        app.looked.insert(
+            "/x.mp3".to_string(),
+            metadata::Looked {
+                genre: "Electronic / Drum & Bass".to_string(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(track_meta_pool(&app).get("/x.mp3").expect("t").bpm, 174.0);
 
         let _ = std::fs::remove_dir_all(dir);
     }

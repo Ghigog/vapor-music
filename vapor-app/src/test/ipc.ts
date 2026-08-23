@@ -59,6 +59,8 @@ export type Command = string;
 export interface FakeOptions {
   /** Start already connected to a server, as a returning user would be. */
   connected?: boolean;
+  /** Folders on this device the library reads from. Not playlist folders. */
+  localFolders?: core.LocalFolder[];
   /** Start with a password in the keychain. */
   withPassword?: boolean;
   /** Tracks in the library. Defaults to a small mixed set. */
@@ -477,6 +479,13 @@ export class FakeBackend {
   constructor(options: FakeOptions = {}) {
     const connected = options.connected ?? true;
     this.settings = {
+      // Folders on this device, alongside the server. Empty by default, so
+      // every existing test still describes a server-only library.
+      //
+      // Named `localFolders` in the options because `folders` already means
+      // playlist folders here, and two things called folders in one fake is
+      // how a fixture starts lying.
+      folders: options.localFolders ?? [],
       remote: {
         url: connected ? "https://app.koofr.net" : "",
         username: connected ? "someone@example.com" : "",
@@ -693,6 +702,31 @@ export class FakeBackend {
 
       case "has_webdav_password":
         return this.password !== null && String(a.username ?? "") !== "";
+
+      case "local_folders":
+        return this.settings.folders;
+
+      case "add_local_folder": {
+        const path = String(a.path ?? "").trim();
+        // Already configured is a no-op returning the list, matching the
+        // backend: clicking add on a folder you already have is not an error.
+        if (this.settings.folders.some((f) => f.path === path)) {
+          return this.settings.folders;
+        }
+        this.settings.folders = [
+          ...this.settings.folders,
+          { id: `folder-${this.settings.folders.length + 1}`, path, name: "" },
+        ];
+        return this.settings.folders;
+      }
+
+      case "remove_local_folder": {
+        const id = String(a.id ?? "");
+        this.settings.folders = this.settings.folders.filter(
+          (f) => f.id !== id,
+        );
+        return this.settings.folders;
+      }
 
       case "scan_library": {
         if (this.password === null) {

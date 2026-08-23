@@ -88,6 +88,7 @@ export function TabMenu({
                 <button
                   className="tabmenu__item"
                   data-drop-id={item.id}
+                  data-drop-name={item.label}
                   onClick={() => onPick(item.id)}
                 >
                   <span className="tabmenu__name">{item.label}</span>

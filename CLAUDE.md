@@ -150,6 +150,14 @@ dev port cannot move without editing that file too. One `tauri dev` per
 machine. If 1420 is taken, the app is already running — attach to it rather
 than starting a second one.
 
+**Ask before running the e2e suite.** It is for preparing a release or closing
+out a major feature, not for checking a change on the way past. A run builds
+the frontend and drives three browser projects for the better part of a minute,
+on a machine Dylan is using, and every session that reaches for it as a routine
+check costs him that. Say what you want to run it for and wait for a yes.
+
+`npm run test` is the one to reach for by default — see below.
+
 **The e2e port moves.** `VAPOR_E2E_PORT` is read by both
 `playwright.config.ts` and `vite.e2e.config.ts`; unset, it is 1421. Take a port
 of your own when another session may be testing:
@@ -168,7 +176,8 @@ is on it.
 tree serialize on its lock: "Blocking waiting for file lock on build directory"
 is contention, not a hang — wait it out rather than killing the other build.
 
-`npm run test` (vitest, jsdom) is safe to run concurrently.
+`npm run test` (vitest, jsdom) is safe to run concurrently, takes seconds, and
+needs no permission. It is the default check for a change.
 
 ## How worktrees actually work here
 

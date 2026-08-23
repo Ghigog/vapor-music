@@ -338,9 +338,9 @@ pub fn album_id_of(body: &str) -> Option<u64> {
         .as_u64()
 }
 
-/// The genre named by a Deezer **album** response, if it names a real one.
+/// The genres named by a Deezer **album** response, joined with " / ".
 ///
-/// `genres.data[0].name`, and the emphasis on *album* is the whole point. This
+/// `genres.data[*].name`, and the emphasis on *album* is the whole point. This
 /// parser was correct all along and was being handed the wrong document: it was
 /// fed the response from `/search/album`, which has no `genres` object at any
 /// level — only a numeric `genre_id`. So it looked, found nothing, and returned
@@ -353,24 +353,51 @@ pub fn album_id_of(body: &str) -> Option<u64> {
 /// in the tests below, captured from the real responses rather than written
 /// from reading the GDScript this was ported from — which is how the mismatch
 /// survived a full suite of passing tests in the first place.
+///
+/// **All of them, not `[0]`** (AUD-24). An album filed under both Electronic
+/// and Drum & Bass used to keep whichever Deezer listed first, and the coarse
+/// one is the likelier first. `vapor_library::tempo_band` reads a `/`-joined
+/// field a segment at a time, so a second genre is not decoration: it is what
+/// can make the octave correction fire on a track the coarse label could never
+/// resolve.
+///
+/// This does not make Deezer granular. Its taxonomy is roughly twenty-five
+/// top-level genres with no drum and bass, no riddim and no neo-classical in
+/// it, so most albums still come back with the single word "Electronic". What
+/// this recovers is the minority that carry more, at no cost — the real answer
+/// to AUD-24 needs a source with a deeper taxonomy, which is AUD-18's decision
+/// and not made here.
+///
+/// Joined rather than returned as a `Vec` because `Row::genre` is one `String`
+/// end to end — index, filter, sort, group, the genre tiles and the smart
+/// group rules all key on it. Widening that type is its own change.
 pub fn genre_of(body: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return String::new();
     };
-    let name = value
+    let Some(names) = value
         .get("genres")
         .and_then(|g| g.get("data"))
         .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-        .and_then(|g| g.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
+    else {
+        return String::new();
+    };
 
-    if is_unknown_genre(name) {
-        String::new()
-    } else {
-        name.to_string()
+    let mut kept: Vec<&str> = Vec::new();
+    for name in names
+        .iter()
+        .filter_map(|g| g.get("name").and_then(|n| n.as_str()))
+        .map(str::trim)
+        .filter(|name| !is_unknown_genre(name))
+    {
+        // A repeat would read downstream as two genres when it is one, and
+        // every consumer of this field — the genre tiles, the group rules,
+        // `tempo_band`'s segment split — would see the duplicate.
+        if !kept.iter().any(|k| k.eq_ignore_ascii_case(name)) {
+            kept.push(name);
+        }
     }
+    kept.join(" / ")
 }
 
 /// Whether a genre string says nothing.
@@ -831,6 +858,28 @@ mod tests {
         let body = r#"{"genres":{"data":[{"name":"Electronic"}]}}"#;
 
         assert_eq!(genre_of(body), "Electronic");
+    }
+
+    /// AUD-24's `[0]` half. The first genre is the shelf Deezer had room for;
+    /// anything after it is the one that says something about the record, and
+    /// `vapor_library::tempo_band` splits this field on `/` to read it.
+    #[test]
+    fn every_genre_the_album_names_is_kept() {
+        let body = r#"{"genres":{"data":[{"name":"Electronic"},{"name":"Drum & Bass"}]}}"#;
+        assert_eq!(genre_of(body), "Electronic / Drum & Bass");
+        assert_eq!(
+            vapor_library::tempo_band(&genre_of(body)),
+            Some((160.0, 185.0)),
+            "the second genre has to reach the tempo band to be worth keeping"
+        );
+    }
+
+    /// A placeholder among real genres is dropped, not joined; and a genre
+    /// listed twice is one genre.
+    #[test]
+    fn placeholders_and_repeats_do_not_survive_the_join() {
+        let body = r#"{"genres":{"data":[{"name":"Unknown"},{"name":"Techno"},{"name":"techno"},{"name":""}]}}"#;
+        assert_eq!(genre_of(body), "Techno");
     }
 
     // -----------------------------------------------------------------------

@@ -24,6 +24,7 @@ pub(crate) mod analysis;
 pub(crate) mod artwork;
 pub(crate) mod cache;
 pub(crate) mod dj;
+pub(crate) mod folders;
 pub(crate) mod groups;
 pub(crate) mod playback;
 pub(crate) mod playlists;

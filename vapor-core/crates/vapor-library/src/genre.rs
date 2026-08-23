@@ -54,13 +54,48 @@ const TAXONOMY: &[(&str, &[&str])] = &[
 /// `bpm * 2` and `bpm / 2`, and those are a factor of two apart — so a band
 /// only has to be right to within about 40% to pick correctly, and a narrow one
 /// would refuse to answer for perfectly ordinary records.
+///
+/// **Every key here must already be in [`normalise`] form** — lowercase, runs
+/// of alphanumerics separated by single spaces, `&` spelled `and`. Lookups are
+/// normalised before they are compared, so a key that is not would be dead
+/// weight that nothing could ever match. `keys_are_already_normalised` fails
+/// the build's test run if one slips in.
+///
+/// The spellings are here because the table is the *only* thing standing
+/// between a half-read drum & bass record and the DJ treating it as hip hop,
+/// and taggers do not agree on a single name for that genre. AUD-26 measured
+/// the cost: 108 of 563 corpus entries pile up in the 84–90 BPM band, and the
+/// correction that fixes them never fired because the lookup was exact string
+/// equality and the tags said "DnB", "D&B" or "Breakbeat".
 const TEMPO_BANDS: &[(&str, f32, f32)] = &[
-    ("drum & bass", 160.0, 185.0),
+    // Drum & bass, under every spelling a tagger has been seen to use.
     ("drum and bass", 160.0, 185.0),
+    ("drum n bass", 160.0, 185.0),
+    ("drumandbass", 160.0, 185.0),
+    ("drumnbass", 160.0, 185.0),
+    ("dnb", 160.0, 185.0),
+    ("d n b", 160.0, 185.0),
+    ("d and b", 160.0, 185.0),
     ("liquid dnb", 160.0, 185.0),
+    ("liquid drum and bass", 160.0, 185.0),
+    ("liquid funk", 160.0, 185.0),
     ("neurofunk", 160.0, 185.0),
+    ("neuro", 160.0, 185.0),
+    ("jump up", 160.0, 185.0),
+    ("drumstep", 160.0, 185.0),
+    ("halftime", 160.0, 185.0),
+    // Breakbeat is filed with drum & bass rather than given a band of its own.
+    // It is the tag this library's jungle and DnB actually carries, and the
+    // 130–140 nu-skool records it also covers are safe: 132 is outside
+    // 160–185 and so are 66 and 264, so `octave_correct` finds no candidate
+    // and leaves them exactly where they are.
+    ("breakbeat", 160.0, 185.0),
+    ("breakbeats", 160.0, 185.0),
     ("jungle", 155.0, 185.0),
+    ("ragga jungle", 155.0, 185.0),
     ("dubstep", 130.0, 150.0),
+    ("brostep", 130.0, 150.0),
+    ("riddim", 135.0, 150.0),
     ("house", 115.0, 132.0),
     ("tech house", 118.0, 132.0),
     ("deep house", 110.0, 128.0),
@@ -70,9 +105,15 @@ const TEMPO_BANDS: &[(&str, f32, f32)] = &[
     ("acid techno", 125.0, 150.0),
     ("minimal techno", 120.0, 140.0),
     ("trance", 130.0, 145.0),
+    ("psytrance", 135.0, 150.0),
+    ("psy trance", 135.0, 150.0),
+    ("psychedelic trance", 135.0, 150.0),
     ("garage", 128.0, 138.0),
+    ("uk garage", 128.0, 138.0),
+    ("2 step", 128.0, 138.0),
+    ("2step", 128.0, 138.0),
     ("hip hop", 70.0, 110.0),
-    ("hip-hop", 70.0, 110.0),
+    ("hiphop", 70.0, 110.0),
     ("rap", 70.0, 110.0),
     ("reggae", 60.0, 100.0),
     ("dub", 60.0, 100.0),
@@ -84,27 +125,63 @@ const TEMPO_BANDS: &[(&str, f32, f32)] = &[
     ("ambient", 50.0, 120.0),
 ];
 
+/// A genre name reduced to the form [`TEMPO_BANDS`] is keyed by.
+///
+/// Lowercased; `&` spelled out, so "D&B" and "D and B" are one name; and every
+/// other run of punctuation or whitespace collapsed to a single space, so
+/// "Drum'n'Bass", "drum-n-bass" and "Drum   N   Bass" are one name too.
+///
+/// Deliberately *not* used by [`genre_distance`] or [`find_node`], which key
+/// the taxonomy graph on a plain lowercase and have their own substring
+/// fallback. Changing what those two consider equal would move mix costs, and
+/// this is a tempo lookup, not a taxonomy change.
+fn normalise(genre: &str) -> String {
+    genre
+        .replace('&', " and ")
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The tempo band a genre is played at, if this crate knows one.
 ///
 /// Matched on the most specific name first, then on any parent in the taxonomy,
 /// so "Liquid DNB" answers even when only "Drum & Bass" is listed.
+///
+/// A tag field holding several genres — "Drum & Bass / Neurofunk", the shape a
+/// file tag and a multi-genre service response both arrive in — is tried a
+/// segment at a time, and the first segment with a band wins. First rather than
+/// some reconciliation of all of them because the alternative is refusing to
+/// answer whenever a record is filed under two things, which is most of the
+/// interesting ones; and because the segments of a real tag are near enough
+/// always the same music described at two levels of detail.
 pub fn tempo_band(genre: &str) -> Option<(f32, f32)> {
-    let g = genre.trim().to_lowercase();
+    genre.split(['/', ',', ';', '|']).find_map(band_of_one)
+}
+
+/// [`tempo_band`] for a name already known to hold a single genre.
+fn band_of_one(genre: &str) -> Option<(f32, f32)> {
+    let g = normalise(genre);
     if g.is_empty() {
         return None;
     }
-    if let Some((_, lo, hi)) = TEMPO_BANDS.iter().find(|(name, _, _)| *name == g) {
-        return Some((*lo, *hi));
+    let listed = |name: &str| {
+        TEMPO_BANDS
+            .iter()
+            .find(|(key, _, _)| *key == name)
+            .map(|(_, lo, hi)| (*lo, *hi))
+    };
+    if let Some(band) = listed(&g) {
+        return Some(band);
     }
     // A genre this table does not list may still be a child of one it does.
-    graph().get(&g).and_then(|neighbours| {
-        neighbours.iter().find_map(|n| {
-            TEMPO_BANDS
-                .iter()
-                .find(|(name, _, _)| name == n)
-                .map(|(_, lo, hi)| (*lo, *hi))
-        })
-    })
+    // The graph is keyed on a plain lowercase, so look it up that way and
+    // normalise the neighbours on the way back out.
+    graph()
+        .get(&genre.trim().to_lowercase())
+        .and_then(|neighbours| neighbours.iter().find_map(|n| listed(&normalise(n))))
 }
 
 /// The tempo a trusted reference says this track is really at.
@@ -437,6 +514,92 @@ mod tests {
         assert_eq!(tempo_band("  DRUM & BASS  "), Some((160.0, 185.0)));
         assert_eq!(tempo_band("Sea Shanty"), None);
         assert_eq!(tempo_band(""), None);
+    }
+
+    /// A key that is not already normalised can never be matched, because the
+    /// lookup normalises first. This is the test that catches "drum & bass"
+    /// being added back to the table and silently never firing.
+    #[test]
+    fn keys_are_already_normalised() {
+        for (key, _, _) in TEMPO_BANDS {
+            assert_eq!(&normalise(key), key, "{key} is not in normalised form");
+        }
+    }
+
+    /// The reason AUD-26's correction never ran: the lookup was exact string
+    /// equality, and no tagger writes "drum & bass".
+    #[test]
+    fn every_spelling_of_drum_and_bass_finds_the_band() {
+        for spelling in [
+            "DnB",
+            "dnb",
+            "D&B",
+            "d & b",
+            "D.N.B.",
+            "Drum n Bass",
+            "drum'n'bass",
+            "Drum-n-Bass",
+            "Drum   N   Bass",
+            "Drum & Bass",
+            "Drum and Bass",
+            "DrumAndBass",
+            "Liquid Funk",
+            "Jump Up",
+            "Neurofunk",
+            "Breakbeat",
+        ] {
+            assert_eq!(
+                tempo_band(spelling),
+                Some((160.0, 185.0)),
+                "{spelling} missed the band"
+            );
+            assert_eq!(
+                octave_correct(87.0, spelling),
+                Some(174.0),
+                "{spelling} did not correct 87"
+            );
+        }
+    }
+
+    /// Punctuation and case are noise; the words are the name.
+    #[test]
+    fn punctuation_and_spacing_are_not_part_of_a_name() {
+        assert_eq!(normalise("  Drum'n'Bass  "), "drum n bass");
+        assert_eq!(normalise("D&B"), "d and b");
+        assert_eq!(normalise("Hip-Hop"), "hip hop");
+        assert_eq!(normalise("///"), "");
+        assert_eq!(tempo_band("HIP-HOP"), Some((70.0, 110.0)));
+        assert_eq!(tempo_band("Tech-House"), Some((118.0, 132.0)));
+    }
+
+    /// Real tag fields hold several genres at once, and step one of AUD-24
+    /// makes the service's response one too.
+    #[test]
+    fn a_multi_genre_tag_is_read_a_segment_at_a_time() {
+        assert_eq!(tempo_band("Drum & Bass / Neurofunk"), Some((160.0, 185.0)));
+        assert_eq!(tempo_band("Electronic, Drum & Bass"), Some((160.0, 185.0)));
+        assert_eq!(tempo_band("Electronic; Dance"), None);
+        // First segment with a band wins, and says so.
+        assert_eq!(tempo_band("Hip Hop / Drum & Bass"), Some((70.0, 110.0)));
+    }
+
+    /// Nu-skool breaks sits at 130–140 and is nowhere near the band this table
+    /// files "breakbeat" under. That is safe rather than lucky: no octave of
+    /// 132 lands inside 160–185 either, so the correction declines.
+    #[test]
+    fn a_breakbeat_record_at_its_own_tempo_is_left_alone() {
+        assert_eq!(octave_correct(132.0, "Breakbeat"), None);
+        assert_eq!(octave_correct(174.0, "Breakbeat"), None);
+    }
+
+    /// The alias table must not swallow the coarse label the service returns.
+    /// "Electronic" covers everything from Nils Frahm to Eptic (AUD-24), and a
+    /// band for it would be a guess dressed as knowledge.
+    #[test]
+    fn the_coarse_service_label_still_has_no_band() {
+        assert_eq!(tempo_band("Electronic"), None);
+        assert_eq!(tempo_band("Dance"), None);
+        assert_eq!(octave_correct(87.0, "Electronic"), None);
     }
 
     // -----------------------------------------------------------------------

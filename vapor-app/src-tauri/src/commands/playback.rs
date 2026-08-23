@@ -116,8 +116,10 @@ pub fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
         (Some(a), Some(s)) => beat_window(
             a,
             s.position,
-            app.settings
-                .bpm_override(app.playing.as_deref().unwrap_or_default())
+            // The tempo in force, not the raw reading: the ribbon pulses on
+            // this, and a pulse at half the tempo the mixer is using is the
+            // visible half of AUD-26.
+            crate::tempo_in_force(&app, app.playing.as_deref().unwrap_or_default(), Some(a))
                 .unwrap_or(a.bpm),
         ),
         _ => (0.0, 0.0),

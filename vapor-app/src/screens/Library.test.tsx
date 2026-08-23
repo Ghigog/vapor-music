@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { useBackend } from "../test/setup";
 import { makeEntity, makeRow } from "../test/ipc";
+import * as drag from "../lib/drag";
 import type * as core from "../lib/core";
 
 const FOUND =
@@ -252,5 +253,89 @@ describe("Library — album identity", () => {
     // And each names its own artist rather than one claiming both.
     expect(screen.getByText("Queen")).toBeInTheDocument();
     expect(screen.getByText("Abba")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Picking a tile up.
+ *
+ * The rails are the drop targets and they were only ever half the feature: a
+ * group holds artists, albums and genres, its empty state says so, and no tile
+ * in the library could be picked up. `Songs` was the app's only drag source
+ * and it carries tracks, so `dropOn`'s group branch had no caller at all.
+ *
+ * What is asserted is the payload left on the `dataTransfer`, because that is
+ * the whole of the contract with `GroupRail` and `PlaylistRail`. The rest of
+ * the gesture is the browser's.
+ */
+describe("Library — dragging a tile out", () => {
+  /** The card behind a tile's cover button, which is the draggable part. */
+  function tile(name: RegExp): HTMLElement {
+    const open = screen.getByRole("button", { name });
+    const card = open.closest<HTMLElement>(".card");
+    if (!card) throw new Error("the tile has no card around it");
+    return card;
+  }
+
+  /** Start a drag on `element` and hand back what it put on the transfer. */
+  function dragFrom(element: HTMLElement): DataTransfer {
+    const data = new DataTransfer();
+    element.dispatchEvent(
+      new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      }),
+    );
+    return data;
+  }
+
+  it("carries an album card as an album", async () => {
+    useBackend({ rows: album(), albums: currents(), covers: true });
+    const user = userEvent.setup();
+    render(<Library />);
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+    await screen.findByRole("button", { name: /open the album currents/i });
+
+    const payload = drag.readDrag(dragFrom(tile(/open the album currents/i)));
+    expect(payload).toEqual({
+      kind: "album",
+      values: ["Currents"],
+      label: "Currents",
+    });
+  });
+
+  it("carries an artist card as an artist", async () => {
+    useBackend({
+      rows: album(),
+      artists: [makeEntity({ name: "Tame Impala", subtitle: "1 album" })],
+      covers: true,
+    });
+    const user = userEvent.setup();
+    render(<Library />);
+    await user.click(await screen.findByRole("tab", { name: /^artists$/i }));
+    await screen.findByRole("button", { name: /open the artist tame impala/i });
+
+    const payload = drag.readDrag(dragFrom(tile(/open the artist tame impala/i)));
+    expect(payload?.kind).toBe("artist");
+    expect(payload?.values).toEqual(["Tame Impala"]);
+  });
+
+  /*
+   * The tile is a container of two buttons and the drag lives on the
+   * container, so a drag begun on the cover — which is where a hand actually
+   * lands — has to reach it. That is the browser's own rule about the nearest
+   * draggable ancestor, and this is the test that says we are relying on it.
+   */
+  it("is picked up from the cover button inside the card", async () => {
+    useBackend({ rows: album(), albums: currents(), covers: true });
+    const user = userEvent.setup();
+    render(<Library />);
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+
+    const open = await screen.findByRole("button", {
+      name: /open the album currents/i,
+    });
+    expect(open.closest("[draggable=true]")).not.toBeNull();
   });
 });

@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import * as core from "../lib/core";
 import { Cover } from "../components/Cover";
+import { useEntityDrag } from "../components/entityDrag";
 import { Home, forgetHomeShelves } from "./Home";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Songs } from "./Songs";
@@ -742,6 +743,10 @@ function AlbumArtwork({
  * button on the sleeve starts it. Collapsing those into one gesture would mean
  * either you cannot see what is on an album without playing it, or you cannot
  * play it without going in first.
+ *
+ * A third thing you can do with it is take it somewhere — onto a group in the
+ * rail, which is what a group is made of, or onto a playlist, which resolves
+ * it to the tracks on it. See `useEntityDrag`.
  */
 function EntityCard({
   entity,
@@ -755,8 +760,12 @@ function EntityCard({
   onPlay: () => void;
 }) {
   const noun = kind;
+  const pickUp = useEntityDrag(kind, entity.name);
   return (
-    <div className={"card card--entity" + (kind === "artist" ? " card--round" : "")}>
+    <div
+      className={"card card--entity" + (kind === "artist" ? " card--round" : "")}
+      {...pickUp}
+    >
       <button
         type="button"
         className="card__open"

@@ -24,7 +24,7 @@ import * as core from "../lib/core";
 import { DownloadButton } from "../components/DownloadButton";
 import { Empty } from "../components/States";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { startTrackDrag } from "../components/PlaylistRail";
+import { writeDrag } from "../lib/drag";
 
 /** Tell the rail its counts have moved. */
 function announce() {
@@ -225,10 +225,19 @@ export function Playlist({
               draggable
               onDragStart={(e) => {
                 setDragging(index);
-                e.dataTransfer.effectAllowed = "move";
                 // Also carries the track payload, so a row can be dragged out
                 // to another playlist in the rail as well as reordered here.
-                startTrackDrag(e, [row.href]);
+                writeDrag(e.dataTransfer, {
+                  kind: "track",
+                  values: [row.href],
+                  label: row.title,
+                });
+                // Both, and after `writeDrag`, which sets plain "copy". This
+                // row is two drags at once: a move within this list, and a
+                // copy onto a rail. `effectAllowed` has to permit whichever
+                // `dropEffect` the target asks for, and a target asking for
+                // one the drag did not allow is a drop the browser refuses.
+                e.dataTransfer.effectAllowed = "copyMove";
               }}
               onDragOver={(e) => {
                 if (dragging === null) return;

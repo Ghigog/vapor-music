@@ -55,6 +55,46 @@ pub const MAX_CACHE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024 * 1024;
 /// no cache, because it pays the download twice and reports itself as working.
 pub const MIN_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
+/// A folder on this device the library reads from.
+///
+/// Sits alongside [`RemoteConfig`] rather than replacing it. A person can have
+/// a server, or folders, or both, and the app should not make them choose —
+/// the music somebody already has on disk and the music on their NAS are the
+/// same library from where they are standing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LocalFolder {
+    /// Stable for the life of the folder, and part of every href that comes
+    /// from it — see `local::href` in the shell. Two folders can hold the same
+    /// relative path, so without this they would be one track to the index.
+    ///
+    /// Never reuse an id for a different folder: every playlist entry, tag and
+    /// analysis record that named the old one would silently point at the new.
+    pub id: String,
+    /// Absolute path on this device.
+    pub path: String,
+    /// What to call it on screen. Empty means "use the folder's own name".
+    #[serde(default)]
+    pub name: String,
+}
+
+impl LocalFolder {
+    /// What to show a person, which is the folder's own name unless they
+    /// renamed it.
+    pub fn label(&self) -> &str {
+        if !self.name.trim().is_empty() {
+            return self.name.trim();
+        }
+        self.path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Music")
+    }
+}
+
 /// Where the library lives.
 ///
 /// The password is deliberately **not** part of this struct. It belongs in the
@@ -122,6 +162,18 @@ pub enum ThemeMode {
 pub struct Settings {
     #[serde(default)]
     pub remote: RemoteConfig,
+
+    /// Folders on this device to read music from.
+    ///
+    /// Additive to `remote`, not an alternative to it. `Onboarding.tsx` used to
+    /// record that a local-folder library was deliberately absent because Vapor
+    /// was "cloud-first" and a folder would be a second source of truth — but
+    /// the README calls the app local-first and promises every feature works
+    /// with no internet, and as shipped nobody could use it without standing up
+    /// a WebDAV server. The two documents could not both be right. This is the
+    /// side that was chosen.
+    #[serde(default)]
+    pub folders: Vec<LocalFolder>,
 
     #[serde(default = "default_font_size")]
     #[serde(alias = "base_font_size")]
@@ -303,6 +355,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             remote: RemoteConfig::default(),
+            folders: Vec::new(),
             base_font_size: default_font_size(),
             ui_scale: default_ui_scale(),
             theme_mode: ThemeMode::default(),

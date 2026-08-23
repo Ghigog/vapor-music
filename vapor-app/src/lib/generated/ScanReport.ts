@@ -4,4 +4,14 @@ export type ScanReport = { tracks: number, directories: number,
 /**
  * Folders that could not be read and were walked past (TD-49).
  */
-unreadable: number, };
+unreadable: number, 
+/**
+ * Sources that failed outright, named, one line each.
+ *
+ * A library can have several sources now. One unreachable server used to
+ * fail the whole command, which with folders configured would throw away a
+ * scan that had already succeeded — and a person whose NAS is asleep still
+ * wants the music on their laptop. So a failure is reported beside the
+ * result instead of replacing it.
+ */
+problems: Array<string>, };
