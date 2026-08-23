@@ -90,14 +90,32 @@ pub struct Looked {
     /// before anything of theirs is believed.
     #[serde(default)]
     pub deezer_duration: u32,
-    /// Whether a lookup has been attempted at all.
+    /// Whether the **facts** pass has run for this track — genre, tempo,
+    /// duration, from Deezer.
     ///
-    /// Distinct from every field being empty: a track whose lyrics simply do
-    /// not exist on LRCLIB must not be asked for again on every visit to the
-    /// screen, and "nothing found" and "not yet looked" are otherwise the same
-    /// value.
+    /// Named `attempted` since the port, and it used to be read as "everything
+    /// has been tried", which is how it came to deny the whole library two
+    /// features. `identify_library` sets it after asking Deezer and never
+    /// asking LRCLIB at all, and the background fetcher treated it as proof
+    /// there was nothing left to get. Measured 2026-08-22: 534 of 534 cached
+    /// entries had `attempted: true`, and **zero** had lyrics or album art.
+    ///
+    /// One flag per thing actually attempted, so a pass cannot close a door it
+    /// never opened. See [`Looked::words_attempted`].
     #[serde(default)]
     pub attempted: bool,
+    /// Whether **LRCLIB** has been asked for this track's words.
+    ///
+    /// This is the flag the old doc comment described: a track whose lyrics
+    /// simply do not exist must not be asked for again on every visit to the
+    /// screen, and "nothing found" and "not yet looked" are otherwise the same
+    /// value.
+    ///
+    /// Defaults to false, which is what repairs the caches already written —
+    /// every entry poisoned by the facts pass asks once more, gets its words
+    /// and its sleeve, and settles.
+    #[serde(default)]
+    pub words_attempted: bool,
 }
 
 /// Everything looked up so far, keyed by href.
@@ -614,6 +632,55 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The defect this pair of flags exists to prevent.
+    ///
+    /// Measured on a real cache 2026-08-22: 534 of 534 entries had
+    /// `attempted: true` and **zero** had lyrics or album art, because the
+    /// facts pass set one flag that every other path read as "nothing left to
+    /// get". A record can only claim what it actually did.
+    #[test]
+    fn asking_deezer_for_a_genre_does_not_claim_the_words_were_asked_for() {
+        let mut entry = Looked {
+            genre: "Pop".to_string(),
+            deezer_bpm: 160.2,
+            ..Default::default()
+        };
+        // What the facts pass sets.
+        entry.attempted = true;
+
+        assert!(
+            !entry.words_attempted,
+            "the facts pass claimed LRCLIB had been asked"
+        );
+        assert!(entry.lyrics.is_none());
+        assert!(entry.album_art.is_empty());
+    }
+
+    /// The caches already written are repaired by reading them, with no
+    /// migration: `words_attempted` is absent from every one of them, and
+    /// absent deserialises to false.
+    #[test]
+    fn a_cache_written_before_the_split_asks_for_its_words_again() {
+        let json = r#"{
+            "lyrics": null,
+            "artistImage": "",
+            "albumArt": "",
+            "genre": "Pop",
+            "deezerBpm": 160.2,
+            "deezerDuration": 377,
+            "attempted": true
+        }"#;
+
+        let entry: Looked = serde_json::from_str(json).expect("parse");
+
+        assert!(entry.attempted, "the old flag still reads");
+        assert!(
+            !entry.words_attempted,
+            "an entry from before the split must not look already-asked"
+        );
+        assert_eq!(entry.genre, "Pop", "the facts it did get are kept");
+    }
+
     use super::*;
 
     /// The real path behind the crash, not a stand-in for it.

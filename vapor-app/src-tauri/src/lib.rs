@@ -1715,11 +1715,24 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
              * Asked concurrently: two independent services, and in turn this
              * pass was two round trips deep per track over hundreds of them.
              */
-            let (facts, genre) = std::thread::scope(|scope| {
+            let (facts, sleeve) = std::thread::scope(|scope| {
                 let f = scope.spawn(|| lookup.track_facts(&artist, &title));
                 let a = scope.spawn(|| lookup.album(&artist, &album));
-                (f.join().unwrap_or(None), a.join().unwrap_or_default().1)
+                (f.join().unwrap_or(None), a.join().unwrap_or_default())
             });
+            // `album` returns the art URL and the genre together, and only the
+            // genre is kept. That looks wasteful and is deliberate: the URL is
+            // useless without the image file beside it, because the CSP blocks
+            // remote origins and `looked_up_image` serves a local file named
+            // after the URL. Storing the URL alone would make the background
+            // fetcher believe the sleeve was already had, and skip the download
+            // for ever — the same shape of bug this pass caused with words.
+            //
+            // Downloading here instead would pull an image per track across the
+            // whole library on one button press. The words were moved out of
+            // this pass for exactly that reason; the sleeve stays out with them
+            // and arrives as a track is played.
+            let genre = sleeve.1;
 
             if let Ok(mut app) = shared.lock() {
                 let entry = app.looked.entry(href.clone()).or_default();
@@ -3241,7 +3254,17 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
     if !app.settings.metadata_lookup_enabled {
         return;
     }
-    if app.looked.get(href).is_some_and(|l| l.attempted) {
+    // Gated on what is actually missing, not on whether some other pass has
+    // run. `attempted` means the facts pass asked Deezer for a genre; it says
+    // nothing about words, which that pass never requests. Reading it here is
+    // what left 534 of 534 cached tracks marked done with no lyrics and no
+    // sleeve between them.
+    let (has_words, has_sleeve) = app
+        .looked
+        .get(href)
+        .map(|l| (l.words_attempted, !l.album_art.is_empty()))
+        .unwrap_or((false, false));
+    if has_words && has_sleeve {
         return;
     }
     let Some(row) = app.rows.iter().find(|r| r.href == href) else {
@@ -3260,25 +3283,38 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
             let Ok(lookup) = metadata::Lookup::new() else {
                 return;
             };
+            // Only the half that is missing. A track that has its sleeve and
+            // wants words costs one LRCLIB request, not a Deezer search as
+            // well — which matters while the Deezer calls are unregistered
+            // (AUD-18).
             let (words, sleeve) = std::thread::scope(|scope| {
-                let w = scope.spawn(|| lookup.lyrics(&artist, &title));
-                let a = scope.spawn(|| lookup.album(&artist, &album));
-                (w.join().unwrap_or(None), a.join().unwrap_or_default())
+                let w = (!has_words).then(|| scope.spawn(|| lookup.lyrics(&artist, &title)));
+                let a = (!has_sleeve).then(|| scope.spawn(|| lookup.album(&artist, &album)));
+                (
+                    w.and_then(|h| h.join().unwrap_or(None)),
+                    a.map(|h| h.join().unwrap_or_default()),
+                )
             });
-            if !sleeve.0.is_empty() {
-                lookup.download_image(&sleeve.0, &dir);
+            if let Some(sleeve) = &sleeve {
+                if !sleeve.0.is_empty() {
+                    lookup.download_image(&sleeve.0, &dir);
+                }
             }
             if let Ok(mut app) = shared.lock() {
                 let entry = app.looked.entry(href).or_default();
-                entry.attempted = true;
+                // Asked, whatever came back. "No words for this one" is an
+                // answer and must not be re-asked on every play.
+                entry.words_attempted = true;
                 if let Some(words) = words {
                     entry.lyrics = Some(words);
                 }
-                if !sleeve.1.trim().is_empty() {
-                    entry.genre = sleeve.1;
-                }
-                if !sleeve.0.is_empty() {
-                    entry.album_art = sleeve.0;
+                if let Some(sleeve) = sleeve {
+                    if !sleeve.1.trim().is_empty() {
+                        entry.genre = sleeve.1;
+                    }
+                    if !sleeve.0.is_empty() {
+                        entry.album_art = sleeve.0;
+                    }
                 }
                 let _ = app.save_looked();
             }
