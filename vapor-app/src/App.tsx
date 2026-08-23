@@ -413,6 +413,21 @@ export function App() {
         onResult={(text, ok) => setDropSaid({ text, ok })}
       >
       <div className="shell">
+        {/*
+          The only thing on screen you can drag the window by.
+
+          `titleBarStyle: "Overlay"` with `hiddenTitle` means macOS draws no bar
+          — the webview owns the whole window, including the strip the traffic
+          lights sit in. Nothing there was a drag region, so the window could
+          not be moved at all; the sidebar's 42px of top padding was reserving
+          space for a bar that has no grab handle.
+
+          Above the content rather than behind it, because a region behind an
+          opaque background never receives the press. Tauri's own handler
+          ignores presses that land on interactive descendants, and this has
+          none — it is an empty strip.
+        */}
+        <div className="shell__drag" data-tauri-drag-region />
         {damaged.length > 0 && !damagedSeen && (
           <div className="damaged" role="alert">
             <div className="damaged__body">
