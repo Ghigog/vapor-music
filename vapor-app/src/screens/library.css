@@ -178,6 +178,37 @@
 
 .library__section-head {
   margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2, 8px);
+}
+
+/*
+ * How many are under the heading.
+ *
+ * "Incomplete" on its own invites the question this answers, and the count is
+ * the difference between a note and a problem — three is a tidy-up, ninety is
+ * what the library actually looks like.
+ */
+.library__section-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+/*
+ * "4 of 8" under an incomplete album.
+ *
+ * Quiet on purpose. It is a correction to what the tile implies, not a warning
+ * — nothing is wrong with the library, it just does not hold the whole record —
+ * so it sits at the same weight as the subtitle rather than shouting in red.
+ */
+.card__gap {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .library__grid {

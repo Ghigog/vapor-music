@@ -90,6 +90,13 @@ pub struct Looked {
     /// before anything of theirs is believed.
     #[serde(default)]
     pub deezer_duration: u32,
+    /// Which Deezer release this track was matched to. 0 when unmatched.
+    ///
+    /// A pointer rather than a copy: the tracklist behind it can be fourteen
+    /// titles, and storing that on all fourteen tracks would write the same
+    /// list fourteen times. See [`Albums`].
+    #[serde(default)]
+    pub deezer_album_id: u64,
     /// Whether the **facts** pass has run for this track — genre, tempo,
     /// duration, from Deezer.
     ///
@@ -295,6 +302,49 @@ pub fn track_facts_of(body: &str) -> Option<TrackFacts> {
     })
 }
 
+/// The first hit of a track search, with the release it sits on.
+///
+/// The search response was being read for one field — the track id — and thrown
+/// away, when it already names the album, its id, and the recording's length.
+/// That is everything needed to say which record a loose file came off, without
+/// a single extra request.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TrackHit {
+    pub id: u64,
+    pub title: String,
+    /// Length in seconds, for the [`same_recording`] check.
+    pub duration: u32,
+    pub album_id: u64,
+    pub album_title: String,
+}
+
+/// Read the first hit out of a Deezer `/search/track` response.
+pub fn track_hit_of(body: &str) -> Option<TrackHit> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let hit = value.get("data")?.as_array()?.first()?;
+    let album = hit.get("album");
+    Some(TrackHit {
+        id: hit.get("id")?.as_u64()?,
+        title: hit
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        duration: hit.get("duration").and_then(|d| d.as_u64()).unwrap_or(0) as u32,
+        album_id: album
+            .and_then(|a| a.get("id"))
+            .and_then(|i| i.as_u64())
+            .unwrap_or(0),
+        album_title: album
+            .and_then(|a| a.get("title"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    })
+}
+
 /// The id of the first track in a Deezer search response.
 pub fn track_id_of(body: &str) -> Option<u64> {
     serde_json::from_str::<serde_json::Value>(body)
@@ -399,6 +449,119 @@ pub fn genre_of(body: &str) -> String {
     }
     kept.join(" / ")
 }
+
+/// What a Deezer **album** response says an album is made of.
+///
+/// The `/album/{id}` request was already being made — for the genre, one field
+/// out of a document that also names how many tracks the release has and what
+/// every one of them is called — and the rest was parsed away and dropped. This
+/// keeps it, which is what lets the library say "you have 4 of the 8 tracks on
+/// *Bangarang EP*" instead of showing a tile that looks like a whole record.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumFacts {
+    pub id: u64,
+    pub title: String,
+    pub artist: String,
+    /// `"album"`, `"single"` or `"ep"`.
+    ///
+    /// Kept because it changes what "incomplete" means. Holding one track of a
+    /// two-track single is a different statement about a library than holding
+    /// one track of a nineteen-track album, and a person reading the tab needs
+    /// to be able to tell them apart.
+    pub record_type: String,
+    /// How many tracks the release has, as the service counts them.
+    pub nb_tracks: u32,
+    /// Every track title, in album order.
+    ///
+    /// The embedded list carries no `track_position` — that field is only on
+    /// the full `/track/{id}` document — so position *is* array order here, and
+    /// nothing downstream may assume otherwise.
+    pub tracks: Vec<String>,
+}
+
+impl AlbumFacts {
+    /// True when the service told us nothing worth keeping.
+    pub fn is_usable(&self) -> bool {
+        self.id != 0 && self.nb_tracks > 0
+    }
+}
+
+/// Parse an album's facts out of a Deezer `/album/{id}` response.
+///
+/// Returns `None` for a document that is not one — a `/search/album` hit, say,
+/// which carries `nb_tracks` but no `tracks` and no `genres`. That distinction
+/// is the bug [`genre_of`] documents, and this parser is built to be given the
+/// wrong document and say so rather than return a confident half-answer.
+pub fn album_facts_of(body: &str) -> Option<AlbumFacts> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let id = value.get("id")?.as_u64()?;
+
+    // `tracks.data` is what separates the full document from a search hit.
+    let tracks: Vec<String> = value
+        .get("tracks")
+        .and_then(|t| t.get("data"))
+        .and_then(|d| d.as_array())?
+        .iter()
+        .filter_map(|t| t.get("title")?.as_str())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    let str_at = |key: &str| -> String {
+        value
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+
+    // Prefer the stated count, but never below what was actually listed: a
+    // release whose `nb_tracks` disagrees with its own tracklist would
+    // otherwise be reported as more than complete.
+    let stated = value.get("nb_tracks").and_then(|n| n.as_u64()).unwrap_or(0) as u32;
+
+    Some(AlbumFacts {
+        id,
+        title: str_at("title"),
+        artist: value
+            .get("artist")
+            .and_then(|a| a.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        record_type: str_at("record_type").to_ascii_lowercase(),
+        nb_tracks: stated.max(tracks.len() as u32),
+        tracks,
+    })
+}
+
+/// What one album lookup came back with.
+///
+/// A struct rather than the tuple this used to return. Three values out of two
+/// requests, and a `(String, String, Option<AlbumFacts>)` at four call sites is
+/// a shape nobody can read — the art and the genre are both strings, so
+/// swapping them is a mistake the compiler cannot catch.
+#[derive(Clone, Debug, Default)]
+pub struct Found {
+    /// Album art, as a URL on the service. Empty when nothing matched.
+    pub art: String,
+    /// The album's genre, empty when the service names none.
+    pub genre: String,
+    /// The tracklist and how long the release is. `None` when the album could
+    /// not be fetched in full — art can be had from the search hit alone, and
+    /// a miss here must not discard it.
+    pub facts: Option<AlbumFacts>,
+}
+
+/// Everything known about the albums that have been looked up, by Deezer id.
+///
+/// Keyed by *their* id rather than by our album key, so one tracklist is stored
+/// once however many tracks of it the library holds — and so two local folders
+/// that turn out to be the same release share an answer.
+pub type Albums = std::collections::HashMap<u64, AlbumFacts>;
 
 /// Whether a genre string says nothing.
 ///
@@ -563,6 +726,37 @@ impl Lookup {
         track_facts_of(&self.get(&format!("https://api.deezer.com/track/{id}"))?)
     }
 
+    /// The release a loose track came off, found from the track alone.
+    ///
+    /// [`Self::album`] cannot help here: it searches by album name, and these
+    /// are the files that have no album name — 97 of this library's 563, sitting
+    /// in the root because they were downloaded one at a time. They were
+    /// dropped from the Albums tab entirely, which is why a person who owns
+    /// four tracks of *Bangarang EP* saw no sign of it.
+    ///
+    /// Guarded by length. Track search is fuzzy — the same title by another
+    /// artist, a remix, a live cut — and attaching a file to the wrong record
+    /// would invent an album the library does not have and then report it as
+    /// 1 of 19. `ours_secs` is the duration this device measured; a hit that
+    /// disagrees is a different recording and is refused. Same rule, and the
+    /// same reason, as the tempo correction in [`same_recording`].
+    pub fn album_of_track(&self, artist: &str, title: &str, ours_secs: f64) -> Option<AlbumFacts> {
+        if !is_searchable(title) {
+            return None;
+        }
+        let query = if is_searchable(artist) {
+            format!("{artist} {title}")
+        } else {
+            title.to_string()
+        };
+        let url = format!("https://api.deezer.com/search/track?q={}", encode(&query));
+        let hit = track_hit_of(&self.get(&url)?)?;
+        if hit.album_id == 0 || !same_recording(ours_secs, hit.duration) {
+            return None;
+        }
+        album_facts_of(&self.get(&format!("https://api.deezer.com/album/{}", hit.album_id))?)
+    }
+
     /// Album art, and the genre.
     ///
     /// Two requests, not one. This used to claim the search response "already
@@ -574,9 +768,9 @@ impl Lookup {
     /// The second request is only made once there is art, so a miss costs
     /// nothing extra: no art means no album matched, and there is no id worth
     /// asking about.
-    pub fn album(&self, artist: &str, album: &str) -> (String, String) {
+    pub fn album(&self, artist: &str, album: &str) -> Found {
         if !is_searchable(album) {
-            return (String::new(), String::new());
+            return Found::default();
         }
         // "Artist Album" first, then the album alone — the original's fallback,
         // which exists because a common album title matches half the catalogue.
@@ -591,17 +785,22 @@ impl Lookup {
             let Some(body) = self.get(&url) else { continue };
             let art = image_url_of(&body, ALBUM_KEYS);
             if !art.is_empty() {
-                // The genre is worth a second request but not worth failing
+                // The second request is worth making but not worth failing
                 // over: art on a screen is the point, and a missing genre is
-                // the state the app has been in all along.
-                let genre = album_id_of(&body)
-                    .and_then(|id| self.get(&format!("https://api.deezer.com/album/{id}")))
-                    .map(|full| genre_of(&full))
-                    .unwrap_or_default();
-                return (art, genre);
+                // the state the app has been in all along. One request, two
+                // answers — the genre and the tracklist come out of the same
+                // document, so keeping the facts costs nothing beyond parsing
+                // what was already on the wire.
+                let full = album_id_of(&body)
+                    .and_then(|id| self.get(&format!("https://api.deezer.com/album/{id}")));
+                return Found {
+                    art,
+                    genre: full.as_deref().map(genre_of).unwrap_or_default(),
+                    facts: full.as_deref().and_then(album_facts_of),
+                };
             }
         }
-        (String::new(), String::new())
+        Found::default()
     }
 
     /// Fetch an image and keep it, returning where it was kept.
@@ -902,8 +1101,13 @@ mod tests {
     /// Note what is *not* here: any `genres` object. Only `genre_id`.
     const REAL_ALBUM_SEARCH: &str = r#"{"data":[{"id":302127,"title":"Discovery","cover":"https://api.deezer.com/album/302127/image","cover_small":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/56x56-000000-80-0-0.jpg","cover_medium":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/250x250-000000-80-0-0.jpg","cover_big":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/500x500-000000-80-0-0.jpg","cover_xl":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/1000x1000-000000-80-0-0.jpg","genre_id":106,"nb_tracks":14,"record_type":"album","explicit_lyrics":false,"type":"album"}],"total":300}"#;
 
-    /// `GET https://api.deezer.com/album/302127`
-    const REAL_ALBUM_FULL: &str = r#"{"id":302127,"title":"Discovery","genres":{"data":[{"id":106,"name":"Electro","picture":"https://api.deezer.com/genre/106/image","type":"genre"}]},"cover_xl":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/1000x1000-000000-80-0-0.jpg","nb_tracks":14}"#;
+    /// `GET https://api.deezer.com/album/302127` — recaptured 2026-08-21.
+    ///
+    /// The earlier capture kept only the fields the genre lookup read. The rest
+    /// of the document is the point now: `record_type`, and a `tracks.data`
+    /// naming all fourteen. Fields irrelevant to any parser here (`fans`,
+    /// `upc`, the four smaller cover sizes) are still trimmed out.
+    const REAL_ALBUM_FULL: &str = r#"{"id":302127,"title":"Discovery","artist":{"name":"Daft Punk"},"record_type":"album","nb_tracks":14,"genres":{"data":[{"id":106,"name":"Electro"}]},"cover_xl":"https://cdn-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/1000x1000-000000-80-0-0.jpg","tracks":{"data":[{"id":3135553,"title":"One More Time"},{"id":3135554,"title":"Aerodynamic"},{"id":3135555,"title":"Digital Love"},{"id":3135556,"title":"Harder, Better, Faster, Stronger"},{"id":3135557,"title":"Crescendolls"},{"id":3135558,"title":"Nightvision"},{"id":3135559,"title":"Superheroes"},{"id":3135560,"title":"High Life"},{"id":3135561,"title":"Something About Us"},{"id":3135562,"title":"Voyager"},{"id":3135563,"title":"Veridis Quo"},{"id":3135564,"title":"Short Circuit"},{"id":3135565,"title":"Face to Face"},{"id":3135566,"title":"Too Long"}]}}"#;
 
     /// `GET https://lrclib.net/api/get?artist_name=Daft%20Punk&track_name=One%20More%20Time`
     const REAL_LRCLIB: &str = r#"{"id":250327,"trackName":"One More Time","artistName":"Daft Punk","albumName":"Discovery","duration":320.0,"instrumental":false,"plainLyrics":"One more time\n\nOne more time\n","syncedLyrics":"[00:30.75] One more time\n[00:33.18] \n[00:46.35] One more time\n[00:49.25] \n[01:03.76] One more time\n[01:04.92] We're gonna celebrate"}"#;
@@ -930,6 +1134,61 @@ mod tests {
     fn the_full_album_response_names_the_genre() {
         assert_eq!(album_id_of(REAL_ALBUM_SEARCH), Some(302127));
         assert_eq!(genre_of(REAL_ALBUM_FULL), "Electro");
+    }
+
+    /// The same document also says how long the record is, and what is on it.
+    ///
+    /// This was being fetched and thrown away: one field read, the tracklist
+    /// parsed past. It is the only thing in the app that can tell a complete
+    /// album from four tracks of one.
+    #[test]
+    fn the_full_album_response_names_the_whole_tracklist() {
+        let facts = album_facts_of(REAL_ALBUM_FULL).expect("a full album document parses");
+        assert_eq!(facts.id, 302127);
+        assert_eq!(facts.title, "Discovery");
+        assert_eq!(facts.artist, "Daft Punk");
+        assert_eq!(facts.record_type, "album");
+        assert_eq!(facts.nb_tracks, 14);
+        assert_eq!(facts.tracks.len(), 14);
+        // Array order is album order — the embedded list carries no
+        // `track_position` to sort on, so first must mean first.
+        assert_eq!(
+            facts.tracks.first().map(String::as_str),
+            Some("One More Time")
+        );
+        assert_eq!(facts.tracks.last().map(String::as_str), Some("Too Long"));
+        assert!(facts.is_usable());
+    }
+
+    /// Given the wrong document, it says so rather than half-answering.
+    ///
+    /// The search response carries a believable `nb_tracks` and no tracklist,
+    /// which is exactly the shape that fooled [`genre_of`] for every track
+    /// since the port (TD-51). A parser that accepted it would report an album
+    /// as complete on the strength of a number with nothing behind it.
+    #[test]
+    fn an_album_search_hit_is_not_mistaken_for_a_full_album() {
+        assert_eq!(
+            album_facts_of(REAL_ALBUM_SEARCH),
+            None,
+            "the search response has no tracks.data and must not parse as facts"
+        );
+        assert_eq!(album_facts_of("not json"), None);
+        assert_eq!(album_facts_of("{}"), None);
+    }
+
+    /// A stated count below the tracklist is not believed.
+    ///
+    /// Otherwise an album could be held "more than completely" — 3 of 2 — and
+    /// the completeness sort would put nonsense at the top of the tab.
+    #[test]
+    fn the_track_count_is_never_less_than_the_tracks_listed() {
+        let body = r#"{"id":1,"nb_tracks":2,"tracks":{"data":[{"title":"A"},{"title":"B"},{"title":"C"}]}}"#;
+        let facts = album_facts_of(body).expect("parses");
+        assert_eq!(
+            facts.nb_tracks, 3,
+            "the listed tracks outnumbered the stated count"
+        );
     }
 
     #[test]
@@ -1043,16 +1302,34 @@ mod tests {
         println!("artist image: {portrait}");
         assert!(portrait.starts_with("http"), "no artist portrait");
 
-        let (art, genre) = lookup.album(artist, album);
-        println!("album art: {art}\ngenre: {genre}");
-        assert!(art.starts_with("http"), "no album art");
+        let found = lookup.album(artist, album);
+        println!(
+            "album art: {}\ngenre: {}\nfacts: {:?}",
+            found.art, found.genre, found.facts
+        );
+        assert!(found.art.starts_with("http"), "no album art");
         // The regression this ticket found. An empty genre here is the bug
         // coming back, not a record without a genre — Discovery has one.
         assert!(
-            !genre.is_empty(),
+            !found.genre.is_empty(),
             "the genre is empty again: the album search response is being asked \
              for something it does not carry"
         );
+
+        // The tracklist, which is what album completeness is measured against.
+        // If Deezer ever stops embedding `tracks.data` in the album document,
+        // every album in the library silently becomes "length unknown" and the
+        // Incomplete group empties out — so it is worth failing loudly here.
+        let facts = found
+            .facts
+            .expect("no album facts: tracks.data went missing");
+        assert_eq!(facts.nb_tracks, 14, "Discovery is a fourteen-track record");
+        assert_eq!(
+            facts.tracks.len(),
+            14,
+            "the tracklist did not arrive in full"
+        );
+        assert_eq!(facts.record_type, "album");
     }
 
     /// LRCLIB's field names and its timestamp precision, from a real body.
