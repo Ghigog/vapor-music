@@ -2677,7 +2677,7 @@ backlog stops living in a conversation.
 
 Ordered by what blocks distribution, not by which desk raised it.
 
-### AUD-7 : LAN sync is readable and forgeable on the wire (open)
+### AUD-7 : LAN sync is readable and forgeable on the wire (done 2026-08-23)
 
 `peers.rs` has no transport encryption — grep for tls, noise, cipher or
 encrypt returns nothing. That much was already recorded as TD-56 and accepted
@@ -2695,6 +2695,27 @@ side of this were closed in `30ba440`.
 
 **Waiting for:** Nothing. This is the one security item that should land before
 the app runs on a network Dylan does not own.
+
+**Closed:** Pairing runs an X25519 exchange and HKDF derives a 32-byte key per
+peer, stored in `Trust` beside the device rather than on `TrustedDevice`, which
+goes to the webview whole. Every `Reply::Bytes` is HMAC'd over a
+length-prefixed transcript of href, offset and digest — the href and offset are
+in there because without them a signed chunk is portable, and the peer's own
+bytes for one track replayed as the answer for another would verify.
+`accept_bytes` is the only way that variant is unpacked. 19 tests.
+
+Two consequences worth knowing. `Trust::allows` now wants a key as well as a
+listing, so **every existing pairing has to be made again**; `needs_repairing`
+exists only to tell the owner why, and the wire refuses a stale pairing and an
+unknown device identically so that nothing on the subnet can ask whether a
+device id is known. And `os_random` was reading `/dev/urandom`, which does not
+exist on Windows — every PIN on that target took the fallback, so the
+unreachable "no OS randomness" branch was the normal path. It uses `getrandom`
+now.
+
+TD-56 is untouched and still accurate: there is no transport encryption, and
+this does not add any. What it removes is the forgery, which was the half TD-56
+did not cover.
 
 ### AUD-8 : the end-to-end suite never reaches Rust (done 2026-08-23)
 
@@ -2765,7 +2786,7 @@ At 50k tracks that is multiple GB with no lever short of "delete all data".
 **Waiting for:** A choice — give `Covers` the same LRU as `Cache`, or stop
 persisting full-size covers and keep thumbs plus a re-derive path.
 
-### AUD-13 : library_view returns the whole library, per keystroke (open)
+### AUD-13 : library_view returns the whole library, per keystroke (done 2026-08-23)
 
 It clones every matching row, applies tags and analysis per row, sorts, groups
 and serialises the lot — under the global mutex, on a debounced query effect. At
@@ -2778,6 +2799,27 @@ of rows, and horizontal shelves should pull more in lazily — which is the same
 fix from the product end.
 
 **Waiting for:** The library redesign, which is where this naturally lands.
+
+**Closed:** Ahead of the redesign, because the transport half stands on its own
+and the redesign is not scheduled. `library_view` takes a `window` beside
+`view` and answers with a `LibraryPage` — the window's sections, the total
+before the window, and the offset it was clamped to. Measured at 50,000 rows:
+17,649,902 bytes and 153 ms of `JSON.parse` per keystroke before, 106,032 bytes
+and 0.27 ms after.
+
+Clamped rather than refused, because a scroll position and a row count arrive
+from two different round trips and a window past the end is what a library
+shrinking under a search looks like. Ordering stays in Rust: a caller ordering
+its own window would order each window separately and show a different order
+per screenful. `libraryView` still returns everything for the three callers
+that need every row — queueing a table, resolving a dragged entity, playing an
+album — which are presses rather than keystrokes.
+
+`seam.rs` covers the window through the real IPC, including that the shell
+reads it under the key the frontend sends it under.
+
+The product half of the ticket — playlists, groups, albums and artists instead
+of a wall of rows — is untouched and still belongs to the redesign.
 
 ### AUD-14 : the DJ planner is outside the portable core (open)
 
@@ -2890,7 +2932,7 @@ before a switch — the switch is thrown.
 
 **Waiting for:** Dylan. Disable pull requests, or add a CLA. Minutes either way.
 
-### AUD-18 : Deezer is called without registration or terms review (open)
+### AUD-18 : Deezer is called without registration or terms review (half done 2026-08-23)
 
 `metadata.rs` calls `search/artist`, `search/track`, `track/{id}`, `search/album`
 and `album/{id}`, and downloads artwork from `cdn-images.dzcdn.net` which is then
@@ -2900,8 +2942,29 @@ no `User-Agent` naming a contact.
 An analysis pass over a whole library is a lot of requests. `docs/RELEASE.md` §3
 already lists reviewing the rate limits and terms as outstanding.
 
-**Waiting for:** Reading Deezer's current API terms, then either registering or
-moving to MusicBrainz plus the Cover Art Archive, which are built for this.
+**Waiting for:** Deezer or MusicBrainz. That is a decision, not work, and it is
+Dylan's — see `docs/workspace/release-epic.md`.
+
+**Half done:** The calls are identified and paced, which is worth having
+whichever way the decision goes. Every request carries a `User-Agent` naming
+the app, its version and the project URL — LRCLIB requires that in as many
+words and a URL satisfies it, so nothing here invents a contact address, and
+the same header is what MusicBrainz asks for should the lookups move. One line
+to change if a mailbox is wanted instead.
+
+Three clocks: 200 ms Deezer, 300 ms LRCLIB (the middle of the band they name
+for scanning a library), 200 ms for the artwork CDN. Separate so a slow answer
+from one service cannot spend the other's budget, shared across threads so two
+lookups queue rather than each keeping its own polite gap. Four attempts with a
+doubling wait, at most 3.5 s.
+
+The number that made this urgent: ~0.29 s per Deezer request measured on this
+machine, which is about 7 requests a second sustained across a 563-track pass,
+with nothing watching for a refusal. Deezer documents no quota at all — 50 per
+5 seconds is what every client in the wild converges on, which is why the gap
+is set at half of it.
+
+`docs/RELEASE.md` §3 still lists the terms review as outstanding, correctly.
 
 ### AUD-19 : Windows CI was red for three days (done 2026-08-23)
 

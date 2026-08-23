@@ -29,7 +29,7 @@ already done.
 | **AUD-19** Windows CI | **done** — all eight jobs green, NSIS installer builds | — |
 | `release.yml` dead pins | **done** — two of five pinned SHAs did not exist upstream and would have failed on the first tag push | — |
 | **AUD-16** privacy / EULA / support | **partly done** — `PRIVACY.md` and `SUPPORT.md` written from the code, `docs/EULA-NOTES.md` states the gap without pretending to close it | a contact address, and a lawyer before anything is sold |
-| **AUD-18** Deezer terms | open | reading Deezer's current API terms, then registering or moving to MusicBrainz + Cover Art Archive |
+| **AUD-18** Deezer terms | **half done** — every request identified by `User-Agent`, three per-service clocks, four attempts with backoff | Dylan: Deezer or MusicBrainz. The calls are polite either way |
 | **AUD-3** what a supporter gets | open | Dylan to pick. Recommendation recorded 2026-08-23: a supporter credit in About, opt-in, and nothing contingent on payment |
 | **AUD-23** the front door | open | Dylan, and something worth pointing at |
 | **AUD-21** the updater keypair | **deliberately parked** | Dylan. Standing instruction: no private key is kept until distribution is real |
@@ -54,9 +54,13 @@ already done.
 
 1. **Where the signing keys live**, on both platforms. Half an hour of work and
    the thing every other release item waits behind.
-2. **Deezer or MusicBrainz.** Deezer is called today with no API key, no
-   registered application, and no `User-Agent` naming a contact, at a request
-   volume that an analysis pass over a whole library makes substantial.
+2. **Deezer or MusicBrainz.** The volume and the anonymity are dealt with —
+   AUD-18 landed a `User-Agent` and a 200 ms floor between requests, down from
+   ~7 a second sustained across a 563-track pass. What is left is the part that
+   was always a decision: Deezer still has no API key and no registered
+   application, and Deezer documents no quota to be compliant with. Moving to
+   MusicBrainz plus the Cover Art Archive needs no new header — the one that
+   went in is the one MusicBrainz asks for.
 3. **A contact address** for the support route. There is no telemetry and no
    crash reporting, both deliberate, so a person describing a fault is the only
    channel that exists. `SUPPORT.md` is written and its first line is a
@@ -75,8 +79,9 @@ and no `updater_enabled` setting exists anywhere. That is defensible — it is
 how the app stays patched — but it belongs in the privacy document, which it
 now is, and `RELEASE.md` §3 is wrong until someone corrects it.
 
-**A doc comment claims a privacy guarantee the code does not make.**
-`lib.rs:711` says the beacon "only runs on private addresses
+**A doc comment claims a privacy guarantee the code does not make.** *Fixed
+2026-08-23 in `741cf34`; kept here because the finding is what the epic is
+for.* `lib.rs:711` said the beacon "only runs on private addresses
 ([`peers::is_local`])". `is_local` is called in exactly two places, both in
 `commands/sync.rs`, and both gate *outbound* pair and sync connections. The
 beacon at `peers.rs:450` broadcasts unconditionally on whatever network the
