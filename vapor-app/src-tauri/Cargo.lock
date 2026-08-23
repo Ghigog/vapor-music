@@ -5860,10 +5860,21 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "ts-rs",
+ "vapor-dj",
  "vapor-dsp",
  "vapor-engine",
  "vapor-library",
  "x25519-dalek",
+]
+
+[[package]]
+name = "vapor-dj"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "ts-rs",
+ "vapor-engine",
+ "vapor-library",
 ]
 
 [[package]]

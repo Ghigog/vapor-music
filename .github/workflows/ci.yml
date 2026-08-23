@@ -96,6 +96,14 @@ jobs:
       - name: Build vapor-library for wasm
         run: cargo build --release --target wasm32-unknown-unknown -p vapor-library --lib
 
+      # The DJ's decisions (AUD-14). Added when the crate was, because a core
+      # crate that nothing here builds is a core crate that can stop being
+      # platform-free without anyone finding out — which is the whole point of
+      # this job, and was the state the planner had been in all along while it
+      # lived in the Tauri shell.
+      - name: Build vapor-dj for wasm
+        run: cargo build --release --target wasm32-unknown-unknown -p vapor-dj --lib
+
   # Licences and security advisories, as a gate rather than a document
   # somebody re-runs by hand. docs/LICENSING.md warns that "a new dependency
   # can reintroduce copyleft silently" and then relied on a manual pass; that

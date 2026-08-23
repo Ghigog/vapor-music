@@ -389,7 +389,7 @@ pub fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
         gain_delta: inc.lufs - out.lufs,
         matchable,
         reason,
-        transition: transition_name(choose_transition(
+        transition: transition_name(vapor_dj::choose_transition(
             if out.outro_key.is_empty() {
                 &out.key
             } else {

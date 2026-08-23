@@ -53,6 +53,9 @@ cpal = "0.15"
 vapor-dsp = { path = "../../vapor-core/crates/vapor-dsp" }
 vapor-engine = { path = "../../vapor-core/crates/vapor-engine" }
 vapor-library = { path = "../../vapor-core/crates/vapor-library" }
+# The DJ's decisions (AUD-14). Depends on both of the above, which is why it is
+# a crate of its own rather than a module in either.
+vapor-dj = { path = "../../vapor-core/crates/vapor-dj" }
 lofty = "0.25.1"
 # System media controls: hardware keys, macOS Control Center, Windows SMTC,
 # Linux MPRIS (MIG-023). One crate for all three desktop targets, which is why

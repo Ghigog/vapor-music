@@ -1439,6 +1439,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
+name = "vapor-dj"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "ts-rs",
+ "vapor-engine",
+ "vapor-library",
+]
+
+[[package]]
 name = "vapor-dsp"
 version = "0.1.0"
 dependencies = [

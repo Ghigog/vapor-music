@@ -49,6 +49,10 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use ts_rs::TS;
 
+// The three exits and the cost model behind them moved to `vapor-dj` (AUD-14).
+// Imported rather than re-exported: `Exit` appears in this file's `#[ts(export)]`
+// response shapes, and the generated `Exit.ts` now comes from that crate.
+use vapor_dj::Exit;
 use vapor_engine::TrackSource;
 use vapor_library::{
     index::{GroupBy, Row, SortKey},
@@ -3028,79 +3032,6 @@ pub(crate) fn playing_duration(
 /// whole of every song (TD-09).
 const TRANSITION_ARM_LEAD: f64 = 30.0;
 
-/// Choose the mix for a given pair of tracks (TD-27).
-///
-/// The engine has three and the shell used to pick one for everything, which
-/// meant every mix inherited Standard Crossfade's ~3 dB midpoint dip (TD-23)
-/// whether or not it suited the pair.
-///
-/// **Ported from `audio_manager.gd::get_transition_type_between`.**
-///
-/// An earlier version of this was a two-way branch of my own devising. The
-/// original is a weighted choice over six transition types, bucketed by
-/// harmonic distance *and* tempo distance, with a genre jump treated as its own
-/// case — and seeded by the pair, so the same two tracks always get the same
-/// mix. That structure is what belongs here.
-///
-/// ## What cannot be ported yet
-///
-/// Three of the six — Echo Out, Reverb Freeze and Tempo Morph — need delay and
-/// reverb, which `vapor-engine` does not have (TD-20). They carry most of the
-/// weight in the original's buckets, particularly where the keys clash or the
-/// tempi are far apart.
-///
-/// So their weight falls onto the three that exist, by nearest relative:
-///
-/// | Original | Stands in as | Why |
-/// |---|---|---|
-/// | Echo Out | Filter Sweep | Both hide the outgoing track behind an effect |
-/// | Reverb Freeze | Filter Sweep | Same |
-/// | Tempo Morph | Bass Swap | Both are "these two fit, ride it out" |
-///
-/// A mix that should be an Echo Out is a Filter Sweep today. That is a
-/// downgrade rather than a design, it is visible — the Vibe screen names the
-/// mix it will perform — and it resolves when TD-20 lands.
-pub(crate) fn choose_transition(
-    from_key: &str,
-    to_key: &str,
-    bpm_diff: f32,
-    same_genre: bool,
-) -> vapor_engine::TransitionType {
-    use vapor_engine::TransitionType::{
-        BassSwap, EchoOut, ReverbFreeze, StandardCrossfade, TempoMorph,
-    };
-
-    // Unanalysed. The original hashes the pair and takes any of the six; with
-    // three available and nothing to reason from, the least opinionated one is
-    // a better answer than a third of a coin flip.
-    if from_key.is_empty() || to_key.is_empty() {
-        return StandardCrossfade;
-    }
-
-    let key_cost = vapor_library::harmonic_relation_cost(from_key, to_key);
-    // The original's "creative" match type: a genre jump is steered the same
-    // way as a key clash, because both are a deliberate gear change.
-    let clashing = key_cost >= vapor_library::CLASH_COST || !same_genre;
-
-    // The original's buckets, now that all six types exist. It picks between
-    // two or three candidates per bucket with a hash of the pair; a single
-    // deterministic choice is taken here instead, favouring the type that
-    // carries the most weight in each — the variety it adds is not worth a
-    // second source of "which mix will this be" for the screen to predict.
-    match (clashing, bpm_diff) {
-        // Clash or gear change: hide it behind an effect, whatever the tempo.
-        (true, d) if d < 8.0 => EchoOut,
-        (true, _) => EchoOut,
-        // Closely related keys and close tempi: the characteristic DJ move.
-        (false, d) if d < 3.0 => BassSwap,
-        // Still related, tempi a few BPM apart: bend them together.
-        (false, d) if d < 8.0 => TempoMorph,
-        // Too far apart to stretch — the engine would refuse a beat-match
-        // anyway, so let the outgoing track dissolve rather than collide.
-        (false, _) => ReverbFreeze,
-    }
-}
-
 /// A track's tempo, honouring a manual correction and the genre's verdict on
 /// which octave the detector's reading is in. See [`tempo_in_force`].
 fn bpm_of(analysis: &analysis::Analysis, app: &AppState, href: &str) -> f32 {
@@ -3222,53 +3153,27 @@ pub(crate) fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
     vapor_library::is_similar_genre(&ga, &gb)
 }
 
-/// How far a candidate moves away from what is playing, in kind rather than in
-/// tempo or level.
+/// What a track is, for the kind-distance question `vapor_dj` answers.
 ///
-/// Genre when both sides have one; the artist otherwise.
-///
-/// The fallback is the point. Measured on this library, **488 of 534 tracks
-/// carry no genre tag at all** and a further 15 say "Unknown genre" — so genre
-/// is not a signal here, it is a blank, and `same_genre` answers "yes, the
-/// same" for every pair of them. That is why a De André ballad could be offered
-/// as the way to *stay* in a Keem the Cipher set: nothing in the model knew
-/// they were different music.
-///
-/// The artist is the strongest thing a folder-organised library does carry. Two
-/// tracks by one artist are far more likely to be one vibe than two tracks
-/// picked for tempo alone.
-fn kind_distance(app: &AppState, a: &str, b: &str) -> f32 {
-    let (ga, gb) = (genre_of(app, a), genre_of(app, b));
-    if !vapor_library::is_unknown_genre(&ga) && !vapor_library::is_unknown_genre(&gb) {
-        return if vapor_library::is_similar_genre(&ga, &gb) {
-            0.0
-        } else {
-            GENRE_JUMP
-        };
-    }
-    let artist = |href: &str| {
-        app.rows
+/// The resolution is the shell's — a genre may come from a tag, from a lookup,
+/// or from nowhere, and that reads three maps on `AppState`. What is done with
+/// the answer is [`vapor_dj::kind_distance`], along with the two constants that
+/// used to sit here.
+fn kind_of(app: &AppState, href: &str) -> vapor_dj::Kind {
+    vapor_dj::Kind {
+        genre: genre_of(app, href),
+        artist: app
+            .rows
             .iter()
             .find(|r| r.href == href)
             .map(|r| r.artist.trim().to_lowercase())
-            .unwrap_or_default()
-    };
-    let (aa, ab) = (artist(a), artist(b));
-    if aa.is_empty() || ab.is_empty() || aa == ab {
-        0.0
-    } else {
-        ARTIST_JUMP
+            .unwrap_or_default(),
     }
 }
 
-/// What leaving the genre costs a Stay, and earns a Switch.
-///
-/// Sized against the intensity term below, which is a 0–1 difference scaled by
-/// 100: a genre jump is worth more than any intensity gap, and an artist jump
-/// about a quarter of one, because a different artist is ordinary and a
-/// different genre is a decision.
-const GENRE_JUMP: f32 = 140.0;
-const ARTIST_JUMP: f32 = 28.0;
+fn kind_distance(app: &AppState, a: &str, b: &str) -> f32 {
+    vapor_dj::kind_distance(&kind_of(app, a), &kind_of(app, b))
+}
 
 /// Build the mixer's beat grid for a track, honouring a manual tempo.
 ///
@@ -3352,43 +3257,13 @@ struct ArmedMix {
     mid_cut: bool,
 }
 
-/// Decide whether the next track can be mixed into rather than merely followed.
+/// The cost of one candidate, with the threshold this app happens to hold.
 ///
-/// Returns `None` for every ordinary reason a mix cannot happen — no analysis
-/// yet, tempi too far apart to bridge musically, the moment already passed —
-/// and the caller falls back to playing the next track when this one ends.
-/// That fallback is the common case, not an error: a queue in title order will
-/// mostly hold neighbours whose tempi are nowhere near each other.
-/// What a candidate of a given kind costs, lower being better.
-///
-/// One definition, used by both the three suggestions on screen and the pick
-/// the set actually takes, so the two cannot drift apart.
-///
-/// Built on [`vapor_library::transition_cost`] — the model ported from the
-/// Godot build, which weighs key, tempo, energy *and genre relatedness*. The
-/// scoring here used to be a separate ad-hoc formula per kind that mentioned
-/// genre nowhere at all, so two tracks from unrelated genres scored exactly as
-/// well as two from the same one. That is what made the suggestions feel
-/// arbitrary and repetitive: with genre absent, the only things left were key
-/// and tempo, and the same handful of tracks win those against everything.
-///
-/// Each kind then adds what it is *for* on top, because a Switch that scored
-/// like a Match would simply be a Match:
-///
-/// * **Match** — the smoothest harmonic step, so the shared cost is enough.
-/// * **Fresh** — §2's target of about 15 BPM and 0.25 of energy of movement,
-///   so distance *from that target* is the penalty rather than distance itself.
-/// * **Switch** — the effect masks the key, so rhythm and energy carry it.
+/// A shim over [`vapor_dj::candidate_cost`]: the arithmetic moved, and what
+/// stayed is reading `vibe_limit` off settings. Kept as a function rather than
+/// inlined at nine call sites so that the settings read happens in one place.
 fn candidate_cost(app: &AppState, from: &TrackMeta, to: &TrackMeta, kind: Exit) -> f32 {
-    let base = vapor_library::transition_cost(from, to, app.settings.vibe_limit, 0.0);
-    let bpm_diff = (from.bpm - to.bpm).abs();
-    let energy_diff = (from.energy_level - to.energy_level).abs();
-
-    match kind {
-        Exit::Stay => base,
-        Exit::Follow => base + (bpm_diff - 15.0).abs() + (energy_diff - 0.25).abs() * 40.0,
-        Exit::Switch => base + energy_diff * 20.0,
-    }
+    vapor_dj::candidate_cost(from, to, kind, app.settings.vibe_limit)
 }
 
 /// The track the DJ would pick to follow the one playing.
@@ -3418,7 +3293,7 @@ fn dj_pick(app: &AppState) -> Option<String> {
             continue;
         }
         let similar = same_genre(app, &current, href);
-        let score = candidate_cost(app, from, to, exit_between(from, to, similar));
+        let score = candidate_cost(app, from, to, vapor_dj::exit_between(from, to, similar));
         if best.is_none_or(|(s, _)| score < s) {
             best = Some((score, href));
         }
@@ -3495,6 +3370,18 @@ fn extend_set(app: &mut AppState) -> bool {
     app.queue.append(&pick)
 }
 
+/// Decide whether the next track can be mixed into rather than merely followed.
+///
+/// Returns `None` for every ordinary reason a mix cannot happen — no analysis
+/// yet, tempi too far apart to bridge musically, the moment already passed —
+/// and the caller falls back to playing the next track when this one ends.
+/// That fallback is the common case, not an error: a queue in title order will
+/// mostly hold neighbours whose tempi are nowhere near each other.
+///
+/// The paragraph above spent some time attached to `candidate_cost` instead,
+/// which has nothing to do with whether a mix can happen. Moved back when the
+/// cost model left for `vapor-dj` and the seam between the two doc blocks
+/// became visible.
 fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
     let current = app.playing.as_ref()?;
     let next = app.queue.peek_next(None)?.to_string();
@@ -3541,7 +3428,7 @@ fn plan_mix(app: &AppState, position: f64) -> Option<ArmedMix> {
     } else {
         &incoming.intro_key
     };
-    let kind = choose_transition(
+    let kind = vapor_dj::choose_transition(
         out_key,
         in_key,
         (bpm_of(outgoing, app, current) - bpm_of(incoming, app, &next)).abs(),
@@ -4606,79 +4493,6 @@ pub(crate) struct VibePath {
     skipped: usize,
 }
 
-/// The three ways out of the track that is playing.
-///
-/// **Intentions, not similarity classes.** The old model sorted candidates into
-/// Match, Fresh and Switch by how alike they were, then picked one per step from
-/// a rotating cycle and marked it "AI choice". That fights the planner: the
-/// cycle's pick and the set's own next track were computed by different code and
-/// could disagree about what happens next.
-///
-/// Here the planner owns the set and these are the ways a person can steer it.
-/// `Follow` is not a recommendation, it is what happens if nobody touches
-/// anything — which is why there is no badge any more, and no cycle to reason
-/// about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(export)]
-enum Exit {
-    /// Hold roughly where the set is now, without advancing the curve.
-    Stay,
-    /// The planner's next track. The default, always.
-    Follow,
-    /// Branch off: audibly different, still mixable. Re-plans the tail toward
-    /// the same destination the curve already had.
-    Switch,
-}
-
-impl Exit {
-    fn label(self) -> &'static str {
-        match self {
-            Exit::Stay => "STAY",
-            Exit::Follow => "FOLLOW",
-            Exit::Switch => "SWITCH",
-        }
-    }
-}
-
-/// How far apart two tracks have to be to count as a Switch.
-///
-/// Taken from the distribution of the owner's own library rather than invented:
-/// across 4,000 random pairs the median tempo gap is 25 BPM and the median
-/// intensity gap 0.14, with the 90th percentiles at 59 BPM and 0.35. These sit
-/// around the 75th–90th, so a Switch is genuinely one of the more distant
-/// jumps available rather than merely "not a match".
-const SWITCH_INTENSITY: f32 = 0.30;
-const SWITCH_BPM: f32 = 45.0;
-
-/// And how close they have to be to count as a Match: below the median of both.
-const MATCH_INTENSITY: f32 = 0.15;
-const MATCH_BPM: f32 = 8.0;
-
-/// Which of the three exits one track is from another.
-///
-/// **Distance, not a genre label.** This used to return `Switch` if and only if
-/// the two genres differed, and `same_genre` treats an unknown genre as
-/// similar — so on a library carrying 46 genre tags across 534 tracks the
-/// branch was dead and the screen could never offer a third choice. Drum & bass
-/// into Sade is 25 BPM and 0.35 of intensity apart, the 90th percentile of this
-/// library, and it was being called a Match.
-///
-/// A known difference of genre still forces a Switch. It is good evidence when
-/// it is there; it simply is not the only evidence, and it was never present.
-fn exit_between(from: &TrackMeta, to: &TrackMeta, similar_genre: bool) -> Exit {
-    let bpm_diff = (from.bpm - to.bpm).abs();
-    let intensity_diff = (from.energy_level - to.energy_level).abs();
-
-    if !similar_genre || intensity_diff >= SWITCH_INTENSITY || bpm_diff >= SWITCH_BPM {
-        return Exit::Switch;
-    }
-    if bpm_diff >= MATCH_BPM || intensity_diff >= MATCH_INTENSITY {
-        return Exit::Follow;
-    }
-    Exit::Stay
-}
-
 /// One option for what plays next.
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -4790,7 +4604,9 @@ pub(crate) fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
         .iter()
         .copied()
         .filter(|t| stay.is_none_or(|s| s.href != t.href))
-        .filter(|t| exit_between(from, t, same_genre(app, &current, &t.href)) == Exit::Switch)
+        .filter(|t| {
+            vapor_dj::exit_between(from, t, same_genre(app, &current, &t.href)) == Exit::Switch
+        })
         .min_by(|a, b| {
             // Rewarded for leaving, not merely permitted to.
             //
@@ -4928,7 +4744,7 @@ fn card_for(
         key: to.musical_key.clone(),
         exit,
         label: exit.label().to_string(),
-        transition: transition_name(choose_transition(
+        transition: transition_name(vapor_dj::choose_transition(
             &from.musical_key,
             &to.musical_key,
             (from.bpm - to.bpm).abs(),
@@ -7746,7 +7562,7 @@ mod tests {
         );
 
         // Neither has a genre, so the old rule called this similar.
-        assert_eq!(exit_between(dnb, sade, true), Exit::Switch);
+        assert_eq!(vapor_dj::exit_between(dnb, sade, true), Exit::Switch);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -7762,7 +7578,7 @@ mod tests {
         }
         let pool = track_meta_pool(&app);
         assert_eq!(
-            exit_between(
+            vapor_dj::exit_between(
                 pool.get("/a.mp3").unwrap(),
                 pool.get("/b.mp3").unwrap(),
                 true
@@ -8365,7 +8181,7 @@ mod tests {
         assert_eq!(dnb.bpm, 174.0, "the drum & bass tempo was not corrected");
         assert_eq!(hip.bpm, 87.0, "the hip hop tempo was wrongly moved");
 
-        let kind = exit_between(dnb, hip, same_genre(&app, "/dnb.mp3", "/hiphop.mp3"));
+        let kind = vapor_dj::exit_between(dnb, hip, same_genre(&app, "/dnb.mp3", "/hiphop.mp3"));
         assert_ne!(
             kind,
             Exit::Stay,
@@ -8404,7 +8220,7 @@ mod tests {
             quiet.energy_level
         );
         assert_ne!(
-            exit_between(loud, quiet, true),
+            vapor_dj::exit_between(loud, quiet, true),
             Exit::Stay,
             "a loud track is still a match for a quiet one at the same tempo"
         );
@@ -8984,7 +8800,7 @@ mod tests {
         let from = meta(128.0, "8A", 0.5);
         let to = meta(130.0, "9A", 0.55);
 
-        assert_eq!(exit_between(&from, &to, true), Exit::Stay);
+        assert_eq!(vapor_dj::exit_between(&from, &to, true), Exit::Stay);
     }
 
     #[test]
@@ -8993,7 +8809,7 @@ mod tests {
         // Exactly the boundary: the original uses >=, so this is Fresh.
         let to = meta(136.0, "8A", 0.5);
 
-        assert_eq!(exit_between(&from, &to, true), Exit::Follow);
+        assert_eq!(vapor_dj::exit_between(&from, &to, true), Exit::Follow);
     }
 
     #[test]
@@ -9001,7 +8817,7 @@ mod tests {
         let from = meta(128.0, "8A", 0.4);
         let to = meta(128.0, "8A", 0.6);
 
-        assert_eq!(exit_between(&from, &to, true), Exit::Follow);
+        assert_eq!(vapor_dj::exit_between(&from, &to, true), Exit::Follow);
     }
 
     /// A genre jump outranks everything: it is a Switch however close the
@@ -9011,7 +8827,7 @@ mod tests {
         let from = meta(128.0, "8A", 0.5);
         let to = meta(128.0, "8A", 0.5);
 
-        assert_eq!(exit_between(&from, &to, false), Exit::Switch);
+        assert_eq!(vapor_dj::exit_between(&from, &to, false), Exit::Switch);
     }
 
     /// The seek bar's length, when the container would not say.
