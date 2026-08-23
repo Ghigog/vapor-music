@@ -10,7 +10,7 @@
 
 ---
 
-## What `LICENSE` currently does
+## What `LICENSE` says
 
 `LICENSE` is a reservation of rights over the **repository**. In substance:
 

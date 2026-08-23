@@ -192,22 +192,42 @@ it — which covers the icons and carries the MPL notice for Symphonia too.
 
 ## 3. Third-party services
 
-The app talks to two strangers, both **off by default**:
+The app talks to **three** strangers. Two are off by default; the third is not,
+and this section said there were two until 2026-08-23, when the AUD-16 privacy
+pass counted them against the code.
 
 * **LRCLIB** — lyrics. Reached from Liner Notes and now Now Playing.
-* **Deezer** — artist images and album art.
+  Off by default.
+* **Deezer** — artist images and album art. Off by default.
+* **GitHub** — the updater. **On, on every desktop launch, with no setting to
+  turn it off.** `lib.rs` spawns the check in `setup` without consulting
+  anything, fetches `releases/latest/download/latest.json`, and silently
+  downloads and installs a signed newer release to run from the next launch.
+  Android has no updater at all.
 
-For a personal build this is a setting. For a distributed one it needs:
+The third one is defensible and should stay — it is how a build in a stranger's
+hands ever gets patched, and the endpoint and public key are compiled in, so it
+is the one feature that cannot be added later by shipping an update. What is
+not defensible is leaving it out of the count. GitHub sees an IP address and a
+request; nothing about the person or their library goes with it. `PRIVACY.md`
+§4 states it in the terms a reader needs.
+
+For a personal build the first two are a setting. For a distributed one they
+need:
 
 * Attribution where those services ask for it.
 * A privacy statement, because enabling lookups sends **artist and album names
   off the device**. That is user data leaving the machine, and a store listing
   has to declare it. Android's Data Safety form and Apple's privacy nutrition
-  labels both ask directly.
+  labels both ask directly. `PRIVACY.md` is that statement, written 2026-08-23.
 * A check on rate limits and terms of use for automated querying. The analysis
-  pass can look up a whole library.
+  pass can look up a whole library. AUD-18 landed the identification and the
+  pacing — a `User-Agent` on every request and a floor between them — and left
+  the terms question open, because registering with Deezer or moving to
+  MusicBrainz is a decision rather than work.
 
-Keeping them off by default is the right shipping posture and should stay.
+Keeping the first two off by default is the right shipping posture and should
+stay.
 
 ---
 
