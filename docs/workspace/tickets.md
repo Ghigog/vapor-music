@@ -2696,7 +2696,7 @@ side of this were closed in `30ba440`.
 **Waiting for:** Nothing. This is the one security item that should land before
 the app runs on a network Dylan does not own.
 
-### AUD-8 : the end-to-end suite never reaches Rust (open)
+### AUD-8: the end-to-end suite never reaches Rust (done 2026-08-23)
 
 `vite.e2e.config.ts` aliases `@tauri-apps/api/core` to `src/test/browser-ipc.ts`
 — the same fake the component tests use. So the e2e suite drives the real UI
@@ -2708,6 +2708,8 @@ is exactly where all five defects that reached the first outside user lived.
 **Waiting for:** A decision on how far to go. Extending `seam.rs` a few commands
 at a time is cheap; making the e2e suite drive the real shell needs
 `tauri-driver` and is a different size of job.
+
+**Closed:** `seam.rs` now covers 30 commands, up from 12 — the library and entity reads, search and its facets, the queue view, settings round trips, downloads and the sync view, chosen by where a wrong wire shape strands a user rather than logs an error. Not `tauri-driver`; the ticket left the size open and this is the cheap half. Two of the new tests were wrong rather than the code, and both were checked against the implementation before either side was touched.
 
 ### AUD-9 : the monkey runs against a backend that cannot fail (open)
 
@@ -2722,7 +2724,7 @@ structurally cannot.
 **Waiting for:** Nothing. A `failureRate` on the fake plus a fourth seed is
 about thirty lines.
 
-### AUD-10 : four modules with no tests (open)
+### AUD-10: four modules with no tests (3 of 4 done 2026-08-23)
 
 `decoder.rs` (seek offsets, silence gating), `sync.rs`'s drift-thread lifecycle,
 `android.rs` (359 lines of JNI), and `secrets/{mod,desktop}.rs` (137 lines).
@@ -2733,7 +2735,9 @@ around the keyring.
 
 **Waiting for:** Nothing.
 
-### AUD-11 : dynamic groups do not sync at all (open)
+**Closed:** 26 tests across `secrets/`, `decoder.rs` and `sync.rs`. The keyring came first as the ticket asked, and needed two inline `match` blocks extracted into named functions before it could be tested at all — without touching the real keychain. `android.rs` is deliberately still untested: 359 lines of JNI that cannot run off-device, where a test mocking the JNI boundary would assert the mock.
+
+### AUD-11: dynamic groups do not sync at all (done 2026-08-23)
 
 `sync::Shared` carries playlists, folders, bpm overrides and tombstones. It does
 not mention groups — zero occurrences in `sync.rs`. Groups are a first-class
@@ -2746,6 +2750,8 @@ ever needed.
 
 **Waiting for:** Nothing. Either add `groups` to `Shared`, or say in the UI that
 groups are per-device.
+
+**Closed:** `groups` and `Tombstones::groups` added to `sync::Shared`, merged by the same `keep_earliest` as playlists and folders. `SHARED_VERSION` 3 → 4; a version-3 build refuses the document rather than writing back one in which every group on every device has been deleted. Five tests on the cases that lose data.
 
 ### AUD-12 : the cover cache has no ceiling (open)
 
