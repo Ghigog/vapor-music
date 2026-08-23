@@ -2858,7 +2858,7 @@ reads it under the key the frontend sends it under.
 The product half of the ticket — playlists, groups, albums and artists instead
 of a wall of rows — is untouched and still belongs to the redesign.
 
-### AUD-14 : the DJ planner is outside the portable core (open)
+### AUD-14 : the DJ planner is outside the portable core (done 2026-08-23)
 
 `choose_transition`, `candidate_cost`, `dj_pick`, `extend_set`, `plan_mix` and
 the tuned weights live in `lib.rs` and take `&AppState`. The repo keeps a wasm CI
@@ -2870,6 +2870,33 @@ Behind a narrow `Catalogue` trait this is one to two days, and the tuned
 constants get property tests that need no Tauri runtime.
 
 **Waiting for:** Nothing, but it wants the `lib.rs` split further along first.
+
+**Closed** as a fourth crate, `vapor-core/crates/vapor-dj`, in the wasm job
+alongside the other three. It holds `Exit`, `exit_between`, `candidate_cost`,
+`kind_distance`, `choose_transition` and the six tuned constants, over plain
+values — nine tests, three of them proptests, none needing a Tauri runtime,
+which was the whole ask.
+
+**Why a fourth crate.** `vapor-library` cannot depend on `vapor-engine` — the
+engine brings cpal and signalsmith on every non-wasm target and the catalogue
+has no business carrying an audio device. `vapor-engine` could depend on
+`vapor-library`, but then the audio engine carries regex, ts-rs and tag parsing
+to answer a question it never asks. The planner is the one thing that needs
+both.
+
+**What stayed, deliberately.** `extend_set`, `plan_mix`, `track_meta_pool` and
+`arm_mix` are still in `lib.rs`. They are `&mut` on a queue, a playhead and
+three maps on `AppState`, and a `Catalogue` trait wide enough to abstract them
+would be a larger fiction than the code it removed. The A* was never the
+problem — `vapor_library::generate_mood_path` has been portable all along. This
+ticket's own line was the right reading: the planners are already portable, and
+what binds them is the command wrappers. The wrappers stay; the arithmetic does
+not.
+
+Two doc comments were repaired rather than moved as they stood:
+`choose_transition` claimed three transition types could not be ported yet and
+returns all three, and a paragraph about whether a mix can happen at all had
+drifted onto `candidate_cost` and is back on `plan_mix`.
 
 ### AUD-15 : finish the lib.rs split — 39 commands left (done 2026-08-23)
 
