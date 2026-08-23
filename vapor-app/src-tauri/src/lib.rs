@@ -1944,35 +1944,53 @@ impl peers::Library for ServedLibrary {
             .unwrap_or_default()
     }
 
-    fn pair(
-        &self,
-        device_id: &str,
-        name: &str,
-        kind: vapor_library::sync::DeviceKind,
-        pin: &str,
-    ) -> vapor_library::sync::PairOutcome {
+    fn pair(&self, request: peers::PairRequest<'_>) -> (vapor_library::sync::PairOutcome, String) {
         use vapor_library::sync::PairOutcome;
 
         let Ok(mut app) = self.0.lock() else {
-            return PairOutcome::Refused;
+            return (PairOutcome::Refused, String::new());
         };
         let Some(pairing) = app.pairing.as_mut() else {
             // Nobody pressed "pair" on this device. A plausible code is not an
             // invitation.
-            return PairOutcome::Refused;
+            return (PairOutcome::Refused, String::new());
         };
 
-        let outcome = pairing.offer(device_id, pin, peers::now());
+        let outcome = pairing.offer(request.device_id, request.pin, peers::now());
         match outcome {
             PairOutcome::Paired => {
-                app.trust.add(device_id, name, kind, peers::now());
+                // The key exchange has to finish before anything is written
+                // down. A device recorded without one is a device whose
+                // replies can never be checked (AUD-7), so the failures below
+                // end the pairing rather than degrading it — the owner sees
+                // "that device could not complete the pairing exchange" and
+                // tries again, which is the honest outcome.
+                let Some(handshake) = peers::Handshake::begin() else {
+                    app.pairing = None;
+                    return (PairOutcome::Refused, String::new());
+                };
+                let me = app.device_id.clone();
+                let Some(key) = handshake.finish(request.public_key, &me, request.device_id) else {
+                    app.pairing = None;
+                    return (PairOutcome::Refused, String::new());
+                };
+                app.trust.add(
+                    request.device_id,
+                    request.name,
+                    request.kind,
+                    key,
+                    peers::now(),
+                );
                 app.pairing = None;
                 let _ = app.save_trust();
+                (PairOutcome::Paired, handshake.public_key())
             }
-            PairOutcome::Refused => app.pairing = None,
-            PairOutcome::WrongPin { .. } => {}
+            PairOutcome::Refused => {
+                app.pairing = None;
+                (outcome, String::new())
+            }
+            PairOutcome::WrongPin { .. } => (outcome, String::new()),
         }
-        outcome
     }
 
     fn manifest(&self) -> vapor_library::sync::Manifest {
@@ -2081,11 +2099,22 @@ struct SyncView {
 /// short bursts — a sync can take minutes, and the app has to stay usable.
 fn run_sync(
     shared: &Shared,
+    peer_id: &str,
     address: &str,
     what: SyncWhat,
     started: std::time::Instant,
 ) -> std::result::Result<(), String> {
-    let me = shared.lock().map_err(|e| e.to_string())?.device_id.clone();
+    // Looked up once, at the top, so a sync cannot get halfway through before
+    // discovering it has no way to check what arrives (AUD-7).
+    let (me, key) = {
+        let app = shared.lock().map_err(|e| e.to_string())?;
+        let key = app.trust.key(peer_id).ok_or_else(|| {
+            "there is no shared key with that device, so nothing it sends could be \
+             checked — pair with it again"
+                .to_string()
+        })?;
+        (app.device_id.clone(), key)
+    };
 
     let (reply, _) = peers::ask(
         address,
@@ -2132,7 +2161,7 @@ fn run_sync(
             app.sync.file = href.rsplit('/').next().unwrap_or(href).to_string();
             app.sync.elapsed = started.elapsed().as_secs_f64();
         }
-        if let Err(e) = pull_track(shared, address, &me, href) {
+        if let Err(e) = pull_track(shared, address, &me, &key, href) {
             // One track that will not come across must not end the sync — a
             // library with one unreadable file would otherwise never finish
             // one.
@@ -2175,12 +2204,18 @@ fn run_sync(
 /// A GiB is roughly half an hour of 24-bit/192 kHz stereo FLAC, so a real track
 /// that trips this does not exist yet. Raising it is one line; the point is
 /// that the ceiling is ours rather than the sender's.
+///
+/// AUD-7 changed what "the sender" means here: `total` is now inside the MAC,
+/// so it is a number the *paired* device chose rather than a number anyone on
+/// the path chose. The ceiling stays, because a paired device can also be a
+/// broken one.
 const MAX_PULLED_TRACK: u64 = 1024 * 1024 * 1024;
 
 fn pull_track(
     shared: &Shared,
     address: &str,
     me: &str,
+    key: &[u8; 32],
     href: &str,
 ) -> std::result::Result<(), String> {
     let mut collected: Vec<u8> = Vec::new();
@@ -2198,13 +2233,12 @@ fn pull_track(
             },
         )?;
 
-        let (len, total, digest) = match reply {
-            peers::Reply::Bytes { len, total, digest } => (len, total, digest),
-            peers::Reply::Error { reason } | peers::Reply::Refused { reason } => {
-                return Err(reason)
-            }
-            _ => return Err("that device answered with something else".to_string()),
-        };
+        // Before anything in the reply is believed, including `total` and the
+        // digest. Both used to be numbers an attacker on the path could pick,
+        // and the digest in particular is worthless on its own: it travels in
+        // the same message as the bytes it covers, so rewriting the pair
+        // together made the check below confirm the substitution (AUD-7).
+        let (len, total, digest) = peers::accept_bytes(key, href, have, reply, &body)?;
         expected_digest = digest;
 
         // Checked every round, not only the first: the peer restates `total`

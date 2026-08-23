@@ -282,11 +282,33 @@ pub struct TrustedDevice {
     pub paired_at: Millis,
 }
 
+/// The key a pairing derived, kept beside the device it belongs to.
+///
+/// Deliberately *not* a field on [`TrustedDevice`]. That type is `#[ts(export)]`
+/// and the whole of it goes to the webview inside `SyncView.trusted`; a secret
+/// on it would be a secret in the frontend's hands, one `console.log` from
+/// being somewhere it can never be taken back from. Keeping the two apart in
+/// the store means the thing that is drawn and the thing that is used to sign
+/// cannot be confused for one another.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct PeerKey {
+    id: String,
+    /// 32 bytes, shared with exactly one device. See `peers::Handshake`.
+    key: [u8; 32],
+}
+
 /// Who this device has paired with. Persisted by the shell.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Trust {
     #[serde(default)]
     devices: Vec<TrustedDevice>,
+    /// One per entry in `devices`, from the moment of pairing (AUD-7).
+    ///
+    /// `#[serde(default)]` so a trust file written before AUD-7 still loads —
+    /// and loads with this empty, which is exactly the intent. See
+    /// [`Trust::allows`].
+    #[serde(default)]
+    keys: Vec<PeerKey>,
 }
 
 impl Trust {
@@ -300,17 +322,49 @@ impl Trust {
 
     /// **The gate.** Everything a peer can do beyond asking to pair goes
     /// through this.
+    ///
+    /// Being listed is not enough — there has to be a key as well (AUD-7).
+    /// Without one nothing the peer sends can be checked, and nothing this
+    /// device sends can be signed, so serving it would mean answering a device
+    /// whose replies are forgeable in both directions. A pairing made before
+    /// AUD-7 has no key, so it lands here as "not paired": the owner pairs
+    /// again, which is one press and six digits, and this is the whole of the
+    /// upgrade path. The alternative — serving keyless peers unauthenticated —
+    /// would leave the hole open for every device that had ever paired, which
+    /// is every device there is.
     pub fn allows(&self, peer_id: &str) -> bool {
-        !peer_id.trim().is_empty() && self.devices.iter().any(|d| d.id == peer_id)
+        !peer_id.trim().is_empty()
+            && self.devices.iter().any(|d| d.id == peer_id)
+            && self.keys.iter().any(|k| k.id == peer_id)
+    }
+
+    /// Listed, but from before there were keys — so it must be paired again.
+    ///
+    /// Only for telling the owner *why*. The gate above does not consult it:
+    /// a stale pairing and an unknown device are refused identically on the
+    /// wire, because a refusal that told them apart would let anything on the
+    /// subnet ask whether a device id is known.
+    pub fn needs_repairing(&self, peer_id: &str) -> bool {
+        self.devices.iter().any(|d| d.id == peer_id) && !self.keys.iter().any(|k| k.id == peer_id)
+    }
+
+    /// The key shared with a peer, when there is one.
+    pub fn key(&self, peer_id: &str) -> Option<[u8; 32]> {
+        self.keys.iter().find(|k| k.id == peer_id).map(|k| k.key)
     }
 
     /// Trust a device. Pairing again updates the name rather than listing it
     /// twice.
+    ///
+    /// The key is not optional, and that is the point: there is no way to add
+    /// a device without one, so the state that [`Trust::allows`] refuses can
+    /// only ever arrive from a file written by an older build.
     pub fn add(
         &mut self,
         id: impl Into<String>,
         name: impl Into<String>,
         kind: DeviceKind,
+        key: [u8; 32],
         now: Millis,
     ) {
         let id = id.into();
@@ -321,17 +375,31 @@ impl Trust {
                 existing.kind = kind;
             }
             None => self.devices.push(TrustedDevice {
-                id,
+                id: id.clone(),
                 name,
                 kind,
                 paired_at: now,
             }),
         }
+        // Pairing again is a fresh exchange, so the new key replaces the old
+        // one rather than joining it. Two live keys for one device would mean
+        // a reply signed with either was accepted, and the older one is the
+        // one more likely to have been observed.
+        match self.keys.iter_mut().find(|k| k.id == id) {
+            Some(existing) => existing.key = key,
+            None => self.keys.push(PeerKey { id, key }),
+        }
     }
 
+    /// Forget a device, key and all.
+    ///
+    /// The key goes even when the device was not listed — a store that somehow
+    /// held one without the other would otherwise keep a live secret for a
+    /// peer nobody can see.
     pub fn forget(&mut self, id: &str) -> bool {
         let before = self.devices.len();
         self.devices.retain(|d| d.id != id);
+        self.keys.retain(|k| k.id != id);
         before != self.devices.len()
     }
 }
@@ -1149,7 +1217,7 @@ mod tests {
         let mut trust = Trust::new();
         assert!(!trust.allows("device-b"));
 
-        trust.add("device-b", "Dylan's Phone", DeviceKind::Phone, 1_000);
+        trust.add("device-b", "Dylan's Phone", DeviceKind::Phone, [7u8; 32], 1_000);
         assert!(trust.allows("device-b"));
         assert!(!trust.allows("device-c"));
     }
@@ -1160,7 +1228,7 @@ mod tests {
     #[test]
     fn an_empty_id_is_never_trusted() {
         let mut trust = Trust::new();
-        trust.add("", "", DeviceKind::Unknown, 0);
+        trust.add("", "", DeviceKind::Unknown, [7u8; 32], 0);
 
         assert!(!trust.allows(""));
         assert!(!trust.allows("   "));
@@ -1169,8 +1237,8 @@ mod tests {
     #[test]
     fn pairing_again_updates_rather_than_duplicates() {
         let mut trust = Trust::new();
-        trust.add("device-b", "Old Name", DeviceKind::Phone, 1_000);
-        trust.add("device-b", "New Name", DeviceKind::Tablet, 2_000);
+        trust.add("device-b", "Old Name", DeviceKind::Phone, [1u8; 32], 1_000);
+        trust.add("device-b", "New Name", DeviceKind::Tablet, [2u8; 32], 2_000);
 
         assert_eq!(trust.all().len(), 1);
         assert_eq!(trust.all()[0].name, "New Name");
@@ -1181,11 +1249,64 @@ mod tests {
     #[test]
     fn forgetting_a_device_revokes_it() {
         let mut trust = Trust::new();
-        trust.add("device-b", "Phone", DeviceKind::Phone, 0);
+        trust.add("device-b", "Phone", DeviceKind::Phone, [7u8; 32], 0);
 
         assert!(trust.forget("device-b"));
         assert!(!trust.allows("device-b"));
         assert!(!trust.forget("device-b"), "already gone");
+    }
+
+    /// Forgetting takes the secret with it, not only the row that is drawn.
+    #[test]
+    fn forgetting_a_device_takes_its_key_as_well() {
+        let mut trust = Trust::new();
+        trust.add("device-b", "Phone", DeviceKind::Phone, [7u8; 32], 0);
+
+        trust.forget("device-b");
+
+        assert_eq!(trust.key("device-b"), None);
+    }
+
+    /// The second exchange replaces the first. Two live keys for one device
+    /// would mean a reply signed with either was accepted, and the older key
+    /// is the one that has had longer to be observed.
+    #[test]
+    fn pairing_again_replaces_the_key_rather_than_keeping_both() {
+        let mut trust = Trust::new();
+        trust.add("device-b", "Phone", DeviceKind::Phone, [1u8; 32], 0);
+        trust.add("device-b", "Phone", DeviceKind::Phone, [2u8; 32], 1);
+
+        assert_eq!(trust.key("device-b"), Some([2u8; 32]));
+    }
+
+    /// AUD-7's upgrade path, and the reason it is not silent.
+    ///
+    /// A trust file written before AUD-7 has devices and no keys. Deserialising
+    /// it must not produce a peer that is allowed to sync, because nothing it
+    /// sends could be authenticated — which is the whole hole the key closes.
+    /// It reads back as unpaired, and the owner pairs again.
+    #[test]
+    fn a_pairing_made_before_there_were_keys_reads_back_as_unpaired() {
+        let old = r#"{"devices":[{"id":"device-b","name":"Phone","kind":"phone","pairedAt":1000}]}"#;
+
+        let trust: Trust = serde_json::from_str(old).expect("an old trust file still loads");
+
+        assert_eq!(trust.all().len(), 1, "the device is still listed");
+        assert!(!trust.allows("device-b"), "but it is allowed nothing");
+        assert!(
+            trust.needs_repairing("device-b"),
+            "and the owner can be told why"
+        );
+    }
+
+    /// The distinction above is for the owner, not for the network: an unknown
+    /// device is not "needs re-pairing", so nothing on the subnet can use that
+    /// answer to find out which device ids this one knows.
+    #[test]
+    fn a_device_that_was_never_paired_does_not_need_repairing() {
+        let trust = Trust::new();
+
+        assert!(!trust.needs_repairing("device-b"));
     }
 
     // --- Reconciliation ----------------------------------------------------

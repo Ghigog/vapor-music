@@ -158,10 +158,21 @@ pub fn pair_with(peer_id: String, pin: String, state: State<'_, Shared>) -> Resu
         ));
     }
 
+    // Half of the key every later reply from that device is checked against
+    // (AUD-7). Made before the request goes out, because a pairing that cannot
+    // produce one is a pairing worth refusing rather than completing.
+    let handshake = peers::Handshake::begin().ok_or_else(|| {
+        Error(
+            "This device has no source of randomness, so it cannot make a key to \
+             check that device's replies with."
+                .to_string(),
+        )
+    })?;
+
     let (reply, _) = peers::ask(
         &address,
         &peers::Request::Pair {
-            device_id: me,
+            device_id: me.clone(),
             name: my_name,
             device_kind: if cfg!(any(target_os = "ios", target_os = "android")) {
                 vapor_library::sync::DeviceKind::Phone
@@ -169,14 +180,32 @@ pub fn pair_with(peer_id: String, pin: String, state: State<'_, Shared>) -> Resu
                 vapor_library::sync::DeviceKind::Desktop
             },
             pin,
+            public_key: handshake.public_key(),
         },
     )
     .map_err(Error)?;
 
     match reply {
-        peers::Reply::Paired { device_id, name } => {
+        peers::Reply::Paired {
+            device_id,
+            name,
+            public_key,
+        } => {
+            // An empty or unusable half means the other device did not run the
+            // exchange — a build from before AUD-7 sends none. Recording the
+            // pairing anyway would give a trusted device whose replies nothing
+            // could check, which is exactly the state AUD-7 removed.
+            let key = handshake
+                .finish(&public_key, &me, &device_id)
+                .ok_or_else(|| {
+                    Error(
+                        "That device did not complete the pairing exchange, so nothing it \
+                     sent could be checked. It may be running an older version of Vapor."
+                            .to_string(),
+                    )
+                })?;
             let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
-            app.trust.add(&device_id, &name, kind, peers::now());
+            app.trust.add(&device_id, &name, kind, key, peers::now());
             app.save_trust()?;
             Ok(name)
         }
@@ -216,7 +245,18 @@ pub fn sync_with(
             return Err(Error("A sync is already running.".to_string()));
         }
         if !app.trust.allows(&peer_id) {
-            return Err(Error("That device is not paired.".to_string()));
+            // Told apart here and only here. On the wire a stale pairing and an
+            // unknown device get the same refusal, so nothing on the subnet can
+            // ask which device ids this one knows — but this side is the owner's
+            // own screen, and "not paired" would be a baffling thing to read
+            // about a device that is sitting in the paired list.
+            return Err(Error(if app.trust.needs_repairing(&peer_id) {
+                "That device was paired before Vapor started checking who sent a \
+                 transfer. Pair with it again."
+                    .to_string()
+            } else {
+                "That device is not paired.".to_string()
+            }));
         }
         let registry = app.peers.lock().map_err(|e| Error(e.to_string()))?;
         let peer = registry
@@ -242,7 +282,7 @@ pub fn sync_with(
     let spawned = std::thread::Builder::new()
         .name("vapor-sync".into())
         .spawn(move || {
-            let outcome = run_sync(&shared, &address, what, started);
+            let outcome = run_sync(&shared, &peer_id, &address, what, started);
             if let Ok(mut app) = shared.lock() {
                 app.sync.running = false;
                 app.sync.elapsed = started.elapsed().as_secs_f64();
