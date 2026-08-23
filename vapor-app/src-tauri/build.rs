@@ -1,34 +1,44 @@
 fn main() {
-    tauri_build::build();
+    // Own the Windows application manifest instead of letting tauri-build embed
+    // it, so that every binary this crate produces carries it — not just the app.
+    //
+    // The manifest matters for one reason: it declares a dependency on
+    // Microsoft.Windows.Common-Controls 6.0.0.0, and that declaration is what
+    // creates the activation context the loader needs to resolve `comctl32.dll`
+    // to version 6 in WinSxS. The copy in System32 is 5.82. Only version 6
+    // exports `TaskDialogIndirect`, which `rfd` imports by way of
+    // `tauri-plugin-dialog` — the folder picker.
+    //
+    // `tauri_build::build()` embeds that manifest through a Windows resource,
+    // and hands the resource to cargo with `cargo:rustc-link-arg-bins=`. `-bins`
+    // is the whole problem: `vapor-app.exe` got the manifest and the unit-test
+    // binary did not, so `cargo test` produced an executable whose comctl32
+    // import could not be bound. It died at load with STATUS_ENTRYPOINT_NOT_FOUND
+    // (0xc0000139) before `main`, printing nothing, and cargo reported exit 127.
+    // Windows CI had been red that way since 2026-08-20.
+    //
+    // `cargo:rustc-link-arg-tests=` is not the fix, and this is worth writing
+    // down because it looks like it: `-tests` reaches integration targets under
+    // `tests/`, and the binary that fails here is the *lib* unit-test harness,
+    // which it does not reach. Measured with a throwaway crate — a bogus flag
+    // emitted under `-tests` fails `cargo test --test integration` and leaves
+    // `cargo test --lib` linking happily. Plain `rustc-link-arg` reaches both.
+    //
+    // So: tauri embeds no manifest (the resource still carries the icon and the
+    // version strings), and the dependency is declared through the linker for
+    // every target instead. One source, not two — which also avoids handing
+    // link.exe a generated manifest and an RT_MANIFEST resource saying the same
+    // thing, and asking it to reconcile them.
+    let attributes = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    tauri_build::try_build(attributes).expect("failed to run tauri-build");
 
-    // Give the test binaries the manifest that only the app binary gets.
-    //
-    // `tauri_build::build()` writes a Windows resource — icon, version strings,
-    // and an application manifest that declares a dependency on
-    // Microsoft.Windows.Common-Controls 6.0.0.0 — and hands it to cargo through
-    // `embed_resource::compile()`. That function emits
-    // `cargo:rustc-link-arg-bins=`, and `-bins` means bins: the resource is
-    // linked into `vapor-app.exe` and into nothing else. embed-resource has a
-    // `compile_for_tests()` that emits `-tests` instead; tauri-build does not
-    // call it, so `cargo test` produces an executable with no manifest at all.
-    //
-    // That was invisible until `tauri-plugin-dialog` arrived for the folder
-    // picker. It pulls in `rfd`, which imports `TaskDialogIndirect` from
-    // comctl32 — and only comctl32 *version 6* exports it. Version 6 is not the
-    // copy in System32; that one is 5.82 and never had the symbol. Version 6
-    // lives in WinSxS and the loader only finds it through the activation
-    // context the manifest creates. No manifest, no activation context, no
-    // TaskDialogIndirect: the test binary died at load with
-    // STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139), before `main`, so the harness
-    // never printed a line and cargo reported exit code 127.
-    //
-    // Declaring the same dependency for test targets is enough — the symbol
-    // itself is never called there, it only has to bind. The app binary is left
-    // alone: it already has tauri's manifest, and a second one would collide.
     let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
     let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
     if windows && msvc {
-        println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
-        println!("cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
+        // Identical in effect to the manifest tauri-build used to embed, which
+        // contains this dependency and nothing else.
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
     }
 }
