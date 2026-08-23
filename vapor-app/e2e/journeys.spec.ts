@@ -289,8 +289,11 @@ test.describe("Every screen opens", () => {
     // The "what Vapor never does" prose is gone, so this checks the part that
     // carries the claim instead: the breakdown of what is actually on disk,
     // and the control that empties it.
+    //
+    // Exact, because Settings now also has a "Music on this device" heading for
+    // local folders and the loose pattern matched both.
     await expect(
-      page.getByRole("heading", { name: /on this device/i }),
+      page.getByRole("heading", { name: "on this device", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: /empty cache/i }),

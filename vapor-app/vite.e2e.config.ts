@@ -31,6 +31,27 @@ export default defineConfig({
       "@tauri-apps/api/event": path.resolve(__dirname, "src/test/browser-event.ts"),
     },
   },
+  /*
+   * Keep the dialog plugin out of dependency pre-bundling.
+   *
+   * The alias above points a bare specifier at a file inside this project, and
+   * esbuild does not treat that as external — so when Vite pre-bundled
+   * `@tauri-apps/plugin-dialog` (which imports `@tauri-apps/api/core` itself),
+   * it inlined the whole fake backend into
+   * `node_modules/.vite/deps/@tauri-apps_plugin-dialog.js`, `window` assignment
+   * and all.
+   *
+   * Two FakeBackends then existed. The app used the aliased one; the inlined
+   * copy ran `window.__vaporBackend = backend` afterwards and won. So
+   * `backend.fail("set_remote_config", ...)` armed an object nothing invoked,
+   * the save it was supposed to break succeeded, and the test waited five
+   * seconds for an alert that was never going to appear.
+   *
+   * Excluded rather than pre-bundled: served as source, its import of
+   * `@tauri-apps/api/core` goes through the alias like everything else, and
+   * there is one backend again.
+   */
+  optimizeDeps: { exclude: ["@tauri-apps/plugin-dialog"] },
   // Same allowance as the dev config: the Vibe help sheet imports
   // docs/ai_dj_workflow.md, which sits above this root.
   server: { port, strictPort: true, fs: { allow: [".."] } },
