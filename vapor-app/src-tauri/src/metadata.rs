@@ -25,7 +25,8 @@
 //! [`image_url_of`] and [`genre_of`] are pure and take `&str`.
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 /// How long a lookup may take before it is abandoned.
@@ -36,11 +37,70 @@ use ts_rs::TS;
 const TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Sent so the services can identify the client, as the original did.
+///
+/// Both services this file talks to ask for exactly this shape, and one of
+/// them requires it (AUD-18, read 2026-08-23):
+///
+/// * **LRCLIB** — "we require you to identify your client in requests. Set the
+///   `User-Agent` header with your application's name, version, and a link to
+///   its homepage or project page **or an email address**."
+///   <https://lrclib.net/docs>
+/// * **MusicBrainz**, should the lookups ever move there — "Application
+///   name/&lt;version&gt; ( contact-url )", and a request without one is
+///   throttled as "anonymous".
+///   <https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting>
+///
+/// A project URL satisfies both, so this is already compliant and no address
+/// is invented here. **If Dylan wants a mailbox on it instead**, this is the
+/// one line to change; nothing else reads it.
 const USER_AGENT: &str = concat!(
     "VaporMusic/",
     env!("CARGO_PKG_VERSION"),
     " (https://github.com/Ghigog/vapor-music)"
 );
+
+/// The smallest gap between two requests to the same service.
+///
+/// **Deezer** documents no quota at all — the terms of use are silent and the
+/// developer FAQ says only "there is no limitation on data in the API, but
+/// there is a query quota". The number every client in the wild converges on
+/// is 50 requests per 5 seconds per IP, and exceeding it returns error code 4,
+/// "Quota limit exceeded". 200 ms is 5 requests a second: half of a limit
+/// nobody will confirm, which is the right side to be wrong on when the
+/// consequence is a blocked address.
+///
+/// Why it matters here rather than at the call site: `identify_library` runs
+/// two lookups per track on scoped threads, and each is two round trips deep
+/// — measured 2026-08-23 at ~0.29 s per Deezer request from this machine,
+/// which is about **7 requests a second sustained across a 563-track pass**,
+/// with no gap between them and nothing watching for a refusal.
+const DEEZER_GAP: Duration = Duration::from_millis(200);
+
+/// LRCLIB asks for this in as many words, and names this exact use:
+///
+/// > "add a short delay between requests (200–500 ms), especially for batch
+/// > operations like scanning a full music library."
+///
+/// The middle of the band they gave. <https://lrclib.net/docs>
+const LRCLIB_GAP: Duration = Duration::from_millis(300);
+
+/// Artwork comes off a static CDN rather than the API, so it gets its own
+/// clock — but it is still Deezer's infrastructure and still a whole library's
+/// worth of files, so it is paced the same way.
+const ARTWORK_GAP: Duration = Duration::from_millis(200);
+
+/// How many times one request is sent before it is given up on.
+///
+/// Four attempts with a doubling wait spends at most 3.5 s of backoff, which
+/// is inside a quota window on any of the numbers above.
+const ATTEMPTS: u32 = 4;
+
+/// The wait before a second attempt, doubled for each one after.
+const BACKOFF: Duration = Duration::from_millis(500);
+
+/// A refusal that names its own wait is still capped: a service asking for ten
+/// minutes gets the request abandoned, not a parked thread.
+const LONGEST_WAIT: Duration = Duration::from_secs(30);
 
 /// One line of time-aligned lyrics.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -658,9 +718,171 @@ fn image_mime(bytes: &[u8]) -> &'static str {
 // Transport
 // ---------------------------------------------------------------------------
 
+/// Which stranger a URL belongs to.
+///
+/// Each is paced on its own clock: a wait owed to LRCLIB is not a reason to
+/// hold up a Deezer request, and the two run concurrently by design — see the
+/// scoped threads in `identify_library`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Service {
+    Deezer,
+    Lrclib,
+    Artwork,
+}
+
+impl Service {
+    /// Which service a URL is for.
+    ///
+    /// Matched on the host, not on a substring of the whole URL: a Deezer
+    /// search response is full of `cdn-images.dzcdn.net` links, and a query
+    /// string can contain anything a track is called.
+    fn of(url: &str) -> Option<Self> {
+        let host = url
+            .split_once("://")
+            .map(|(_, rest)| rest)?
+            .split(['/', '?', '#'])
+            .next()?;
+        match host {
+            "api.deezer.com" => Some(Service::Deezer),
+            "lrclib.net" => Some(Service::Lrclib),
+            // Every artwork host seen in a response so far, and the fallback
+            // for anything else: an unrecognised host is paced, not exempt.
+            _ => Some(Service::Artwork),
+        }
+    }
+
+    fn gap(self) -> Duration {
+        match self {
+            Service::Deezer => DEEZER_GAP,
+            Service::Lrclib => LRCLIB_GAP,
+            Service::Artwork => ARTWORK_GAP,
+        }
+    }
+}
+
+/// The clocks that keep each service's requests apart.
+///
+/// One mutex per service, holding when that service was last asked. The lock
+/// is held **across the sleep**, which is the whole mechanism: two threads
+/// wanting Deezer queue behind each other rather than both deciding they may
+/// go now. Nothing else is inside it, so the only thing a caller can wait on
+/// is the gap it owes.
+#[derive(Default)]
+struct Pace {
+    deezer: Mutex<Option<Instant>>,
+    lrclib: Mutex<Option<Instant>>,
+    artwork: Mutex<Option<Instant>>,
+}
+
+impl Pace {
+    fn slot(&self, service: Service) -> &Mutex<Option<Instant>> {
+        match service {
+            Service::Deezer => &self.deezer,
+            Service::Lrclib => &self.lrclib,
+            Service::Artwork => &self.artwork,
+        }
+    }
+
+    /// Block until this service may be asked again, then claim the slot.
+    ///
+    /// `extra` is a backoff a refused attempt owes on top of the ordinary gap.
+    ///
+    /// A poisoned lock is recovered from rather than propagated: the only
+    /// state behind it is "when did we last ask", and a panic elsewhere is no
+    /// reason to stop a lookup — the worst a stale instant costs is one
+    /// request sent a little early.
+    fn wait(&self, service: Service, extra: Duration) {
+        let mut slot = self
+            .slot(service)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let owed = match *slot {
+            Some(last) => service.gap().saturating_sub(last.elapsed()),
+            None => Duration::ZERO,
+        } + extra;
+        if !owed.is_zero() {
+            std::thread::sleep(owed);
+        }
+        *slot = Some(Instant::now());
+    }
+}
+
+/// What to do with one response, before its body is used for anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Usable. Read it.
+    Keep,
+    /// Refused for a reason that passes — try again after `Duration`, or after
+    /// the caller's own backoff when the service named no time.
+    Wait(Option<Duration>),
+    /// Refused for a reason that will not change. Nothing to retry.
+    Drop,
+}
+
+/// Read the status line.
+///
+/// The words are the analysis pass's — a `retryable` outcome there is one
+/// where "trying again could plausibly succeed" — but the machinery is not
+/// shared, because `analysis::Progress::retryable` is a flag reported to the
+/// screen about one track, not a loop. Same distinction, different place to
+/// make it.
+fn verdict_of(status: u16) -> Verdict {
+    match status {
+        200..=299 => Verdict::Keep,
+        // Too many requests, and the only honest response to it is to stop
+        // sending them for a moment.
+        429 => Verdict::Wait(None),
+        // A server having a bad minute. The request was fine.
+        500..=599 => Verdict::Wait(None),
+        _ => Verdict::Drop,
+    }
+}
+
+/// Seconds from a `Retry-After` header, when it is the numeric form.
+///
+/// The HTTP-date form is allowed by the spec and is not parsed: it needs a
+/// date parser for a case neither of these services uses, and falling through
+/// to the caller's own backoff is a correct answer, just a less informed one.
+fn retry_after(value: &str) -> Option<Duration> {
+    let seconds: u64 = value.trim().parse().ok()?;
+    Some(Duration::from_secs(seconds).min(LONGEST_WAIT))
+}
+
+/// Whether a Deezer body is a refusal wearing a 200.
+///
+/// **This is the whole reason the status code is not enough.** Deezer answers
+/// errors with `HTTP 200` and an error object — confirmed against the live API
+/// on 2026-08-23:
+///
+/// ```text
+/// $ curl -s -w '%{http_code}' https://api.deezer.com/track/0
+/// {"error":{"type":"DataException","message":"no data","code":800}}200
+/// ```
+///
+/// So `status().is_success()` is true for a quota refusal, the parsers find no
+/// fields they want, and the pass records the track as looked up and empty.
+/// Code 4 is "Quota limit exceeded"; code 700 is their service busy. Every
+/// other code is a real answer about the track and must not be retried — 800
+/// means they genuinely do not have it.
+fn deezer_is_throttling(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(code) = value.get("error").and_then(|e| e.get("code")) else {
+        return false;
+    };
+    // Sent as a number by the API and as a string by at least one of their
+    // error paths, so both are read.
+    let code = code
+        .as_u64()
+        .or_else(|| code.as_str().and_then(|s| s.parse().ok()));
+    matches!(code, Some(4) | Some(700))
+}
+
 /// A client for the two services.
 pub struct Lookup {
     client: reqwest::blocking::Client,
+    pace: Pace,
 }
 
 impl Lookup {
@@ -674,15 +896,90 @@ impl Lookup {
                 .build()
                 .map_err(|e| e.to_string())
         })?;
-        Ok(Lookup { client })
+        Ok(Lookup {
+            client,
+            pace: Pace::default(),
+        })
+    }
+
+    /// Ask for `url`, at a pace the service asked for, giving up only on
+    /// answers that trying again cannot change.
+    ///
+    /// `read` turns a kept response into the thing wanted. It returns `None`
+    /// twice over: outer for "this response is not usable at all", inner for
+    /// the body itself. Splitting it out is what lets one loop serve both a
+    /// JSON document and an image.
+    fn fetch<T>(
+        &self,
+        url: &str,
+        read: impl Fn(reqwest::blocking::Response) -> Option<T>,
+        again: impl Fn(&T) -> bool,
+    ) -> Option<T> {
+        let Some(service) = Service::of(url) else {
+            return None;
+        };
+        let mut backoff = BACKOFF;
+        let mut owed = Duration::ZERO;
+
+        for attempt in 1..=ATTEMPTS {
+            let last = attempt == ATTEMPTS;
+            // Taken rather than read: a backoff is owed once, and leaving it
+            // set would charge every later attempt for the first refusal.
+            self.pace.wait(service, std::mem::take(&mut owed));
+
+            let response = match self.client.get(url).send() {
+                Ok(response) => response,
+                // A connection that never landed, or one that timed out, is
+                // the same kind of nothing as a 503 — the difference is only
+                // where it stopped.
+                Err(e) if e.is_timeout() || e.is_connect() || e.is_request() => {
+                    if last {
+                        return None;
+                    }
+                    owed = backoff;
+                    backoff *= 2;
+                    continue;
+                }
+                Err(_) => return None,
+            };
+
+            match verdict_of(response.status().as_u16()) {
+                Verdict::Drop => return None,
+                Verdict::Wait(_) if last => return None,
+                Verdict::Wait(_) => {
+                    owed = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(retry_after)
+                        .unwrap_or(backoff);
+                    backoff *= 2;
+                    continue;
+                }
+                Verdict::Keep => {
+                    let value = read(response)?;
+                    if !again(&value) {
+                        return Some(value);
+                    }
+                    if last {
+                        return None;
+                    }
+                    owed = backoff;
+                    backoff *= 2;
+                }
+            }
+        }
+        None
     }
 
     fn get(&self, url: &str) -> Option<String> {
-        let response = self.client.get(url).send().ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        response.text().ok()
+        self.fetch(
+            url,
+            |response| response.text().ok(),
+            // The 200-with-an-error-body case. Anything else in the document
+            // is an answer, including "no data".
+            |body: &String| deezer_is_throttling(body),
+        )
     }
 
     /// Lyrics for one track, or `None` when the service has none.
@@ -820,11 +1117,11 @@ impl Lookup {
             return Some(path);
         }
 
-        let response = self.client.get(url).send().ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        let bytes = response.bytes().ok()?;
+        // Same pacing and the same backoff as everything else: a library-wide
+        // pass fetches a sleeve per album, and the CDN is entitled to the same
+        // manners as the API. No body check — an image has no error object to
+        // read, so `false` is the honest answer to "should this be retried".
+        let bytes = self.fetch(url, |response| response.bytes().ok(), |_| false)?;
         if bytes.is_empty() {
             return None;
         }
@@ -858,6 +1155,151 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    // -----------------------------------------------------------------------
+    // Manners (AUD-18)
+    // -----------------------------------------------------------------------
+
+    /// LRCLIB requires a name, a version and a contact link; MusicBrainz would
+    /// require the same shape and throttles anything it calls "anonymous".
+    /// This asserts the header is all three things, so a well-meant tidy-up
+    /// cannot quietly reduce it to a product name.
+    #[test]
+    fn the_user_agent_names_the_app_its_version_and_somewhere_to_complain() {
+        assert!(USER_AGENT.starts_with("VaporMusic/"), "{USER_AGENT}");
+        let (_, rest) = USER_AGENT.split_once('/').expect("a version after the name");
+        let (version, contact) = rest.split_once(' ').expect("a contact after the version");
+        assert!(
+            version.split('.').count() >= 3 && version.starts_with(|c: char| c.is_ascii_digit()),
+            "the version is not a version: {version}"
+        );
+        assert!(
+            contact.starts_with("(http") || contact.contains('@'),
+            "no contact url or address: {contact}"
+        );
+    }
+
+    /// Pacing is decided by host, and a Deezer search response is full of CDN
+    /// links — so a substring match on the whole URL would put an artwork
+    /// download on the API's clock, and a track called "lrclib.net" on
+    /// LRCLIB's.
+    #[test]
+    fn a_url_is_placed_by_its_host_and_not_by_its_query() {
+        assert_eq!(
+            Service::of("https://api.deezer.com/search/track?q=x"),
+            Some(Service::Deezer)
+        );
+        assert_eq!(
+            Service::of("https://lrclib.net/api/get?artist_name=a"),
+            Some(Service::Lrclib)
+        );
+        assert_eq!(
+            Service::of("https://cdn-images.dzcdn.net/images/cover/x.jpg"),
+            Some(Service::Artwork)
+        );
+        assert_eq!(
+            Service::of("https://lrclib.net.example.com/x"),
+            Some(Service::Artwork),
+            "a host that merely begins with a known one is not that service"
+        );
+        assert_eq!(
+            Service::of("https://example.com/track?q=api.deezer.com"),
+            Some(Service::Artwork),
+            "a query naming a service is not a request to it"
+        );
+        assert_eq!(Service::of("not a url"), None);
+    }
+
+    /// The distinction the retry loop is built on.
+    #[test]
+    fn a_refusal_is_retried_and_an_answer_is_not() {
+        assert_eq!(verdict_of(200), Verdict::Keep);
+        assert_eq!(verdict_of(429), Verdict::Wait(None));
+        assert_eq!(verdict_of(503), Verdict::Wait(None));
+        assert_eq!(verdict_of(500), Verdict::Wait(None));
+        // Not found is an answer about the track. Retrying it is asking the
+        // same question again and getting told the same thing.
+        assert_eq!(verdict_of(404), Verdict::Drop);
+        assert_eq!(verdict_of(403), Verdict::Drop);
+    }
+
+    /// The fault a status-code-only check cannot see.
+    ///
+    /// Deezer sends its errors with `HTTP 200`, so without this the quota
+    /// refusal parses as a track with no genre and is cached as one.
+    #[test]
+    fn deezers_quota_refusal_arrives_wearing_a_200() {
+        assert!(deezer_is_throttling(
+            r#"{"error":{"type":"Exception","message":"Quota limit exceeded","code":4}}"#
+        ));
+        assert!(
+            deezer_is_throttling(r#"{"error":{"code":"4"}}"#),
+            "the code is sent as a string on at least one of their error paths"
+        );
+        assert!(deezer_is_throttling(r#"{"error":{"code":700}}"#));
+        assert!(
+            !deezer_is_throttling(
+                r#"{"error":{"type":"DataException","message":"no data","code":800}}"#
+            ),
+            "\"we do not have this track\" is an answer, and re-asking wastes \
+             three more requests on it"
+        );
+        assert!(!deezer_is_throttling(REAL_ALBUM_FULL));
+        assert!(!deezer_is_throttling("not json at all"));
+    }
+
+    /// A `Retry-After` is honoured, and a silly one is not.
+    #[test]
+    fn a_named_wait_is_taken_but_capped() {
+        assert_eq!(retry_after("2"), Some(Duration::from_secs(2)));
+        assert_eq!(retry_after(" 5 "), Some(Duration::from_secs(5)));
+        assert_eq!(
+            retry_after("600"),
+            Some(LONGEST_WAIT),
+            "a ten-minute wait parks a thread; the request is abandoned instead"
+        );
+        // The HTTP-date form is legal and unparsed — the caller's own backoff
+        // covers it.
+        assert_eq!(retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+    }
+
+    /// The behaviour the whole ticket is about: two threads asking the same
+    /// service cannot both decide they may go now.
+    ///
+    /// `identify_library` runs `track_facts` and `album` on scoped threads
+    /// against one `Lookup`, so the gate has to hold across them or it holds
+    /// nothing.
+    #[test]
+    fn two_threads_wanting_one_service_queue_behind_each_other() {
+        let pace = Pace::default();
+        let started = Instant::now();
+        std::thread::scope(|scope| {
+            for _ in 0..3 {
+                scope.spawn(|| pace.wait(Service::Deezer, Duration::ZERO));
+            }
+        });
+        // Three requests, two gaps between them — the first is free.
+        assert!(
+            started.elapsed() >= DEEZER_GAP * 2,
+            "three Deezer requests took {:?}, which is faster than the pace \
+             allows",
+            started.elapsed()
+        );
+    }
+
+    /// And a wait owed to one service does not hold up another. The two are
+    /// asked concurrently on purpose; sharing one clock would undo that.
+    #[test]
+    fn the_services_are_paced_on_separate_clocks() {
+        let pace = Pace::default();
+        pace.wait(Service::Lrclib, Duration::ZERO);
+        let started = Instant::now();
+        pace.wait(Service::Deezer, Duration::ZERO);
+        assert!(
+            started.elapsed() < LRCLIB_GAP,
+            "a Deezer request waited on LRCLIB's clock"
+        );
+    }
+
     /// The defect this pair of flags exists to prevent.
     ///
     /// Measured on a real cache 2026-08-22: 534 of 534 entries had
