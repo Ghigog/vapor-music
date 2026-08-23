@@ -94,10 +94,18 @@
   /* Between `--ink-2` and `--ink-3`: the secondary line of a table row, where
      the artist has to stay readable while the title stays dominant. */
   --ink-soft: #7b8189;
-  --ink-3: #9ba1aa;
+  /* `--ink-3` and `--ink-4` are darker than they look like they should be, and
+     that is AUD-6 rather than a mistake. At their old #9ba1aa / #8b9099 they
+     measured 2.24:1 and 2.76:1 on `--page`, against a stated WCAG 2.1 AA floor
+     of 4.5:1, and `--ink-4` is what `.label` is set in at 11px. Both are now
+     the lightest hex on their own hue that clears 4.5:1 on `--page` *and* on
+     `#dfe9f5`, the lightest stop of `--page-gradient` — one step lighter fails
+     at the top of the screen. That floor is shared, so the bottom of the scale
+     is nearly flat; the separation that is left is hue, not lightness. */
+  --ink-3: #626974;
   /* The same grey as a triple, for rules that need it at partial alpha. */
-  --ink-3-rgb: 155, 161, 170;
-  --ink-4: #8b9099;
+  --ink-3-rgb: 98, 105, 116;
+  --ink-4: #646971;
 
   /* ---- Surfaces ----------------------------------------------------- */
   --page: #eceef1;

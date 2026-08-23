@@ -117,10 +117,14 @@ describe("colours live in tokens.css", () => {
  * comment beside it recorded 5.6:1, a figure that belonged to a label colour
  * the theme no longer used.
  *
- * Only the pairs that are *decided* are asserted: a label on a fill, and body
- * ink on the page. The secondary ink scale has known failures, deliberately not
- * encoded here as acceptable — see `docs/workspace/tickets.md`. A test that
- * asserts a failing value is how the failure becomes permanent.
+ * Only the pairs that are *decided* are asserted: a label on a fill, body ink
+ * on the page, and — since AUD-6 — Daylight's quiet scale, `--ink-3` and
+ * `--ink-4`, which were 2.24:1 and 2.76:1 and are now guarded on both the flat
+ * page and the palest stop of its gradient. What is still undecided stays out:
+ * `--ink-soft`, `--accent`-as-text and `--sov-quiet` are large-text-only by
+ * measurement, and Lamplight's `--ink-4` is 4.39:1. A test that asserts a
+ * failing value is how the failure becomes permanent — see
+ * `docs/workspace/tickets.md`.
  */
 describe("contrast", () => {
   const channel = (c: number) =>
@@ -187,4 +191,56 @@ describe("contrast", () => {
       }
     });
   }
+
+  it("Daylight: the quiet ink scale passes AA everywhere the page goes", () => {
+    const t = declarations(block(":root {"));
+    const page = t.get("--page");
+    expect(page, "Daylight has no --page").toBeTruthy();
+
+    // `--page` is the flat fallback; what is actually behind these labels most
+    // of the time is `--page-gradient`, and its palest stop is paler than the
+    // fallback. That stop is the real worst case, so it is read back out of
+    // the gradient rather than written down here — restyling the horizon
+    // cannot then quietly lower the bar this test is holding.
+    const stops = (t.get("--page-gradient") ?? "").match(/#[0-9a-f]{3,8}\b/gi);
+    expect(stops?.length, "Daylight --page-gradient names no colours")
+      .toBeGreaterThan(0);
+    const palest = (stops as string[]).reduce((a, b) =>
+      luminance(b) > luminance(a) ? b : a,
+    );
+
+    for (const token of ["--ink-3", "--ink-4"]) {
+      const value = t.get(token);
+      expect(value, `Daylight has no ${token}`).toBeTruthy();
+      for (const [what, bg] of [
+        ["--page", page as string],
+        ["the palest gradient stop", palest],
+      ] as Array<[string, string]>) {
+        const measured = ratio(value as string, bg);
+        expect(
+          measured,
+          `${token} ${value} on ${what} ${bg} is ${measured.toFixed(2)}:1. ` +
+            `--ink-4 is what \`.label\` is set in at 11px, which is the most ` +
+            `repeated text style in the app`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("Daylight: --ink-3-rgb is the same grey as --ink-3", () => {
+    // The triple exists only so eighteen rules can take `--ink-3` at partial
+    // alpha. Nothing makes the two track each other, and AUD-6 moved one of
+    // them, so the drift is worth a line rather than a comment.
+    const t = declarations(block(":root {"));
+    const hex = (t.get("--ink-3") ?? "").replace("#", "");
+    const triple = (t.get("--ink-3-rgb") ?? "")
+      .split(",")
+      .map((n) => Number(n.trim()));
+
+    expect(triple, "--ink-3-rgb is not three numbers").toHaveLength(3);
+    expect(
+      triple,
+      `--ink-3-rgb no longer matches --ink-3 #${hex}`,
+    ).toEqual([0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)));
+  });
 });

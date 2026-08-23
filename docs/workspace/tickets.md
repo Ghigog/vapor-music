@@ -2568,40 +2568,72 @@ Titles reconstructed from Dylan's answers; the desks' own wording is gone.
 another session has been in both.
 
 
-### AUD-6 : the Daylight secondary ink scale is under AA (open)
+### AUD-6 : the Daylight secondary ink scale is under AA (done 2026-08-23)
 
-`--accent-fill` was 4.02:1 under a white label and is fixed — `#0062d6`, 5.65:1,
-guarded by a computed test in `src/lib/tokens.test.ts`. The rest of the scale
-was measured at the same time and is left alone, because darkening it changes
-how every quiet label in the app looks and that is a design call rather than a
-correctness one.
+`--accent-fill` was 4.02:1 under a white label and was fixed first — `#0062d6`,
+5.65:1, guarded by a computed test in `src/lib/tokens.test.ts`. The rest of the
+scale was measured at the same time and left alone, because darkening it changes
+how every quiet label in the app looks and that was a design call rather than a
+correctness one. Dylan made it on 2026-08-23: darken to AA.
 
-Daylight, against `--page` `#eceef1`:
+Daylight, re-measured 2026-08-23 against both backgrounds a label can sit on —
+the flat `--page` `#eceef1`, and `#dfe9f5`, the palest stop of `--page-gradient`
+and so the real worst case at the top of the window:
 
-| Token | Value | Ratio | |
-|---|---|---|---|
-| `--ink` | `#14161a` | 15.58:1 | passes |
-| `--ink-2` | `#676c75` | 4.54:1 | passes, and 4.30:1 on the gradient's top stop `#dfe9f5` |
-| `--sov-ink` | `#237a52` | 4.54:1 | passes |
-| `--ink-soft` | `#7b8189` | 3.38:1 | large text only |
-| `--accent` as text | `#007aff` | 3.46:1 | large text only |
-| `--sov-quiet` | `#5c8f76` | 3.20:1 | large text only |
-| `--ink-4` | `#8b9099` | 2.76:1 | **fails** |
-| `--ink-3` | `#9ba1aa` | 2.24:1 | **fails** |
+| Token | Value | on `#eceef1` | on `#dfe9f5` | |
+|---|---|---|---|---|
+| `--ink` | `#14161a` | 15.58:1 | 14.76:1 | passes |
+| `--ink-2` | `#676c75` | 4.54:1 | 4.30:1 | passes on the flat page, not at the top |
+| `--sov-ink` | `#237a52` | 4.54:1 | 4.30:1 | same, to two decimal places |
+| `--accent` as text | `#007aff` | 3.46:1 | 3.27:1 | large text only |
+| `--ink-soft` | `#7b8189` | 3.38:1 | 3.20:1 | large text only |
+| `--sov-quiet` | `#5c8f76` | 3.20:1 | 3.03:1 | large text only |
+| `--ink-4` | `#8b9099` → `#646971` | 2.76 → **4.75:1** | 2.61 → **4.50:1** | fixed |
+| `--ink-3` | `#9ba1aa` → `#626974` | 2.24 → **4.76:1** | 2.12 → **4.51:1** | fixed |
 
-`--ink-4` is the one that matters: it is what `.label` is set in, at 11px, which
-is the most repeated text style in the app. Two of those numbers are marginal
-rather than failing — `--ink-2` drops to 4.30:1 where the page gradient is
-lightest, so it passes on most of the screen and not at the top.
+`--ink-4` was the one that mattered: it is what `.label` is set in, at 11px,
+which is the most repeated text style in the app. Nine rules take it, fifty-two
+take `--ink-3`, and eighteen more take `--ink-3-rgb`, which moved with it so the
+two do not drift.
 
-`docs/DESIGN_LANGUAGE.md` commits the app to WCAG 2.1 AA, so this is a gap
-against a stated position, not a suggestion. Deliberately not encoded as an
-accepted value in the test: a test that asserts a failing number is how the
-failure becomes permanent.
+Three things the re-measurement changed:
 
-**Waiting for:** Dylan. Darkening `--ink-4` to roughly `#6b7079` clears 4.5:1;
-whether the quiet scale should get darker or the 11px labels should get bigger
-is the actual question.
+* **The proposed `#6b7079` does not clear 4.5:1.** It is 4.28:1 on `--page` and
+  4.06:1 on the gradient, so it would have closed the ticket without fixing it.
+  Every other number in the original table verified exactly.
+* **The bottom of the scale is now nearly flat**, and that is arithmetic rather
+  than a choice. 4.5:1 on the palest stop is a single luminance ceiling; both
+  tokens are the lightest hex on their own hue that sits under it, so what
+  separates them is hue, not lightness. One channel lighter on either fails.
+* **`--screen-gradient` starts paler still** at `#dcebfa`. Both new values clear
+  it too — 4.55:1 and 4.56:1 — so nothing inside a device frame is worse.
+
+Guarded in `src/lib/tokens.test.ts` beside `--accent-fill`: the palest stop is
+read back out of `--page-gradient` rather than written down, so restyling the
+horizon cannot quietly lower the bar.
+
+`docs/DESIGN_LANGUAGE.md` commits the app to WCAG 2.1 AA, so this was a gap
+against a stated position, not a suggestion.
+
+**Waiting for:** Two decisions, neither blocking this.
+
+* **`--ink-2` `#676c75` is 4.30:1 at the top of the gradient** and was left
+  alone — it passes on most of the screen, and it is body-adjacent rather than a
+  quiet label, so moving it is a louder change than this ticket was scoped for.
+  The lightest value on its own hue that clears both is `#646971` at 4.75:1 and
+  4.50:1 — which is exactly where `--ink-4` landed. Taking it would collapse
+  `--ink-2`, `--ink-3` and `--ink-4` into a single colour, which is the design
+  call the flatness above is already pressing on.
+* **Lamplight's `--ink-4` `#8a7c6c` is 4.39:1** on its `--page` `#1c1712`.
+  Found while measuring, not in the original table, which only covered Daylight.
+  Not encoded in the test as acceptable, for the same reason the Daylight
+  failures were not.
+
+**Closed:** `--ink-4` is `#646971` and `--ink-3` is `#626974` in
+`vapor-app/public/tokens.css`, both the lightest hex on their own hue that
+clears 4.5:1 on `--page` and on the gradient's palest stop, with `--ink-3-rgb`
+moved to match. Two computed assertions in `src/lib/tokens.test.ts` hold them
+there; 301 frontend tests pass.
 
 ---
 
