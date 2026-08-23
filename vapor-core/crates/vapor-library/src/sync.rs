@@ -1217,7 +1217,13 @@ mod tests {
         let mut trust = Trust::new();
         assert!(!trust.allows("device-b"));
 
-        trust.add("device-b", "Dylan's Phone", DeviceKind::Phone, [7u8; 32], 1_000);
+        trust.add(
+            "device-b",
+            "Dylan's Phone",
+            DeviceKind::Phone,
+            [7u8; 32],
+            1_000,
+        );
         assert!(trust.allows("device-b"));
         assert!(!trust.allows("device-c"));
     }
@@ -1287,7 +1293,8 @@ mod tests {
     /// It reads back as unpaired, and the owner pairs again.
     #[test]
     fn a_pairing_made_before_there_were_keys_reads_back_as_unpaired() {
-        let old = r#"{"devices":[{"id":"device-b","name":"Phone","kind":"phone","pairedAt":1000}]}"#;
+        let old =
+            r#"{"devices":[{"id":"device-b","name":"Phone","kind":"phone","pairedAt":1000}]}"#;
 
         let trust: Trust = serde_json::from_str(old).expect("an old trust file still loads");
 
