@@ -17,6 +17,14 @@
  * Sorting, filtering and grouping are not implemented here — they come from
  * `vapor-library`'s index over IPC, so this screen and a smart playlist cannot
  * form different opinions about the same query.
+ *
+ * Only the *rendering* was virtualized, though. The read behind it was not:
+ * `library_view` sent every matching row on every keystroke, so a fifty
+ * thousand track library cost 17,649,902 bytes of JSON and 153 ms of
+ * `JSON.parse` on the UI thread to draw the forty rows a screen holds
+ * (AUD-13). The read is windowed now — see `BLOCK` — and the ordering stays on
+ * the Rust side, because a table that sorted its own window would show a
+ * different order per screenful.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -35,6 +43,20 @@ import { ErrorNotice, messageOf } from "../components/ErrorNotice";
  *  stylesheet both read it from here rather than each holding a copy. */
 const ROW_HEIGHT = 66;
 const ROW_GAP = 4;
+
+/**
+ * How many rows one fetch covers, and how the window follows the viewport.
+ *
+ * The window in hand is the block the viewport is in, plus one block either
+ * side. Rounding to a block is what stops the read re-running on every frame of
+ * a scroll: it only moves when a scroll crosses a boundary, and by then there
+ * is already a block of rows ahead of the viewport in the direction of travel.
+ *
+ * 300 rows is 106,032 bytes at the row shape a real library has — 0.6% of what
+ * the unwindowed call sent, and 0.27 ms to parse instead of 153 ms.
+ */
+const BLOCK = 100;
+const WINDOW = BLOCK * 3;
 
 interface Column {
   id: SortKey;
@@ -74,8 +96,18 @@ const COLUMNS: readonly Column[] = [
 
 type Load =
   | { kind: "loading" }
-  | { kind: "ready"; rows: Row[] }
+  | { kind: "ready" }
   | { kind: "error"; message: string };
+
+/**
+ * The window of rows in hand, and where it sits in the whole result.
+ *
+ * `total` is the length of the result the window was cut from, which is what
+ * the scrollbar measures and what the empty state tests. It is not
+ * `rows.length` any more, and the two must not be confused: a table showing
+ * three hundred rows of fifty thousand has a scrollbar for fifty thousand.
+ */
+type Page = { offset: number; rows: Row[]; total: number };
 
 /**
  * The flat track table.
@@ -121,7 +153,27 @@ export function Songs({
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [ascending, setAscending] = useState(true);
   const [load, setLoad] = useState<Load>({ kind: "loading" });
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [page, setPage] = useState<Page>({ offset: 0, rows: [], total: 0 });
+  /**
+   * Which block of the result the viewport is in.
+   *
+   * The one piece of state the scroll position feeds into the read. Everything
+   * else about the window is derived from it, so there is one number to be
+   * wrong rather than two.
+   */
+  const [block, setBlock] = useState(0);
+  /**
+   * Which rows are ticked, and where each sits in the ordered result.
+   *
+   * A Map rather than a Set because the index is no longer recoverable from
+   * the rows in hand: the table holds three hundred of fifty thousand, and
+   * "the order they appear on screen" — which is the order a playlist has to
+   * receive them in — cannot be read back off a window. It is recorded when
+   * the row is ticked, which is the only moment it is certainly known.
+   */
+  const [selected, setSelected] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  );
   /**
    * Where a shift-click ranges from: the last row selected on purpose.
    *
@@ -138,6 +190,15 @@ export function Songs({
   /** The href whose BPM cell is being edited, if any. */
   const [editing, setEditing] = useState<string | null>(null);
   const [bpmError, setBpmError] = useState<string | null>(null);
+  /**
+   * A press that needed a read of its own and did not get one.
+   *
+   * Starting a track queues the whole table behind it, and a shift-click
+   * selects a range that may reach outside the window — both are round trips
+   * now, and both can fail. Kept apart from `load`, which is the table itself:
+   * a failed press must not blank the rows a person is looking at.
+   */
+  const [actionError, setActionError] = useState<string | null>(null);
   /** Bumped after a correction lands, to re-read rows with it applied. */
   const [revision, setRevision] = useState(0);
   /** Hrefs whose beat grid is being re-tracked against a corrected tempo.
@@ -163,6 +224,20 @@ export function Songs({
   const carry = useDrag();
 
   /**
+   * The selection, in the order it appears on screen.
+   *
+   * From the index recorded when each row was ticked, not from the rows in
+   * hand — the selection can reach a long way outside the window, and a
+   * playlist receiving tracks in click order rather than table order is what
+   * this exists to prevent.
+   */
+  function orderedSelection(): string[] {
+    return [...selected]
+      .sort((a, b) => a[1] - b[1])
+      .map(([href]) => href);
+  }
+
+  /**
    * What a drag starting on `row` is carrying.
    *
    * One function for both paths, so the mouse and the finger cannot pick up
@@ -173,9 +248,7 @@ export function Songs({
    * anyone wants.
    */
   function payloadFor(row: Row): DragPayload {
-    const hrefs = selected.has(row.href)
-      ? rows.filter((r) => selected.has(r.href)).map((r) => r.href)
-      : [row.href];
+    const hrefs = selected.has(row.href) ? orderedSelection() : [row.href];
     return {
       kind: "track",
       values: hrefs,
@@ -196,41 +269,67 @@ export function Songs({
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * What this table is a view of — everything except which window of it.
+   *
+   * Named once because four things ask for it now: the windowed read below,
+   * the range a shift-click selects, and the two places that genuinely need
+   * every row. Two spellings of the same view would be two libraries.
+   */
+  const view = useMemo<core.LibraryView>(
+    () => ({
+      query,
+      sortKey,
+      ascending,
+      groupBy: "none",
+      ...(filter?.album ? { album: filter.album } : {}),
+      ...(filter?.artist ? { artist: filter.artist } : {}),
+      ...(filter?.genre ? { genre: filter.genre } : {}),
+    }),
+    [query, sortKey, ascending, filter?.album, filter?.artist, filter?.genre],
+  );
+
+  /** Where the window in hand starts: one block before the viewport's. */
+  const offset = Math.max(0, (block - 1) * BLOCK);
+
+  /**
+   * A request number, so a late answer cannot overwrite a newer one.
+   *
+   * Two things move the window — typing and scrolling — and both go through
+   * the effect below, so both can be in flight across a change to the other.
+   * Without this, a scroll's read issued under the old query and answered
+   * after the new query's read had landed would put the old query's rows on
+   * screen under the new query's count. The `cancelled` flag covers the effect
+   * re-running; this covers the answer itself.
+   */
+  const request = useRef(0);
+
   useEffect(() => {
     let cancelled = false;
+    const seq = ++request.current;
     const t = setTimeout(() => {
       core
-        .libraryView({
-          query,
-          sortKey,
-          ascending,
-          groupBy: "none",
-          ...(filter?.album ? { album: filter.album } : {}),
-          ...(filter?.artist ? { artist: filter.artist } : {}),
-          ...(filter?.genre ? { genre: filter.genre } : {}),
-        })
-        .then((sections) => {
-          if (cancelled) return;
-          // groupBy "none" returns exactly one section.
-          setLoad({ kind: "ready", rows: sections[0]?.rows ?? [] });
+        .libraryPage(view, { offset, limit: WINDOW })
+        .then((got) => {
+          if (cancelled || seq !== request.current) return;
+          // groupBy "none" is one section, and a window past the end is none.
+          setPage({
+            offset: got.offset,
+            rows: got.sections[0]?.rows ?? [],
+            total: got.total,
+          });
+          setLoad({ kind: "ready" });
         })
         .catch((e: unknown) => {
-          if (!cancelled) setLoad({ kind: "error", message: messageOf(e) });
+          if (cancelled || seq !== request.current) return;
+          setLoad({ kind: "error", message: messageOf(e) });
         });
     }, 120);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [
-    query,
-    sortKey,
-    ascending,
-    revision,
-    filter?.album,
-    filter?.artist,
-    filter?.genre,
-  ]);
+  }, [view, revision, offset]);
 
   useEffect(() => {
     core
@@ -286,16 +385,45 @@ export function Songs({
     }
   }
 
-  const rows = useMemo(() => (load.kind === "ready" ? load.rows : []), [load]);
+  /** How long the result is, which is what the scrollbar measures. */
+  const total = page.total;
+
+  /**
+   * The row at `index` in the whole result, if the window in hand covers it.
+   *
+   * Undefined is not an error and not the end of the list: it is a row whose
+   * index exists and whose contents have not arrived. The table draws a
+   * placeholder of the right height for it, so the scroll position is correct
+   * before the rows are.
+   */
+  function rowAt(index: number): Row | undefined {
+    const i = index - page.offset;
+    return i >= 0 && i < page.rows.length ? page.rows[i] : undefined;
+  }
 
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    // The whole result, not the window. Rows are a fixed height, so this is
+    // the exact scroll extent rather than an estimate of it — which is what
+    // lets the scrollbar be right about a library the table has never seen.
+    count: total,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT + ROW_GAP,
     // A few rows above and below the viewport, so a fast scroll does not
     // reveal blank space before React commits.
     overscan: 6,
   });
+
+  /**
+   * Follow the viewport, one block at a time.
+   *
+   * The only thing that turns scrolling into a read. Rounding to a block means
+   * a scroll within one costs nothing, and crossing a boundary asks for a
+   * window that already reaches a block past the viewport in both directions.
+   */
+  const firstVisible = virtualizer.getVirtualItems()[0]?.index ?? 0;
+  useEffect(() => {
+    setBlock(Math.floor(firstVisible / BLOCK));
+  }, [firstVisible]);
 
   function toggleSort(id: SortKey) {
     if (id === sortKey) setAscending((a) => !a);
@@ -305,10 +433,10 @@ export function Songs({
     }
   }
 
-  function toggleSelected(href: string) {
+  function toggleSelected(href: string, index: number) {
     setSelected((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(href)) next.add(href);
+      const next = new Map(prev);
+      if (!next.delete(href)) next.set(href, index);
       return next;
     });
   }
@@ -324,43 +452,64 @@ export function Songs({
    * and `ctrlKey` and nothing else, which left selecting a run of tracks
    * possible only one modifier-click at a time.
    */
-  function selectRange(index: number) {
+  async function selectRange(index: number) {
     const from = anchor ?? index;
     const lo = Math.min(from, index);
     const hi = Math.max(from, index);
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (let i = lo; i <= hi; i++) {
-        const r = rows[i];
-        if (r) next.add(r.href);
-      }
-      return next;
-    });
+    // Fetched rather than read from the window: a shift-click can span more of
+    // the library than the table is holding, and selecting only the part of
+    // the range that happened to be in hand would be a silent wrong answer.
+    // Exactly the range, too — this is the one read on the screen whose size a
+    // person chose.
+    try {
+      const got = await core.libraryPage(view, {
+        offset: lo,
+        limit: hi - lo + 1,
+      });
+      const ranged = got.sections.flatMap((s) => s.rows);
+      setSelected((prev) => {
+        const next = new Map(prev);
+        ranged.forEach((r, i) => next.set(r.href, got.offset + i));
+        return next;
+      });
+    } catch (e: unknown) {
+      setActionError(messageOf(e));
+    }
   }
 
   /** Select deliberately, and remember where a later shift-click ranges from. */
   function selectAt(index: number, href: string) {
-    toggleSelected(href);
+    toggleSelected(href, index);
     setAnchor(index);
   }
 
+  /**
+   * Play `href`, queueing the whole table behind it in the order shown.
+   *
+   * The one place left that reads every row, and deliberately so: a queue is
+   * the whole list by definition, and this is a press rather than a keystroke.
+   * Paying the full payload once when somebody starts a track is the trade
+   * AUD-13 makes; paying it sixty times while they type is the bug it fixes.
+   */
   async function playFrom(href: string) {
-    await core.playTracks(
-      rows.map((r) => r.href),
-      href,
-      scope,
-    );
+    try {
+      const sections = await core.libraryView(view);
+      const hrefs = sections.flatMap((s) => s.rows.map((r) => r.href));
+      await core.playTracks(hrefs, href, scope);
+    } catch (e: unknown) {
+      setActionError(messageOf(e));
+    }
   }
 
   async function addSelectedTo(playlistId: string) {
-    // Order matters: the selection is a Set, but the playlist should receive
-    // tracks in the order they appear on screen, not in insertion order.
-    const hrefs = rows.filter((r) => selected.has(r.href)).map((r) => r.href);
-    await core.addTracksToPlaylist(playlistId, hrefs);
+    // Order matters: the playlist should receive tracks in the order they
+    // appear on screen, not in the order they were ticked. That order comes
+    // from the index recorded with each — see `orderedSelection`.
+    await core.addTracksToPlaylist(playlistId, orderedSelection());
     // The sidebar rail shows each playlist's length; without this it keeps
     // showing the count from before the add.
     window.dispatchEvent(new Event("vapor:playlists-changed"));
-    setSelected(new Set());
+    setSelected(new Map());
   }
 
   return (
@@ -462,6 +611,13 @@ export function Songs({
         <ErrorNotice error={bpmError} onDismiss={() => setBpmError(null)} />
       )}
 
+      {actionError && (
+        <ErrorNotice
+          error={actionError}
+          onDismiss={() => setActionError(null)}
+        />
+      )}
+
       {/* Overlaid rather than inserted above the table.
        *
        * In the flow it pushed every row down the moment a row was selected —
@@ -474,7 +630,7 @@ export function Songs({
       {selected.size > 0 && (
         <SelectionBar
           count={selected.size}
-          onClear={() => setSelected(new Set())}
+          onClear={() => setSelected(new Map())}
           onAddTo={addSelectedTo}
         />
       )}
@@ -485,15 +641,25 @@ export function Songs({
         tabIndex={0}
         role="listbox"
         aria-label="Tracks"
-        aria-activedescendant={rows[focused] ? `row-${focused}` : undefined}
+        // By index, not by row: the cursor can sit on a row whose contents
+        // have not arrived, and it is still where the cursor is.
+        aria-activedescendant={focused < total ? `row-${focused}` : undefined}
         onKeyDown={(e) => {
-          if (rows.length === 0) return;
+          if (total === 0) return;
           // Arrow keys move a cursor; Enter plays it; space selects. The Godot
           // version had none of this, and a table this size is unusable without
           // it (TD-33).
+          /*
+           * The cursor moves over the whole result, not over the window.
+           *
+           * An index outside the rows in hand is a legal place to be: the
+           * scroll follows it, the window follows the scroll, and the row
+           * fills in. What it cannot do until then is answer Enter or Space,
+           * which is why both check for a row rather than assuming one.
+           */
           const move = (to: number) => {
             e.preventDefault();
-            const next = Math.max(0, Math.min(rows.length - 1, to));
+            const next = Math.max(0, Math.min(total - 1, to));
             setFocused(next);
             virtualizer.scrollToIndex(next, { align: "auto" });
           };
@@ -509,17 +675,17 @@ export function Songs({
             case "Home":
               return move(0);
             case "End":
-              return move(rows.length - 1);
+              return move(total - 1);
             case "Enter": {
               e.preventDefault();
-              const row = rows[focused];
+              const row = rowAt(focused);
               if (row) void playFrom(row.href);
               return;
             }
             case " ": {
               e.preventDefault();
-              const row = rows[focused];
-              if (row) toggleSelected(row.href);
+              const row = rowAt(focused);
+              if (row) toggleSelected(row.href, focused);
               return;
             }
             default:
@@ -536,7 +702,7 @@ export function Songs({
           />
         )}
 
-        {load.kind === "ready" && rows.length === 0 && (
+        {load.kind === "ready" && total === 0 && (
           <p className="songs__empty">
             {query.trim() ? `Nothing matched “${query}”` : "No tracks yet"}
           </p>
@@ -548,8 +714,39 @@ export function Songs({
           style={{ height: virtualizer.getTotalSize(), position: "relative" }}
         >
           {virtualizer.getVirtualItems().map((item) => {
-            const row = rows[item.index];
-            if (!row) return null;
+            const row = rowAt(item.index);
+            /*
+             * A row whose index exists and whose contents have not arrived.
+             *
+             * Drawn at full height rather than skipped, because the spacer
+             * above is sized for the whole result: leaving a gap here would
+             * make the rows below it sit at the wrong offset for as long as
+             * the read takes. It is still an `option`, so the cursor and the
+             * count a screen reader announces stay right while it fills in.
+             */
+            if (!row) {
+              return (
+                <div
+                  key={`pending-${item.index}`}
+                  id={`row-${item.index}`}
+                  role="option"
+                  aria-selected={false}
+                  aria-label="Loading"
+                  className={
+                    "songrow songrow--pending" +
+                    (item.index === focused ? " songrow--cursor" : "")
+                  }
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: ROW_HEIGHT,
+                    transform: `translateY(${item.start}px)`,
+                  }}
+                />
+              );
+            }
             return (
               <div
                 key={row.href}
@@ -608,7 +805,7 @@ export function Songs({
                   setFocused(item.index);
 
                   if (e.shiftKey) {
-                    selectRange(item.index);
+                    void selectRange(item.index);
                     return;
                   }
                   if (e.metaKey || e.ctrlKey) {
@@ -622,7 +819,7 @@ export function Songs({
                   checked={selected.has(row.href)}
                   title={row.title}
                   onPick={(shift) => {
-                    if (shift) selectRange(item.index);
+                    if (shift) void selectRange(item.index);
                     else selectAt(item.index, row.href);
                   }}
                 />

@@ -186,6 +186,51 @@ export function makeEntity(
   };
 }
 
+/**
+ * The canned answer to `library_view`, in the shape the command now returns.
+ *
+ * `library_view` answers with a window plus the length of the result it was cut
+ * from (AUD-13), so a test arranging a narrowed reply has three fields to state
+ * where it used to state one. Two of them are the same at almost every call
+ * site — the arranged rows are the whole of the arranged result, starting at
+ * its beginning — and restating that at each one is another chance to get
+ * `total` and `offset` to disagree with `sections`.
+ *
+ * `total` counts the rows given unless a test says otherwise, which is what a
+ * test wanting the header's count to exceed the window in hand would do.
+ */
+export function makePage(
+  sections: core.LibrarySection[],
+  over: Partial<core.LibraryPage> = {},
+): core.LibraryPage {
+  return {
+    sections,
+    total: sections.reduce((n, section) => n + section.rows.length, 0),
+    offset: 0,
+    ...over,
+  };
+}
+
+/**
+ * The default rows, by title, in the order given.
+ *
+ * The instance method of the same intent reads whatever rows a test arranged;
+ * this one is for arranging them in the first place, which has to happen at
+ * `useBackend` and therefore before there is an instance to ask.
+ *
+ * A test that cares about on-screen order states it here rather than through
+ * `answers()`. The two are not interchangeable any more: a canned answer is
+ * returned whole, so a screen that asks for a window gets the whole thing back
+ * and every row in it looks like it was in the window.
+ */
+export function defaultRowsNamed(...titles: string[]): core.Row[] {
+  return titles.map((title) => {
+    const row = DEFAULT_ROWS.find((r) => r.title === title);
+    if (!row) throw new Error(`no default row titled ${title}`);
+    return row;
+  });
+}
+
 /** An album or artist as a home shelf draws it. */
 function shelfOf(entity: core.LibraryEntity): core.Shelf {
   return {
@@ -475,7 +520,8 @@ export class FakeBackend {
     const found = attempted ? this.lyricsFor[href] : undefined;
     return {
       lyrics: found ?? null,
-      artistImage: attempted && found ? "https://example.invalid/artist.jpg" : "",
+      artistImage:
+        attempted && found ? "https://example.invalid/artist.jpg" : "",
       albumArt: attempted && found ? "https://example.invalid/album.jpg" : "",
       genre: attempted && found ? "Electronic" : "",
       attempted,
@@ -704,7 +750,8 @@ export class FakeBackend {
       case "save_webdav_password":
         // Succeeds either way. That is the point: the command returning
         // without throwing has never been evidence that anything was stored.
-        if (!this.keychainSilentlyFails) this.password = String(a.password ?? "");
+        if (!this.keychainSilentlyFails)
+          this.password = String(a.password ?? "");
         return null;
 
       case "has_webdav_password":
@@ -778,17 +825,32 @@ export class FakeBackend {
 
       // --- library ------------------------------------------------------
       case "library_view": {
-        if (!this.scanned) return [];
-        // No filtering, sorting, scoping or de-duplication here. All of it is
+        if (!this.scanned) return makePage([]);
+        // The window is applied; it is not derived. Slicing an ordered list at
+        // the offset the caller named is what the transport does (AUD-13), and
+        // a stub that answered a request for rows 300-600 with all 50,000 would
+        // make every windowed screen look correct here and be wrong in the app
+        // — which is the failure a fake exists to catch, not to produce.
+        //
+        // Still no filtering, sorting, scoping or de-duplication. All of it is
         // `vapor_library::index`, which tests it — including the parts this
         // used to get wrong: Camelot keys sort musically rather than
         // alphabetically, unknowns sink whichever way the sort runs, and ties
         // break on title. A screen's test asserted against none of that.
         //
-        // What comes back is what the test arranged. That makes a screen's
-        // test say what the screen does with an answer, and `calls` says what
-        // it asked for.
-        return [{ header: "", rows: this.rows }];
+        // What comes back is what the test arranged, in the window it asked
+        // for. That makes a screen's test say what the screen does with an
+        // answer, and `calls` says what it asked for.
+        const w = (a.window ?? {}) as { offset?: number; limit?: number };
+        const offset = Math.min(Math.max(w.offset ?? 0, 0), this.rows.length);
+        const end = Math.min(
+          offset + (w.limit ?? this.rows.length),
+          this.rows.length,
+        );
+        return makePage([{ header: "", rows: this.rows.slice(offset, end) }], {
+          total: this.rows.length,
+          offset,
+        });
       }
 
       case "library_entities": {
@@ -913,7 +975,10 @@ export class FakeBackend {
         const name = String(a.name ?? "");
         // Any track by that artist that has been looked up answers for it.
         const found = this.rows.some(
-          (r) => r.artist === name && this.attempted.has(r.href) && this.lyricsFor[r.href],
+          (r) =>
+            r.artist === name &&
+            this.attempted.has(r.href) &&
+            this.lyricsFor[r.href],
         );
         return found ? A_SLEEVE : null;
       }
@@ -955,7 +1020,8 @@ export class FakeBackend {
 
       case "set_vibe_limit": {
         const limit = Number(a.limit);
-        if (!Number.isFinite(limit)) throw new Error("That is not a Vibe Limit.");
+        if (!Number.isFinite(limit))
+          throw new Error("That is not a Vibe Limit.");
         this.settings = {
           ...this.settings,
           vibeLimit: Math.min(Math.max(limit, 0.1), 1),
@@ -1005,7 +1071,10 @@ export class FakeBackend {
 
       case "clear_album_art": {
         delete this.albumArt[`${a.album as string}\u001f${a.lead as string}`];
-        return { src: this.coverFor(a.lead as string), chosen: false } satisfies core.AlbumArt;
+        return {
+          src: this.coverFor(a.lead as string),
+          chosen: false,
+        } satisfies core.AlbumArt;
       }
 
       case "set_prefer_looked_up_art":
@@ -1042,7 +1111,9 @@ export class FakeBackend {
         return this.analysisFailures;
 
       case "set_appearance": {
-        const choice = String(a.appearance ?? "").trim().toLowerCase();
+        const choice = String(a.appearance ?? "")
+          .trim()
+          .toLowerCase();
         if (!["auto", "daylight", "lamplight"].includes(choice)) {
           throw new Error(`unknown appearance ${JSON.stringify(a.appearance)}`);
         }
@@ -1094,7 +1165,8 @@ export class FakeBackend {
         const peerId = String(a.peerId ?? "");
         const peer = this.trusted.find((t) => t.id === peerId);
         if (!peer) throw new Error("That device is not paired.");
-        if (this.syncing?.running) throw new Error("A sync is already running.");
+        if (this.syncing?.running)
+          throw new Error("A sync is already running.");
         // Finished immediately: what a screen test needs is the shape of a
         // completed sync, and a fake that takes real time is a fake that makes
         // every test that touches it slow and flaky.
@@ -1113,7 +1185,9 @@ export class FakeBackend {
 
       case "sync_shared_document": {
         if (!this.settings.remote.url || !this.settings.remote.username) {
-          throw new Error("No server is configured, so there is nowhere to keep it.");
+          throw new Error(
+            "No server is configured, so there is nowhere to keep it.",
+          );
         }
         // Additive, as the real merge is: a playlist the server has and this
         // device does not, and nothing removed.
@@ -1232,7 +1306,9 @@ export class FakeBackend {
         const g = this.groups.find((x) => x.id === a.id);
         if (!g) return false;
         // Idempotent, as the store is.
-        if (g.entities.some((e) => e.entityType === kind && e.value === value)) {
+        if (
+          g.entities.some((e) => e.entityType === kind && e.value === value)
+        ) {
           return false;
         }
         g.entities = [
@@ -1694,7 +1770,10 @@ export class FakeBackend {
         };
 
       case "set_cache_max_bytes":
-        this.settings = { ...this.settings, cacheMaxBytes: Number(a.bytes ?? 0) };
+        this.settings = {
+          ...this.settings,
+          cacheMaxBytes: Number(a.bytes ?? 0),
+        };
         return this.settings;
 
       case "clear_audio_cache": {
