@@ -152,7 +152,10 @@ pub fn mood_path(req: MoodPathRequest, state: State<'_, Shared>) -> Result<Vec<S
 
     let mut tracks = req.tracks;
     for (href, meta) in tracks.iter_mut() {
-        if let Some(bpm) = app.settings.bpm_override(href) {
+        // A hand correction, or the genre's verdict on which octave the
+        // detector read (AUD-26). The caller sent these metas in, and its copy
+        // predates both.
+        if let Some(bpm) = crate::tempo_in_force(&app, href, app.analysis.get(href)) {
             meta.bpm = bpm;
         }
     }
@@ -350,11 +353,15 @@ pub fn blend_preview(state: State<'_, Shared>) -> Result<Option<BlendPreview>> {
         }));
     };
 
-    let from_bpm = app.settings.bpm_override(&current).unwrap_or(out.bpm);
-    let to_bpm = app.settings.bpm_override(&next).unwrap_or(inc.bpm);
+    // The tempo the mix will actually be built at, so the number this screen
+    // reports and the number the stretcher meets cannot disagree (AUD-26).
+    let from_tempo = crate::tempo_in_force(&app, &current, Some(out));
+    let to_tempo = crate::tempo_in_force(&app, &next, Some(inc));
+    let from_bpm = from_tempo.unwrap_or(out.bpm);
+    let to_bpm = to_tempo.unwrap_or(inc.bpm);
 
-    let out_grid = beat_grid(out, app.settings.bpm_override(&current));
-    let in_grid = beat_grid(inc, app.settings.bpm_override(&next));
+    let out_grid = beat_grid(out, from_tempo);
+    let in_grid = beat_grid(inc, to_tempo);
     let matched = vapor_engine::Mixer::tempo_ratio(&out_grid, &in_grid);
 
     let (matchable, reason, shift_percent) = match matched {
