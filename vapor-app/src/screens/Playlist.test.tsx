@@ -11,11 +11,8 @@ import { describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Playlist } from "./Playlist";
-import {
-  PlaylistRail,
-  PLAYLIST_DRAG_TYPE,
-  TRACK_DRAG_TYPE,
-} from "../components/PlaylistRail";
+import { PlaylistRail, PLAYLIST_DRAG_TYPE } from "../components/PlaylistRail";
+import * as drag from "../lib/drag";
 import type * as core from "../lib/core";
 import { useBackend } from "../test/setup";
 
@@ -37,7 +34,11 @@ function playlist(over: Partial<core.Playlist> = {}): core.Playlist {
 /** A drag carrying `hrefs`, as the Songs table produces one. */
 function dropOn(element: HTMLElement, hrefs: string[]) {
   const data = new DataTransfer();
-  data.setData(TRACK_DRAG_TYPE, JSON.stringify(hrefs));
+  drag.writeDrag(data, {
+    kind: "track",
+    values: hrefs,
+    label: `${hrefs.length} tracks`,
+  });
   element.dispatchEvent(
     new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }),
   );
@@ -355,7 +356,7 @@ describe("The playlist rail", () => {
 
     const target = await screen.findByRole("button", { name: /late night/i });
     const data = new DataTransfer();
-    data.setData(TRACK_DRAG_TYPE, "{not json at all");
+    data.setData(drag.dragType("track"), "{not json at all");
     target.dispatchEvent(
       new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }),
     );

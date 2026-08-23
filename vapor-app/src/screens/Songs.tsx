@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
-import { startTrackDrag } from "../components/PlaylistRail";
+import { writeDrag, type DragPayload } from "../lib/drag";
 import { useThumb } from "../lib/artwork";
 import { TrackSheet } from "../components/TrackSheet";
 import { useLongPress } from "../lib/longPress";
@@ -161,27 +161,36 @@ export function Songs({
    */
   const pressedRow = useRef<Row | null>(null);
   const carry = useDrag();
+
+  /**
+   * What a drag starting on `row` is carrying.
+   *
+   * One function for both paths, so the mouse and the finger cannot pick up
+   * different things. A drag from a *selected* row takes the whole selection;
+   * from an unselected one it takes just that row, which is what keeps the
+   * single-track case direct. The table has had multi-select since TD-33 and
+   * dragging six rows one at a time to the same playlist is not a feature
+   * anyone wants.
+   */
+  function payloadFor(row: Row): DragPayload {
+    const hrefs = selected.has(row.href)
+      ? rows.filter((r) => selected.has(r.href)).map((r) => r.href)
+      : [row.href];
+    return {
+      kind: "track",
+      values: hrefs,
+      label: hrefs.length > 1 ? `${hrefs.length} tracks` : row.title,
+    };
+  }
+
   const hold = useLongPress(
     () => {
       if (pressedRow.current) setSheetFor(pressedRow.current);
     },
-    // Held, then moved: pick the row up. A drag from a selected row takes the
-    // whole selection, the same rule the desktop drag follows.
+    // Held, then moved: pick the row up.
     (x, y) => {
       const row = pressedRow.current;
-      if (!row) return;
-      const hrefs = selected.has(row.href)
-        ? rows.filter((r) => selected.has(r.href)).map((r) => r.href)
-        : [row.href];
-      carry.begin(
-        {
-          kind: "track",
-          values: hrefs,
-          label: hrefs.length > 1 ? `${hrefs.length} tracks` : row.title,
-        },
-        x,
-        y,
-      );
+      if (row) carry.begin(payloadFor(row), x, y);
     },
   );
 
@@ -570,15 +579,7 @@ export function Songs({
                   // Starting a drag is a press and hold too. Without this the
                   // sheet opens on the way to a playlist.
                   hold.cancel();
-                  // A drag on a selected row takes the whole selection; on an
-                  // unselected one it takes just that row, which keeps the
-                  // single-track case direct. The table has had multi-select
-                  // since TD-33 and dragging six rows one at a time to the
-                  // same playlist is not a feature anyone wants.
-                  const hrefs = selected.has(row.href)
-                    ? rows.filter((r) => selected.has(r.href)).map((r) => r.href)
-                    : [row.href];
-                  startTrackDrag(e, hrefs);
+                  writeDrag(e.dataTransfer, payloadFor(row));
                 }}
                 /* Double-click opens the track, the way double-clicking a file
                  * opens it. It used to play — but playing is now the single
