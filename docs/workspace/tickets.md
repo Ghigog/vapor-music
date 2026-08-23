@@ -2732,7 +2732,7 @@ at a time is cheap; making the e2e suite drive the real shell needs
 
 **Closed:** `seam.rs` now covers 30 commands, up from 12 — the library and entity reads, search and its facets, the queue view, settings round trips, downloads and the sync view, chosen by where a wrong wire shape strands a user rather than logs an error. Not `tauri-driver`; the ticket left the size open and this is the cheap half. Two of the new tests were wrong rather than the code, and both were checked against the implementation before either side was touched.
 
-### AUD-9 : the monkey runs against a backend that cannot fail (open)
+### AUD-9 : the monkey runs against a backend that cannot fail (done 2026-08-23)
 
 `e2e/monkey.spec.ts` takes 250 random actions across three seeds. Every command
 it hits succeeds, because the fake always answers — one `.fail()` exists in the
@@ -2744,6 +2744,14 @@ structurally cannot.
 
 **Waiting for:** Nothing. A `failureRate` on the fake plus a fourth seed is
 about thirty lines.
+
+**Closed** in `b50948a`, and the row stayed open afterwards — noticed
+2026-08-23 while looking for work that was actually left. `monkey.spec.ts`
+arms failures from the same seeded generator as the actions, so seed N fails
+the same commands at the same points every run, and `SEEDS` is four:
+`[1, 20_260_816, 99_991, 4_242_424]`. Nothing was added to `src/test/ipc.ts`
+to do it — the fake already had `fail`/`clearFailure`, and that file is a seam
+that holds answers rather than decisions.
 
 ### AUD-10 : four modules with no tests (3 of 4 done 2026-08-23)
 
@@ -3021,7 +3029,7 @@ lie twice, in `docs/FINDINGS.md`.
 **Result:** 284 tests pass on `windows-latest`; `installers (windows-latest)`
 produces an NSIS installer. All eight jobs green in run 32630969786.
 
-### AUD-20 : CI actions float on tags, and nothing watches dependencies (open)
+### AUD-20 : CI actions float on tags, and nothing watches dependencies (done 2026-08-23)
 
 `release.yml` pins all seven of its actions by commit SHA, because it is the one
 workflow holding the signing key and `contents: write` together. `app.yml`
@@ -3034,6 +3042,15 @@ then relies on a manual pass — which has already drifted once, 624 packages to
 
 **Waiting for:** Nothing. SHA-pinning is mechanical; `cargo-deny check licenses
 advisories` turns the licence inventory from a document into a gate.
+
+**Closed** in `f49b048`, with `f45a51a` behind it, and the row stayed open —
+noticed 2026-08-23 alongside AUD-9's. Counted rather than taken from the
+release epic: `app.yml` 17 of 17 pinned, `ci.yml` 9 of 9, `release.yml` 7 of 7,
+`.github/dependabot.yml` present, `cargo-deny` gating in `ci.yml`.
+
+`f45a51a` is the part worth remembering: two of `release.yml`'s five pinned
+SHAs pointed at commits that do not exist upstream, so the pinning that made
+the workflow safe would have failed it on the first tag push.
 
 ### AUD-21 : the updater keypair is mismatched, and deliberately unmanaged (open)
 
