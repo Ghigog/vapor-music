@@ -110,7 +110,9 @@ pub async fn find_album_art(
     let (query_album, query_artist) = (album.clone(), artist.clone());
     let url = tauri::async_runtime::spawn_blocking(move || {
         let lookup = metadata::Lookup::new()?;
-        let (url, _genre) = lookup.album(&query_artist, &query_album);
+        // Only the art. `album` now answers with a `Found`, which also carries
+        // the genre and the tracklist; this command was asked for a cover.
+        let url = lookup.album(&query_artist, &query_album).art;
         if !url.is_empty() {
             lookup.download_image(&url, &dir);
         }

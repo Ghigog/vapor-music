@@ -41,4 +41,29 @@ plays: number,
  * number and the webview parses it as one, so the generated type would
  * have been a claim about the value that the value does not meet.
  */
-lastPlayed: number, };
+lastPlayed: number, 
+/**
+ * How many tracks the release actually has. **0 means nobody knows**.
+ *
+ * From the Deezer album the tracks were matched to — see
+ * [`metadata::AlbumFacts`]. Zero is the ordinary case for a library that
+ * has not been identified yet, and is emphatically not "an album with no
+ * tracks": an unknown length can never make a tile incomplete, because
+ * the app would then be asserting something it has no evidence for.
+ */
+totalTracks: number, 
+/**
+ * `"album"`, `"single"` or `"ep"` — empty when unmatched.
+ *
+ * Holding one track of a two-track single reads very differently from
+ * holding one of a nineteen-track album, and the tab should be able to
+ * say which it is.
+ */
+recordType: string, 
+/**
+ * True when tracks are missing: a known length that exceeds what is held.
+ *
+ * Never true on a guess. An album nobody has looked up is shown whole,
+ * which is the state the whole library was in before this existed.
+ */
+incomplete: boolean, };

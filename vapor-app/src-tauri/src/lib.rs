@@ -85,6 +85,14 @@ pub(crate) struct AppState {
     /// stranger said. Merging them would make the screen unable to tell a
     /// person which is which.
     pub(crate) looked: metadata::Cache,
+    /// The releases those lookups landed on, by Deezer id.
+    ///
+    /// Normalised out of `looked` rather than stored per track: a fourteen-track
+    /// album is one entry here however many of its tracks the library holds, and
+    /// two folders that turn out to be the same release share it. This is what
+    /// says how long a record is supposed to be, and so what makes an album
+    /// tile able to admit it is missing eleven of them.
+    pub(crate) albums: metadata::Albums,
     pub(crate) queue: Queue,
     /// The three exits as last offered, and what was playing then.
     ///
@@ -346,6 +354,7 @@ impl AppState {
         let groups = quarantined!("groups").unwrap_or_default();
         let pinned = quarantined!("pinned").unwrap_or_default();
         let looked = quarantined!("metadata").unwrap_or_default();
+        let albums = quarantined!("albums").unwrap_or_default();
         let trust = quarantined!("trust").unwrap_or_default();
         let tombstones = quarantined!("tombstones").unwrap_or_default();
         let digests = quarantined!("digests").unwrap_or_default();
@@ -401,6 +410,7 @@ impl AppState {
             groups,
             pinned,
             looked,
+            albums,
             device_id,
             trust,
             pairing: None,
@@ -651,6 +661,23 @@ impl AppState {
     pub(crate) fn save_looked(&self) -> Result<()> {
         self.store.save("metadata", &self.looked)?;
         Ok(())
+    }
+
+    /// Keep what a lookup learned about a release.
+    ///
+    /// Takes the `Option` the lookup actually returns, so the "nothing came
+    /// back" case is handled once here rather than at each call site. An album
+    /// with no id or no track count is not written: an entry that cannot say
+    /// how long the record is would make every album holding it look complete.
+    fn remember_album(&mut self, facts: Option<metadata::AlbumFacts>) {
+        let Some(facts) = facts.filter(|f| f.is_usable()) else {
+            return;
+        };
+        // Re-fetching a release the library already knows is normal — every
+        // track on it comes through here — so this is an overwrite, not an
+        // insert, and the newer answer wins.
+        self.albums.insert(facts.id, facts);
+        let _ = self.store.save("albums", &self.albums);
     }
 
     pub(crate) fn save_trust(&self) -> Result<()> {
@@ -1188,6 +1215,25 @@ struct LibraryEntity {
     /// have been a claim about the value that the value does not meet.
     #[ts(type = "number")]
     last_played: i64,
+    /// How many tracks the release actually has. **0 means nobody knows**.
+    ///
+    /// From the Deezer album the tracks were matched to — see
+    /// [`metadata::AlbumFacts`]. Zero is the ordinary case for a library that
+    /// has not been identified yet, and is emphatically not "an album with no
+    /// tracks": an unknown length can never make a tile incomplete, because
+    /// the app would then be asserting something it has no evidence for.
+    total_tracks: u32,
+    /// `"album"`, `"single"` or `"ep"` — empty when unmatched.
+    ///
+    /// Holding one track of a two-track single reads very differently from
+    /// holding one of a nineteen-track album, and the tab should be able to
+    /// say which it is.
+    record_type: String,
+    /// True when tracks are missing: a known length that exceeds what is held.
+    ///
+    /// Never true on a guess. An album nobody has looked up is shown whole,
+    /// which is the state the whole library was in before this existed.
+    incomplete: bool,
 }
 
 fn default_true() -> bool {
@@ -1285,24 +1331,60 @@ fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<Vec<L
 /// A `#[tauri::command]` takes `State`, which cannot be built outside a running
 /// app, so logic left in a command body is logic no test can see — which is how
 /// the Genres tab shipped grouping by album since the port.
+/*
+ * Three kinds of tile, not two.
+ *
+ * This was a boolean — artist or album — and Genres fell to the `else`, so the
+ * tab grouped by *album* while the screen believed it had genres. What a person
+ * saw was a grid of tracks, because `Library.tsx` only treated album and artist
+ * as entity tabs and rendered everything else as rows. The tab has existed
+ * since the port and has never shown a genre.
+ *
+ * Outside the function body so that [`order_entities`] can be given one, and
+ * so the ordering rules can be read next to each other rather than inferred
+ * from where they sit in a pipeline.
+ */
+#[derive(Clone, Copy, PartialEq)]
+enum By {
+    Artist,
+    Album,
+    Genre,
+}
+
+/// The release a set of tracks belongs to, if they have been identified.
+///
+/// Decided by vote rather than by taking the first: one mistagged track on a
+/// folder can match a different release entirely, and letting it name the album
+/// would report a fourteen-track record as a two-track single — every other
+/// track on it then reads as "missing". The majority is what the folder is.
+///
+/// `None` when nothing has been looked up, which is the ordinary state of a
+/// fresh library and must stay distinguishable from "looked up, found short".
+fn release_of<'a>(app: &'a AppState, tracks: &[&Row]) -> Option<&'a metadata::AlbumFacts> {
+    let mut votes: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    for row in tracks {
+        let id = app
+            .looked
+            .get(&row.href)
+            .map(|l| l.deezer_album_id)
+            .unwrap_or(0);
+        if id != 0 {
+            *votes.entry(id).or_default() += 1;
+        }
+    }
+    // Ties break on the id so the answer does not depend on hash order — an
+    // album tile that changed its mind between two reads would be worse than
+    // either answer.
+    let winner = votes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))?
+        .0;
+    app.albums.get(&winner).filter(|f| f.is_usable())
+}
+
 fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity> {
     let rows = resolved_rows(app, view);
 
-    /*
-     * Three kinds of tile, not two.
-     *
-     * This was a boolean — artist or album — and Genres fell to the `else`, so
-     * the tab grouped by *album* while the screen believed it had genres. What
-     * a person saw was a grid of tracks, because `Library.tsx` only treated
-     * album and artist as entity tabs and rendered everything else as rows.
-     * The tab has existed since the port and has never shown a genre.
-     */
-    #[derive(Clone, Copy, PartialEq)]
-    enum By {
-        Artist,
-        Album,
-        Genre,
-    }
     let by = match view.group_by.as_deref() {
         Some("artist") => By::Artist,
         Some("genre") => By::Genre,
@@ -1349,7 +1431,7 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
         members.entry(key).or_default().push(row);
     }
 
-    order
+    let mut entities: Vec<LibraryEntity> = order
         .into_iter()
         .filter_map(|key| {
             let tracks = members.get(&key)?;
@@ -1423,6 +1505,12 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
                 .max()
                 .unwrap_or(0);
 
+            // Only albums have a length to fall short of. An artist is not
+            // "incomplete" because you do not own their whole catalogue, and a
+            // genre has no end at all.
+            let release = (by == By::Album).then(|| release_of(app, tracks)).flatten();
+            let total_tracks = release.map(|r| r.nb_tracks).unwrap_or(0);
+
             Some(LibraryEntity {
                 name,
                 subtitle,
@@ -1430,9 +1518,64 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
                 lead,
                 plays,
                 last_played,
+                total_tracks,
+                record_type: release.map(|r| r.record_type.clone()).unwrap_or_default(),
+                // `>` not `!=`: holding *more* than the release lists is a
+                // duplicate or a bonus disc, not a gap, and calling that
+                // incomplete would send perfectly whole albums to the bottom.
+                incomplete: total_tracks > tracks.len() as u32,
             })
         })
-        .collect()
+        .collect();
+
+    order_entities(by, &mut entities);
+    entities
+}
+
+/// Put the tiles in the order the tab is read in.
+///
+/// Insertion order is the order the *rows* arrived in — sorted by title — which
+/// is an answer to a question nobody asked of a grid of artists. Applied here
+/// rather than by sorting the rows first, because the thing being ranked is the
+/// tile and two of the three keys (track count, and the album totals behind
+/// completeness) only exist once the members have been gathered.
+fn order_entities(by: By, entities: &mut [LibraryEntity]) {
+    match by {
+        // Biggest first: an artist with thirty-eight tracks is the reason the
+        // tab was opened, and one with a single loose remix is not. Name breaks
+        // the tie so the long tail — 52 of this library's 92 artists have
+        // exactly one track — is alphabetical rather than arbitrary.
+        By::Artist => entities.sort_by(|a, b| {
+            b.tracks
+                .cmp(&a.tracks)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        }),
+        // Whole records first, alphabetically. Everything with a gap in it
+        // sinks to the bottom, ordered by how close to whole it is — an album
+        // you have 11 of 12 of is nearly a record and belongs above one you
+        // have a single track of. Name breaks ties, so two albums at the same
+        // fraction are not in hash order.
+        By::Album => entities.sort_by(|a, b| {
+            a.incomplete
+                .cmp(&b.incomplete)
+                .then_with(|| completion(b).total_cmp(&completion(a)))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        }),
+        // Alphabetical. A genre has no length to be measured against.
+        By::Genre => entities.sort_by_key(|e| e.name.to_lowercase()),
+    }
+}
+
+/// How much of a release is held, 0.0 to 1.0.
+///
+/// An unknown length is 1.0 — "as far as anyone knows, whole". Returning 0.0
+/// would rank every un-identified album below every identified one and read as
+/// a claim that the library is empty of them.
+fn completion(entity: &LibraryEntity) -> f64 {
+    if entity.total_tracks == 0 {
+        return 1.0;
+    }
+    (entity.tracks as f64 / entity.total_tracks as f64).min(1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1574,8 +1717,8 @@ fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Result<
         // decoration on a screen that is already useful without it.
         let lyrics = words.join().unwrap_or(None);
         let artist_image = portrait.join().unwrap_or_default();
-        let (album_art, genre) = sleeve.join().unwrap_or_default();
-        (lyrics, artist_image, album_art, genre)
+        let found = sleeve.join().unwrap_or_default();
+        (lyrics, artist_image, found.art, found.genre)
     });
 
     // Fetched here, once, rather than by the webview: the window's CSP allows
@@ -1751,11 +1894,33 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
             // whole library on one button press. The words were moved out of
             // this pass for exactly that reason; the sleeve stays out with them
             // and arrives as a track is played.
-            let genre = sleeve.1;
+            let genre = sleeve.genre;
+
+            /*
+             * A track with no album still came off a record.
+             *
+             * `lookup.album` searches by album name, so a file with none — 97
+             * of this library, downloaded one at a time into the root — gets
+             * nothing from it and vanishes from the Albums tab. The track
+             * search knows: "Noisia Machine Gun" names *Split The Atom* and
+             * says it is nineteen tracks long.
+             *
+             * Only when the album is genuinely missing. A row that already has
+             * one is not second-guessed here — path and tags outrank a
+             * stranger, which is the rule the whole metadata layer is built on.
+             */
+            let release = match sleeve.facts {
+                Some(facts) => Some(facts),
+                None if album.trim().is_empty() => lookup.album_of_track(&artist, &title, duration),
+                None => None,
+            };
 
             if let Ok(mut app) = shared.lock() {
                 let entry = app.looked.entry(href.clone()).or_default();
                 entry.attempted = true;
+                if let Some(found) = release.as_ref().filter(|f| f.is_usable()) {
+                    entry.deezer_album_id = found.id;
+                }
                 if !genre.trim().is_empty() {
                     entry.genre = genre.clone();
                     genres += 1;
@@ -1782,6 +1947,7 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
                 }
                 let _ = app.save_looked();
                 let _ = app.save_settings();
+                app.remember_album(release);
             }
 
             let _ = handle.emit(
@@ -3315,10 +3481,13 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
                     a.map(|h| h.join().unwrap_or_default()),
                 )
             });
-            if let Some(sleeve) = &sleeve {
-                if !sleeve.0.is_empty() {
-                    lookup.download_image(&sleeve.0, &dir);
-                }
+            // `None` here means the sleeve was already had and never asked for.
+            // A default `Found` is empty in every field, so everything below
+            // leaves the entry alone — which is what not asking should look like,
+            // and avoids nesting the rest of this function inside an `if let`.
+            let sleeve = sleeve.unwrap_or_default();
+            if !sleeve.art.is_empty() {
+                lookup.download_image(&sleeve.art, &dir);
             }
             if let Ok(mut app) = shared.lock() {
                 let entry = app.looked.entry(href).or_default();
@@ -3328,15 +3497,19 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
                 if let Some(words) = words {
                     entry.lyrics = Some(words);
                 }
-                if let Some(sleeve) = sleeve {
-                    if !sleeve.1.trim().is_empty() {
-                        entry.genre = sleeve.1;
-                    }
-                    if !sleeve.0.is_empty() {
-                        entry.album_art = sleeve.0;
-                    }
+                if !sleeve.genre.trim().is_empty() {
+                    entry.genre = sleeve.genre;
+                }
+                if !sleeve.art.is_empty() {
+                    entry.album_art = sleeve.art;
+                }
+                // The track points at the release; the release is stored once.
+                // See `AppState::remember_album`.
+                if let Some(facts) = sleeve.facts.as_ref().filter(|f| f.is_usable()) {
+                    entry.deezer_album_id = facts.id;
                 }
                 let _ = app.save_looked();
+                app.remember_album(sleeve.facts);
             }
         });
     if spawned.is_err() {
@@ -8161,17 +8334,249 @@ mod tests {
         let got = library_entities_for(&app, &view);
         let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
 
+        // Alphabetical. This read `["House", "Ambient"]` when tiles came back
+        // in the order the rows arrived — which was sorted by *track title*,
+        // an answer to a question nobody asks of a grid of genres.
         assert_eq!(
             names,
-            vec!["House", "Ambient"],
+            vec!["Ambient", "House"],
             "expected one tile per genre, got {names:?}",
         );
         // Two tracks under House, one under Ambient — a tile counts its
-        // members, and a tile per track would have made every count 1.
-        assert_eq!(got[0].tracks, 2);
-        assert_eq!(got[1].tracks, 1);
+        // members, and a tile per track would have made every count 1. Looked
+        // up by name rather than by position so this keeps saying what it means
+        // if the ordering changes again.
+        let tracks_on = |name: &str| got.iter().find(|e| e.name == name).map(|e| e.tracks);
+        assert_eq!(tracks_on("House"), Some(2));
+        assert_eq!(tracks_on("Ambient"), Some(1));
         // The untagged track is not a genre and gets no tile of its own.
         assert!(!names.contains(&""), "an empty genre became a tile");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Artists tab leads with who you actually have most of.
+    ///
+    /// Tiles used to arrive in the order the rows did — sorted by track title —
+    /// so an artist with one loose remix could sit above one with thirty-eight
+    /// tracks, and the grid had no reading order at all. Count first, then name,
+    /// because this library's tail is 52 artists holding exactly one track and
+    /// "arbitrary" is the only other way to order them.
+    #[test]
+    fn the_artists_tab_leads_with_the_biggest_and_breaks_ties_by_name() {
+        let (mut app, dir) = app();
+        // Deliberately inserted small-first and out of alphabetical order, so
+        // insertion order cannot pass this by accident.
+        for (href, title, artist) in [
+            ("/z.mp3", "A", "Zero T"),
+            ("/a.mp3", "B", "Alpha Rhythm"),
+            ("/n1.mp3", "C", "Noisia"),
+            ("/n2.mp3", "D", "Noisia"),
+            ("/n3.mp3", "E", "Noisia"),
+            ("/d1.mp3", "F", "Delta Heavy"),
+            ("/d2.mp3", "G", "Delta Heavy"),
+        ] {
+            let mut r = row(href, title);
+            r.artist = artist.to_string();
+            r.artist_source = vapor_library::index::Source::File;
+            app.rows.push(r);
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("artist".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let got = library_entities_for(&app, &view);
+        let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(
+            names,
+            // 3, then 2, then the two singletons alphabetically.
+            vec!["Noisia", "Delta Heavy", "Alpha Rhythm", "Zero T"],
+            "expected most tracks first then alphabetical, got {names:?}",
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Albums with gaps sink, ordered by how close to whole they are.
+    ///
+    /// The case this is really for: a library where most of the "albums" are a
+    /// single track of a record, because they arrived as one-off downloads. A
+    /// tab that shows those beside a complete album, in the same shape, is
+    /// telling a person they own something they do not.
+    #[test]
+    fn incomplete_albums_sink_below_whole_ones_and_rank_by_how_much_is_missing() {
+        let (mut app, dir) = app();
+
+        // (album, folder, how many of its tracks are held, how long it is)
+        let releases = [
+            ("Whole Record", 12u64, 12usize, 12u32),
+            ("Almost There", 13, 11, 12),
+            ("Half An EP", 14, 4, 8),
+            ("One Track Of", 15, 1, 19),
+            ("Never Looked Up", 0, 3, 0),
+        ];
+
+        for (album, deezer_id, held, total) in releases {
+            if deezer_id != 0 {
+                app.albums.insert(
+                    deezer_id,
+                    metadata::AlbumFacts {
+                        id: deezer_id,
+                        title: album.to_string(),
+                        artist: "An Artist".to_string(),
+                        record_type: "album".to_string(),
+                        nb_tracks: total,
+                        tracks: (0..total).map(|i| format!("{album} {i}")).collect(),
+                    },
+                );
+            }
+            for i in 0..held {
+                let href = format!("/{album}/{i}.mp3");
+                let mut r = row(&href, &format!("{album} {i}"));
+                r.album = album.to_string();
+                r.album_source = vapor_library::index::Source::File;
+                app.rows.push(r);
+                if deezer_id != 0 {
+                    app.looked.entry(href).or_default().deezer_album_id = deezer_id;
+                }
+            }
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("album".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let got = library_entities_for(&app, &view);
+        let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec![
+                // Whole, alphabetically. "Never Looked Up" is here because an
+                // unknown length is not evidence of a gap.
+                "Never Looked Up",
+                "Whole Record",
+                // Then the gaps, fullest first: 11/12, then 4/8, then 1/19.
+                "Almost There",
+                "Half An EP",
+                "One Track Of",
+            ],
+            "got {names:?}",
+        );
+
+        let by_name = |n: &str| got.iter().find(|e| e.name == n).expect("tile missing");
+        assert!(!by_name("Whole Record").incomplete);
+        assert!(by_name("Almost There").incomplete);
+        assert_eq!(by_name("One Track Of").total_tracks, 19);
+        assert_eq!(by_name("One Track Of").tracks, 1);
+        // The one nobody looked up must not be accused of missing anything.
+        assert!(!by_name("Never Looked Up").incomplete);
+        assert_eq!(by_name("Never Looked Up").total_tracks, 0);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Holding more than the service lists is not a gap.
+    ///
+    /// A bonus disc, a duplicate, or a deluxe edition matched to the standard
+    /// release. Reporting that as incomplete would push whole albums to the
+    /// bottom of the tab for having *too much* on them.
+    #[test]
+    fn holding_more_tracks_than_the_release_lists_is_not_incomplete() {
+        let (mut app, dir) = app();
+        app.albums.insert(
+            7,
+            metadata::AlbumFacts {
+                id: 7,
+                title: "Deluxe".to_string(),
+                artist: "An Artist".to_string(),
+                record_type: "album".to_string(),
+                nb_tracks: 2,
+                tracks: vec!["A".to_string(), "B".to_string()],
+            },
+        );
+        for i in 0..4 {
+            let href = format!("/deluxe/{i}.mp3");
+            let mut r = row(&href, &format!("T{i}"));
+            r.album = "Deluxe".to_string();
+            r.album_source = vapor_library::index::Source::File;
+            app.rows.push(r);
+            app.looked.entry(href).or_default().deezer_album_id = 7;
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("album".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let got = library_entities_for(&app, &view);
+        assert_eq!(got.len(), 1);
+        assert!(!got[0].incomplete, "4 of 2 was called incomplete");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// One mistagged track cannot rename the album everything else is on.
+    ///
+    /// The failure it prevents: a folder of twelve tracks where one matched a
+    /// two-track single would take the single's length, and the other eleven
+    /// would read as missing from a record they are not on.
+    #[test]
+    fn the_release_is_decided_by_majority_not_by_the_first_track() {
+        let (mut app, dir) = app();
+        for (id, total) in [(100u64, 12u32), (200, 2)] {
+            app.albums.insert(
+                id,
+                metadata::AlbumFacts {
+                    id,
+                    title: format!("Release {id}"),
+                    artist: "An Artist".to_string(),
+                    record_type: "album".to_string(),
+                    nb_tracks: total,
+                    tracks: (0..total).map(|i| format!("t{i}")).collect(),
+                },
+            );
+        }
+        // The odd one out is inserted first, so "take the first" would pick it.
+        for (i, id) in [200u64, 100, 100, 100].into_iter().enumerate() {
+            let href = format!("/rec/{i}.mp3");
+            let mut r = row(&href, &format!("T{i}"));
+            r.album = "A Folder".to_string();
+            r.album_source = vapor_library::index::Source::File;
+            app.rows.push(r);
+            app.looked.entry(href).or_default().deezer_album_id = id;
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("album".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let got = library_entities_for(&app, &view);
+        assert_eq!(
+            got[0].total_tracks, 12,
+            "the single-track outlier decided the album's length"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -339,3 +339,85 @@ describe("Library — dragging a tile out", () => {
     expect(open.closest("[draggable=true]")).not.toBeNull();
   });
 });
+
+describe("Library — incomplete albums", () => {
+  /*
+   * A single track of a nineteen-track album is not an album you own.
+   *
+   * Most of this library arrived as one-off downloads filed under the album
+   * they came from, so the Albums tab was mostly tiles that looked like whole
+   * records and were not. The backend decides which is which and puts them in
+   * order; what this grid owns is drawing the line between the two piles and
+   * saying how far off each one is.
+   */
+  it("puts albums with missing tracks under their own heading", async () => {
+    useBackend({
+      rows: album(),
+      albums: [
+        makeEntity({
+          name: "Currents",
+          subtitle: "Tame Impala",
+          tracks: 13,
+          totalTracks: 13,
+          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+        }),
+        makeEntity({
+          name: "Split The Atom",
+          subtitle: "Noisia",
+          tracks: 1,
+          totalTracks: 19,
+          incomplete: true,
+          lead: "/dav/Music/machine-gun.m4a",
+        }),
+      ],
+      covers: true,
+    });
+    const user = userEvent.setup();
+    render(<Library />);
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+
+    // Both are on the tab — the incomplete one is separated, not hidden.
+    await screen.findByText("Currents");
+    expect(screen.getByText("Split The Atom")).toBeInTheDocument();
+
+    const heading = screen.getByRole("heading", { name: /incomplete/i });
+    expect(heading).toBeInTheDocument();
+    // How many are under it, which is what turns the heading from a note into
+    // a description of the library.
+    expect(heading).toHaveTextContent("1");
+
+    // And the shortfall is stated on the card, because "Incomplete" alone
+    // cannot tell 1-of-19 from 12-of-13.
+    expect(screen.getByText(/1 of 19/)).toBeInTheDocument();
+  });
+
+  /*
+   * An unidentified library is not an incomplete one.
+   *
+   * `totalTracks: 0` is "nobody has looked this up", the state every album is
+   * in before the lookup pass runs. Drawing a heading over that would accuse
+   * the whole library of missing tracks on the strength of no evidence.
+   */
+  it("draws no heading when nothing is known to be missing", async () => {
+    useBackend({
+      rows: album(),
+      albums: [
+        makeEntity({
+          name: "Currents",
+          subtitle: "Tame Impala",
+          tracks: 2,
+          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+        }),
+      ],
+      covers: true,
+    });
+    const user = userEvent.setup();
+    render(<Library />);
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+
+    await screen.findByText("Currents");
+    expect(
+      screen.queryByRole("heading", { name: /incomplete/i }),
+    ).not.toBeInTheDocument();
+  });
+});
