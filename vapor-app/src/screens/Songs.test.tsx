@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Songs } from "./Songs";
-import { makeRow } from "../test/ipc";
+import { defaultRowsNamed, makePage, makeRow } from "../test/ipc";
 import { emitEvent, useBackend } from "../test/setup";
 
 /** The rows currently in the DOM. Virtualised, so this is what is *visible*. */
@@ -121,8 +121,7 @@ describe("Songs — showing the library", () => {
 
     await waitFor(() => {
       const view = backend.lastArgs("library_view")?.view as
-        | { query?: string }
-        | undefined;
+        { query?: string } | undefined;
       expect(view?.query).toBe("roygbiv");
     });
   });
@@ -135,9 +134,10 @@ describe("Songs — showing the library", () => {
     await screen.findByText("Windowlicker");
 
     // The narrowed answer a real backend would send back for this query.
-    backend.answers("library_view", [
-      { header: "", rows: backend.rowsNamed("Roygbiv") },
-    ]);
+    backend.answers(
+      "library_view",
+      makePage([{ header: "", rows: backend.rowsNamed("Roygbiv") }]),
+    );
     await user.type(screen.getByRole("searchbox"), "roygbiv");
 
     await waitFor(() => {
@@ -243,7 +243,13 @@ describe("Songs — selection and the keyboard", () => {
   it("adds a selection to a playlist in the order shown, not insertion order", async () => {
     const backend = useBackend({
       playlists: [
-        { id: "p1", name: "Later", customCoverPath: "", tracks: [], folderId: "" },
+        {
+          id: "p1",
+          name: "Later",
+          customCoverPath: "",
+          tracks: [],
+          folderId: "",
+        },
       ],
     });
     const user = userEvent.setup();
@@ -305,7 +311,9 @@ describe("Songs — correcting a tempo", () => {
     await user.type(within(row).getByRole("textbox"), "4000");
     await user.keyboard("{Enter}");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/not plausible/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /not plausible/i,
+    );
   });
 
   /**
@@ -401,12 +409,17 @@ describe("Songs — sorting", () => {
 
     await user.click(bpm);
     await waitFor(() => {
-      expect((backend.lastArgs("library_view")?.view as { sortKey?: string })?.sortKey).toBe("bpm");
+      expect(
+        (backend.lastArgs("library_view")?.view as { sortKey?: string })
+          ?.sortKey,
+      ).toBe("bpm");
     });
 
     await user.click(bpm);
     await waitFor(() => {
-      const view = backend.lastArgs("library_view")?.view as { ascending?: boolean };
+      const view = backend.lastArgs("library_view")?.view as {
+        ascending?: boolean;
+      };
       expect(view?.ascending).toBe(false);
     });
   });
@@ -441,7 +454,9 @@ describe("Songs — sorting", () => {
     await screen.findByText("Windowlicker");
     await user.click(screen.getByRole("button", { name: /^bpm/i }));
 
-    const bpm = await screen.findByRole("button", { name: /bpm, sorted ascending/i });
+    const bpm = await screen.findByRole("button", {
+      name: /bpm, sorted ascending/i,
+    });
     expect(bpm).toHaveAttribute("aria-pressed", "true");
     // And the ones that are not sorting say so by not being pressed.
     expect(screen.getByRole("button", { name: /^artist$/i })).toHaveAttribute(
@@ -467,7 +482,8 @@ describe("Songs — sorting", () => {
 
     await waitFor(() => {
       expect(
-        (backend.lastArgs("library_view")?.view as { sortKey?: string })?.sortKey,
+        (backend.lastArgs("library_view")?.view as { sortKey?: string })
+          ?.sortKey,
       ).toBe("artist");
     });
   });
@@ -568,21 +584,22 @@ describe("Songs — gestures", () => {
   });
 
   it("extends the selection with shift, across a range of rows", async () => {
-    const backend = useBackend();
     // The order on screen is the backend's answer, not this table's doing, so
     // a test about spanning a range states the order rather than relying on a
     // sort happening somewhere out of sight.
-    backend.answers("library_view", [
-      {
-        header: "",
-        rows: backend.rowsNamed(
-          "Not Yet Analysed",
-          "Roygbiv",
-          "Windowlicker",
-          "Xtal",
-        ),
-      },
-    ]);
+    //
+    // Stated as the rows themselves rather than as a canned `library_view`
+    // answer, because a shift-click asks for exactly the range it spans
+    // (AUD-13) and a canned answer is returned whole — which would select four
+    // rows here and still call it a range.
+    useBackend({
+      rows: defaultRowsNamed(
+        "Not Yet Analysed",
+        "Roygbiv",
+        "Windowlicker",
+        "Xtal",
+      ),
+    });
     const user = userEvent.setup();
     render(<Songs />);
 
@@ -596,21 +613,22 @@ describe("Songs — gestures", () => {
   });
 
   it("extends the selection with shift-click on the row itself", async () => {
-    const backend = useBackend();
     // The order on screen is the backend's answer, not this table's doing, so
     // a test about spanning a range states the order rather than relying on a
     // sort happening somewhere out of sight.
-    backend.answers("library_view", [
-      {
-        header: "",
-        rows: backend.rowsNamed(
-          "Not Yet Analysed",
-          "Roygbiv",
-          "Windowlicker",
-          "Xtal",
-        ),
-      },
-    ]);
+    //
+    // Stated as the rows themselves rather than as a canned `library_view`
+    // answer, because a shift-click asks for exactly the range it spans
+    // (AUD-13) and a canned answer is returned whole — which would select four
+    // rows here and still call it a range.
+    useBackend({
+      rows: defaultRowsNamed(
+        "Not Yet Analysed",
+        "Roygbiv",
+        "Windowlicker",
+        "Xtal",
+      ),
+    });
     const user = userEvent.setup();
     render(<Songs />);
 

@@ -26,7 +26,7 @@ import { YourData } from "./YourData";
 import { Onboarding } from "./Onboarding";
 import { Transport } from "../components/Transport";
 import { useBackend } from "../test/setup";
-import { makeRow } from "../test/ipc";
+import { makePage, makeRow } from "../test/ipc";
 import type * as core from "../lib/core";
 
 const A_TRACK = "/dav/Koofr/Music/windowlicker.m4a";
@@ -107,18 +107,20 @@ describe("Library", () => {
     render(<Library />);
     await openAlbumsTab();
 
-    backend.answers("library_view", [
-      { header: "", rows: backend.rowsNamed("Windowlicker") },
-    ]);
+    backend.answers(
+      "library_view",
+      makePage([{ header: "", rows: backend.rowsNamed("Windowlicker") }]),
+    );
 
     await user.click(
-      await screen.findByRole("button", { name: /open the album windowlicker ep/i }),
+      await screen.findByRole("button", {
+        name: /open the album windowlicker ep/i,
+      }),
     );
 
     await waitFor(() => {
       const view = backend.lastArgs("library_view")?.view as
-        | { album?: string }
-        | undefined;
+        { album?: string } | undefined;
       expect(view?.album).toBe("Windowlicker EP");
     });
 
@@ -127,7 +129,9 @@ describe("Library", () => {
 
     backend.clearAnswer("library_view");
     await user.click(screen.getByRole("button", { name: /albums/i }));
-    expect(await screen.findByText("Selected Ambient Works")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Selected Ambient Works"),
+    ).toBeInTheDocument();
   });
 
   it("plays an album from its card without opening it", async () => {
@@ -138,12 +142,15 @@ describe("Library", () => {
 
     // What the backend would answer for that album. The card queues what it is
     // given — that it is given the right thing is the backend's half.
-    backend.answers("library_view", [
-      { header: "", rows: backend.rowsNamed("Xtal") },
-    ]);
+    backend.answers(
+      "library_view",
+      makePage([{ header: "", rows: backend.rowsNamed("Xtal") }]),
+    );
 
     await user.click(
-      await screen.findByRole("button", { name: /play selected ambient works/i }),
+      await screen.findByRole("button", {
+        name: /play selected ambient works/i,
+      }),
     );
 
     await waitFor(() => expect(backend.state.status).toBe("playing"));
@@ -166,11 +173,15 @@ describe("Library", () => {
     await openAlbumsTab();
 
     await user.click(
-      await screen.findByRole("button", { name: /play selected ambient works/i }),
+      await screen.findByRole("button", {
+        name: /play selected ambient works/i,
+      }),
     );
 
     await waitFor(() => expect(backend.state.status).toBe("playing"));
-    expect(backend.lastArgs("play_tracks")?.scope).toBe("Selected Ambient Works");
+    expect(backend.lastArgs("play_tracks")?.scope).toBe(
+      "Selected Ambient Works",
+    );
   });
 
   /** An unfiltered list is the library, and says so by naming no scope. */
@@ -206,7 +217,9 @@ describe("Library", () => {
     await openAlbumsTab();
     await user.click(screen.getByRole("tab", { name: /artists/i }));
 
-    expect(await screen.findByAltText(/cover of aphex twin/i)).toBeInTheDocument();
+    expect(
+      await screen.findByAltText(/cover of aphex twin/i),
+    ).toBeInTheDocument();
   });
 
   /** The file's own artwork still wins where it has any. */
@@ -250,7 +263,9 @@ describe("Library", () => {
     await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     await waitFor(() => {
-      const view = backend.lastArgs("library_entities")?.view as { groupBy?: string };
+      const view = backend.lastArgs("library_entities")?.view as {
+        groupBy?: string;
+      };
       expect(view?.groupBy).toBe("artist");
     });
   });
@@ -298,9 +313,10 @@ describe("Library", () => {
     await openSongsTab(user);
     await screen.findByText("Windowlicker");
 
-    backend.answers("library_view", [
-      { header: "", rows: backend.rowsNamed("Xtal") },
-    ]);
+    backend.answers(
+      "library_view",
+      makePage([{ header: "", rows: backend.rowsNamed("Xtal") }]),
+    );
     await user.type(screen.getByRole("searchbox"), "xtal");
 
     // Wait for the narrowed answer to land, not merely for the row to exist —
@@ -313,7 +329,9 @@ describe("Library", () => {
 
     await user.click(await screen.findByText("Xtal"));
 
-    await waitFor(() => expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a"));
+    await waitFor(() =>
+      expect(backend.state.current).toBe("/dav/Koofr/Music/xtal.m4a"),
+    );
     expect(backend.state.queue).toEqual(["/dav/Koofr/Music/xtal.m4a"]);
   });
 
@@ -329,7 +347,9 @@ describe("Library", () => {
       await screen.findByRole("button", { name: /play windowlicker ep/i }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/no longer on the server/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /no longer on the server/i,
+    );
   });
 
   /**
@@ -395,7 +415,9 @@ describe("Library", () => {
     render(<Library />);
 
     await openSongsTab(user);
-    expect(await screen.findByRole("alert")).toHaveTextContent(/would not open/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /would not open/i,
+    );
   });
 });
 
@@ -450,8 +472,12 @@ describe("Vibe DJ", () => {
 
     // The controls are not merely disabled — the screen replaces them with an
     // explanation, which is the better answer when there is nothing to act on.
-    expect(await screen.findByText(/nothing to conduct yet/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /build vibe/i })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/nothing to conduct yet/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /build vibe/i }),
+    ).not.toBeInTheDocument();
   });
 
   /**
@@ -468,9 +494,13 @@ describe("Vibe DJ", () => {
     const user = userEvent.setup();
     render(<Vibe />);
 
-    expect(screen.queryByRole("button", { name: /conduct from here/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /conduct from here/i }),
+    ).toBeNull();
 
-    await user.click(await screen.findByRole("button", { name: /chill down/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /chill down/i }),
+    );
 
     await waitFor(() => expect(backend.called("set_curve")).toBe(true));
     expect(backend.lastArgs("set_curve")?.curve).toBe("chill");
@@ -503,10 +533,16 @@ describe("Vibe DJ", () => {
     await playing();
     render(<Vibe />);
 
-    expect(await screen.findByRole("button", { name: /build vibe/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /chill down/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /build vibe/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /chill down/i }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /wave/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /hold steady/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /hold steady/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /wind down/i })).toBeNull();
 
     // The arithmetic that used to sit under each label is gone — "Energy +0.4,
@@ -526,7 +562,9 @@ describe("Vibe DJ", () => {
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(await screen.findByRole("button", { name: /how the dj chooses/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /how the dj chooses/i }),
+    );
 
     const sheet = await screen.findByRole("dialog");
     expect(sheet).toHaveTextContent(/bass swap/i);
@@ -573,7 +611,9 @@ describe("Vibe DJ", () => {
     // And a wrapped bullet stays inside its own item.
     const items = Array.from(sheet.querySelectorAll("li"));
     expect(
-      items.some((li) => /^Follow — carry on\..*on its own\.$/.test(li.textContent ?? "")),
+      items.some((li) =>
+        /^Follow — carry on\..*on its own\.$/.test(li.textContent ?? ""),
+      ),
     ).toBe(true);
   });
 
@@ -582,7 +622,9 @@ describe("Vibe DJ", () => {
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(await screen.findByRole("button", { name: /how the dj chooses/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /how the dj chooses/i }),
+    );
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
@@ -595,7 +637,9 @@ describe("Vibe DJ", () => {
     render(<Vibe />);
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /how the dj chooses/i })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("button", { name: /how the dj chooses/i }),
+      ).toBeInTheDocument(),
     );
   });
 
@@ -645,7 +689,9 @@ describe("Vibe DJ", () => {
       await screen.findByText(/please enable vibe dj in your player/i),
     ).toBeInTheDocument();
     // Dimmed and covered, not removed: the curves are still there.
-    expect(screen.getByRole("button", { name: /chill down/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /chill down/i }),
+    ).toBeInTheDocument();
   });
 
   it("carries no DJ checkbox of its own", async () => {
@@ -662,7 +708,9 @@ describe("Vibe DJ", () => {
     const user = userEvent.setup();
     render(<Vibe />);
 
-    await user.click(await screen.findByRole("button", { name: /chill down/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /chill down/i }),
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/no analysed/i);
   });
@@ -719,7 +767,9 @@ describe("Now Playing", () => {
     useBackend();
     render(<NowPlaying />);
 
-    expect(await screen.findByText(/nothing playing|nothing/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/nothing playing|nothing/i),
+    ).toBeInTheDocument();
   });
 
   it("shows the track that is playing", async () => {
@@ -745,7 +795,9 @@ describe("Now Playing", () => {
 
     await waitFor(() => expect(backend.state.status).toBe("paused"));
     // The button becomes the other thing, so the screen agrees with the state.
-    expect(await screen.findByRole("button", { name: /^play$/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /^play$/i }),
+    ).toBeInTheDocument();
   });
 
   it("resumes from paused", async () => {
@@ -804,7 +856,14 @@ describe("Liner Notes", () => {
     useBackend();
     const user = userEvent.setup();
     let back = false;
-    render(<LinerNotes href={A_TRACK} onBack={() => { back = true; }} />);
+    render(
+      <LinerNotes
+        href={A_TRACK}
+        onBack={() => {
+          back = true;
+        }}
+      />,
+    );
 
     await user.click(await screen.findByRole("button", { name: /back/i }));
     expect(back).toBe(true);
@@ -826,7 +885,9 @@ describe("Liner Notes", () => {
     backend.fail("track_details", "That track is not in the library.");
     render(<LinerNotes href="/gone.m4a" onBack={() => {}} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/not in the library/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /not in the library/i,
+    );
   });
 
   /**
@@ -912,19 +973,25 @@ describe("Liner Notes", () => {
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
-      expect(await screen.findByText(/no words for this track/i))
-        .toBeInTheDocument();
+      expect(
+        await screen.findByText(/no words for this track/i),
+      ).toBeInTheDocument();
     });
 
     it("surfaces a refused lookup rather than failing silently", async () => {
       const backend = useBackend({ metadataLookup: true });
-      backend.fail("look_up_track", "Looking up lyrics and artwork is switched off.");
+      backend.fail(
+        "look_up_track",
+        "Looking up lyrics and artwork is switched off.",
+      );
       const user = userEvent.setup();
       render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(/switched off/i);
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        /switched off/i,
+      );
     });
 
     /**
@@ -1003,7 +1070,9 @@ describe("Your Data", () => {
     const user = userEvent.setup();
     render(<YourData />);
 
-    await user.click(await screen.findByRole("button", { name: /empty cache/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /empty cache/i }),
+    );
 
     expect(await screen.findByText(/freed/i)).toBeInTheDocument();
     // Not merely "freed": the screen re-read the cache and it is empty.
@@ -1021,7 +1090,9 @@ describe("Your Data", () => {
     const user = userEvent.setup();
     render(<YourData />);
 
-    await user.click(await screen.findByRole("button", { name: /empty cache/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /empty cache/i }),
+    );
 
     expect(await screen.findByText(/still held/i)).toBeInTheDocument();
   });
@@ -1032,14 +1103,18 @@ describe("Your Data", () => {
     render(<YourData />);
 
     await user.click(
-      await screen.findByRole("button", { name: /delete everything stored here/i }),
+      await screen.findByRole("button", {
+        name: /delete everything stored here/i,
+      }),
     );
     const dialog = await screen.findByRole("alertdialog");
     await user.click(
       within(dialog).getByRole("button", { name: /delete everything/i }),
     );
 
-    expect(await screen.findByText(/nothing is stored locally/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/nothing is stored locally/i),
+    ).toBeInTheDocument();
   });
 
   /** The most consequential button on the screen must not fire on a cancel. */
@@ -1049,7 +1124,9 @@ describe("Your Data", () => {
     render(<YourData />);
 
     await user.click(
-      await screen.findByRole("button", { name: /delete everything stored here/i }),
+      await screen.findByRole("button", {
+        name: /delete everything stored here/i,
+      }),
     );
     const dialog = await screen.findByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
@@ -1201,7 +1278,9 @@ describe("Transport", () => {
       <Transport djMode={false} onDjModeChange={onChange} />,
     );
 
-    const button = await screen.findByRole("button", { name: /turn vibe dj on/i });
+    const button = await screen.findByRole("button", {
+      name: /turn vibe dj on/i,
+    });
     // A toggle, not a checkbox — pressed state, not a tick.
     expect(button).toHaveAttribute("aria-pressed", "false");
 
@@ -1233,7 +1312,9 @@ describe("Transport", () => {
     // A transport that reads "playing" in silence is the failure this
     // prevents, so the screen must not claim anything is playing.
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: /^pause$/i })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /^pause$/i }),
+      ).not.toBeInTheDocument();
     });
   });
 });
@@ -1261,10 +1342,34 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
    */
   const HERE = "/here.m4a";
   const MIXABLE: core.Row[] = [
-    makeRow({ href: HERE, title: "Here", bpm: 120, key: "8A", genre: "Electronic" }),
-    makeRow({ href: "/near.m4a", title: "Near", bpm: 122, key: "9A", genre: "Electronic" }),
-    makeRow({ href: "/lift.m4a", title: "Lift", bpm: 140, key: "10A", genre: "Electronic" }),
-    makeRow({ href: "/away.m4a", title: "Away", bpm: 121, key: "3B", genre: "Jazz" }),
+    makeRow({
+      href: HERE,
+      title: "Here",
+      bpm: 120,
+      key: "8A",
+      genre: "Electronic",
+    }),
+    makeRow({
+      href: "/near.m4a",
+      title: "Near",
+      bpm: 122,
+      key: "9A",
+      genre: "Electronic",
+    }),
+    makeRow({
+      href: "/lift.m4a",
+      title: "Lift",
+      bpm: 140,
+      key: "10A",
+      genre: "Electronic",
+    }),
+    makeRow({
+      href: "/away.m4a",
+      title: "Away",
+      bpm: 121,
+      key: "3B",
+      genre: "Jazz",
+    }),
   ];
 
   /**
@@ -1371,7 +1476,11 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
     await screen.findByText("FOLLOW");
     const pressed = screen
       .getAllByRole("button")
-      .filter((b) => b.getAttribute("aria-pressed") === "true" && /STAY|FOLLOW|SWITCH/.test(b.textContent ?? ""));
+      .filter(
+        (b) =>
+          b.getAttribute("aria-pressed") === "true" &&
+          /STAY|FOLLOW|SWITCH/.test(b.textContent ?? ""),
+      );
     expect(pressed).toHaveLength(1);
     expect(screen.queryByText(/ai choice/i)).toBeNull();
   });
@@ -1428,7 +1537,9 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
   });
 
   it("says so rather than showing empty cards when nothing is analysed", async () => {
-    const backend = useBackend({ rows: [makeRow({ href: "/a.mp3", title: "A", bpm: 0 })] });
+    const backend = useBackend({
+      rows: [makeRow({ href: "/a.mp3", title: "A", bpm: 0 })],
+    });
     await backend.invoke("play_tracks", { hrefs: ["/a.mp3"], start: "/a.mp3" });
     // Nothing analysed means nothing to score, so the backend offers no cards.
     // That it offers none is its decision; this is about what the screen shows
@@ -1436,6 +1547,8 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
     backend.answers("mix_candidates", []);
     render(<Vibe />);
 
-    expect(await screen.findByText(/nothing analysed to choose from/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/nothing analysed to choose from/i),
+    ).toBeInTheDocument();
   });
 });

@@ -55,6 +55,7 @@ import type { Exit } from "./generated/Exit";
 import type { Facet } from "./generated/Facet";
 import type { HomeShelves } from "./generated/HomeShelves";
 import type { LibraryEntity } from "./generated/LibraryEntity";
+import type { LibraryPage } from "./generated/LibraryPage";
 import type { LibrarySection } from "./generated/LibrarySection";
 import type { LookedUp } from "./generated/LookedUp";
 import type { LookupCounts } from "./generated/LookupCounts";
@@ -114,6 +115,7 @@ export type {
   Facet,
   HomeShelves,
   LibraryEntity,
+  LibraryPage,
   LibrarySection,
   LookedUp,
   LookupCounts,
@@ -223,14 +225,50 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 }
 
 /**
- * Filter, sort and group in one round trip.
+ * Which slice of an ordered library view to actually fetch.
+ *
+ * Over the flat result, not over each section: grouping puts headings into one
+ * ordered list of rows, and that list is what a scroll position is in terms of.
+ */
+export interface RowWindow {
+  /** First row to fetch, counting from the start of the ordered result. */
+  offset?: number;
+  /** How many rows to fetch. Omitted is "the rest"; `0` is a count. */
+  limit?: number;
+}
+
+/**
+ * Filter, sort and group in one round trip, and fetch one window of the result.
  *
  * One call rather than three because the table re-runs this per keystroke, and
  * because the filter predicate is the same one a smart playlist uses — running
  * them separately would let the two disagree about membership.
+ *
+ * The window is AUD-13. Measured at 50,000 rows: the whole view is 17,649,902
+ * bytes of JSON and 153 ms of `JSON.parse` on the UI thread, per keystroke; the
+ * 300-row window the table actually renders into is 106,032 bytes and 0.27 ms.
+ * The ordering stays here — a caller that sorted its own window would sort each
+ * window separately and show a different order per screenful, which is a worse
+ * bug than the payload.
+ */
+export function libraryPage(
+  view: LibraryView = {},
+  window: RowWindow = {},
+): Promise<LibraryPage> {
+  return invoke<LibraryPage>("library_view", { view, window });
+}
+
+/**
+ * The whole of a library view, in one go.
+ *
+ * Still here, and still the right call for the three things that genuinely need
+ * every row: queueing a table from a track, resolving an entity a drag is
+ * carrying, and playing an album. Those are presses, not keystrokes, so paying
+ * the full payload once for one is the trade. Anything that re-reads as
+ * somebody types wants `libraryPage`.
  */
 export function libraryView(view: LibraryView = {}): Promise<LibrarySection[]> {
-  return invoke<LibrarySection[]>("library_view", { view });
+  return libraryPage(view).then((page) => page.sections);
 }
 
 /** The albums or artists in the library, one entry each. */

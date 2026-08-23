@@ -488,9 +488,11 @@ fn the_library_view_reads_the_camel_cased_keys_the_frontend_sends() {
         "library_view",
         serde_json::json!({ "view": { "sortKey": "title", "ascending": false } }),
     );
-    let sections = descending.as_array().expect("sections");
+    let sections = descending["sections"].as_array().expect("sections");
     assert_eq!(sections.len(), 1, "ungrouped is one section: {descending}");
     assert_eq!(sections[0]["header"], "", "and its header is empty");
+    assert_eq!(descending["total"], 4, "and the count is of the whole result");
+    assert_eq!(descending["offset"], 0, "starting at the top");
 
     let titles: Vec<&str> = sections[0]["rows"]
         .as_array()
@@ -512,7 +514,7 @@ fn the_library_view_reads_the_camel_cased_keys_the_frontend_sends() {
         "library_view",
         serde_json::json!({ "view": { "groupBy": "artist" } }),
     );
-    let headers: Vec<&str> = grouped
+    let headers: Vec<&str> = grouped["sections"]
         .as_array()
         .expect("sections")
         .iter()
@@ -531,9 +533,43 @@ fn the_library_view_reads_the_camel_cased_keys_the_frontend_sends() {
         serde_json::json!({ "view": { "album": "All Melody" } }),
     );
     assert_eq!(
-        one_album[0]["rows"].as_array().expect("rows").len(),
+        one_album["sections"][0]["rows"].as_array().expect("rows").len(),
         2,
         "exactly that album, not a substring match: {one_album}"
+    );
+
+    // The window, which is the whole point of AUD-13: the same ordered result,
+    // one row of it, and the count of what it was cut from. `window` is a
+    // second argument rather than a field of `view`, so this is also the check
+    // that the shell reads it under the key the frontend sends it under.
+    let windowed = call(
+        &webview,
+        "library_view",
+        serde_json::json!({
+            "view": { "sortKey": "title", "ascending": false },
+            "window": { "offset": 2, "limit": 1 },
+        }),
+    );
+    assert_eq!(windowed["total"], 4, "the count is of the result: {windowed}");
+    assert_eq!(windowed["offset"], 2);
+    let rows = windowed["sections"][0]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "one row asked for, one row sent");
+    assert_eq!(
+        rows[0]["title"], "Minipops 67",
+        "and it is the third of the four titles above, not the first"
+    );
+
+    // A count with no rows in it — what the header asks for per keystroke.
+    let counted = call(
+        &webview,
+        "library_view",
+        serde_json::json!({ "view": {}, "window": { "limit": 0 } }),
+    );
+    assert_eq!(counted["total"], 4);
+    assert_eq!(
+        counted["sections"].as_array().expect("sections").len(),
+        0,
+        "a count carries no rows: {counted}"
     );
 }
 
@@ -629,9 +665,13 @@ fn hiding_duplicates_shortens_the_next_library_read() {
 
     let rows = call(&webview, "library_view", serde_json::json!({ "view": {} }));
     assert_eq!(
-        rows[0]["rows"].as_array().expect("rows").len(),
+        rows["sections"][0]["rows"].as_array().expect("rows").len(),
         2,
         "the table obeys the setting without being told again: {rows}"
+    );
+    assert_eq!(
+        rows["total"], 2,
+        "and the count the header draws is of what is left, not of the files"
     );
 }
 
