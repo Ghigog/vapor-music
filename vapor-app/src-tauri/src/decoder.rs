@@ -243,3 +243,303 @@ fn serve_seek(
     }
     window.served_seek();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The device rate every test decodes at, and the rate the fixtures are
+    /// written at. Equal on purpose: `StreamResampler` passes through when the
+    /// two match, so a frame's value survives the decode unchanged and the
+    /// window can be asserted against sample by sample.
+    const RATE: u32 = 8_000;
+
+    /// Three seconds. Comfortably inside a window, which holds five.
+    const FRAMES: u64 = 24_000;
+
+    /// The sample value at frame `i`.
+    ///
+    /// A ramp that repeats every 512 frames, so a sample says which frame it
+    /// came from. Adjacent frames differ by 60, which is far more than the
+    /// quantisation this makes a round trip through — the point is that a seek
+    /// landing one frame off is visible, not that the arithmetic is exact.
+    fn ramp(i: u64) -> i16 {
+        ((i % 512) as i32 * 60 - 15_360) as i16
+    }
+
+    /// Which frame a sample came from, modulo the ramp's period.
+    fn frame_of(sample: i16) -> u64 {
+        ((sample as i32 + 15_360) as f32 / 60.0).round() as u64
+    }
+
+    /// A 16-bit stereo WAV of `frames` frames, left channel ramped and right
+    /// its negation. Real enough for symphonia to decode and seek, without
+    /// needing anyone's music.
+    fn ramped_wav(frames: u64) -> Vec<u8> {
+        let data_len = (frames * 4) as u32;
+        let mut v = Vec::with_capacity(44 + data_len as usize);
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(36 + data_len).to_le_bytes());
+        v.extend_from_slice(b"WAVEfmt ");
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        v.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        v.extend_from_slice(&RATE.to_le_bytes());
+        v.extend_from_slice(&(RATE * 4).to_le_bytes());
+        v.extend_from_slice(&4u16.to_le_bytes());
+        v.extend_from_slice(&16u16.to_le_bytes());
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            v.extend_from_slice(&ramp(i).to_le_bytes());
+            v.extend_from_slice(&(-ramp(i)).to_le_bytes());
+        }
+        v
+    }
+
+    /// A file in its own directory, removed when the returned guard drops.
+    ///
+    /// A counter rather than a timestamp, for the reason the suite in `cache`
+    /// already documents: macOS resolves the clock coarsely enough that two
+    /// tests starting together collide on the name.
+    struct Fixture(std::path::PathBuf);
+
+    impl Fixture {
+        fn new(bytes: &[u8]) -> Fixture {
+            use std::sync::atomic::AtomicU64;
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+
+            let dir = std::env::temp_dir().join(format!(
+                "vapor-decoder-test-{}-{}",
+                std::process::id(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).expect("fixture dir");
+            let path = dir.join("track.wav");
+            std::fs::write(&path, bytes).expect("fixture file");
+            Fixture(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let Some(dir) = self.0.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    /// Poll `done` until it is true or a second has passed.
+    ///
+    /// The decoder is a thread with no handshake other than the window itself,
+    /// so every assertion about what it has produced is eventually-true. A
+    /// second is thousands of times what decoding three seconds of PCM takes.
+    fn settles(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::time::Instant::now() < deadline {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        done()
+    }
+
+    #[test]
+    fn a_track_started_at_the_beginning_holds_its_first_frame() {
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, 0).expect("a plain WAV should open");
+
+        let window = streamer.window();
+        assert_eq!(
+            window.span().0,
+            0,
+            "a track played from the top began somewhere else"
+        );
+        let first = window.view().get(0).expect("frame zero should be decoded");
+        assert_eq!(
+            frame_of(first[0]),
+            0,
+            "the frame at position zero is not the first frame of the file"
+        );
+    }
+
+    #[test]
+    fn a_track_cued_part_way_in_does_not_decode_what_comes_before_it() {
+        // The whole point of cueing at a position rather than at the start:
+        // arming a transition must not cost the minutes of track in front of
+        // the cue point.
+        let cue = 16_000;
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, cue).expect("open");
+
+        let window = streamer.window();
+        let (start, end) = window.span();
+        assert!(
+            start > 0 && start <= cue,
+            "a cue at {cue} left the window starting at {start}"
+        );
+        assert!(end > start, "nothing was decoded at the cue point");
+        assert!(
+            window.view().get(0).is_none(),
+            "the window holds frame zero, so the decoder read the track from the top"
+        );
+    }
+
+    #[test]
+    fn the_audio_at_a_cue_point_is_the_audio_from_that_point() {
+        // A seek reports where it landed because the window indexes frames by
+        // their absolute position in the track. If the landing frame and the
+        // window's origin ever disagree, every frame in the window is the
+        // wrong audio by the size of the disagreement — inaudible on a cue,
+        // and exactly the error a beat-matched transition is built on.
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, 16_000).expect("open");
+
+        let window = streamer.window();
+        let (start, end) = window.span();
+        let view = window.view();
+        for probe in [start, start + 1, start + 733, end - 1] {
+            let frame = view
+                .get(probe)
+                .unwrap_or_else(|| panic!("frame {probe} is inside the span but not readable"));
+            assert_eq!(
+                frame_of(frame[0]),
+                probe % 512,
+                "the window says frame {probe} but the audio there came from somewhere else"
+            );
+        }
+    }
+
+    #[test]
+    fn a_seek_inside_the_window_costs_no_decoding_and_does_not_reopen_the_track() {
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, 0).expect("open");
+        let window = streamer.window();
+
+        assert!(
+            settles(|| window.is_complete()),
+            "a three-second WAV did not decode within a second"
+        );
+        let before = window.span();
+
+        window.request_seek(12_000);
+        assert!(
+            settles(|| !window.seek_pending()),
+            "the seek was never served"
+        );
+
+        assert_eq!(
+            window.span(),
+            before,
+            "a seek to audio the window already held threw that audio away"
+        );
+        assert!(
+            window.is_complete(),
+            "a seek within a finished track made it unfinished again, so the deck \
+             will wait for frames that are never coming"
+        );
+    }
+
+    #[test]
+    fn a_seek_outside_the_window_moves_the_window_to_it() {
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, 16_000).expect("open");
+        let window = streamer.window();
+        assert!(window.span().0 > 0, "the cue did not take");
+
+        // Backwards, out of everything the window holds.
+        window.request_seek(0);
+        assert!(
+            settles(|| !window.seek_pending()),
+            "the seek was never served"
+        );
+        assert!(
+            settles(|| window.view().get(0).is_some()),
+            "a seek to the top of the track produced no audio there"
+        );
+
+        assert_eq!(
+            window.span().0,
+            0,
+            "the window did not move back to the seek target"
+        );
+        let frame = window.view().get(0).expect("frame zero");
+        assert_eq!(
+            frame_of(frame[0]),
+            0,
+            "the window claims frame zero but holds audio from elsewhere"
+        );
+    }
+
+    #[test]
+    fn a_file_that_decodes_to_no_audio_is_silent_rather_than_a_failure() {
+        // TD-12's malformed AAC, in the shape streaming meets it: the
+        // container probes fine and the decoder reaches the end having
+        // produced nothing. A track that is complete and empty, not an error.
+        let fixture = Fixture::new(&ramped_wav(0));
+        let streamer = Streamer::start(fixture.path(), RATE, 0)
+            .expect("a container that decodes to nothing is not an open failure");
+
+        assert!(
+            streamer.is_silent(),
+            "a file that produced no frames at all was not reported as silent"
+        );
+    }
+
+    #[test]
+    fn a_track_with_audio_is_not_silent_once_it_finishes() {
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, 0).expect("open");
+        let window = streamer.window();
+
+        assert!(
+            settles(|| window.is_complete()),
+            "a three-second WAV did not decode within a second"
+        );
+        assert!(
+            !streamer.is_silent(),
+            "a track that decoded {FRAMES} frames was reported as silent"
+        );
+        assert_eq!(
+            window.total_frames(),
+            Some(FRAMES),
+            "finishing the track did not fix its length at what was actually decoded"
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_audio_at_all_is_an_error_rather_than_silence() {
+        // The distinction `is_silent` exists to make. A file that cannot be
+        // opened must fail loudly here, not arrive at the deck as a track that
+        // is complete and empty.
+        let fixture = Fixture::new(b"this is not a RIFF chunk and never was");
+        assert!(
+            Streamer::start(fixture.path(), RATE, 0).is_err(),
+            "a file with no container in it opened as a track"
+        );
+    }
+
+    #[test]
+    fn dropping_a_streamer_stops_its_thread_rather_than_leaving_it_reading() {
+        let fixture = Fixture::new(&ramped_wav(FRAMES));
+        let streamer = Streamer::start(fixture.path(), RATE, 0).expect("open");
+
+        let at = std::time::Instant::now();
+        drop(streamer);
+        let took = at.elapsed();
+
+        // The loop checks the flag between sleeps of three milliseconds, so
+        // this is four orders of magnitude of slack. It is a liveness check:
+        // a `Drop` that stopped joining, or joined without setting the flag,
+        // fails it rather than hanging the suite forever.
+        assert!(
+            took < std::time::Duration::from_secs(1),
+            "dropping a streamer took {took:?}, so its thread is not being stopped"
+        );
+    }
+}
