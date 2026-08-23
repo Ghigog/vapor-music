@@ -184,7 +184,24 @@ fn rust_commands(src: &str) -> BTreeMap<String, BTreeSet<String>> {
                 continue;
             };
             let ty = ty.trim();
-            if ty.contains("State<") || ty.contains("AppHandle") || ty.contains("Window") {
+            // Tauri injects these rather than taking them off the wire, so they
+            // are not arguments the frontend sends.
+            //
+            // Matched at the start of the type rather than anywhere in it.
+            // `contains("Window")` was the original, and AUD-13's
+            // `window: Option<RowWindow>` is a real argument whose type happens
+            // to end in that word — so the parser dropped it, and this test
+            // reported that Rust expected one fewer argument than it does. A
+            // heuristic that silently ignores a parameter is worse here than
+            // one that occasionally names an extra: this test exists to catch
+            // an argument that disagrees across the seam, and dropping one is
+            // exactly how it would fail to.
+            let bare = ty.trim_start_matches("tauri::");
+            if bare.starts_with("State<")
+                || bare.starts_with("AppHandle")
+                || bare.starts_with("Window")
+                || bare.starts_with("WebviewWindow")
+            {
                 continue;
             }
             let arg = lhs.trim().trim_start_matches("mut ").trim();
