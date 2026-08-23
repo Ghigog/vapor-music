@@ -99,3 +99,36 @@
   font-size: var(--fs-sm);
   color: var(--ink-3);
 }
+
+/* The second path, quieter than the first.
+ *
+ * Both are real choices, so neither is a link — but the folder is the one that
+ * needs nothing, and a person with no server should not have to weigh two
+ * equally loud buttons to find that out. */
+.onboard__button--quiet {
+  background: transparent;
+  border: 1px solid var(--glass-rim);
+  color: var(--ink-2);
+  box-shadow: none;
+}
+
+.onboard__button--quiet:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--edge-strong);
+}
+
+.onboard__button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* What went wrong, where it happened. A folder that cannot be read is the one
+   failure this screen can produce, and sending somebody to Settings to find out
+   why would be the old mistake in a new place. */
+.onboard__problem {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--danger-ink);
+}
