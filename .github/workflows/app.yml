@@ -541,12 +541,22 @@ jobs:
       # The `.sig` this produces is worthless and is not uploaded. It exists so
       # the build reaches exit 0 rather than reporting failure for a step that
       # has nothing to do with whether the app compiled.
+      #
+      # `$RUNNER_TEMP`, not `/tmp`. The CLI reads this variable as a path when
+      # the path exists and as the key itself when it does not, and `/tmp` on
+      # Windows is a Git-bash fiction: bash created the file under
+      # AppData\Local\Temp, the CLI looked for `C:\tmp`, found nothing, and
+      # base64-decoded the string `/tmp/throwaway.key` instead. It failed on
+      # "Invalid symbol 46, offset 14" — symbol 46 is `.`, offset 14 is `.key`.
+      #
+      # Still the file and not its contents: a private key in an environment
+      # variable is a bad habit to write into a workflow, throwaway or not.
       - name: A throwaway updater key, so bundling completes
         shell: bash
         working-directory: vapor-app
         run: |
-          npx tauri signer generate -w /tmp/throwaway.key -f --password "" > /dev/null 2>&1
-          echo "TAURI_SIGNING_PRIVATE_KEY=/tmp/throwaway.key" >> "$GITHUB_ENV"
+          npx tauri signer generate -w "$RUNNER_TEMP/throwaway.key" -f --password "" > /dev/null 2>&1
+          echo "TAURI_SIGNING_PRIVATE_KEY=$RUNNER_TEMP/throwaway.key" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> "$GITHUB_ENV"
 
       - name: Build
