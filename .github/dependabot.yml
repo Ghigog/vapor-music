@@ -1,0 +1,62 @@
+version: 2
+
+# Nothing watched the dependency tree before this (AUD-20). The licence
+# inventory in docs/LICENSING.md is a manual pass against `Cargo.lock`, and it
+# had already drifted once — 624 packages measured, 627 in the graph by the
+# time anyone looked again. `cargo-deny` in ci.yml is the gate; this is the
+# thing that keeps the tree from ageing until the gate has to be argued with.
+#
+# Patch and minor are grouped per ecosystem so a quiet week is one PR rather
+# than thirty. Majors stay ungrouped and arrive one at a time, because those
+# are the ones that need reading.
+
+updates:
+  # The Tauri shell. Its own crate, not a member of the vapor-core workspace,
+  # so it needs its own entry and carries its own Cargo.lock.
+  - package-ecosystem: cargo
+    directory: /vapor-app/src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      shell-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The DSP/engine/library workspace. One lockfile at the root covers all four
+  # member crates.
+  - package-ecosystem: cargo
+    directory: /vapor-core
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      core-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /vapor-app
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      frontend-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The actions themselves are now pinned by SHA, which is the whole reason
+  # this entry has to exist: a pinned action never updates on its own, so
+  # without something moving the SHA a security fix upstream never arrives.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

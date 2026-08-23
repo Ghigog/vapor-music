@@ -1,0 +1,90 @@
+# The licence inventory in docs/LICENSING.md, as a gate.
+#
+# That document measured every package in `vapor-app/src-tauri/Cargo.lock`
+# against its vendored source and concluded: no GPL, no AGPL and no LGPL-only
+# dependency in the shipped tree, with MPL-2.0 — eighteen packages, weak
+# copyleft at file granularity — the strongest obligation in it. It then
+# warned that "a new dependency can reintroduce copyleft silently" and left
+# re-checking that to whoever remembered. Nobody did: it measured 624
+# packages, AUD-20 recorded 627, and the lockfile holds 651 today.
+#
+# This file is what makes the conclusion checkable on every push instead of
+# once a quarter by hand. It is not a place to widen a licence so a build goes
+# green — a rejection here means a dependency arrived under terms nobody has
+# assessed, and the fix is to assess it and write the answer into
+# docs/LICENSING.md.
+#
+# Both Cargo trees are checked. `vapor-app/src-tauri` is a standalone crate
+# with its own lockfile, not a member of the `vapor-core` workspace, so
+# neither run covers the other. See the `licences` job in ci.yml.
+
+[graph]
+all-features = true
+
+[licenses]
+# Only what is actually in one of the two graphs. A licence that appears only
+# inside a disjunction — `Unlicense OR MIT`, `CC0-1.0 OR MIT-0 OR Apache-2.0`,
+# `Apache-2.0 OR BSL-1.0` — is satisfied by the arm already allowed and is
+# deliberately absent, so this list stays the set of terms actually accepted
+# rather than every string seen in a manifest.
+#
+# `r-efi` is the one worth naming: `MIT OR Apache-2.0 OR LGPL-2.1-or-later`
+# resolves on MIT, exactly as docs/LICENSING.md says, and LGPL never enters.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    # `target-lexicon` carries this alone, not as one arm of a choice.
+    "Apache-2.0 WITH LLVM-exception",
+    # Thirteen symphonia crates, the Servo CSS crates Tauri drags in, and
+    # `option-ext`. Nothing in them is modified; see docs/LICENSING.md.
+    "MPL-2.0",
+    # `bindgen` alone, and unavoidably inside `brotli` (AND MIT) and
+    # `encoding_rs` (AND (Apache-2.0 OR MIT)).
+    "BSD-3-Clause",
+    # `libloading`, `rustls-webpki`, `untrusted`, and inside `ring`
+    # (`Apache-2.0 AND ISC`, a conjunction, so ISC is not optional there).
+    "ISC",
+    # `foldhash` alone.
+    "Zlib",
+    "Unicode-3.0",
+]
+
+# The four crates in this repository. They declare `LicenseRef-Proprietary`,
+# the SPDX form for "not one of the standard identifiers" — see
+# docs/LICENSING.md §"Where it is declared" — so there is nothing to evaluate.
+# Named one at a time rather than allowing the identifier globally: a
+# third-party crate arriving with a LicenseRef of its own should still stop
+# the build.
+[[licenses.exceptions]]
+crate = "vapor-app"
+allow = ["LicenseRef-Proprietary"]
+
+[[licenses.exceptions]]
+crate = "vapor-dsp"
+allow = ["LicenseRef-Proprietary"]
+
+[[licenses.exceptions]]
+crate = "vapor-engine"
+allow = ["LicenseRef-Proprietary"]
+
+[[licenses.exceptions]]
+crate = "vapor-library"
+allow = ["LicenseRef-Proprietary"]
+
+[advisories]
+# Vulnerabilities and yanked crates are denied outright, transitive or not,
+# and nothing is ignored. Measured 2026-08-23: both graphs are clean on both
+# counts — 0 of each across 651 and 193 packages.
+ignore = []
+
+# Unmaintained is scoped to what this repo depends on directly. The transitive
+# set today is seventeen advisories and not one of them is actionable here:
+# ten gtk-rs GTK3 binding crates, which are Tauri's Linux backend; the five
+# `unic-*` crates under `urlpattern` -> `tauri-utils`, where RUSTSEC-2025-0098
+# says in as many words that no safe upgrade is available; plus `paste` and
+# `proc-macro-error`. Denying all seventeen would make this job red on the day
+# it was added, for things only Tauri can fix, and a gate that is red for
+# reasons nobody can act on is a gate that gets switched off.
+#
+# Dependabot is what moves these, not this file.
+unmaintained = "workspace"
