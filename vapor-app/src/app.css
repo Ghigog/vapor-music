@@ -69,6 +69,41 @@
   }
 }
 
+/* The strip you can move the window by.
+ *
+ * Tall enough to cover the macOS traffic lights and the space beside them,
+ * matching the 42px the sidebar already reserves. Nothing was a drag region
+ * before this, so the window could not be moved at all: `titleBarStyle:
+ * "Overlay"` with `hiddenTitle` means macOS draws no bar and the webview owns
+ * the whole window, grab handle included.
+ *
+ * `right: 0` rather than a fixed width, because the whole top edge is where
+ * anybody reaches for a window. Nothing clickable is underneath: the sidebar
+ * and the content column both reserve exactly 42px at the top for the traffic
+ * lights, so this covers padding in both.
+ */
+.shell__drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 42px;
+  /* Above the page, below every overlay and sheet. Those mount on <body> and
+     must not end up underneath a transparent strip. */
+  z-index: 5;
+  background: transparent;
+}
+
+/* Not on a phone. There is no window to move, and the reserved 42px becomes
+   18px of real padding at this width — so the strip would stop being chrome
+   and start swallowing taps on whatever is at the top of the screen. */
+@media (max-width: 767px) {
+  .shell__drag {
+    display: none;
+  }
+}
+
+
 .shell__sidebar {
   grid-area: sidebar;
   padding: 20px 14px;
