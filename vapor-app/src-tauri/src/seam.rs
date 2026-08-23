@@ -101,7 +101,7 @@ fn seam() -> Seam {
             crate::commands::groups::dynamic_groups,
             crate::commands::groups::create_group,
             crate::commands::groups::add_to_group,
-            settings,
+            crate::commands::settings::settings,
         ])
         // `mock_context`, not `generate_context!`: the real one embeds the
         // Info.plist and can only be expanded once per crate, which `run()`
