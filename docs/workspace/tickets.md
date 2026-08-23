@@ -2561,7 +2561,7 @@ drops the `godot (stub path)` job from `ci.yml`.
 `tools/` with it — both scripts in it were Godot's. TD-41, TD-42 and TD-45 close
 with it. The `godot-cpp` submodule is deregistered and `.gitmodules` is gone.
 
-### AUD-5 : the four named UI findings (open)
+### AUD-5 : the four named UI findings (3 of 4 done 2026-08-23)
 
 Titles reconstructed from Dylan's answers; the desks' own wording is gone.
 
@@ -2579,6 +2579,25 @@ Titles reconstructed from Dylan's answers; the desks' own wording is gone.
 **Waiting for:** The `screens` and `components` lanes; all four land there and
 another session has been in both.
 
+
+**Three of the four are closed. The fourth is AUD-13 and stays there.**
+
+* **Onboarding — done.** First run now offers two paths with the local folder
+  first: "Choose a folder on this device", and "Connect a server instead"
+  beneath it. The finding was that the flow assumed a server a new person does
+  not have; there is now a path that needs no server, no address and no
+  password, and it is the one offered first.
+* **The texts — nothing to do.** Approved without reservation. Recorded so the
+  next reader does not go looking for the work.
+* **Contrast — done, via AUD-6.** It was to be re-checked rather than re-fixed,
+  and the re-check found two real failures: `--ink-3` at 2.24:1 and `--ink-4` at
+  2.76:1, the latter being what `.label` is set in. Both now clear 4.5:1 against
+  the palest stop of the page gradient, guarded by a computed test. The ticket's
+  own proposed value would not have cleared it — `#6b7079` measures 4.28:1.
+* **The library view — open, and tracked as AUD-13.** Playlists, groups, albums
+  and artists rather than a wall of rows, with shelves pulling in lazily. That is
+  the same change AUD-13 needs for transport reasons, so it belongs in one place
+  and that place is AUD-13, not here.
 
 ### AUD-6 : the Daylight secondary ink scale is under AA (done 2026-08-23)
 
