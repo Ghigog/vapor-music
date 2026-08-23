@@ -6416,6 +6416,7 @@ pub fn run() {
             commands::cache::cache_status,
             commands::cache::set_cache_max_bytes,
             commands::cache::clear_audio_cache,
+            commands::cache::clear_cover_art,
             commands::cache::evict_track,
         ])
         .run(tauri::generate_context!())

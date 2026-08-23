@@ -42,6 +42,16 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
   const [purging, setPurging] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
+  /**
+   * Bytes of artwork, read off the storage list rather than fetched.
+   *
+   * There is no `coverStatus` command and adding one to disable a button would
+   * be a second round trip for a number this screen has already asked for. The
+   * label is the backend's own string — matched here rather than given an id,
+   * because a `DataRow` is a row on a list and inventing a key for one of them
+   * would make the list about this button.
+   */
+  const coverBytes = rows.find((r) => r.label === "Cover art")?.bytes ?? 0;
 
   const refresh = useCallback(async () => {
     const [r, c, l] = await Promise.allSettled([
@@ -212,7 +222,9 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
           <button
             className="data__button"
             onClick={() => {
-              core.revealDataFolder().catch((e: unknown) => setError(messageOf(e)));
+              core
+                .revealDataFolder()
+                .catch((e: unknown) => setError(messageOf(e)));
             }}
           >
             Open folder
@@ -268,11 +280,35 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
           >
             Empty cache
           </button>
+          {/* Cover art was the second-largest thing in the directory and had
+              no lever at all — the only way to reclaim it was to delete
+              everything (AUD-12). It is bounded now, but the bound is generous
+              on purpose, so the deliberate button still has to exist.
+
+              The sentence is different from the audio one because the bargain
+              is different, and saying so is the point: audio returns on its
+              own the next time something plays, artwork returns only when the
+              library is analysed again. */}
+          <button
+            className="data__button"
+            disabled={coverBytes === 0}
+            onClick={() => {
+              setNote(null);
+              void core
+                .clearCoverArt()
+                .then(async (freed) => {
+                  await refresh();
+                  setNote(
+                    `Freed ${bytes(freed)}. Artwork comes back when the library is analysed again.`,
+                  );
+                })
+                .catch((e: unknown) => setError(messageOf(e)));
+            }}
+          >
+            Clear artwork
+          </button>
         </div>
       </section>
-
-
-
 
       <section className="data__card glass">
         <h2 className="label">delete</h2>
@@ -297,27 +333,27 @@ export function YourData({ embedded = false }: { embedded?: boolean } = {}) {
           confirmLabel="Delete everything"
           onConfirm={() => {
             setPurging(false);
-              // Deleting used to refresh and say nothing at all, which leaves
-              // the most consequential button on the screen with no outcome
-              // to read — and no way to notice a delete that only half
-              // happened. What is *left* is read back and reported.
-              void core
-                .deleteAllData()
-                .then(async () => {
-                  await refresh();
-                  const [remaining, stillCached] = await Promise.all([
-                    core.dataBreakdown(),
-                    core.cacheStatus(),
-                  ]);
-                  const left = remaining.filter((r) => r.local).length;
-                  setNote(
-                    left === 0 && stillCached.bytes === 0
-                      ? "Deleted. Nothing is stored locally any more; your music on the server is untouched."
-                      : `Deleted, but ${left} ${left === 1 ? "item" : "items"} and ` +
+            // Deleting used to refresh and say nothing at all, which leaves
+            // the most consequential button on the screen with no outcome
+            // to read — and no way to notice a delete that only half
+            // happened. What is *left* is read back and reported.
+            void core
+              .deleteAllData()
+              .then(async () => {
+                await refresh();
+                const [remaining, stillCached] = await Promise.all([
+                  core.dataBreakdown(),
+                  core.cacheStatus(),
+                ]);
+                const left = remaining.filter((r) => r.local).length;
+                setNote(
+                  left === 0 && stillCached.bytes === 0
+                    ? "Deleted. Nothing is stored locally any more; your music on the server is untouched."
+                    : `Deleted, but ${left} ${left === 1 ? "item" : "items"} and ` +
                         `${bytes(stillCached.bytes)} of cached audio are still here.`,
-                  );
-                })
-                .catch((e: unknown) => setError(messageOf(e)));
+                );
+              })
+              .catch((e: unknown) => setError(messageOf(e)));
           }}
           onCancel={() => setPurging(false)}
         />

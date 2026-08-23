@@ -120,6 +120,8 @@ export interface FakeOptions {
   keychainSilentlyFails?: boolean;
   /** Cached bytes on disk. */
   cacheBytes?: number;
+  /** Cover art bytes on disk. */
+  coverBytes?: number;
   /**
    * A pass is running right now, on this track.
    *
@@ -449,6 +451,7 @@ export class FakeBackend {
   private keychainSilentlyFails: boolean;
   private analysisFailures: core.AnalysisFailure[];
   private cacheBytes: number;
+  private coverBytes: number;
   private cacheResistsClearing: boolean;
   private covers: boolean;
   private analysing: boolean;
@@ -597,6 +600,7 @@ export class FakeBackend {
     this.analysed = connected ? this.rows.length : 0;
     this.unreadableFolders = options.unreadableFolders ?? 0;
     this.cacheBytes = options.cacheBytes ?? 1_200_000_000;
+    this.coverBytes = options.coverBytes ?? 149_000_000;
     this.cacheResistsClearing = options.cacheResistsClearing ?? false;
     this.covers = options.covers ?? false;
     this.analysing = options.analysing !== undefined;
@@ -1736,6 +1740,12 @@ export class FakeBackend {
             local: this.cacheBytes > 0,
           },
           {
+            label: "Cover art",
+            path: "/tmp/vapor-music/covers",
+            bytes: this.coverBytes,
+            local: this.coverBytes > 0,
+          },
+          {
             label: "Analysis",
             path: "/tmp/vapor-music/analysis.json",
             bytes: this.deleted ? 0 : 240_000,
@@ -1785,6 +1795,15 @@ export class FakeBackend {
         return freed;
       }
 
+      case "clear_cover_art": {
+        const freed = this.coverBytes;
+        // Modelled with an effect for the same reason as `clear_audio_cache`
+        // above: a screen that says the artwork is gone should be able to be
+        // wrong here.
+        this.coverBytes = 0;
+        return freed;
+      }
+
       case "data_location":
         return "/tmp/vapor-music";
 
@@ -1794,6 +1813,7 @@ export class FakeBackend {
         this.playlists = [];
         this.scanned = false;
         this.cacheBytes = 0;
+        this.coverBytes = 0;
         this.deleted = true;
         return null;
 

@@ -137,18 +137,8 @@ export type {
   VibePath,
 };
 
-
-
-
 export type SortKey =
-  | "title"
-  | "artist"
-  | "album"
-  | "genre"
-  | "year"
-  | "bpm"
-  | "key"
-  | "order";
+  "title" | "artist" | "album" | "genre" | "year" | "bpm" | "key" | "order";
 
 export type GroupBy = "none" | "artist" | "album" | "genre";
 
@@ -165,21 +155,11 @@ export interface LibraryView {
   artist?: string;
 }
 
-
-
-
-
 /** What the audio thread is doing. "loading" is a separate flag — fetching and
  *  decoding is the shell's business, not the device's. */
 export type PlaybackStatus = "idle" | "playing" | "paused";
 
-
-
 export type Curve = "build" | "chill" | "wave" | "flat";
-
-
-
-
 
 /** The band the Vibe Limit is offered over. Matches `settings.rs`. */
 export const MIN_VIBE_LIMIT = 0.1;
@@ -220,7 +200,10 @@ export function setVibeLimit(limit: number): Promise<Settings> {
 // Commands
 // ---------------------------------------------------------------------------
 
-async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function invoke<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   return tauriInvoke<T>(cmd, args);
 }
 
@@ -272,7 +255,9 @@ export function libraryView(view: LibraryView = {}): Promise<LibrarySection[]> {
 }
 
 /** The albums or artists in the library, one entry each. */
-export function libraryEntities(view: LibraryView = {}): Promise<LibraryEntity[]> {
+export function libraryEntities(
+  view: LibraryView = {},
+): Promise<LibraryEntity[]> {
   return invoke<LibraryEntity[]>("library_entities", { view });
 }
 
@@ -340,13 +325,13 @@ export function createPlaylist(
   name: string,
   folderId?: string,
 ): Promise<Playlist> {
-  return invoke<Playlist>("create_playlist", { name, folderId: folderId ?? null });
+  return invoke<Playlist>("create_playlist", {
+    name,
+    folderId: folderId ?? null,
+  });
 }
 
 // --- Lyrics and artwork from public services --------------------------------
-
-
-
 
 /** What has already been looked up. Never makes a request. */
 export function trackLookup(href: string): Promise<LookedUp> {
@@ -367,7 +352,6 @@ export function lookUpTrack(href: string, force = false): Promise<LookedUp> {
 export function lookedUpImage(url: string): Promise<string | null> {
   return invoke<string | null>("looked_up_image", { url });
 }
-
 
 export function albumCover(album: string, lead: string): Promise<AlbumArt> {
   return invoke<AlbumArt>("album_cover", { album, lead });
@@ -393,7 +377,6 @@ export function findAlbumArt(
 export function clearAlbumArt(album: string, lead: string): Promise<AlbumArt> {
   return invoke<AlbumArt>("clear_album_art", { album, lead });
 }
-
 
 /**
  * Ask Deezer about every track in the library.
@@ -458,7 +441,6 @@ export function setMetadataLookup(enabled: boolean): Promise<Settings> {
 
 // --- Sync with another device on the same network (SYNC-001 to SYNC-005) ----
 
-
 /** A device seen on the network. */
 export interface SyncPeer {
   id: string;
@@ -468,9 +450,6 @@ export interface SyncPeer {
   address: string;
   lastSeen: number;
 }
-
-
-
 
 /** What may move. Both default to true. */
 export interface SyncWhat {
@@ -526,7 +505,6 @@ export function syncWith(peerId: string, what?: SyncWhat): Promise<void> {
   return invoke<void>("sync_with", { peerId, what: what ?? null });
 }
 
-
 /**
  * Pull the shared document from the server, merge it in, and push it back.
  *
@@ -540,11 +518,7 @@ export function syncSharedDocument(): Promise<SharedSyncResult> {
 
 // --- Dynamic groups -----------------------------------------------------------
 
-
-
-
 // --- Downloads --------------------------------------------------------------
-
 
 export type Collection = "playlist" | "group";
 
@@ -565,10 +539,7 @@ export function downloadCollection(
 
 /** Stop keeping them. Returns how many were actually released — a track another
  *  download still wants is kept. */
-export function removeDownload(
-  kind: Collection,
-  id: string,
-): Promise<number> {
+export function removeDownload(kind: Collection, id: string): Promise<number> {
   return invoke<number>("remove_download", { kind, id });
 }
 
@@ -660,7 +631,10 @@ export function setPlaylistFolder(
 }
 
 /** Returns how many were actually added — duplicates are skipped. */
-export function addTracksToPlaylist(id: string, hrefs: string[]): Promise<number> {
+export function addTracksToPlaylist(
+  id: string,
+  hrefs: string[],
+): Promise<number> {
   return invoke<number>("add_tracks_to_playlist", { id, hrefs });
 }
 
@@ -679,7 +653,10 @@ export function deletePlaylist(id: string): Promise<boolean> {
   return invoke<boolean>("delete_playlist", { id });
 }
 
-export function removePlaylistTrack(id: string, index: number): Promise<boolean> {
+export function removePlaylistTrack(
+  id: string,
+  index: number,
+): Promise<boolean> {
   return invoke<boolean>("remove_playlist_track", { id, index });
 }
 
@@ -784,9 +761,7 @@ export function setVolume(volume: number): Promise<void> {
 // Queue
 // ---------------------------------------------------------------------------
 
-
 export type RepeatMode = "off" | "all" | "one";
-
 
 export function queueView(): Promise<QueueView> {
   return invoke<QueueView>("queue_view");
@@ -822,7 +797,6 @@ export function setShuffled(shuffled: boolean): Promise<boolean> {
 // Vibe DJ
 // ---------------------------------------------------------------------------
 
-
 /**
  * Order the library along an energy and tempo curve, starting from one track.
  *
@@ -834,7 +808,6 @@ export function vibePath(start: string, curve: Curve): Promise<VibePath> {
   return invoke<VibePath>("vibe_path", { start, curve });
 }
 
-
 /** Describe the mix between what is playing and what is next, or null when
  *  there is no pair to describe. */
 export function blendPreview(): Promise<BlendPreview | null> {
@@ -845,7 +818,6 @@ export function blendPreview(): Promise<BlendPreview | null> {
 // Liner notes
 // ---------------------------------------------------------------------------
 
-
 export function trackDetails(href: string): Promise<TrackDetails> {
   return invoke<TrackDetails>("track_details", { href });
 }
@@ -854,8 +826,6 @@ export function trackDetails(href: string): Promise<TrackDetails> {
 // Search
 // ---------------------------------------------------------------------------
 
-
-
 export function search(query: string): Promise<SearchResults> {
   return invoke<SearchResults>("search", { query });
 }
@@ -863,8 +833,6 @@ export function search(query: string): Promise<SearchResults> {
 // ---------------------------------------------------------------------------
 // Connecting a library
 // ---------------------------------------------------------------------------
-
-
 
 export interface Analysis {
   bpm: number;
@@ -915,7 +883,6 @@ export interface BpmRetrack {
   /** Why it could not be done. The correction itself is saved either way. */
   error: string | null;
 }
-
 
 /**
  * Point the app at a server. Returns the settings as stored.
@@ -1022,7 +989,6 @@ export function dataLocation(): Promise<string> {
   return invoke<string>("data_location");
 }
 
-
 /** Itemise what is stored, so the sovereignty claim can be checked rather than
  *  taken on trust. */
 export function dataBreakdown(): Promise<DataRow[]> {
@@ -1084,4 +1050,16 @@ export function setCacheMaxBytes(bytes: number): Promise<number> {
  */
 export function clearAudioCache(): Promise<number> {
   return invoke<number>("clear_audio_cache");
+}
+
+/**
+ * Empty the cover art, keeping analysis, playlists and settings.
+ *
+ * Returns the bytes freed. Sibling to `clearAudioCache` and not the same
+ * bargain: audio comes back the next time a track is played, artwork comes
+ * back when the library is analysed again. Say so wherever this is offered
+ * (AUD-12).
+ */
+export function clearCoverArt(): Promise<number> {
+  return invoke<number>("clear_cover_art");
 }

@@ -74,6 +74,25 @@ pub fn clear_audio_cache(state: State<'_, Shared>) -> Result<u64> {
     Ok(freed)
 }
 
+/// Empty the cover art, keeping everything else.
+///
+/// Sibling to [`clear_audio_cache`] and not the same bargain, which the caller
+/// has to say out loud. Audio comes back the next time somebody plays a track.
+/// Artwork comes back when the library is analysed again — it was read out of
+/// each file's own tags, and nothing re-reads a tag on demand, so on a library
+/// living on a server this is bytes that only a full pass restores.
+///
+/// Offered anyway because the alternative on that screen was "delete
+/// everything", and cover art was the second-largest thing in the directory
+/// with no lever of its own (AUD-12).
+#[tauri::command]
+pub fn clear_cover_art(state: State<'_, Shared>) -> Result<u64> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    let freed = app.covers.size();
+    app.covers.clear().map_err(|e| Error(e.to_string()))?;
+    Ok(freed)
+}
+
 /// Drop one track's local copy, keeping its analysis.
 ///
 /// Analysis is small and expensive; the audio is large and cheap to re-fetch.

@@ -1097,6 +1097,34 @@ describe("Your Data", () => {
     expect(await screen.findByText(/still held/i)).toBeInTheDocument();
   });
 
+  /*
+   * Cover art (AUD-12). The directory is bounded now, but generously, so the
+   * deliberate lever still has to exist and still has to say what it costs —
+   * which is not what emptying the audio cache costs.
+   */
+  it("clears the artwork and says what getting it back takes", async () => {
+    useBackend({ coverBytes: 149_000_000 });
+    const user = userEvent.setup();
+    render(<YourData />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /clear artwork/i }),
+    );
+
+    // The sentence is the point. "Freed 149 MB" alone would read like the
+    // audio one, and the two do not come back the same way.
+    expect(await screen.findByText(/analysed again/i)).toBeInTheDocument();
+  });
+
+  it("offers nothing to clear when no artwork is stored", async () => {
+    useBackend({ coverBytes: 0 });
+    render(<YourData />);
+
+    expect(
+      await screen.findByRole("button", { name: /clear artwork/i }),
+    ).toBeDisabled();
+  });
+
   it("deletes everything and confirms nothing is left", async () => {
     const user = userEvent.setup();
     useBackend();

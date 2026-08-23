@@ -9,6 +9,29 @@
 //! So artwork moved out. `tags.json` holds text, and a cover is a file named by
 //! a hash of its href, read only when something is about to draw it.
 //!
+//! ## Bounded, and evicted full-size-first (AUD-12)
+//!
+//! This directory had no ceiling and no way to empty it. At 50k tracks and the
+//! 281 KB median measured on the 563-track library, that is roughly 14 GB,
+//! reported on the Your Data screen with nothing to do about it short of
+//! deleting every scrap of app data.
+//!
+//! It is bounded now, but not the way [`crate::cache`] is bounded, because the
+//! two are not the same kind of thing. Cached *audio* is re-fetchable: evict it
+//! and the worst case is a download the next time somebody plays that track.
+//! A cover is not. It came out of the file's own tags during analysis, and
+//! nothing re-reads those tags on demand — on a WebDAV library that would mean
+//! pulling the whole track back to recover one thumbnail. Evicting a cover
+//! loses the artwork until the next full analysis pass.
+//!
+//! So eviction takes full covers before it takes thumbnails, oldest first, and
+//! only starts on thumbnails if removing every full cover was not enough. A
+//! thumbnail is ~6 KB against a ~281 KB full cover, so the first tier reclaims
+//! about 98% of the bytes while every row, every queue tile and every shelf
+//! still draws its artwork. The full cover is wanted by exactly one view — the
+//! now-playing art — and that one degrades to a thumbnail rather than to a
+//! blank.
+//!
 //! ## Stored as the data URI, not as decoded bytes
 //!
 //! What the webview wants is `data:image/jpeg;base64,...`, so that is what is
@@ -22,15 +45,37 @@ use std::path::{Path, PathBuf};
 /// The cover directory.
 pub struct Covers {
     dir: PathBuf,
+    max_bytes: u64,
 }
 
 impl Covers {
+    /// A cover store bounded at [`MAX_COVER_BYTES`].
     pub fn new(dir: PathBuf) -> Self {
-        Covers { dir }
+        Covers {
+            dir,
+            max_bytes: MAX_COVER_BYTES,
+        }
+    }
+
+    /// A cover store with a different ceiling.
+    ///
+    /// Test-only, and staying that way until something outside asks: the
+    /// ceiling is a constant on purpose ([`MAX_COVER_BYTES`]), so a second
+    /// public constructor taking one would be an invitation to make it a
+    /// setting by the back door.
+    #[cfg(test)]
+    pub fn bounded(dir: PathBuf, max_bytes: u64) -> Self {
+        Covers { dir, max_bytes }
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The ceiling this store evicts down to. Test-only, as above.
+    #[cfg(test)]
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
     }
 
     fn path_for(&self, href: &str) -> PathBuf {
@@ -78,6 +123,95 @@ impl Covers {
             let tmp = thumb.with_extension(format!("{}.tmp", next_attempt()));
             if fs::write(&tmp, &small).is_ok() {
                 let _ = fs::rename(&tmp, &thumb);
+            }
+        }
+
+        // Best-effort, and deliberately not part of the result. The cover this
+        // call was asked to store is written by the time eviction runs; a
+        // directory that could not be tidied is a directory slightly over its
+        // bound, which is not a reason to report that saving artwork failed.
+        let _ = self.evict_to_fit();
+        Ok(())
+    }
+
+    /// Delete covers until the directory fits its bound, full ones first.
+    ///
+    /// Modification time rather than access time, for the reason
+    /// [`crate::cache`] gives at length: `relatime` and `noatime` are common
+    /// enough that atime cannot be trusted, and for a write-once store mtime is
+    /// when it was fetched.
+    ///
+    /// The two tiers are the whole point — see the module docs. Full covers go
+    /// first because they are ~98% of the bytes and the only view that wants
+    /// one degrades to a thumbnail, while a thumbnail is what every row, tile
+    /// and shelf draws.
+    ///
+    /// Private, unlike [`crate::cache::Cache::trim`]. That one is public
+    /// because lowering the audio bound has to reclaim the space immediately;
+    /// this bound is a constant and cannot move, so `put` is the only moment
+    /// the directory can grow and the only moment worth checking.
+    fn evict_to_fit(&self) -> Result<(), std::io::Error> {
+        let mut total = self.size();
+        if total <= self.max_bytes {
+            return Ok(());
+        }
+
+        let mut full: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+        let mut thumbs: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+        for entry in fs::read_dir(&self.dir)?.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // A half-written `.tmp` from another thread's `put` is nobody's to
+            // delete: that thread is about to rename it into place.
+            if name.ends_with(".tmp") {
+                continue;
+            }
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if name.ends_with(".thumb.txt") {
+                thumbs.push((path, meta.len(), modified));
+            } else {
+                full.push((path, meta.len(), modified));
+            }
+        }
+
+        full.sort_by_key(|(_, _, t)| *t);
+        thumbs.sort_by_key(|(_, _, t)| *t);
+
+        for (path, len, _) in full.into_iter().chain(thumbs) {
+            if total <= self.max_bytes {
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(len);
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete every cover and thumbnail, keeping the directory.
+    ///
+    /// The deliberate lever, and the honest one: unlike emptying the audio
+    /// cache, this does not come back on its own. Artwork returns when the
+    /// library is analysed again, and the caller is expected to say so.
+    pub fn clear(&self) -> Result<(), std::io::Error> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            // Never written to, so already empty. Reporting "no such
+            // directory" to somebody who pressed a button to reclaim space
+            // would be a failure that is indistinguishable from success.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in entries.flatten() {
+            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                fs::remove_file(entry.path())?;
             }
         }
         Ok(())
@@ -139,6 +273,22 @@ impl Covers {
             .sum()
     }
 }
+
+/// Ceiling on the cover directory, in bytes.
+///
+/// A constant rather than a setting, which is the opposite of
+/// [`vapor_library::settings::Settings::cache_max_bytes`] and deliberate. That
+/// number decides how much re-fetchable audio a device holds, and lowering it
+/// costs a download. This one decides how much artwork survives, and lowering
+/// it costs artwork that only a full analysis pass brings back — a knob whose
+/// wrong setting quietly loses data is a knob worth not shipping. Emptying the
+/// directory on purpose is a button; grinding it down by accident is not.
+///
+/// 4 GiB against the measured 281 KB median is roughly 14,000 full covers, or
+/// every cover in a library of that size plus its thumbnails. A library large
+/// enough to hit this keeps its thumbnails — every row still draws — and loses
+/// full-size art for the tracks nobody has analysed recently.
+pub const MAX_COVER_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Longest edge of a small-tile thumbnail, in pixels.
 ///
@@ -342,6 +492,104 @@ mod tests {
         let files = fs::read_dir(&dir).unwrap().count();
         assert_eq!(files, 1, "a stray temporary file was left behind");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A cover store with a stated ceiling, in its own directory.
+    fn bounded_covers(max_bytes: u64) -> (Covers, PathBuf) {
+        let (_, dir) = covers();
+        (Covers::bounded(dir.clone(), max_bytes), dir)
+    }
+
+    /// The tier order, which is the whole design (AUD-12).
+    ///
+    /// Asserted by file name rather than by time, deliberately: mtime has
+    /// second granularity on some filesystems, and a test that wrote two
+    /// covers and expected the earlier one to go first would be a test about
+    /// the clock.
+    #[test]
+    fn eviction_takes_the_full_cover_and_leaves_the_thumbnail() {
+        let cover = a_big_cover();
+        let thumb_size = shrink(&cover).expect("a shrinkable cover").len() as u64;
+        // Room for the thumbnail and nothing like enough for the cover.
+        let (c, dir) = bounded_covers(thumb_size + 64);
+
+        c.put("/music/a.mp3", &cover).unwrap();
+
+        assert!(
+            c.size() <= c.max_bytes(),
+            "still over the bound after a write: {} > {}",
+            c.size(),
+            c.max_bytes()
+        );
+        assert!(
+            c.get("/music/a.mp3").is_none(),
+            "the full cover should have been the first thing to go"
+        );
+        // And the row can still draw. `thumb` falls back to deriving from the
+        // full cover, so this passing by accident would need the full cover to
+        // still be there — which the assertion above has just ruled out.
+        assert!(
+            c.thumb("/music/a.mp3").is_some(),
+            "the thumbnail should have survived the full cover"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn eviction_reaches_thumbnails_when_dropping_the_covers_was_not_enough() {
+        let cover = a_big_cover();
+        let (c, dir) = bounded_covers(16);
+
+        c.put("/music/a.mp3", &cover).unwrap();
+
+        assert!(c.size() <= 16, "held {} against a bound of 16", c.size());
+        assert!(c.get("/music/a.mp3").is_none());
+        assert!(
+            c.thumb("/music/a.mp3").is_none(),
+            "nothing to derive from and nothing stored"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A bound big enough for everything evicts nothing — the normal case, and
+    /// the one a two-tier eviction could most easily get wrong by running when
+    /// it should not.
+    #[test]
+    fn a_store_inside_its_bound_is_left_alone() {
+        let cover = a_big_cover();
+        let (c, dir) = bounded_covers(u64::MAX);
+
+        c.put("/music/a.mp3", &cover).unwrap();
+
+        assert_eq!(c.get("/music/a.mp3").as_deref(), Some(cover.as_str()));
+        assert!(c.thumb("/music/a.mp3").is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn clearing_removes_the_covers_and_the_thumbnails() {
+        let (c, dir) = covers();
+        c.put("/music/a.mp3", &a_big_cover()).unwrap();
+        c.put("/music/b.mp3", "not an image").unwrap();
+        assert!(c.size() > 0);
+
+        c.clear().unwrap();
+
+        assert_eq!(c.size(), 0);
+        assert!(c.get("/music/a.mp3").is_none());
+        assert!(c.thumb("/music/a.mp3").is_none());
+        // The directory itself stays, so the next `put` does not have to
+        // recreate it and nothing that holds the path is left dangling.
+        assert!(dir.exists(), "the directory should outlive its contents");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Pressing the button on an install that has never stored a cover.
+    #[test]
+    fn clearing_a_store_that_was_never_written_is_not_a_failure() {
+        let (c, dir) = covers();
+        assert!(!dir.exists());
+        c.clear().expect("an empty store clears without complaint");
     }
 
     #[test]
