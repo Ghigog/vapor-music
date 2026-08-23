@@ -125,7 +125,7 @@ several features at once.
 
 | Seam | Rule |
 |------|------|
-| `src-tauri/src/lib.rs` | Over 10,000 lines and ~100 commands behind one mutex — the only door to the backend. **One session in the backend at a time** until it is split into `commands/<domain>.rs`. |
+| `src-tauri/src/lib.rs` | The split is done (AUD-15, 2026-08-23): no `#[tauri::command]` is left in it and all 100 live in `commands/<domain>.rs`. What has not changed is why the rule exists — 9,170 lines, one `AppState`, one mutex, still the only door to the backend. **One session in the backend at a time** until Dylan says otherwise; the condition the old rule named is met, the reason under it is not. |
 | `vapor-app/src/lib/generated/**` | Generated from Rust by `ts-rs`. Never hand-edit: the shell lane regenerates, frontend lanes read. `npm run types:check` already fails on drift — this seam is solved, and is the template for the others. |
 | `vapor-app/src/lib/core.ts` | Additive only. Add your wrapper; restructuring the file is its own task with no other session live. |
 | `vapor-app/src/app.css`, `tokens.css` | Additive only, append at the end of the token block. Renaming or reorganising a token is its own task. |

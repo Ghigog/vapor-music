@@ -2200,12 +2200,24 @@ Unblocks VDJ-1 and the whole class of drum & bass matching chill hip hop.
 
 Waiting on a button press: it sends artist and title for every track.
 
-### VDJ-5 : the hiccup (open)
+### VDJ-5 : the hiccup (done 2026-08-20, confirmed 2026-08-23)
 
 A small audible glitch in an otherwise much-improved transition, heard once and
 not investigated. Reproduce offline with `bin/render` rather than by ear.
 Candidates: the stretcher re-priming as the post-transition glide crosses unity,
 a decoder stall at the seam, the limiter.
+
+**Closed on the evidence, with one caveat.** Recorded 2026-08-17 naming three
+candidates: the glide crossing unity, a decoder stall at the seam, and the
+limiter. `89b0fb5` on 2026-08-20 — "Ramp the limiter, crossfade the glide" —
+addressed two of the three, and `FINDINGS.md` records the field confirmation:
+same listener, "completely clean", on a beat-matched Bass Swap that drove the
+limiter deeper than anything measured before the fix.
+
+The caveat, because closing it silently would misrepresent what was checked: the
+third candidate, a decoder stall at the seam, was never separately ruled out, and
+confirmation was by ear rather than offline through `bin/render` as this ticket
+asked for. If the hiccup returns, that is the unexamined one.
 
 ---
 
@@ -2755,7 +2767,7 @@ constants get property tests that need no Tauri runtime.
 
 **Waiting for:** Nothing, but it wants the `lib.rs` split further along first.
 
-### AUD-15 : finish the lib.rs split — 39 commands left (open)
+### AUD-15 : finish the lib.rs split — 39 commands left (done 2026-08-23)
 
 62 of 101 moved on 2026-08-22 (`7aa97b5`, `f96f391`), 11,033 lines down to
 9,663. Still in `lib.rs`: library, sync and peers, downloads, data, settings,
@@ -2770,6 +2782,21 @@ the body to open, and a blind rewrite of a handler entry also matches
 struct-field shorthand in `AppState { … }`.
 
 **Waiting for:** Nothing. Mechanical, and each domain is independently green.
+
+**Closed:** 34 commands moved into `commands/{library,lookup,sync,downloads,data,settings}.rs`,
+and `lib.rs` went 10,385 → 9,170 lines with no `#[tauri::command]` left in it —
+the five remaining matches are doc comments explaining why a command cannot be
+integration-tested, which is also where this ticket's "39" came from.
+
+The move surfaced a second `generate_handler!` in `seam.rs` naming `settings`
+bare, which broke the moment the function left `lib.rs` and only under
+`--all-targets`.
+
+**`CLAUDE.md`'s seam rule is deliberately unchanged.** Its condition — "until it
+is split into `commands/<domain>.rs`" — is met, but the reason underneath it is
+not: `lib.rs` is still 9,170 lines and every command still goes through one
+mutex on one `AppState`. Whether two sessions may now share the backend is
+Dylan's call, not the line count's.
 
 ### AUD-16 : no privacy policy, EULA or support route (open)
 
