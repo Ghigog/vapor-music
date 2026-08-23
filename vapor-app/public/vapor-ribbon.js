@@ -152,10 +152,32 @@
    * change its bounding box and cannot make the logo breathe in size.
    */
 
-  /** Turn rate with no brightness and no beat, in rad/s. */
+  /** Turn rate with nothing playing, in rad/s. */
   const TWIST_BASE = 0.55;
-  /** Extra turn rate at full brightness, in rad/s. */
-  const TWIST_BRIGHT = 0.90;
+  /**
+   * Extra turn rate at full bass, in rad/s.
+   *
+   * Bass rather than brightness, which is what this used to be. A ribbon whose
+   * speed came off the treble sped up on hi-hats and ignored the kick, which is
+   * the opposite of how the music feels — and left tempo affecting nothing at
+   * all, since the beat only ever contributed a decaying kick whose mean is
+   * independent of period. 60 and 180 BPM produced the same average speed.
+   *
+   * There is no separate bass signal to publish: `brightness` is the *high*
+   * fraction of block energy, so `1 - brightness` is the low fraction, and
+   * multiplying by `level` gives the low-band energy. Both already arrive.
+   */
+  const TWIST_BASS = 1.10;
+  /**
+   * How much the tempo raises the resting rate, in rad/s per beat-per-second.
+   *
+   * The floor, not the reaction. A drum and bass record idles faster than a
+   * ballad and still lunges on the kick; without this the two are only
+   * distinguishable while something is actually hitting.
+   */
+  const TWIST_TEMPO = 0.16;
+  /** How far brightness shifts the hue, in degrees. */
+  const BRIGHT_HUE = 26;
   /**
    * Peak extra turn rate on the beat itself, in rad/s.
    *
@@ -474,7 +496,25 @@
          * cannot.
          */
         const bright = clamp(this._num('brightness', 0), 0, 1);
-        twistRate = TWIST_BASE + TWIST_BRIGHT * bright + TWIST_BEAT * this._beatPulse(time);
+        // `e` is the smoothed `energy` attribute, and `energy` is what the
+        // level is passed as — there is no separate `level` attribute, and
+        // reading one would have been a silent zero.
+        const loud = e;
+        // Low-band energy: how much of what is playing is bass, times how much
+        // is playing at all. The fraction alone would read 1.0 through a quiet
+        // sub-only passage and drive the ribbon as hard as a drop.
+        const bass = loud * (1 - bright);
+        // Beats per second from the tracked grid, so the resting rate belongs
+        // to the record rather than to whatever is hitting right now. Zero
+        // until a track is analysed, which leaves TWIST_BASE alone.
+        const period = this._num('beat-period', 0);
+        const bps = period > 0 ? 1 / period : 0;
+
+        twistRate =
+          TWIST_BASE +
+          TWIST_TEMPO * bps +
+          TWIST_BASS * bass +
+          TWIST_BEAT * this._beatPulse(time);
         wanderRate = 0.55; zphaseRate = 0.44; travelRate = 0;
         Object.assign(shape, {
           // A little life left in the envelope, well under what it was: the
@@ -485,7 +525,13 @@
           turns: this._num('turns', 1.5) + TURNS_LEVEL * e,
           // Where the set is along its curve, not a decorative wobble. Absent
           // (`set-energy` unset, or DJ mode off) this stays on the brand hue.
-          hueShift: hue + SET_HUE * (clamp(this._num('set-energy', 0.5), 0, 1) - 0.5) * 2,
+          // Brightness is a timbre, so it belongs on the timbre channel. A
+          // cymbal-heavy passage reads cooler without competing for motion,
+          // which is what having it on the rate did.
+          hueShift:
+            hue +
+            SET_HUE * (clamp(this._num('set-energy', 0.5), 0, 1) - 0.5) * 2 +
+            BRIGHT_HUE * (bright - 0.5) * 2,
         });
       } else if (state === 'blending') {
         twistRate = 1.15; wanderRate = 0.9; zphaseRate = 0.7; travelRate = 0.45;

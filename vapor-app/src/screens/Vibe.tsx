@@ -260,9 +260,14 @@ export function Vibe({
             // and swirls through a blend, both of which are real states.
             state={planning ? "thinking" : mixing ? "blending" : "playing"}
             energy={playback?.level ?? 0}
-            // And the record, not just the engine. Loudness winds turns into
-            // the ribbon, brightness sets how fast it turns, the beat kicks it,
-            // and the hue says how far along the curve the set has got.
+            // And the record, not just the engine. Each signal owns one
+            // channel: the bass sets how fast the ribbon turns, the tempo sets
+            // how fast it turns at rest, loudness winds turns into it, and
+            // brightness tints it alongside the set's position on its curve.
+            //
+            // There is no bass attribute. Brightness is the *high* fraction of
+            // the block's energy, so the low fraction is its complement, and
+            // the ribbon multiplies that by the level it already has.
             brightness={playback?.brightness}
             beatPeriod={beat?.period}
             beatAt={beat?.at}
