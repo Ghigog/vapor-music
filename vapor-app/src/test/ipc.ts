@@ -706,6 +706,17 @@ export class FakeBackend {
       case "local_folders":
         return this.settings.folders;
 
+      // The native folder picker, which `@tauri-apps/plugin-dialog` reaches
+      // through the same IPC as everything else. A canned path, because a fake
+      // cannot open a real picker and the screen's behaviour is what is under
+      // test: what it does with a chosen folder, not how the folder was chosen.
+      //
+      // The monkey found this one. It clicks "Add a folder" like anything else
+      // on screen, and an unhandled command throws — which is exactly what the
+      // monkey is for.
+      case "plugin:dialog|open":
+        return "/Users/someone/Music";
+
       case "add_local_folder": {
         const path = String(a.path ?? "").trim();
         // Already configured is a no-op returning the list, matching the
