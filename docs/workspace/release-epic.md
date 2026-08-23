@@ -28,7 +28,7 @@ already done.
 | **AUD-20** supply chain | **done** — 23 actions SHA-pinned, Dependabot, `cargo deny` gate in CI | — |
 | **AUD-19** Windows CI | **done** — all eight jobs green, NSIS installer builds | — |
 | `release.yml` dead pins | **done** — two of five pinned SHAs did not exist upstream and would have failed on the first tag push | — |
-| **AUD-16** privacy / EULA / support | in progress | a contact address, and a lawyer before anything is sold |
+| **AUD-16** privacy / EULA / support | **partly done** — `PRIVACY.md` and `SUPPORT.md` written from the code, `docs/EULA-NOTES.md` states the gap without pretending to close it | a contact address, and a lawyer before anything is sold |
 | **AUD-18** Deezer terms | open | reading Deezer's current API terms, then registering or moving to MusicBrainz + Cover Art Archive |
 | **AUD-3** what a supporter gets | open | Dylan to pick. Recommendation recorded 2026-08-23: a supporter credit in About, opt-in, and nothing contingent on payment |
 | **AUD-23** the front door | open | Dylan, and something worth pointing at |
@@ -59,8 +59,35 @@ already done.
    volume that an analysis pass over a whole library makes substantial.
 3. **A contact address** for the support route. There is no telemetry and no
    crash reporting, both deliberate, so a person describing a fault is the only
-   channel that exists.
+   channel that exists. `SUPPORT.md` is written and its first line is a
+   placeholder waiting on this. `docs/EULA-NOTES.md` wants a jurisdiction and a
+   legal entity too.
 4. **Whether v1 is worth cutting yet.**
+
+## Found on the way, and not in any ticket
+
+**The updater is a third network call nobody had counted.** `docs/RELEASE.md`
+§3 says the app talks to two strangers, both off by default. There are three,
+and the third is on by default with no switch: every desktop launch fetches
+`releases/latest/download/latest.json` from GitHub and, if a signed newer
+release exists, downloads and installs it silently. Verified at `lib.rs:6246`,
+and no `updater_enabled` setting exists anywhere. That is defensible — it is
+how the app stays patched — but it belongs in the privacy document, which it
+now is, and `RELEASE.md` §3 is wrong until someone corrects it.
+
+**A doc comment claims a privacy guarantee the code does not make.**
+`lib.rs:711` says the beacon "only runs on private addresses
+([`peers::is_local`])". `is_local` is called in exactly two places, both in
+`commands/sync.rs`, and both gate *outbound* pair and sync connections. The
+beacon at `peers.rs:450` broadcasts unconditionally on whatever network the
+device has joined — which is the case the comment was reassuring the reader
+about. The behaviour is fine and documented honestly in `PRIVACY.md`; the
+comment is what is wrong.
+
+**`data_breakdown` itemises 8 of the ~17 things stored.** `plays.json` and
+`skips.json` — what you played and what you skipped, which is how the DJ learns
+— are among the ones it does not show, so the Your Data screen understates
+what is kept.
 
 ## The measurement that is missing
 
