@@ -2774,7 +2774,7 @@ groups are per-device.
 
 **Closed:** `groups` and `Tombstones::groups` added to `sync::Shared`, merged by the same `keep_earliest` as playlists and folders. `SHARED_VERSION` 3 → 4; a version-3 build refuses the document rather than writing back one in which every group on every device has been deleted. Five tests on the cases that lose data.
 
-### AUD-12 : the cover cache has no ceiling (open)
+### AUD-12 : the cover cache has no ceiling (done 2026-08-23)
 
 `covers.rs` has `get`, `put`, `thumb` and `size` — and no `max_bytes`, no
 eviction, no `clear`. The audio cache beside it has a full LRU and three
@@ -2785,6 +2785,35 @@ At 50k tracks that is multiple GB with no lever short of "delete all data".
 
 **Waiting for:** A choice — give `Covers` the same LRU as `Cache`, or stop
 persisting full-size covers and keep thumbs plus a re-derive path.
+
+**Closed:** Neither, quite. The second option is not available at the price it
+sounds like: a cover comes out of the file's own tags during analysis and
+nothing re-reads a tag on demand, so on a WebDAV library "re-derive" means
+pulling the whole track back to recover one thumbnail. And the first would
+treat covers like cached audio, which comes back on its own.
+
+So: a 4 GiB ceiling, evicted **full covers first, thumbnails only if that was
+not enough**, oldest first within each tier. A thumbnail is ~6 KB against a
+~281 KB cover, so the first tier reclaims about 98% of the bytes while every
+row, queue tile and shelf still draws — the full cover is wanted by one view,
+the now-playing art, and it degrades to a thumbnail rather than to a blank.
+
+The ceiling is a constant, not a setting, and that is the opposite of
+`cache_max_bytes` on purpose: lowering the audio bound costs a download,
+lowering this one costs artwork that only a full analysis pass brings back.
+`clear_cover_art` is the deliberate lever, on Your Data beside "Empty cache",
+and it says the different thing after it — "Artwork comes back when the library
+is analysed again."
+
+Seven Rust tests and two screen tests. The fake now models cover bytes with an
+effect, so a screen claiming the artwork is gone can be contradicted.
+
+Found while landing it: `argument_names_agree_on_both_sides` in
+`tests/ipc_contract.rs` skipped any parameter whose type *contained* `Window`,
+so AUD-13's `window: Option<RowWindow>` was dropped rather than checked. Fixed
+in `e9a03d5`. It had been hidden because `cargo test` stops at the first failing
+binary and `docs_state_claims` had been red since `6f13af3` — four of the nine
+binaries were not running at all.
 
 ### AUD-13 : library_view returns the whole library, per keystroke (done 2026-08-23)
 
