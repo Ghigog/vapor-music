@@ -32,6 +32,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { Settings } from "./generated/Settings";
 import type { Appearance } from "./theme";
 import type { RemoteConfig } from "./generated/RemoteConfig";
+import type { LocalFolder } from "./generated/LocalFolder";
+export type { LocalFolder };
 import type { DownloadProgress } from "./generated/DownloadProgress";
 import type { IdentifyProgress } from "./generated/IdentifyProgress";
 import type { Source } from "./generated/Source";
@@ -899,9 +901,41 @@ export function saveWebdavPassword(
   return invoke<void>("save_webdav_password", { username, password });
 }
 
-/** Walk the server and rebuild the index. Minutes on a large library. */
+/**
+ * Walk every configured source and rebuild the index.
+ *
+ * Folders on this device and the server, merged. `ScanReport.problems` names
+ * any source that failed — one unreachable server is a partial library and a
+ * message, not a failed scan, because the music on this laptop is still here.
+ */
 export function scanLibrary(): Promise<ScanReport> {
   return invoke<ScanReport>("scan_library");
+}
+
+/**
+ * Read music from a folder on this device, alongside anything else configured.
+ *
+ * The path comes from the native picker. The backend checks it is a readable
+ * directory before storing it, and adding one already configured is a no-op —
+ * so a double click is not an error. Returns the folders as stored.
+ *
+ * Nothing is read here: run {@link scanLibrary} next.
+ */
+export function addLocalFolder(path: string): Promise<LocalFolder[]> {
+  return invoke<LocalFolder[]>("add_local_folder", { path });
+}
+
+/**
+ * Stop reading a folder. The files are untouched — this is the library
+ * forgetting where to look, and the tracks leave at the next scan.
+ */
+export function removeLocalFolder(id: string): Promise<LocalFolder[]> {
+  return invoke<LocalFolder[]>("remove_local_folder", { id });
+}
+
+/** The folders on this device the library reads from. */
+export function localFolders(): Promise<LocalFolder[]> {
+  return invoke<LocalFolder[]>("local_folders");
 }
 
 /**
