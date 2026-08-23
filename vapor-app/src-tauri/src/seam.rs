@@ -116,6 +116,25 @@ fn seam() -> Seam {
     (app, webview, dir)
 }
 
+/// The origin a real webview invokes from, which is not the same string on every
+/// platform.
+///
+/// Tauri decides whether a request is `ExecutionContext::Local` — the context
+/// the ACL above grants — by comparing the request URL against the protocol URL
+/// for the platform. On Windows and Android wry cannot register a `tauri://`
+/// scheme, so the webview is served from `http://tauri.localhost` instead; on
+/// macOS, Linux and iOS it really is `tauri://localhost`.
+///
+/// Hard-coded to the Unix spelling, every seam test failed on Windows with
+/// "not allowed on window \"main\" … allowed on: [windows: \"*\", URL: local]" —
+/// the command was allowed, the request just did not count as local. Nobody saw
+/// it for as long as it was there, because the test binary could not load on
+/// Windows at all and these five never ran.
+#[cfg(any(windows, target_os = "android"))]
+const LOCAL_URL: &str = "http://tauri.localhost";
+#[cfg(not(any(windows, target_os = "android")))]
+const LOCAL_URL: &str = "tauri://localhost";
+
 /// Invoke a command and hand back the JSON the webview would have received.
 fn call(
     webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
@@ -128,7 +147,7 @@ fn call(
             cmd: cmd.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().expect("url"),
+            url: LOCAL_URL.parse().expect("url"),
             body: tauri::ipc::InvokeBody::Json(args),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
