@@ -215,24 +215,40 @@ jobs:
       # execution since the image moved to 20260818.207 is also the first
       # failure. No `windows-*` crate changed version in that range.
       #
-      # This lists what the binary imports so the next failure names the DLL
-      # instead of a hex code. It costs nothing when the job is green.
+      # The first version of this step reported nothing missing because it had
+      # compared nothing: its import regex wanted eight hex digits, a word and
+      # a name, and `dumpbin /imports` prints two columns — a variable-width
+      # hint and the name. Every DLL came out with an empty wanted-list, and
+      # the "nothing listed above" line then read as a clean bill of health.
+      # Run 32613443721 printed it having parsed 0 of the binary's imports.
+      #
+      # So this version prints how many names it parsed per module, walks the
+      # whole load graph rather than the first level, and resolves each DLL the
+      # way the loader would — beside the binary first, then System32, then
+      # PATH — because the usual cause of this error is a shadowing copy.
       - name: Which DLL is missing an export
         if: failure() && runner.os == 'Windows'
         shell: pwsh
         working-directory: vapor-app/src-tauri
         run: |
           $ErrorActionPreference = 'Continue'
+          Write-Host "image: $env:ImageOS $env:ImageVersion"
+
           $exe = Get-ChildItem target/debug/deps -Filter 'vapor_app_lib-*.exe' |
                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $exe) { Write-Host 'no test binary found'; exit 0 }
           Write-Host "binary: $($exe.FullName)"
 
-          # Which CRT the loader would actually pick, before anything clever.
-          # STATUS_ENTRYPOINT_NOT_FOUND means a DLL was found and did not export
-          # a name the binary imports, and the usual cause on a CI image is an
-          # older redistributable earlier on PATH than the system one. This is
-          # the cheap question and it was never asked.
+          # A DLL in the binary's own directory beats System32 for every name
+          # the loader resolves after it, so this is the first thing to rule
+          # out. cargo puts build-script output next to the test binary.
+          Write-Host "--- DLLs beside the binary ---"
+          $beside = Get-ChildItem $exe.DirectoryName -Filter '*.dll' -ErrorAction SilentlyContinue
+          if (-not $beside) { Write-Host '  (none)' }
+          $beside | ForEach-Object { Write-Host "  $($_.Name)  ($($_.VersionInfo.FileVersion))" }
+
+          # Which CRT copies exist and where. Kept from the previous version:
+          # it is cheap, and it is how we know System32 holds the newest.
           foreach ($dll in 'vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll') {
             Write-Host "--- $dll ---"
             $found = (where.exe $dll) 2>$null
@@ -242,14 +258,10 @@ jobs:
               Write-Host "  $path  ($v)"
             }
           }
-          Write-Host "--- PATH ---"
-          $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
 
-          # Host x64, explicitly. The previous run sorted by name descending and
-          # picked Hostx86\x86, whose dumpbin needs its own x86 runtime to start
-          # — it produced no parseable output at all, and the step reported
-          # nothing missing because it had parsed no DLLs rather than because
-          # everything resolved.
+          # Host x64, explicitly. An earlier version sorted by name descending
+          # and picked Hostx86\x86, whose dumpbin needs its own x86 runtime to
+          # start — it produced no parseable output at all.
           $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' `
                        -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
                      Where-Object { $_.FullName -like '*Hostx64\x64*' } |
@@ -257,37 +269,109 @@ jobs:
           if (-not $dumpbin) { Write-Host 'no x64 dumpbin on this image'; exit 0 }
           Write-Host "dumpbin: $($dumpbin.FullName)"
 
-          # Proof the parser ran at all, so a silent zero cannot read as a pass.
-          $depends = & $dumpbin.FullName /dependents $exe.FullName
-          Write-Host "--- dependents ---"
-          $depends | Select-String -Pattern '\.dll' | ForEach-Object { Write-Host "  $_" }
-
-          # Every name the binary imports, grouped by the DLL it wants it from.
-          $imports = & $dumpbin.FullName /imports $exe.FullName
-          $wanted = @{}
-          $dll = $null
-          foreach ($line in $imports) {
-            if ($line -match '^\s{4}(\S+\.dll)\s*$') { $dll = $Matches[1]; $wanted[$dll] = @() ; continue }
-            if ($dll -and $line -match '^\s+[0-9A-Fa-f]{8}\s+\w+\s+(\S+)\s*$') { $wanted[$dll] += $Matches[1] }
+          # `/imports` prints "    <name>.dll" for each module, then one line
+          # per imported symbol as "<hex hint> <name>", or "Ordinal <n>" when
+          # the import is by ordinal. The trailing Summary section has lines
+          # that look like symbols, hence the break.
+          function Get-Imports($file) {
+            $map = @{}
+            $dll = $null
+            foreach ($line in (& $dumpbin.FullName /imports $file 2>$null)) {
+              if ($line -match '^\s+Summary\s*$') { break }
+              if ($line -match '^\s{4}(\S+\.dll)\s*$') {
+                $dll = $Matches[1].ToLower()
+                if (-not $map.ContainsKey($dll)) { $map[$dll] = New-Object System.Collections.ArrayList }
+                continue
+              }
+              if (-not $dll) { continue }
+              if ($line -match '^\s+Ordinal\s+(\d+)\s*$') { [void]$map[$dll].Add('#' + $Matches[1]); continue }
+              if ($line -match '^\s+[0-9A-Fa-f]+\s+(\S+)\s*$') { [void]$map[$dll].Add($Matches[1]) }
+            }
+            return $map
           }
 
-          # For each, what the DLL the loader would actually pick exports.
-          foreach ($d in $wanted.Keys | Sort-Object) {
-            $path = (Get-Command $d -ErrorAction SilentlyContinue).Source
-            if (-not $path) { $path = Join-Path $env:SystemRoot "System32\$d" }
-            if (-not (Test-Path $path)) { Write-Host "$d : not found on PATH"; continue }
-            $exports = & $dumpbin.FullName /exports $path |
-                       ForEach-Object { if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]{8}\s+(\S+)') { $Matches[1] } }
-            $missing = $wanted[$d] | Where-Object { $exports -notcontains $_ }
-            if ($missing) {
-              Write-Host ""
-              Write-Host "MISSING from $path :"
-              $missing | ForEach-Object { Write-Host "    $_" }
+          # `/exports` prints "ordinal hint RVA name". Forwarded exports —
+          # every name in the api-ms-win-crt-* stubs is one — leave the RVA
+          # column blank, which is why the RVA group is optional. Requiring it
+          # would report the entire C runtime as missing.
+          function Get-Exports($file) {
+            $set = New-Object System.Collections.Generic.HashSet[string]
+            $inTable = $false
+            foreach ($line in (& $dumpbin.FullName /exports $file 2>$null)) {
+              if (-not $inTable) {
+                if ($line -match '^\s*ordinal\s+hint\s+RVA\s+name') { $inTable = $true }
+                continue
+              }
+              if ($line -match '^\s+Summary\s*$') { break }
+              if ($line -match '^\s+(\d+)\s+[0-9A-Fa-f]+\s+(?:[0-9A-Fa-f]{8}\s+)?(\S+)') {
+                [void]$set.Add($Matches[2]); [void]$set.Add('#' + $Matches[1])
+              } elseif ($line -match '^\s+(\d+)\s+[0-9A-Fa-f]+') {
+                [void]$set.Add('#' + $Matches[1])
+              }
+            }
+            return $set
+          }
+
+          $sys = Join-Path $env:SystemRoot 'System32'
+          function Resolve-Dll($name, $ownerDir) {
+            foreach ($d in @($ownerDir, $sys, $env:SystemRoot)) {
+              $p = Join-Path $d $name
+              if (Test-Path $p) { return (Get-Item $p).FullName }
+            }
+            foreach ($d in ($env:PATH -split ';')) {
+              if (-not $d) { continue }
+              $p = Join-Path $d $name
+              if (Test-Path $p) { return (Get-Item $p).FullName }
+            }
+            return $null
+          }
+
+          $queue = New-Object System.Collections.Queue
+          $queue.Enqueue($exe.FullName)
+          $seen = New-Object System.Collections.Generic.HashSet[string]
+          [void]$seen.Add($exe.FullName.ToLower())
+          $exports = @{}
+          $problems = New-Object System.Collections.ArrayList
+          $unresolved = New-Object System.Collections.ArrayList
+          $walked = 0
+
+          Write-Host "--- walking the load graph ---"
+          while ($queue.Count -gt 0 -and $walked -lt 250) {
+            $mod = $queue.Dequeue()
+            $walked++
+            $dir = Split-Path $mod -Parent
+            $leaf = Split-Path $mod -Leaf
+            $imports = Get-Imports $mod
+            $names = 0
+            foreach ($v in $imports.Values) { $names += $v.Count }
+            Write-Host ("  {0}: {1} DLLs, {2} names" -f $leaf, $imports.Keys.Count, $names)
+            foreach ($d in $imports.Keys) {
+              $path = Resolve-Dll $d $dir
+              if (-not $path) { [void]$unresolved.Add("$d (wanted by $leaf)"); continue }
+              $key = $path.ToLower()
+              if (-not $exports.ContainsKey($key)) { $exports[$key] = Get-Exports $path }
+              $have = $exports[$key]
+              $missing = @($imports[$d] | Where-Object { -not $have.Contains($_) })
+              if ($missing.Count -gt 0) {
+                [void]$problems.Add("MISSING from ${path}: " + ($missing -join ', ') + "  (wanted by $leaf)")
+              }
+              if ($seen.Add($key)) { $queue.Enqueue($path) }
             }
           }
+
           Write-Host ""
-          Write-Host "(nothing listed above means every imported name resolves;"
-          Write-Host " the failure is then a load-time dependency of a dependency)"
+          Write-Host "--- result ---"
+          Write-Host "modules walked: $walked"
+          if ($unresolved.Count -gt 0) {
+            Write-Host "not found on disk (api-ms-* names resolve through the apiset schema, so these are usually fine):"
+            $unresolved | Sort-Object -Unique | ForEach-Object { Write-Host "    $_" }
+          }
+          if ($problems.Count -eq 0) {
+            Write-Host "no missing export anywhere in the walked graph"
+          } else {
+            $problems | ForEach-Object { Write-Host $_ }
+          }
+          exit 0
 
       - name: Clippy
         run: cargo clippy --all-targets
