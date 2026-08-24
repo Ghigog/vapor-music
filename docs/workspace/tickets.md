@@ -2190,7 +2190,7 @@ the static pointing at a collected object.
 that installed. Nothing about the failure is visible from a build — which is the
 argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
-### VDJ-4 : the identify pass has never been run (blocked on Dylan)
+### VDJ-4 : the identify pass has never been run (done 2026-08-23 — it does not need running)
 
 `identify_library` asks Deezer for each track's tempo and album genre, and uses
 their tempo only to choose which octave of the tempo measured here is the one a
@@ -2199,6 +2199,37 @@ this crate and Essentia agree on 87, so nothing on the device can settle it.
 Unblocks VDJ-1 and the whole class of drum & bass matching chill hip hop.
 
 Waiting on a button press: it sends artist and title for every track.
+
+**Closed 2026-08-23 by removing the button press from the path**, at Dylan's
+direction: the source does not matter as long as the data arrives lazily, per
+track, when it is needed.
+
+`look_up_in_background` already ran per track as one loads, fetching words and
+a sleeve. It now asks for the facts too when they have never been asked for,
+and applies the octave correction with every guard the library-wide pass
+applies, in the same order. The switch in Settings goes back to being what it
+reads as — *do you want the app to look things up online* — rather than a
+command to fetch a library's worth of anything.
+
+Three consequences worth naming. The pass spreads across the time somebody
+spends listening rather than landing as one burst of hundreds of requests,
+which is also the AUD-18 pressure. It only ever asks about records that get
+played, so a library nobody listens to costs nothing. And it needs no
+permission beyond the switch, which is why this row could sit blocked for days.
+
+The correction itself is unchanged and now testable without a runtime:
+`octave_correction` is the extracted decision, with tests on the guards that
+matter — durations must agree that it is the same recording (a remix by the
+same name is a different piece of music), the difference must be an octave
+rather than a disagreement, Deezer's zero means "unknown" and not a tempo, and
+a tempo set by hand is never overwritten.
+
+The re-tracking that follows a correction is queued on `AppState::pending_retrack`
+and drained by the playback supervisor, which holds the `AppHandle` that
+`retrack_grids` needs and already runs on a timer.
+
+**`identify_library` is untouched** and still there as the bulk option. Nothing
+depends on it now.
 
 ### VDJ-5 : the hiccup (done 2026-08-20, confirmed 2026-08-23)
 

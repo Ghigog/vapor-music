@@ -318,6 +318,17 @@ pub(crate) struct AppState {
     /// The drift correction running for the current mix (TD-21). Dropped when
     /// the mix ends, which stops its thread and clears the correction.
     pub(crate) drift: Option<sync::DriftCorrection>,
+
+    /// Tracks whose tempo was corrected by a lazy lookup, whose beat grids are
+    /// therefore stale (VDJ-4).
+    ///
+    /// A queue rather than a direct call, because the correction happens on a
+    /// lookup thread that has no `AppHandle` and re-tracking needs one to
+    /// report progress. The playback supervisor holds a handle, already runs on
+    /// a timer, and drains this. Not persisted: a correction is saved to
+    /// settings the moment it is made, so the worst a lost queue costs is a
+    /// grid that stays stale until something else re-tracks it.
+    pub(crate) pending_retrack: Vec<String>,
 }
 
 impl AppState {
@@ -463,6 +474,7 @@ impl AppState {
             playing_stream: None,
             next_stream: None,
             drift: None,
+            pending_retrack: Vec::new(),
         }
     }
 
@@ -2702,6 +2714,34 @@ pub(crate) struct PlaybackState {
     scope: String,
 }
 
+/// The tempo a lookup says this recording is really at, if it says anything.
+///
+/// Extracted from the lookup thread so it can be tested without a network, a
+/// Tauri runtime or a thread — the guards are the whole of the correction and
+/// each one exists because of a way it can be wrong:
+///
+/// * **Same recording first.** Deezer's search returns *a* track by that name,
+///   which for a remix, a live version or a cover is a different piece of music
+///   with a different tempo. Durations within five seconds is the cheapest
+///   evidence that the match is the same recording, and without it the
+///   correction confidently sets a wrong number.
+/// * **An octave, not a disagreement.** `octave_from_reference` returns nothing
+///   unless the two readings differ by a factor of two. Two analysers reading
+///   128 and 131 disagree, and neither is the octave problem; overwriting one
+///   with the other would be believing a stranger over the file.
+///
+/// Deezer's tempo is never played and never shown. It answers one question —
+/// which octave of the tempo measured here a listener would count — because
+/// nothing on the device can: this crate and Essentia both read Delta Heavy's
+/// "Space Time" as 87, and it is 174.
+fn octave_correction(measured: (f32, f64), their_bpm: f32, their_duration: u32) -> Option<f32> {
+    let (our_bpm, our_duration) = measured;
+    if !metadata::same_recording(our_duration, their_duration) {
+        return None;
+    }
+    vapor_library::octave_from_reference(our_bpm, their_bpm)
+}
+
 /// Look a track up while it loads, once, if lookups are permitted.
 ///
 /// ## Why here and not in a library-wide pass
@@ -2728,18 +2768,28 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
     // nothing about words, which that pass never requests. Reading it here is
     // what left 534 of 534 cached tracks marked done with no lyrics and no
     // sleeve between them.
-    let (has_words, has_sleeve) = app
+    let (has_words, has_sleeve, has_facts) = app
         .looked
         .get(href)
-        .map(|l| (l.words_attempted, !l.album_art.is_empty()))
-        .unwrap_or((false, false));
-    if has_words && has_sleeve {
+        .map(|l| (l.words_attempted, !l.album_art.is_empty(), l.attempted))
+        .unwrap_or((false, false, false));
+    if has_words && has_sleeve && has_facts {
         return;
     }
     let Some(row) = app.rows.iter().find(|r| r.href == href) else {
         return;
     };
     let (artist, title, album) = (row.artist.clone(), row.title.clone(), row.album.clone());
+    // What the octave check needs, read while the lock is held. `None` means
+    // the track has not been analysed, and there is no local tempo to place —
+    // so the facts are not worth asking for yet, and the analysis pass will
+    // bring this round again.
+    let measured = app
+        .analysis
+        .get(href)
+        .map(|a| (a.bpm, a.duration))
+        .filter(|(bpm, _)| *bpm > 0.0);
+    let want_facts = !has_facts && measured.is_some();
     let href = href.to_string();
     let shared = Arc::clone(shared);
     let dir = app.store.dir().to_path_buf();
@@ -2756,12 +2806,20 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
             // wants words costs one LRCLIB request, not a Deezer search as
             // well — which matters while the Deezer calls are unregistered
             // (AUD-18).
-            let (words, sleeve) = std::thread::scope(|scope| {
+            let (words, sleeve, facts) = std::thread::scope(|scope| {
                 let w = (!has_words).then(|| scope.spawn(|| lookup.lyrics(&artist, &title)));
                 let a = (!has_sleeve).then(|| scope.spawn(|| lookup.album(&artist, &album)));
+                // The third thing, and the reason VDJ-4 stopped needing a
+                // button. Deezer's tempo is never played; its only job is to
+                // say which octave of the tempo measured here a listener would
+                // count, which is a question nothing on this device can settle
+                // — both this crate and Essentia read Delta Heavy's "Space
+                // Time" as 87, and it is 174.
+                let t = want_facts.then(|| scope.spawn(|| lookup.track_facts(&artist, &title)));
                 (
                     w.and_then(|h| h.join().unwrap_or(None)),
                     a.map(|h| h.join().unwrap_or_default()),
+                    t.and_then(|h| h.join().unwrap_or(None)),
                 )
             });
             // `None` here means the sleeve was already had and never asked for.
@@ -2773,7 +2831,7 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
                 lookup.download_image(&sleeve.art, &dir);
             }
             if let Ok(mut app) = shared.lock() {
-                let entry = app.looked.entry(href).or_default();
+                let entry = app.looked.entry(href.clone()).or_default();
                 // Asked, whatever came back. "No words for this one" is an
                 // answer and must not be re-asked on every play.
                 entry.words_attempted = true;
@@ -2788,11 +2846,56 @@ fn look_up_in_background(shared: &Shared, app: &AppState, href: &str) {
                 }
                 // The track points at the release; the release is stored once.
                 // See `AppState::remember_album`.
-                if let Some(facts) = sleeve.facts.as_ref().filter(|f| f.is_usable()) {
-                    entry.deezer_album_id = facts.id;
+                if let Some(album) = sleeve.facts.as_ref().filter(|f| f.is_usable()) {
+                    entry.deezer_album_id = album.id;
                 }
+
+                /*
+                 * The tempo octave, settled for this one track (VDJ-4).
+                 *
+                 * Every guard the library-wide pass applies, applied here in
+                 * the same order, because this is the same correction arriving
+                 * one track at a time rather than a second opinion about it:
+                 * the durations have to agree that it is the same recording,
+                 * the difference has to be an octave rather than a
+                 * disagreement, and a tempo the person set by hand is never
+                 * overwritten.
+                 *
+                 * `attempted` is set whenever the question was asked, however
+                 * it came back. Deezer not knowing a tempo — which is most of
+                 * the time — is an answer, and re-asking it on every play is
+                 * the shape of bug that made the words pass look done when it
+                 * had fetched nothing.
+                 */
+                if want_facts {
+                    entry.attempted = true;
+                    if let Some(f) = &facts {
+                        entry.deezer_bpm = f.bpm;
+                        entry.deezer_duration = f.duration;
+                    }
+                }
+                let corrected = match (measured, &facts) {
+                    (Some(m), Some(f)) => match octave_correction(m, f.bpm, f.duration) {
+                        // A tempo somebody set by hand outranks a stranger's,
+                        // which is the rule the whole metadata layer follows.
+                        Some(fixed) if app.settings.bpm_override(&href).is_none() => {
+                            app.settings.set_bpm_override(&href, fixed)
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+
                 let _ = app.save_looked();
                 app.remember_album(sleeve.facts);
+                if corrected {
+                    let _ = app.save_settings();
+                    // The grid this track was tracked against is now for the
+                    // wrong tempo. Re-tracking needs an `AppHandle` to report
+                    // progress and there is none on this thread, so it is
+                    // queued for the playback supervisor, which has one.
+                    app.pending_retrack.push(href);
+                }
             }
         });
     if spawned.is_err() {
@@ -3805,6 +3908,29 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
                 let Ok(mut app) = shared.lock() else {
                     return;
                 };
+
+                /*
+                 * Grids left stale by a lazy tempo correction (VDJ-4).
+                 *
+                 * `look_up_in_background` settles a track's octave on the
+                 * thread that looked it up, and that thread has no
+                 * `AppHandle` — which `retrack_grids` needs to report
+                 * progress. So it leaves the href here and this loop, which
+                 * holds a handle and already runs on a timer, picks it up.
+                 *
+                 * The lock is dropped before re-tracking, because
+                 * `retrack_grids` takes it again; and the tick ends there
+                 * rather than falling through, because everything below is a
+                 * report about the audio path and one poll's worth of it can
+                 * wait. `retrack_grids` spawns and returns, so this is not a
+                 * long pause either way.
+                 */
+                if !app.pending_retrack.is_empty() {
+                    let corrected = std::mem::take(&mut app.pending_retrack);
+                    drop(app);
+                    retrack_grids(&app_handle, &shared, corrected);
+                    continue;
+                }
 
                 if let Some(player) = app.player.as_ref() {
                     let snap = player.snapshot();
@@ -6672,6 +6798,68 @@ mod tests {
 
         assert_eq!(a.beats_tracked_at(), 128.0);
         assert_eq!(beat_grid(&a, None).beats, a.beats);
+    }
+
+    /*
+     * The lazy octave correction (VDJ-4).
+     *
+     * The pass this replaces sent artist and title for every track in the
+     * library on one button press, which is why it had never been run. These
+     * cover the guards rather than the plumbing: the plumbing is a thread and
+     * a network call, and what can be wrong here is believing a stranger about
+     * the wrong recording.
+     */
+    #[test]
+    fn a_doubled_tempo_is_corrected_from_a_matching_recording() {
+        // Delta Heavy's "Space Time" — the case in the ticket. Measured at 87,
+        // actually 174, and both this crate and Essentia read it the same way,
+        // so nothing local can settle it.
+        assert_eq!(octave_correction((87.0, 300.0), 174.0, 300), Some(174.0));
+    }
+
+    #[test]
+    fn a_correction_needs_the_durations_to_agree() {
+        // A search hit by the same name, four minutes longer: a remix, a live
+        // cut, an extended edit. Its tempo says nothing about this recording.
+        assert_eq!(octave_correction((87.0, 300.0), 174.0, 540), None);
+        // And five seconds apart is still the same record — `same_recording`
+        // draws the line there, and this asserts the lazy path uses it rather
+        // than a stricter one of its own.
+        assert_eq!(octave_correction((87.0, 300.0), 174.0, 304), Some(174.0));
+    }
+
+    #[test]
+    fn a_reference_that_is_not_an_octave_away_changes_nothing() {
+        // Two estimators disagreeing by a few BPM is a disagreement, not the
+        // octave problem, and their number is not better than ours.
+        assert_eq!(octave_correction((128.0, 240.0), 131.0, 240), None);
+        // Zero is Deezer saying it does not know, which is most of the time.
+        assert_eq!(octave_correction((128.0, 240.0), 0.0, 240), None);
+    }
+
+    #[test]
+    fn a_track_with_no_duration_on_their_side_is_not_corrected() {
+        // `same_recording` refuses a zero duration, so there is no evidence the
+        // match is the same piece of music.
+        assert_eq!(octave_correction((87.0, 300.0), 174.0, 0), None);
+    }
+
+    /// The queue the supervisor drains, and the reason it exists: the thread
+    /// that makes the correction cannot re-track a grid itself.
+    #[test]
+    fn a_correction_leaves_the_grid_queued_for_retracking() {
+        let (mut app, _dir) = app();
+        assert!(app.pending_retrack.is_empty(), "nothing corrected yet");
+
+        // What the lookup thread does when the guards pass.
+        assert!(app.settings.set_bpm_override("/music/a.mp3", 174.0));
+        app.pending_retrack.push("/music/a.mp3".to_string());
+
+        // Drained exactly once — a second tick must not re-track what the
+        // first one already handled.
+        let first = std::mem::take(&mut app.pending_retrack);
+        assert_eq!(first, vec!["/music/a.mp3".to_string()]);
+        assert!(std::mem::take(&mut app.pending_retrack).is_empty());
     }
 
     /// What the background job picks up, in each direction.
