@@ -4,6 +4,10 @@
 other than the owner are closed automatically — see
 [`.github/workflows/no-outside-prs.yml`](.github/workflows/no-outside-prs.yml).
 
+Dependabot is exempt. Its pull requests are version numbers in a manifest and a
+lockfile, which carry no authorship to assign, and dependency updates are
+watched deliberately.
+
 ## Why
 
 The licence terms for outside contributions have not been settled, and this

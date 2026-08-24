@@ -36,10 +36,21 @@ permissions:
 
 jobs:
   close:
-    # The owner's own pull requests are left alone. There is no rule against
-    # using one; the licence problem is specifically about copyright arriving
-    # from somebody else.
-    if: github.event.pull_request.user.login != github.repository_owner
+    # Two exemptions.
+    #
+    # The owner's own pull requests, because there is no rule against using
+    # one — the licence problem is specifically about copyright arriving from
+    # somebody else.
+    #
+    # And Dependabot, which was installed on purpose (AUD-20) and whose pull
+    # requests are version numbers in a manifest and a lockfile. There is no
+    # authorship there to be assigned, and closing them would quietly undo the
+    # dependency watching that the supply-chain work exists to provide. Caught
+    # before this workflow ever ran: thirteen of its pull requests were open at
+    # the time it was written.
+    if: >-
+      github.event.pull_request.user.login != github.repository_owner &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Close it, and say why
