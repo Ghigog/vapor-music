@@ -103,12 +103,20 @@ block in `gen/android/app/build.gradle.kts`. **A lost Android upload key cannot
 be replaced for an app already on Play**, which is the whole reason "where does
 it live" is the question rather than "how do I make one".
 
-*The keypair that already exists is wrong.* On 2026-08-22 a session printed the
-updater private key into a transcript and rotated it. `~/.tauri/` holds a new
-keypair and the old one beside it, suffixed `.COMPROMISED-2026-08-22`.
-**`tauri.conf.json` still carries the old public key**, so the config trusts a
-key whose private half is the compromised file, and a build signed with the new
-key would produce a signature the app refuses. Nothing depends on it until a
+*The keypair that already exists is wrong.* **Closed 2026-08-24 — see below.**
+On 2026-08-22 a session printed the updater private key into a transcript and
+rotated it. `~/.tauri/` holds a new keypair and the old one beside it, suffixed
+`.COMPROMISED-2026-08-22`. **`tauri.conf.json` still carries the old public
+key**, so the config trusts a key whose private half is the compromised file,
+and a build signed with the new key would produce a signature the app refuses.
+
+**What it actually took: one line of config.** The framing above had everyone
+expecting a key ceremony, and the fix was to read the public half off the `.pub`
+file the rotation already wrote and paste it in — `F35ECFB640B295DF` out,
+`E17781A5EB1BC8D6` in. Nothing was generated, and the private key never went
+near a terminal. Worth noticing that "the keypair is wrong" was never true: the
+keypair was fine, the *config* was stale, and eight lines of this epic described
+it as the former. Nothing depends on it until a
 release is signed — but the first signed build fails on it, and the standing
 instruction holds until then: no private key is saved or managed while nothing
 ships, because every handling of it is a chance to leak it. When distribution is
@@ -134,7 +142,7 @@ at all.
 | **AUD-18** Deezer terms | **half done** — every request identified by `User-Agent`, three per-service clocks, four attempts with backoff | Dylan: Deezer or MusicBrainz. The calls are polite either way |
 | **AUD-3** what a supporter gets | **built** — a pin per donation at the bottom of Settings, count written in by hand from Ko-fi | A Ko-fi handle. The card does not render without one |
 | **AUD-23** the front door | **moved to v2.1.0** (2026-08-24) — as onboarding, not marketing. Unchanged in scope; it is simply not what v1 waits on | Nothing |
-| **AUD-21** the updater keypair | pipeline step 1 — **Dylan's, and now on the critical path** | Dylan: generate a fresh pair, public half into `tauri.conf.json`, private half into `TAURI_SIGNING_PRIVATE_KEY` |
+| **AUD-21** the updater keypair | **done 2026-08-24** — `tauri.conf.json` now carries `E17781A5EB1BC8D6`, the public half of the pair rotated on 2026-08-22. No new key was needed; the private half was on disk all along | Dylan: the key file's contents into `TAURI_SIGNING_PRIVATE_KEY`, and a backup |
 | **REL-001** release signing | **wired 2026-08-24** — Android `signingConfigs` in `gen/android/build.gradle.kts`, four secrets read by `release.yml` | Dylan: `keytool -genkeypair`, then the four repository secrets |
 | **AUD-22** first release | **in progress** — `release.yml` now builds four platforms and the version gate accepts an `-rc` | The two key steps above, and nothing else |
 

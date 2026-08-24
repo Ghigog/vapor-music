@@ -170,30 +170,37 @@ manager. Losing it is the fatal kind: the public key is already inside every
 build that has gone out, and only the matching private key can sign an update
 those builds will accept. A new keypair means everyone reinstalls by hand.
 
-**The pair in `tauri.conf.json` is the wrong one, and this blocks the first
-tag.** On 2026-08-22 a session printed the private key into a transcript and
-rotated it; `~/.tauri/` holds the new pair and the old one beside it, suffixed
-`.COMPROMISED-2026-08-22`. `plugins.updater.pubkey` still carries the **old
-public half**. A build signed with the live private key therefore produces a
-signature the shipped app refuses — which presents as a broken updater rather
-than as a wrong key, and cannot be fixed afterwards by shipping an update,
-because the public key is compiled in.
+**Resolved 2026-08-24.** On 2026-08-22 a session printed the private key into a
+transcript and rotated it, leaving the new pair at
+`~/.tauri/vapor-music-updater.key` and the old one beside it suffixed
+`.COMPROMISED-2026-08-22` — but `plugins.updater.pubkey` went on carrying the
+**old public half**, `F35ECFB640B295DF`. A build signed with the live private
+key would have produced a signature the shipped app refuses, which presents as a
+broken updater rather than as a wrong key and cannot be fixed afterwards by
+shipping an update, because the public key is compiled in.
 
-`release.yml`'s `verify` job now fails on exactly this: it compares
-`plugins.updater.pubkey` against the rotated string and refuses to build. What
-closes it, in one sitting and without the private half ever reaching a
-terminal's scrollback:
+No new key was needed — the private half from the rotation was on disk the whole
+time. `plugins.updater.pubkey` is now `E17781A5EB1BC8D6`, read off
+`~/.tauri/vapor-music-updater.key.pub`, and `release.yml`'s `verify` job fails
+if the old string ever comes back.
+
+**A trap worth writing down, because it cost a confused minute.** The `.pub`
+file Tauri writes **already contains base64** — its literal content is the
+string that goes into `plugins.updater.pubkey`. So the obvious command is wrong:
 
 ```bash
-npx tauri signer generate -w ~/.tauri/vapor-music-updater.key
+base64 -i ~/.tauri/vapor-music-updater.key.pub   # WRONG — encodes it twice
+cat ~/.tauri/vapor-music-updater.key.pub         # right — this is the value
 ```
 
-Then paste the **public** half it prints into `plugins.updater.pubkey` in
-`vapor-app/src-tauri/tauri.conf.json`, and put the **contents of the key file**
-into the `TAURI_SIGNING_PRIVATE_KEY` repository secret — copied from the file,
-not echoed. Back the file up as a password-manager attachment in the same
-sitting: the public half is compiled into every copy handed out, so a lost
-private half means everyone reinstalls by hand.
+Double-encoded, it is still valid base64 and the config still parses. It fails
+at signature check, at runtime, on a machine belonging to somebody else.
+
+What is still needed to release: the **contents of the key file** in the
+`TAURI_SIGNING_PRIVATE_KEY` repository secret — copied from the file, not
+echoed — and the file backed up as a password-manager attachment. The public
+half is compiled into every copy handed out, so a lost private half means
+everyone reinstalls by hand.
 
 To release, CI needs the private key as a repository secret. The two names are
 Tauri's own, read by `tauri build` without further configuration:
