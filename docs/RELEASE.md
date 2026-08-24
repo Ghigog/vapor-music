@@ -43,6 +43,19 @@ Needed, in order:
    can break audio device access and dynamic loading, and finding that out
    during a release is the wrong time.
 
+`bundle.macOS.signingIdentity` is `"Vapor Dev"` — a self-signed certificate in
+Dylan's login keychain, set 2026-08-23 so a local release build stops being a
+new identity every time. **Both CI workflows override it with
+`APPLE_SIGNING_IDENTITY: "-"`**, codesign's own spelling of ad-hoc, because that
+certificate exists on one machine. `app.yml` was given the override when the
+identity was pinned; `release.yml` was not, and got it on 2026-08-24 — the
+workflow that had run proved the override, and the workflow that had never run
+would have died at the bundle step on the first tag.
+
+None of that lets anyone else open the app. That is the paid half, above, and it
+is still open: the first builds handed out need right-click → Open, once, per
+machine.
+
 ### Android
 
 There is no keystore, so builds go out `--debug`. Two consequences:
@@ -54,9 +67,9 @@ There is no keystore, so builds go out `--debug`. Two consequences:
   wireless ADB in 58 s, so this is survivable for testing and absurd for
   shipping.
 
-Needed:
+**Wired 2026-08-24. Two of the three are done; the first is still Dylan's.**
 
-1. A keystore. **Dylan generates this, because it sets a password.**
+1. A keystore. **Dylan generates this, because it sets a password.** Still open.
 
    ```bash
    mkdir -p ~/.keys && keytool -genkeypair -v \
@@ -65,8 +78,64 @@ Needed:
    ```
 
 2. `gen/android/keystore.properties` holding the path and passwords, **listed in
-   `.gitignore` before it is created**, not after.
-3. A `signingConfigs` block in `gen/android/app/build.gradle.kts` reading it.
+   `.gitignore` before it is created**, not after. Done — the `.gitignore` entry
+   was already there, and the file is now written by CI into the checkout and
+   deleted again in the same job, so it never exists on a machine that is not
+   building.
+3. A `signingConfigs` block reading it. Done — **in
+   `gen/android/build.gradle.kts`, the root file, not `app/`**. The Tauri CLI
+   rewrites `app/build.gradle.kts` from its template on every
+   `tauri android build` (AND-3), so a signing block there would survive until
+   the next build and then vanish silently, producing an unsigned APK from a
+   green build. The root file is the one the CLI leaves alone.
+
+   It reads `keystore.properties` **only if the file exists**, and configures no
+   signing when it does not. A release build on a checkout without the file
+   fails saying so, which is the honest failure; a hardcoded fallback is how a
+   key nobody chose ends up on an APK somebody installed.
+
+### The four secrets CI needs
+
+Once the keystore exists, `release.yml` wants these on the repository. The
+`verify` job checks two of them are set before anything builds, because the
+Android job is forty minutes of Rust away from the step that would otherwise
+notice.
+
+```bash
+base64 -i ~/.keys/vapor-upload.jks | pbcopy   # -> ANDROID_KEYSTORE_BASE64
+```
+
+| Secret | What it is |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | the `.jks` itself, base64 — a GitHub secret is a string and a keystore is binary |
+| `ANDROID_KEYSTORE_PASSWORD` | the store password set by `keytool` |
+| `ANDROID_KEY_ALIAS` | `vapor`, per the command above |
+| `ANDROID_KEY_PASSWORD` | the key password; the same as the store password unless `keytool` was told otherwise |
+
+The job writes the keystore to `$RUNNER_TEMP` rather than into the checkout, so
+no later step can sweep it into an artefact, and deletes both it and
+`keystore.properties` before anything is uploaded anywhere.
+
+### What the release APK actually is
+
+**arm64 only, and release rather than debug.** Every Android build before
+2026-08-24 was `--debug`: 591 MB of unstripped Rust debuginfo, installing as
+`com.dylangrowcoot.vapormusic.debug` beside a real build rather than over it.
+Neither is something to hand to somebody else.
+
+armv7 and x86_64 are not built. Every phone that would run this shipped with an
+arm64 userspace; armv7 roughly doubles the Rust half of the job for devices
+nobody testing this has, and x86_64 is emulators. Adding one is one word in the
+`--target` list in `release.yml`.
+
+**The release build type minifies, and nothing has ever exercised that.** R8
+does not run on a debug build, so the first signed APK is also the first time
+anything here has been shrunk and renamed. `MainActivity` and `PlaybackService`
+are reached from Rust over JNI by string, and R8 keeps a class named in the
+manifest while remaining free to rename its methods — which is AND-4 again,
+where the app starts, renders, and has no sound. `app/proguard-rules.pro` now
+keeps `com.dylangrowcoot.vapormusic.**` whole and every `native` method name.
+**This is reasoned, not measured**: the first APK is the measurement.
 
 ### Where the Android key lives, and how bad losing it is
 
@@ -101,6 +170,31 @@ manager. Losing it is the fatal kind: the public key is already inside every
 build that has gone out, and only the matching private key can sign an update
 those builds will accept. A new keypair means everyone reinstalls by hand.
 
+**The pair in `tauri.conf.json` is the wrong one, and this blocks the first
+tag.** On 2026-08-22 a session printed the private key into a transcript and
+rotated it; `~/.tauri/` holds the new pair and the old one beside it, suffixed
+`.COMPROMISED-2026-08-22`. `plugins.updater.pubkey` still carries the **old
+public half**. A build signed with the live private key therefore produces a
+signature the shipped app refuses — which presents as a broken updater rather
+than as a wrong key, and cannot be fixed afterwards by shipping an update,
+because the public key is compiled in.
+
+`release.yml`'s `verify` job now fails on exactly this: it compares
+`plugins.updater.pubkey` against the rotated string and refuses to build. What
+closes it, in one sitting and without the private half ever reaching a
+terminal's scrollback:
+
+```bash
+npx tauri signer generate -w ~/.tauri/vapor-music-updater.key
+```
+
+Then paste the **public** half it prints into `plugins.updater.pubkey` in
+`vapor-app/src-tauri/tauri.conf.json`, and put the **contents of the key file**
+into the `TAURI_SIGNING_PRIVATE_KEY` repository secret — copied from the file,
+not echoed. Back the file up as a password-manager attachment in the same
+sitting: the public half is compiled into every copy handed out, so a lost
+private half means everyone reinstalls by hand.
+
 To release, CI needs the private key as a repository secret. The two names are
 Tauri's own, read by `tauri build` without further configuration:
 
@@ -116,10 +210,21 @@ published at the endpoint below, next to the bundles.
 
 `.github/workflows/release.yml` generates and publishes it, via
 `tauri-action`'s `includeUpdaterJson`. It runs on a `v*.*.*` tag: `verify`
-checks that the three version declarations agree with the tag and that the
-signing secret is set, three platforms build into one draft release, then
-`finalise` attaches `SHA256SUMS`, publishes the draft, and fetches the endpoint
-to report what the updater will now answer. The draft is deliberate — a release
+checks that the three version declarations agree with the tag, that the pubkey
+is not the rotated one, and that both signing secrets are set; **four** targets
+build into one draft release — macOS universal, Linux x86_64 and Windows x86_64
+from the `tauri-action` matrix, and an Android arm64 APK from a job of its own
+— then `finalise` attaches `SHA256SUMS`, publishes the draft, and fetches the
+endpoint to report what the updater will now answer.
+
+Android is a separate job rather than a matrix row because `tauri-action` wraps
+`tauri build`, and the mobile bundle is a different CLI verb with a Gradle
+project under it. It waits for the desktop matrix so that the draft it uploads
+into already exists.
+
+**The version gate accepts a prerelease suffix** — `v2.0.0-rc.1` is checked
+against `2.0.0` and has to agree on the number. The three files carry a
+version, not a channel, and the first tag is meant to be an `-rc`. The draft is deliberate — a release
 that goes public mid-matrix offers a download that does not exist yet for
 somebody's machine.
 
@@ -239,7 +344,7 @@ Recorded so nobody assumes coverage that does not exist.
 |---|---|
 | **macOS desktop** | The only genuinely exercised target. |
 | **Android** | Compiles, installs, launches. Barely used. Audio path unvalidated on device — TD-24. |
-| **iOS** | Never built, never run. `cpal` unvalidated there. TD-24. |
+| **iOS** | Never built, never run. `cpal` unvalidated there. TD-24. **Not in the first release** — decided 2026-08-24. There is no `gen/ios`, and the blocker is not the code: no route exists to put an iOS build on somebody else's phone without a paid Apple Developer account. Ad-hoc provisioning needs each device's UDID, TestFlight needs the same membership, and an unsigned `.ipa` needs every recipient to re-sign it with their own Apple ID every seven days. |
 | **Sync between devices** | Exercised only in-process. Nothing has crossed a real network. TD-55. |
 
 The sync gap has a specific shape worth restating: both sides are compiled from
@@ -283,11 +388,14 @@ Decisions, not oversights. Each is recorded where it was made.
   underneath anyone mid-track. There is no update UI, which is deliberate: a
   check that only reported to a screen nobody has built would never install
   anything. Every failure is logged with an `updater:` prefix and swallowed.
-* **The release half has not been built.** No workflow builds on a tag, so
-  nothing produces the bundles, the `.sig` files, or the `latest.json` the app
-  goes looking for. The updater is inert until that exists — which is fine, and
-  is why the config went in first: the key and the endpoint are compiled into
-  the binary and cannot be added to a build that has already been handed out.
+* **The release half is built and has never run.** `release.yml` produces the
+  bundles, the `.sig` files and the `latest.json` the app goes looking for, on a
+  `v*.*.*` tag. Zero runs as of 2026-08-24 — this bullet said "has not been
+  built" until the workflow landed on 2026-08-22 and was still saying it two
+  days later, which is the shape of staleness worth watching for in this
+  document. The updater stays inert until the first tag publishes, which is
+  fine, and is why the config went in first: the key and the endpoint are
+  compiled into the binary and cannot be added to a build already handed out.
 * **`[profile.dev.package."*"] opt-level = 2`** exists because unoptimised image
   decoding made thumbnail generation 330 ms per cover. It affects dev builds
   only; release is unaffected.
@@ -308,10 +416,17 @@ Decisions, not oversights. Each is recorded where it was made.
 - [x] ~~Correct the Essentia claims in `Settings.tsx` and `README.md`.~~ Done.
 - [x] ~~An About → Licences screen, for the CC BY icons and the MPL notice.~~
       Done 2026-08-20.
-- [ ] Apple Developer ID, `signingIdentity`, notarisation, hardened runtime
-      tested against real audio output.
-- [ ] Android keystore created, backed up, gitignored; release APK built and its
-      size confirmed sane.
+- [ ] Apple Developer ID, notarisation, hardened runtime tested against real
+      audio output. `signingIdentity` itself is done — `"Vapor Dev"` locally,
+      ad-hoc on both CI workflows. The paid half is what is left, and the first
+      builds go out needing right-click → Open.
+- [ ] **Android keystore created and backed up.** Dylan's, and the last thing
+      between here and an installable APK — `keytool` command and the four
+      repository secrets in §1. Gitignored: done. `signingConfigs`: done, in the
+      root `build.gradle.kts`. Size confirmed sane: waiting on the first build.
+- [ ] **A fresh updater keypair, and the public half into `tauri.conf.json`.**
+      Also Dylan's, also blocking: `verify` refuses to build while the config
+      carries the key rotated on 2026-08-22. See §1.
 - [ ] **Updater key backed up** — `~/.tauri/vapor-music-updater.key` copied into
       a password manager as a file attachment. Costs nothing to lose before the
       first build goes out and cannot be replaced after it, because the matching
@@ -345,5 +460,8 @@ Decisions, not oversights. Each is recorded where it was made.
       `tauri.conf.json` and `Cargo.toml`; the `verify` job now gates it against
       the tag on every release.
 - [ ] Reconsider TD-56 — the LAN decision was made for a single trusted network.
-- [ ] Run on a real iOS device, or state plainly that iOS is unsupported.
+- [x] ~~Run on a real iOS device, or state plainly that iOS is unsupported.~~
+      Stated plainly 2026-08-24: **iOS is not in the first release.** See §4.
+      This is the "state plainly" half, not the "run it" half — the run is still
+      worth doing and still has nothing scheduled.
 - [ ] Two machines on two different builds, syncing, before anyone else has two.

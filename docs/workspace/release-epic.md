@@ -8,6 +8,40 @@ visible when they sit in `tickets.md` as eight unrelated rows.
 accepted limitations, mechanics. This file is the *state*: what is done, what
 blocks what, and which items are waiting on Dylan rather than on work.
 
+## The 2026-08-24 call: v1 ships without onboarding
+
+Dylan, 2026-08-24: **cut a build now**, for himself and a handful of friends to
+install and use. Onboarding does not hold it.
+
+That changes one thing and only one thing about this file — the order. Every
+item below is where it was; **"What is being built first" is no longer what the
+release waits on.** Onboarding (AUD-23) moves *into* this epic as the content of
+the release after, and the two releases are:
+
+| | Tag | Contains |
+|---|---|---|
+| **v1**, as Dylan says it | `v2.0.0-rc.1` then `v2.0.0` | Whatever exists on 2026-08-24. Donation is in; onboarding is not. |
+| **v1.1**, as Dylan says it | `v2.1.0` | Onboarding — AUD-23, unchanged in scope. Plus whatever the first build's testers find. |
+
+**Why the tags say 2 and Dylan says 1.** `v1.0.0` and `v1.1.0` are taken: they
+are the Godot releases from June, and `V1.78` is the last of them. The Rust
+rewrite is `2.0.0` in all three version files and has been since before this
+epic opened. So the numbers on the tags are the numbers the updater compares
+and the numbers GitHub sorts by, and "v1" is what the thing is called. Both are
+right and they are not the same sentence — written down here because the first
+person to read `2.0.0` on a release page and `v1` in a message will otherwise
+assume one of them is a mistake.
+
+**Scope of this first build.** macOS, Windows, Linux, Android. **iOS is not in
+it** — decided 2026-08-24, and it is a real decision rather than an oversight:
+there is no `gen/ios` in the tree, no iOS build has ever been attempted, `cpal`
+is unvalidated there (TD-24), and none of that is the blocker. The blocker is
+that no route exists to put an iOS build on somebody else's phone without a
+paid Apple Developer account — ad-hoc provisioning needs each device's UDID,
+TestFlight needs the same membership, and an unsigned `.ipa` needs every friend
+to re-sign it with their own Apple ID every seven days. It stays "wanted, not
+committed", exactly as it was.
+
 ## The dependency chain
 
 The only hard chain is the one that ends in a signed artefact:
@@ -99,10 +133,10 @@ at all.
 | **AUD-16** privacy / EULA / support | **partly done** — `PRIVACY.md` and `SUPPORT.md` written from the code, `docs/EULA-NOTES.md` states the gap without pretending to close it | a contact address, and a lawyer before anything is sold |
 | **AUD-18** Deezer terms | **half done** — every request identified by `User-Agent`, three per-service clocks, four attempts with backoff | Dylan: Deezer or MusicBrainz. The calls are polite either way |
 | **AUD-3** what a supporter gets | **built** — a pin per donation at the bottom of Settings, count written in by hand from Ko-fi | A Ko-fi handle. The card does not render without one |
-| **AUD-23** the front door | **next** — as onboarding, not marketing | Nothing. Donation is done |
-| **AUD-21** the updater keypair | **not a ticket any more** — pipeline step 1 above | Nothing, until the feature work is done |
-| **REL-001** release signing | **not a ticket any more** — pipeline step 2 above | Step 1 |
-| **AUD-22** first release | blocked — pipeline step 3 above | Steps 1 and 2, and what v1 contains |
+| **AUD-23** the front door | **moved to v2.1.0** (2026-08-24) — as onboarding, not marketing. Unchanged in scope; it is simply not what v1 waits on | Nothing |
+| **AUD-21** the updater keypair | pipeline step 1 — **Dylan's, and now on the critical path** | Dylan: generate a fresh pair, public half into `tauri.conf.json`, private half into `TAURI_SIGNING_PRIVATE_KEY` |
+| **REL-001** release signing | **wired 2026-08-24** — Android `signingConfigs` in `gen/android/build.gradle.kts`, four secrets read by `release.yml` | Dylan: `keytool -genkeypair`, then the four repository secrets |
+| **AUD-22** first release | **in progress** — `release.yml` now builds four platforms and the version gate accepts an `-rc` | The two key steps above, and nothing else |
 
 ## What is actually decided
 
@@ -119,6 +153,11 @@ at all.
   compiled into every binary.
 
 ## What is being built first
+
+**Superseded 2026-08-24 — see "The 2026-08-24 call" at the top.** Donation
+landed; onboarding is now the content of v2.1.0 rather than a thing v1 waits
+for. The two paragraphs below are kept because the *reasoning* about what each
+one is still holds, and AUD-23 is written against it.
 
 **Donation, then onboarding.** Decided 2026-08-23. Neither is a release
 mechanic; both are the product, and the release steps above wait for them.
@@ -241,6 +280,12 @@ which is the same condition TD-55 and TD-24 are already waiting on.
   work is finished.* It was never written down because it is not finished, and
   a feature list invented now would be fiction. Donation and onboarding are the
   last two things going in.
+
+  **Amended 2026-08-24.** The answer held and the date moved: v1 is whatever
+  exists on 2026-08-24, which includes donation and does not include
+  onboarding. The definition did not change — "when the work is finished" was
+  always going to be settled by Dylan saying so, and he has. Onboarding is
+  v1.1.
 * **Pull requests** — closed 2026-08-23. GitHub has no switch for this, so
   `.github/workflows/no-outside-prs.yml` closes any pull request whose author is
   not the owner, with a comment pointing at the issue tracker, and
@@ -287,3 +332,24 @@ local `tauri build` produces exactly the artefacts it expects including the
 `.sig` — and none of that is the same as having run. Two of its pinned action
 SHAs pointed at commits that do not exist and nothing noticed, because nothing
 had ever executed the file. Expect more of that shape on the first `-rc`.
+
+**Two more of that exact shape, found 2026-08-24 while wiring the build.**
+Both were sitting in the file, both would have failed the first tag, and
+neither was findable by reading the workflow on its own:
+
+1. **The macOS job would have died at the bundle step.**
+   `bundle.macOS.signingIdentity` was pinned to `"Vapor Dev"` on 2026-08-23 —
+   a self-signed certificate in one login keychain. `app.yml` was given
+   `APPLE_SIGNING_IDENTITY: "-"` in the same commit and `release.yml` was not,
+   so the workflow that has run proved the override and the workflow that has
+   never run did not have it. The commit message for `ee4df98` says "CI passes
+   `APPLE_SIGNING_IDENTITY: -`", which was true of the CI that ran.
+2. **Nothing built Android at all.** `tauri-action` wraps `tauri build`; the
+   mobile bundle is a different CLI verb with a Gradle project under it, so the
+   matrix could never have produced an APK no matter what was in it. The epic
+   listed Android as a target and the pipeline had no job for it.
+
+The pattern is the same one this section is about, and it is worth naming: a
+file that has never executed accumulates faults at the rate the things around
+it change, and none of them are visible to review, because review reads the
+file and the fault is in the gap between the file and everything else.

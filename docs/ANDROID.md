@@ -97,6 +97,52 @@ it:
 ~/Library/Android/sdk/platform-tools/adb install -r <apk>
 ```
 
+## A release APK
+
+Added 2026-08-24, for the first build that goes to somebody who is not Dylan.
+Everything above this section is the debug loop and is unchanged by it.
+
+Two things are different from the debug build, and both matter more than they
+look:
+
+* **It is signed with a real keystore**, so it installs as
+  `com.dylangrowcoot.vapormusic` rather than `...vapormusic.debug`, and a later
+  build installs *over* it instead of beside it. The signing config lives in
+  `gen/android/build.gradle.kts` — the **root** file, because the CLI rewrites
+  `app/build.gradle.kts` from its template on every build (AND-3) and a signing
+  block there would disappear silently, leaving a green build that produced an
+  unsigned APK.
+* **R8 runs.** `isMinifyEnabled = true` on the release build type, which no
+  Android build here has ever hit. `app/proguard-rules.pro` keeps
+  `com.dylangrowcoot.vapormusic.**` whole and every `native` method name,
+  because `MainActivity` and `PlaybackService` are reached from Rust over JNI by
+  string and R8 will happily rename a method on a class it is keeping. If a
+  release APK ever starts, renders, and has no sound, that is the first thing
+  to look at — it is AND-4's symptom arriving by a different road.
+
+CI builds it: `.github/workflows/release.yml`, `Android (arm64)`, on a
+`v*.*.*` tag. **arm64 only** — armv7 roughly doubles the Rust half for devices
+nobody testing this has, and x86_64 is emulators.
+
+To build one locally, the keystore has to exist and be described. `keytool`
+command and the four CI secret names are in `docs/RELEASE.md` §1; locally it is
+`gen/android/keystore.properties`, which `.gitignore` already covers:
+
+```properties
+storeFile=/Users/dylangrowcoot/.keys/vapor-upload.jks
+storePassword=...
+keyAlias=vapor
+keyPassword=...
+```
+
+```bash
+cd vapor-app && npm run build && npm run tauri android build -- --apk --target aarch64
+```
+
+Without that file Gradle configures no signing at all and the release build
+fails saying so, which is deliberate: a hardcoded fallback is how a key nobody
+chose ends up on an APK somebody installed.
+
 ## Checks that do not need a device
 
 The whole Rust half, on any machine:

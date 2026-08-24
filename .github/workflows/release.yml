@@ -70,14 +70,44 @@ jobs:
 
           # On a tag push the tag is the fourth declaration, and the one the
           # download URLs are built from.
+          #
+          # A prerelease suffix is compared away rather than required to match.
+          # `docs/RELEASE.md` asks for the first tag to be an `-rc`, and the
+          # three files carry a version, not a channel: v2.0.0-rc.1 is a
+          # candidate *for* 2.0.0 and has to agree with it on the number and
+          # differ on nothing else. Written for the first tag, which is the one
+          # run that has never been exercised.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="${GITHUB_REF_NAME#v}"
-            echo "tag               $tag"
-            if [ "$tag" != "$pkg" ]; then
+            base="${tag%%-*}"
+            echo "tag               $tag (version $base)"
+            if [ "$base" != "$pkg" ]; then
               echo "::error::tag ${GITHUB_REF_NAME} does not match version $pkg"
               exit 1
             fi
           fi
+
+      # The public key is compiled into every binary and cannot be changed by
+      # shipping an update — only by handing out a new build. One was rotated
+      # on 2026-08-22 after a session printed its private half into a
+      # transcript, and `tauri.conf.json` went on carrying the old public half:
+      # a build signed with the live key would produce a signature the shipped
+      # app refuses, which looks like a broken updater rather than a wrong key.
+      #
+      # Nothing depended on it while nothing shipped. The first tag is when it
+      # starts to matter, so the first tag is where it is checked.
+      - name: The updater public key is not the rotated one
+        run: |
+          rotated="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYzNUVDRkI2NDBCMjk1REYKUldUZmxiSkF0czllODl3eVlTQnlkMUdFSVArbk5xNWpYbTVYd2NqdmdtVlo5dFNKYklOK0hseVIK"
+          have=$(jq -r '.plugins.updater.pubkey' vapor-app/src-tauri/tauri.conf.json)
+          if [ "$have" = "$rotated" ]; then
+            echo "::error::tauri.conf.json still carries the public key rotated on 2026-08-22."
+            echo "::error::Its private half is ~/.tauri/*.COMPROMISED-2026-08-22 and must not sign anything."
+            echo "::error::Generate a fresh pair, paste the public half into plugins.updater.pubkey,"
+            echo "::error::and put the private half in TAURI_SIGNING_PRIVATE_KEY. See docs/RELEASE.md 1."
+            exit 1
+          fi
+          echo "not the rotated key"
 
       # `bundle.createUpdaterArtifacts` is on, so `tauri build` signs each
       # bundle and fails without the key. Finding that out here costs seconds;
@@ -89,6 +119,21 @@ jobs:
           if [ -z "$KEY" ]; then
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. It is the contents of"
             echo "::error::~/.tauri/vapor-music-updater.key — see docs/RELEASE.md §1."
+            exit 1
+          fi
+          echo "present"
+
+      # The Android job is forty minutes of Rust away from the step that would
+      # notice a missing keystore, and it runs after the desktop matrix has
+      # already uploaded into the draft. Ask here instead.
+      - name: The Android keystore is present
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE" ] || [ -z "$ALIAS" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 and ANDROID_KEY_ALIAS are not both set."
+            echo "::error::Four secrets are needed — see docs/RELEASE.md 1, 'Android'."
             exit 1
           fi
           echo "present"
@@ -171,6 +216,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # `bundle.macOS.signingIdentity` is "Vapor Dev", a self-signed
+          # certificate that exists in one login keychain and nowhere else, so
+          # the bundle step on a runner fails looking for it. The CLI reads
+          # this variable and it wins over the config; `-` is codesign's own
+          # spelling of ad-hoc. `app.yml` has carried the same override since
+          # the identity was pinned — this workflow did not, and it is the one
+          # that has never run, so nothing had found that out.
+          #
+          # It is empty off macOS, where the CLI ignores it.
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
         with:
           projectPath: vapor-app
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
@@ -188,9 +243,166 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }}
 
+  # Android, which `tauri-action` does not build — it wraps `tauri build`, and
+  # the mobile bundle is a different CLI verb with a Gradle project under it.
+  # So this job is hand-rolled and uploads into the same draft the matrix
+  # created, which is why it waits for `build` rather than running beside it.
+  #
+  # A *release* APK, unlike every Android build before this one. Debug builds
+  # carry unstripped Rust debuginfo — 591 MB measured 2026-08-20 — and install
+  # as `...vapormusic.debug` beside a real build rather than over it. Neither is
+  # something to hand to somebody else.
+  #
+  # arm64 only. Every phone that would run this shipped with an arm64 userspace;
+  # armv7 would roughly double the Rust half of this job for devices nobody
+  # testing this has, and x86_64 is emulators. Adding a target later is one word
+  # in the `--target` list.
+  android:
+    name: Android (arm64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vapor-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: vapor-app/src-tauri
+          key: release-android
+
+      # No `setup-java`: the runner image already carries Temurin, and every
+      # other action in this workflow is SHA-pinned against a supply-chain path
+      # that a new one would widen for no gain. AGP 8.11 needs 17 or newer and
+      # the system `java` on this image is already 17 — named explicitly anyway,
+      # because "whatever the image defaults to" is how a green job starts
+      # failing on an image bump.
+      - name: Java 17
+        run: |
+          test -d "$JAVA_HOME_17_X64" || { echo "::error::no JDK 17 on this image"; exit 1; }
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          "$JAVA_HOME_17_X64/bin/java" -version
+
+      # `compileSdk = 36` and AGP will not fetch a missing platform itself —
+      # automatic SDK download was removed. The runner image carries some
+      # platforms and which ones is not a promise, so ask for the two this
+      # build names.
+      - name: The SDK pieces this build names
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager" || { echo "::error::no sdkmanager at $sdkmanager"; exit 1; }
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+
+      # `ring` and the other C dependencies are built by the `cc` crate, which
+      # looks for a target-prefixed compiler. The NDK ships one per API level;
+      # 24 is the floor Tauri's Android template targets. Same set as the
+      # `android` job in app.yml — that one proves the Rust half compiles, this
+      # one has to link and package it.
+      - name: Point the linker and cc at the NDK
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -d "$TOOLCHAIN" || { echo "::error::no NDK toolchain at $TOOLCHAIN"; exit 1; }
+          echo "$TOOLCHAIN" >> "$GITHUB_PATH"
+          {
+            echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME"
+            echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android24-clang"
+            echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+
+      # The keystore arrives base64 because a `.jks` is binary and a GitHub
+      # secret is a string. It is written under `$RUNNER_TEMP` rather than into
+      # the checkout so that no step later in this job can sweep it into an
+      # artefact; `keystore.properties` points at it by absolute path and is
+      # already covered by `gen/android/.gitignore`.
+      #
+      # `gen/android/build.gradle.kts` reads that file and wires a
+      # `signingConfig` only when it exists — so a fork, or this workflow
+      # without the secrets, produces an unsigned build that fails honestly
+      # rather than a signed one with a key nobody meant to use.
+      - name: The signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/vapor-upload.jks"
+          test -s "$RUNNER_TEMP/vapor-upload.jks" || {
+            echo "::error::ANDROID_KEYSTORE_BASE64 did not decode to anything. See docs/RELEASE.md 1."
+            exit 1
+          }
+          cat > vapor-app/src-tauri/gen/android/keystore.properties <<PROPS
+          storeFile=$RUNNER_TEMP/vapor-upload.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          PROPS
+          echo "keystore written"
+
+      - name: Install frontend dependencies
+        working-directory: vapor-app
+        run: npm ci
+
+      # `--apk` and not the AAB beside it: nobody sideloads an AAB, and this
+      # release is a download rather than a store listing.
+      - name: Build
+        working-directory: vapor-app
+        run: npm run tauri android build -- --apk --target aarch64
+
+      # The APK's path depends on whether Tauri built one target or several, so
+      # it is found rather than assumed, and renamed to something a person can
+      # tell apart in a downloads folder.
+      - name: Name it something a person can read
+        id: apk
+        run: |
+          version=$(jq -r .version vapor-app/package.json)
+          src=$(find vapor-app/src-tauri/gen/android/app/build/outputs/apk \
+                  -name '*.apk' -path '*release*' | head -1)
+          test -n "$src" || { echo "::error::no release APK was produced"; exit 1; }
+          mkdir -p dist-android
+          out="dist-android/vapor-music_${version}_android-arm64.apk"
+          cp "$src" "$out"
+          ls -lh "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+
+      # The keystore is gone before anything is uploaded anywhere.
+      - name: Shred the keystore
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/vapor-upload.jks"
+          rm -f vapor-app/src-tauri/gen/android/keystore.properties
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vapor-music-android
+          retention-days: 14
+          if-no-files-found: error
+          path: ${{ steps.apk.outputs.path }}
+
+      # Into the same draft the matrix created. `--clobber` so a re-run of this
+      # job replaces its own upload rather than failing on it.
+      - name: Into the draft release
+        if: github.ref_type == 'tag'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" "${{ steps.apk.outputs.path }}" \
+            --repo "${GITHUB_REPOSITORY}" --clobber
+
   finalise:
     name: finalise
-    needs: build
+    needs: [build, android]
     if: github.ref_type == 'tag' && !inputs.dry_run
     runs-on: ubuntu-latest
     steps:
