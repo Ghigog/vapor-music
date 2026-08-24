@@ -46,10 +46,11 @@ local release build stops changing identity every time. CI passes
 looking for it; `-` is codesign's own spelling of ad-hoc, which is what those
 builds were doing anyway.
 
-**Not verified by a real bundle.** The config is right and CI will exercise it
-on the next push, but no `tauri build` has been run since the change — a
-release build needs disk this machine does not currently have. If the macOS
-installers job goes red, this is the first place to look.
+**Verified by a real bundle, 2026-08-23.** It went in unverified — a release
+build needs disk this machine did not have at the time — and the `App` workflow
+proved it on the next push: `installers (macos-latest)` built the bundle green
+with the override in place. Recorded because the caveat was written down first
+and a caveat nobody closes is worse than one nobody wrote.
 
 *macOS — the paid half, still a decision.* None of the above lets anybody else
 open the app: Gatekeeper refuses a self-signed identity on a machine that does
@@ -97,8 +98,8 @@ at all.
 | `release.yml` dead pins | **done** — two of five pinned SHAs did not exist upstream and would have failed on the first tag push | — |
 | **AUD-16** privacy / EULA / support | **partly done** — `PRIVACY.md` and `SUPPORT.md` written from the code, `docs/EULA-NOTES.md` states the gap without pretending to close it | a contact address, and a lawyer before anything is sold |
 | **AUD-18** Deezer terms | **half done** — every request identified by `User-Agent`, three per-service clocks, four attempts with backoff | Dylan: Deezer or MusicBrainz. The calls are polite either way |
-| **AUD-3** what a supporter gets | **being built** — donation logic first | Nothing. The thank-you is a pin in Settings, one per donation |
-| **AUD-23** the front door | **being built** — as onboarding, not marketing | Nothing. Donation goes first |
+| **AUD-3** what a supporter gets | **built** — a pin per donation at the bottom of Settings, count written in by hand from Ko-fi | A Ko-fi handle. The card does not render without one |
+| **AUD-23** the front door | **next** — as onboarding, not marketing | Nothing. Donation is done |
 | **AUD-21** the updater keypair | **not a ticket any more** — pipeline step 1 above | Nothing, until the feature work is done |
 | **REL-001** release signing | **not a ticket any more** — pipeline step 2 above | Step 1 |
 | **AUD-22** first release | blocked — pipeline step 3 above | Steps 1 and 2, and what v1 contains |
@@ -137,6 +138,76 @@ music" modal** — send them to Settings and to the connection settings with a
 help modal instead. See AUD-23 for what this replaces: first run currently
 *does* open with a two-path chooser, so this is a change of an existing flow,
 not a filling of a gap.
+
+## Queued, and deliberately not now
+
+Both surfaced 2026-08-23 while pushing. Neither is urgent, both are real, and
+the order between them matters — so they are written down rather than done,
+because the feature work is what stands between here and a release and these
+are not.
+
+### The licence gate covers half the tree
+
+`ci.yml` runs `cargo deny ... check licenses advisories` on `vapor-core`, and
+only `check advisories` on `vapor-app/src-tauri`. The app tree is where reqwest,
+tauri and the overwhelming majority of the ~627 crates live, so **the gate
+covers the small half and misses the big one.**
+
+That matters because AUD-20 is recorded as closed with "cargo deny gate in CI",
+and `docs/LICENSING.md` describes its inventory as being behind a gate. The
+claim is currently broader than the truth. The risk it is supposed to catch is
+the one that document names in as many words — a transitive dependency
+reintroducing copyleft into a proprietary app — and that is exactly the half not
+being checked.
+
+Running the stricter command on the app tree today fails on one thing:
+`webpki-roots` and `webpki-root-certs` v1.0.9 declare **CDLA-Permissive-2.0**,
+reached through `reqwest -> hyper-rustls`. That is the Community Data License
+Agreement, permissive, and it is the licence on Mozilla's CA certificate data —
+so this is almost certainly a line to add to `deny.toml`'s allow list with a
+note, not a problem. It has been in the lockfile since before 2026-08-23 and
+nothing has ever objected, because nothing looks.
+
+**The work:** change the one command, allow the licence with its reasoning,
+re-count `docs/LICENSING.md`. Twenty minutes.
+
+**Do it before the dependency bumps below**, not after. A bump is precisely how
+a new licence arrives, and a gate that goes in afterwards has already missed the
+thing it was for.
+
+### Thirteen Dependabot pull requests, none of them urgent
+
+Open as of 2026-08-23, and exempt from the PR closer (see AUD-17) because
+watching dependencies is deliberate.
+
+**Nothing is on a clock.** None carries a `security` label — all are plain
+version bumps. `npm audit` reports 0 vulnerabilities across prod and dev, and
+`cargo deny check advisories` is clean on both trees. Checked rather than
+assumed, because "there are thirteen open PRs" reads as pressure and is not.
+
+**Not as a batch, and not before real hardware.** The risk sits exactly where
+the product's quality does:
+
+* **cpal 0.15 -> 0.18** (`vapor-core`, PR 1) and **0.15 -> 0.17**
+  (`vapor-app/src-tauri`, PR 6). Note the two trees are being sent to
+  *different versions of the same crate* — legal, since the lockfiles are
+  separate, but a version skew between the engine and the shell in the audio
+  device layer is a bad place to have one. TD-24 already records cpal as the
+  least battle-tested part of the stack and unvalidated on iOS and Android, so
+  a regression here has nothing to catch it.
+* **symphonia 0.5 -> 0.6** (PR 2). The decoder, and the reason 58% of the
+  library opens at all.
+* **typescript 5.9 -> 7.0** (PR 8) and **vite 6.4 -> 8.2** (PR 11). Toolchain
+  majors; cheap to try, noisy to debug mid-feature.
+
+The four GitHub Actions bumps (PRs 3, 5, 7, 9) are the low-risk ones and CI
+proves them on the spot. One exception inside that: **`tauri-action`
+0.6 -> 1.0 (PR 3) should wait until after the first tag.** Changing the release
+action and running the release pipeline for the first time in the same change
+means a failure has two possible causes.
+
+**When:** after the feature work, and after the app has run on real hardware —
+which is the same condition TD-55 and TD-24 are already waiting on.
 
 ## What nobody has decided
 
