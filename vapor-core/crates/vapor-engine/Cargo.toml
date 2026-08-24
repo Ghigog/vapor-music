@@ -19,7 +19,7 @@ vapor-dsp = { path = "../vapor-dsp" }
 # runs regardless of whether anything imports it. Gating the module and not the
 # dependency is what turned the wasm job red.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cpal = "0.15"
+cpal = "0.18"
 signalsmith-stretch = "0.1.3"
 
 [[bin]]
