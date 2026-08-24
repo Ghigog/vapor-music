@@ -324,8 +324,18 @@ Decisions, not oversights. Each is recorded where it was made.
       2026-08-21: configured, desktop only, silent. See §1.
 - [x] ~~Make the repository public, so the updater endpoint and free CI both
       work.~~ Already public — confirmed 2026-08-21.
-- [ ] Settle contributions now the repository is public: disable pull requests
-      or require a CLA, before anyone opens one. See `docs/LICENSING.md`.
+- [x] ~~Settle contributions now the repository is public: disable pull requests
+      or require a CLA, before anyone opens one.~~ Done 2026-08-23: pull
+      requests from anyone but the owner are closed automatically by
+      `.github/workflows/no-outside-prs.yml`, with `CONTRIBUTING.md` beside it.
+      GitHub has no setting for this; interaction limits expire after six
+      months. See `docs/LICENSING.md` for why it mattered.
+- [ ] **Update the supporter count** in `vapor-app/src/lib/supporters.ts` from
+      the Ko-fi dashboard, and set `KOFI_HANDLE` if it is still empty — the
+      support card does not render at all without it. The number is written by
+      hand on purpose (there is no server, and Ko-fi has no read API), so this
+      is the only moment it moves. Being a little behind is fine and is the
+      only way it can be wrong; claiming support that did not arrive is not.
 - [x] ~~A release workflow that builds on a tag and publishes `latest.json`
       alongside the bundles.~~ Done 2026-08-22: `.github/workflows/release.yml`.
       See §1. The first tag should be an `-rc`: a mistake then costs a draft

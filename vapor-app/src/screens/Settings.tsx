@@ -26,6 +26,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import * as core from "../lib/core";
 import { YourData } from "./YourData";
+import { SupporterPins } from "../components/SupporterPins";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
 import { VaporMark, LOGO_POSE } from "../components/VaporMark";
@@ -74,7 +75,10 @@ function FoldersCard() {
   const [problem, setProblem] = useState("");
 
   useEffect(() => {
-    core.localFolders().then(setFolders).catch(() => {});
+    core
+      .localFolders()
+      .then(setFolders)
+      .catch(() => {});
   }, []);
 
   async function add() {
@@ -113,8 +117,8 @@ function FoldersCard() {
 
       {folders.length === 0 ? (
         <p className="settings__hint">
-          No folders yet. Add one and Vapor reads what is already there —
-          no server, no account, nothing to set up.
+          No folders yet. Add one and Vapor reads what is already there — no
+          server, no account, nothing to set up.
         </p>
       ) : (
         <ul className="folders">
@@ -208,24 +212,27 @@ export function Settings() {
 
   /** Ask the keychain whether this account has a password. Debounced by the
    *  username changing rather than per keystroke — it is a keychain read. */
-  const checkStored = useCallback(async (name: string): Promise<boolean | null> => {
-    if (!name.trim()) {
-      setStored(null);
-      return null;
-    }
-    try {
-      const answer = await core.hasWebdavPassword(name);
-      setStored(answer);
-      // Returned as well as stored, so a caller can report the answer without
-      // racing the state update it just queued.
-      return answer;
-    } catch {
-      // Unknown rather than false: claiming "none saved" because the check
-      // failed would be the same lie in the other direction.
-      setStored(null);
-      return null;
-    }
-  }, []);
+  const checkStored = useCallback(
+    async (name: string): Promise<boolean | null> => {
+      if (!name.trim()) {
+        setStored(null);
+        return null;
+      }
+      try {
+        const answer = await core.hasWebdavPassword(name);
+        setStored(answer);
+        // Returned as well as stored, so a caller can report the answer without
+        // racing the state update it just queued.
+        return answer;
+      } catch {
+        // Unknown rather than false: claiming "none saved" because the check
+        // failed would be the same lie in the other direction.
+        setStored(null);
+        return null;
+      }
+    },
+    [],
+  );
 
   // Cache size and data location used to be read here too, for a summary this
   // screen no longer draws: Your Data is at the bottom of it and reports both,
@@ -356,7 +363,10 @@ export function Settings() {
    * keychain was a mock that stored nothing (TD-50), so the notice was a lie
    * printed in green directly above a red badge saying the opposite.
    */
-  async function apply(): Promise<{ submitted: boolean; stored: boolean | null }> {
+  async function apply(): Promise<{
+    submitted: boolean;
+    stored: boolean | null;
+  }> {
     await core.setRemoteConfig(url, username, folder);
 
     // An empty box means "keep the password already stored", so an accidental
@@ -428,26 +438,26 @@ export function Settings() {
         return core.scanLibrary();
       },
       (report) => {
-      // A folder that is not there is now an error with the path in it
-      // (TD-49), so reaching here means the path was real. Zero tracks
-      // therefore means the folder holds no audio, which is a different
-      // problem and gets a different sentence.
-      const skipped =
-        report.unreadable > 0
-          ? ` ${report.unreadable.toLocaleString()} ` +
-            `${report.unreadable === 1 ? "folder" : "folders"} could not be ` +
-            `read and ${report.unreadable === 1 ? "was" : "were"} skipped.`
-          : "";
+        // A folder that is not there is now an error with the path in it
+        // (TD-49), so reaching here means the path was real. Zero tracks
+        // therefore means the folder holds no audio, which is a different
+        // problem and gets a different sentence.
+        const skipped =
+          report.unreadable > 0
+            ? ` ${report.unreadable.toLocaleString()} ` +
+              `${report.unreadable === 1 ? "folder" : "folders"} could not be ` +
+              `read and ${report.unreadable === 1 ? "was" : "were"} skipped.`
+            : "";
 
-      setNote({
-        card: "remote",
-        text:
-          report.tracks === 0
-            ? `That folder is there, but no audio files are in it or below it ` +
-              `(${report.directories.toLocaleString()} folders searched). ` +
-              `Check the folder path points at your music.${skipped}`
-            : `Found ${report.tracks.toLocaleString()} tracks in ` +
-              `${report.directories.toLocaleString()} folders.${skipped}`,
+        setNote({
+          card: "remote",
+          text:
+            report.tracks === 0
+              ? `That folder is there, but no audio files are in it or below it ` +
+                `(${report.directories.toLocaleString()} folders searched). ` +
+                `Check the folder path points at your music.${skipped}`
+              : `Found ${report.tracks.toLocaleString()} tracks in ` +
+                `${report.directories.toLocaleString()} folders.${skipped}`,
         });
         void refresh();
       },
@@ -535,7 +545,9 @@ export function Settings() {
               </span>
             ) : stored === false ? (
               <span className="settings__field-note settings__field-note--warn">
-                {password ? "Not saved yet — press Save" : "No password saved yet"}
+                {password
+                  ? "Not saved yet — press Save"
+                  : "No password saved yet"}
               </span>
             ) : (
               // Unknown. Not "stored" and not "none": the question could not
@@ -674,10 +686,7 @@ export function Settings() {
         </SettingRow>
 
         {error?.card === "analysis" && (
-          <ErrorNotice
-            error={error.text}
-            onDismiss={() => setError(null)}
-          />
+          <ErrorNotice error={error.text} onDismiss={() => setError(null)} />
         )}
       </SettingGroup>
 
@@ -759,7 +768,6 @@ export function Settings() {
               }}
             />
           </label>
-
         </SettingRow>
 
         {note?.card === "dupes" && (
@@ -817,7 +825,10 @@ export function Settings() {
             CC BY requires attribution visible to the people using the work,
             and a file on GitHub does not reach them. It is also where the
             MPL-2.0 notice for Symphonia belongs. */}
-        <button className="settings__licences" onClick={() => setLicences(true)}>
+        <button
+          className="settings__licences"
+          onClick={() => setLicences(true)}
+        >
           Licences and attributions
         </button>
       </section>
@@ -830,6 +841,16 @@ export function Settings() {
         already standing.
       */}
       <YourData embedded />
+
+      {/*
+        The supporter wall, last on the screen.
+        
+        Below Your Data rather than beside About, because it is the one thing
+        here that asks for something rather than telling you something, and the
+        end of the screen is where a person has finished reading. It renders
+        nothing at all until there is a Ko-fi handle to point at.
+      */}
+      <SupporterPins />
 
       {/* The full notices, rendered from the file itself. */}
       {licences && (
@@ -926,4 +947,3 @@ function Field({
     </div>
   );
 }
-

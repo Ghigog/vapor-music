@@ -543,3 +543,56 @@
   white-space: nowrap;
   user-select: text;
 }
+
+/* The supporter wall (AUD-3).
+ *
+ * A grid rather than a flex wrap, so the pins line up in columns however many
+ * there are — a wrapped flex row leaves the last line ragged, which on a wall
+ * of identical discs reads as a rendering fault rather than as a layout.
+ *
+ * `auto-fill`, not `auto-fit`: with `auto-fit` a single pin stretches its track
+ * to the full width and the one disc lands in the middle of a lot of nothing.
+ */
+.pins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 28px);
+  gap: var(--fs-sm);
+  align-items: center;
+  margin: var(--fs-md) 0;
+}
+
+.pins__pin {
+  display: block;
+  width: 28px;
+  height: 28px;
+  /* The tilt is inline, per pin. Kept off this rule so the two cannot fight. */
+  filter: drop-shadow(var(--shadow-sm));
+}
+
+/* Enamel, roughly: a filled disc, an inset ring catching the rim, and one
+   off-centre gleam. All three come from the accent so the wall recolours with
+   the theme rather than sitting on it as a foreign object. */
+.pins__disc {
+  fill: var(--accent-fill);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.pins__ring {
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.pins__gleam {
+  fill: var(--specular);
+  opacity: 0.5;
+}
+
+.pins__more {
+  /* Sits in the grid as one more cell, and needs the room of a few. */
+  grid-column: span 3;
+  color: var(--ink-3);
+  white-space: nowrap;
+}

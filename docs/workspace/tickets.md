@@ -2560,7 +2560,7 @@ manual Android run on real hardware ahead of that.
 
 **Waiting for:** Nothing, unless decision 3 changes.
 
-### AUD-3 : what the supporter actually gets (decided 2026-08-23 — building the logic first)
+### AUD-3 : what the supporter actually gets (built 2026-08-23 — waiting on a Ko-fi handle)
 
 Four desks independently rejected a donation button that unlocks customisation:
 money that unlocks features is consideration, which buys the whole legal and tax
@@ -2597,8 +2597,43 @@ of the line is that the pin does nothing and gates nothing — it is a receipt,
 not a good. That distinction is load-bearing and should survive into whatever
 the button and the copy end up saying.
 
-**Still open:** which payment channel. That decides whether the app can even
-observe a donation, and therefore what "the logic" is.
+**Channel: Ko-fi**, and the shape turned out to need no logic at all.
+
+The problem looked like "how does the app learn that somebody donated". Ko-fi
+has webhooks but no read API, so knowing it at runtime means running a service
+to catch them — a thing to maintain forever and a fourth host in a privacy
+document that makes a checkable claim about three. And it still would not give
+a person *their* pin without an identity, which would mean the app verifying
+proof of payment before showing something, which is the exact shape §2 rules
+out.
+
+**Dylan's answer, and it is better than either option that was on the table:
+read the number off the Ko-fi dashboard and write it into the build.** No
+server, no runtime call, no privacy entry. The desktop updater already runs on
+every launch, so the number reaches people without any mechanism being invented
+for it.
+
+The failure mode is the good one. A hand-written count is stale between
+releases, and stale can only mean *low* — the number is monotonic and the file
+is only ever revised upward. The app can undercount the people who chipped in
+and can never claim support it did not get.
+
+**Built:** `src/lib/supporters.ts` holds `SUPPORTERS` and `KOFI_HANDLE`;
+`SupporterPins` draws one disc per supporter at the bottom of Settings, with the
+count in words above it because the discs are `aria-hidden`. Ten tests, on the
+rules rather than the rendering: everybody sees the same wall (the component
+takes a count and has no notion of a viewer, so there is no path by which it
+could learn who paid), the copy states that nothing is bought or unlocked, the
+wall caps its discs and says how many it did not draw, and a build with no
+handle renders **nothing** rather than a link to `ko-fi.com/`.
+
+The pins accumulate on the project, not on the person. You donate, the next
+build has one more pin, and one of them is yours — which is the feeling that
+was wanted, and it is the version that cannot become a purchase.
+
+**Waiting for:** the Ko-fi handle. The card does not render until there is one.
+The art is a placeholder — a flat enamel disc drawn from the theme's tokens —
+and nothing outside `SupporterPins.tsx` knows what a pin looks like.
 
 ### AUD-4 : delete the Godot tree (done 2026-08-21)
 
