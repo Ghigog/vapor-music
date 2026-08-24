@@ -112,7 +112,18 @@ jobs:
       # `bundle.createUpdaterArtifacts` is on, so `tauri build` signs each
       # bundle and fails without the key. Finding that out here costs seconds;
       # finding it out in the build costs the whole matrix.
-      - name: The signing key is present
+      #
+      # Present is not the same as usable, and the difference cost a whole
+      # matrix on 2026-08-24: every desktop bundle built, all three Linux
+      # artefacts were written, and only then did the CLI try to sign them and
+      # report "failed to decode base64 secret key: Invalid padding" — twenty
+      # minutes in, for a value that was wrong before the job started.
+      #
+      # The key file is one long base64 line. Copying it out of a terminal
+      # picks up the wrap points, the trailing `%` zsh prints for a missing
+      # newline, and sometimes the shell prompt after it. All three survive a
+      # non-empty check and none survives base64.
+      - name: The signing key is present, and is a key
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
@@ -121,7 +132,21 @@ jobs:
             echo "::error::~/.tauri/vapor-music-updater.key — see docs/RELEASE.md §1."
             exit 1
           fi
-          echo "present"
+
+          if ! printf '%s' "$KEY" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/key.txt" 2>/dev/null; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not valid base64. It is almost"
+            echo "::error::certainly a copy-paste artefact — a trailing % or a shell prompt."
+            echo "::error::Re-copy it with: cat ~/.tauri/vapor-music-updater.key | pbcopy"
+            exit 1
+          fi
+
+          # Never the key material itself, only the shape of it.
+          if ! head -1 "$RUNNER_TEMP/key.txt" | grep -q "untrusted comment:"; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY decodes, but not to a minisign key."
+            echo "::error::Check the public half was not pasted into it by mistake."
+            exit 1
+          fi
+          echo "present, decodes, and is a minisign key"
 
       # The Android job is forty minutes of Rust away from the step that would
       # notice a missing keystore, and it runs after the desktop matrix has
@@ -207,6 +232,21 @@ jobs:
         working-directory: vapor-app
         run: npm ci
 
+      # Whitespace out, and the key handed over as a *path* rather than a
+      # value. `app.yml` already does it this way and says why: the CLI reads
+      # this variable as a path when the path exists and as the key itself when
+      # it does not, and a private key in an environment variable is a bad
+      # habit to write into a workflow. `$RUNNER_TEMP`, not `/tmp`, because
+      # `/tmp` on Windows is a Git-bash fiction the CLI cannot follow.
+      - name: The updater key, as a file
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$KEY" | tr -d '[:space:]' > "$RUNNER_TEMP/updater.key"
+          echo "TAURI_SIGNING_PRIVATE_KEY=$RUNNER_TEMP/updater.key" >> "$GITHUB_ENV"
+
       # Creates or reuses one draft release per tag and uploads this platform's
       # bundles into it, plus the `.sig` beside each. `includeUpdaterJson`
       # writes `latest.json` — the file the endpoint compiled into every binary
@@ -214,7 +254,8 @@ jobs:
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # TAURI_SIGNING_PRIVATE_KEY is deliberately not set here — the step
+          # above exported it as a file path, and a step-level env would win.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # `bundle.macOS.signingIdentity` is "Vapor Dev", a self-signed
           # certificate that exists in one login keychain and nowhere else, so
