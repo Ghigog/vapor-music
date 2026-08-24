@@ -1,6 +1,6 @@
 # Support
 
-**Where to send a problem:** `<CONTACT ADDRESS — Dylan to fill in>`
+**Where to send a problem:** dylangrowcoot@gmail.com
 
 Vapor Music has no telemetry and no crash reporting, deliberately — see
 [PRIVACY.md](PRIVACY.md). Nothing is sent when the app misbehaves. That is the

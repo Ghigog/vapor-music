@@ -3010,7 +3010,7 @@ Untouched deliberately: `docs/RELEASE.md` §3 and its §7 checkbox
 store's own data-safety form, which is Dylan's to fill in, and `RELEASE.md` is
 the platform lane.
 
-### AUD-17 : contributions are unsettled, on a public repository (open, overdue)
+### AUD-17 : contributions are unsettled, on a public repository (done 2026-08-23)
 
 `docs/LICENSING.md` names this as the precondition for going public: settle
 contributions first, because one accepted outside pull request freezes the
@@ -3020,6 +3020,26 @@ The repository was already public when that was written, so it is not a step
 before a switch — the switch is thrown.
 
 **Waiting for:** Dylan. Disable pull requests, or add a CLA. Minutes either way.
+
+**Closed 2026-08-23 — pull requests disabled.** GitHub has no switch that does
+this: interaction limits come closest and expire after six months, which is a
+reminder nobody gets. So `.github/workflows/no-outside-prs.yml` closes any pull
+request whose author is not the repository owner, leaves a comment saying why,
+and points the author at the issue tracker, which stays open.
+`CONTRIBUTING.md` says the same thing to anybody who reads before writing.
+
+It closes rather than blocks, deliberately: a blocked contribution is invisible
+and looks like the project is broken, while a closed one carries its reason.
+
+`pull_request_target` rather than `pull_request`, because a fork's
+`pull_request` run gets a read-only token and cannot close anything. That event
+is dangerous when a workflow checks out and runs the pull request's code; this
+one checks out nothing and holds one permission.
+
+**Not a position on outside help.** The blocker is that no contributor licence
+agreement exists, and one accepted patch would freeze the licence choice in a
+way that needs every contributor's agreement to undo. If a CLA lands, the
+workflow and `CONTRIBUTING.md` are what change.
 
 ### AUD-18 : Deezer is called without registration or terms review (half done 2026-08-23)
 

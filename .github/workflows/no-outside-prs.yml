@@ -1,0 +1,57 @@
+# Close pull requests from anyone but the owner (AUD-17).
+#
+# ## Why this exists
+#
+# `docs/LICENSING.md` names settling contributions as the precondition for
+# making the repository public, and the repository was public before that
+# happened. One accepted outside pull request freezes the licence choice — the
+# contributor holds copyright in their patch, and relicensing later needs their
+# agreement, which cannot be obtained unilaterally and cannot be undone.
+#
+# The work here goes straight to `main` and always has. Nobody is being turned
+# away from a process they were using.
+#
+# ## Why a workflow rather than a setting
+#
+# GitHub has no switch that disables pull requests. Interaction limits come
+# closest and expire after six months, which is a reminder nobody will get.
+# This closes rather than blocks: the PR is visible, the reason is written on
+# it, and the author is pointed at the issue tracker, which stays open.
+#
+# ## Why `pull_request_target`
+#
+# A `pull_request` run from a fork gets a read-only token and cannot close
+# anything. `pull_request_target` runs with the base repository's token, which
+# can. That event is dangerous when a workflow checks out and executes the
+# pull request's code — this one never checks anything out, and its only
+# permission is to write to pull requests.
+name: no outside PRs
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    # The owner's own pull requests are left alone. There is no rule against
+    # using one; the licence problem is specifically about copyright arriving
+    # from somebody else.
+    if: github.event.pull_request.user.login != github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close it, and say why
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr comment "$PR" --body "Thanks for taking the time — and sorry, this is closed automatically.
+
+          Vapor Music is not accepting code contributions. The licence terms for outside contributions have not been settled, and merging a patch before they are would fix the project's licensing in a way that cannot be undone later without every contributor's agreement. That is a decision the project has not made yet, so the honest answer is to not take the code rather than to take it and work it out afterwards.
+
+          **Bug reports and ideas are genuinely welcome** — please open an issue instead. If you have already written a fix, describing it in an issue is useful and carries none of the problem above.
+
+          See \`docs/LICENSING.md\` for the reasoning."
+          gh pr close "$PR"

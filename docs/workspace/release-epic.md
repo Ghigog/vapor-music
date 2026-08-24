@@ -35,14 +35,27 @@ first" at the end of this file.
 **1. Keys.** Both platforms, and the decision is where they live rather than
 how to make them.
 
-*macOS.* `tauri build` produces an ad-hoc signature, which is a hash of the
-binary — so every release build is a new identity, a keychain grant does not
-survive one, and Gatekeeper refuses it on anybody else's machine. The dev loop
-is already fixed by `src-tauri/.cargo/config.toml`, which signs with a stable
-self-signed identity and pins the identifier; setting that same identity as
-`signingIdentity` under `bundle.macOS` does the same for release builds and
-costs nothing. **Handing the app to another person is a separate and paid
-decision**: a Developer ID account plus notarisation.
+*macOS — the free half is done (2026-08-23).* `tauri build` produced an ad-hoc
+signature, which is a hash of the binary, so every release build was a new
+identity and a keychain grant did not survive one.
+`bundle.macOS.signingIdentity` is now `"Vapor Dev"`, the same self-signed
+certificate `src-tauri/.cargo/config.toml` already uses for the dev loop, so a
+local release build stops changing identity every time. CI passes
+`APPLE_SIGNING_IDENTITY: "-"` — the CLI reads that and it wins over the config
+— because the certificate lives in one login keychain and a runner would fail
+looking for it; `-` is codesign's own spelling of ad-hoc, which is what those
+builds were doing anyway.
+
+**Not verified by a real bundle.** The config is right and CI will exercise it
+on the next push, but no `tauri build` has been run since the change — a
+release build needs disk this machine does not currently have. If the macOS
+installers job goes red, this is the first place to look.
+
+*macOS — the paid half, still a decision.* None of the above lets anybody else
+open the app: Gatekeeper refuses a self-signed identity on a machine that does
+not trust it. Handing a build to another person needs a **paid Apple Developer
+account and notarisation**, and that is a cost decision rather than a task. It
+is the only part of macOS signing that is still open.
 
 *Android.* No keystore, so builds go out `--debug`. Two consequences: the
 package is `com.dylangrowcoot.vapormusic.debug`, which installs *beside* a
@@ -127,34 +140,47 @@ not a filling of a gap.
 
 ## What nobody has decided
 
-1. **Deezer or MusicBrainz.** The volume and the anonymity are dealt with —
-   AUD-18 landed a `User-Agent` and a 200 ms floor between requests, down from
-   ~7 a second sustained across a 563-track pass. What is left is the part that
-   was always a decision: Deezer still has no API key and no registered
-   application, and Deezer documents no quota to be compliant with.
-   **What actually changes if it moves:** Deezer supplies three things — an
-   artist portrait, album art, and a genre for files that carry none.
-   MusicBrainz plus the Cover Art Archive covers the last two and **does not
-   host artist images at all**, so artist portraits would need a third source
-   or would go. The header already sent is the one MusicBrainz asks for, so the
-   move costs no new compliance work — it costs the portraits.
-2. **A contact address** for the support route. There is no telemetry and no
-   crash reporting, both deliberate, so a person describing a fault is the only
-   channel that exists. `SUPPORT.md` is written and its first line is a
-   placeholder waiting on this. `docs/EULA-NOTES.md` wants a jurisdiction and a
-   legal entity too.
-3. **What is in v1.** Asked 2026-08-23 and worth recording that **nobody has
-   ever written it down.** "v1" appears in `DECISIONS.md` §3 as a distribution
-   choice (direct download) and in §2 as a thing to revisit at v1.1, and in
-   `RELEASE.md` as a cost note. No document names a feature set, so "is v1
-   worth cutting" cannot be answered as asked — the prior question is what it
-   contains. Donation and onboarding are now the first two answers to that.
-4. **Pull requests, and this one is overdue** — see AUD-17. The repository is
-   already public with contributions unsettled, and one accepted outside pull
-   request freezes the licence choice in a way that cannot be undone
-   unilaterally. Disable PRs or add a CLA; minutes either way. It is on this
-   list rather than the ticket board's quiet middle because it is the only open
-   item that is *accruing* rather than waiting.
+1. **A paid Apple Developer account**, or no macOS build anybody else can
+   open. See pipeline step 1. The only signing question still open.
+2. **Governing law and a legal entity** for `docs/EULA-NOTES.md`. Parked here
+   deliberately on 2026-08-23 rather than guessed at — nothing is sold, so
+   nothing turns on it yet, and a lawyer will ask both questions first. The
+   contact address that sat beside it is answered: `SUPPORT.md` names
+   dylangrowcoot@gmail.com.
+3. **Where the metadata comes from — parked as a risk, not a decision.**
+   Dylan, 2026-08-23: the source does not matter as long as the data arrives
+   *lazily*, per track, when it is needed. The switch in Settings is a
+   philosophical question — do you want the app to look things up online at all
+   — and not a command to go and fetch everything now.
+
+   The risk, recorded rather than acted on: Deezer is called with no API key
+   and no registered application, against an API that documents no quota. At
+   one user that is a non-event. **It becomes real at distribution**, when many
+   copies of one unregistered client hit the same API — the failure mode is
+   being blocked, not being sued. If it ever needs to move, what Deezer
+   supplies is an artist portrait, album art, and a genre for files that carry
+   none; MusicBrainz plus the Cover Art Archive covers the last two and hosts
+   **no artist images at all**, so portraits would need a third source. The
+   `User-Agent` already sent is the one MusicBrainz asks for, so the move costs
+   no new compliance work — it costs the portraits.
+
+**Settled since this list was written**
+
+* **What is in v1** — asked and answered 2026-08-23: *whatever exists when the
+  work is finished.* It was never written down because it is not finished, and
+  a feature list invented now would be fiction. Donation and onboarding are the
+  last two things going in.
+* **Pull requests** — closed 2026-08-23. GitHub has no switch for this, so
+  `.github/workflows/no-outside-prs.yml` closes any pull request whose author is
+  not the owner, with a comment pointing at the issue tracker, and
+  `CONTRIBUTING.md` says why. This was the one item that was *accruing* rather
+  than waiting: every day the repository sat public with contributions
+  unsettled was a day somebody could hand over copyright nobody could give
+  back.
+* **Sync between two real devices (TD-55)** — Dylan will test it once the
+  feature work is done. Worth knowing it got harder rather than easier:
+  AUD-7 landed a key exchange, so **every existing pairing is now invalid** and
+  the first two-device test is also a first-pairing test.
 
 ## Found on the way, and not in any ticket
 

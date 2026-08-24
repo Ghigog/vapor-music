@@ -559,8 +559,23 @@ jobs:
           echo "TAURI_SIGNING_PRIVATE_KEY=$RUNNER_TEMP/throwaway.key" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> "$GITHUB_ENV"
 
+      # Ad-hoc on CI, deliberately.
+      #
+      # `bundle.macOS.signingIdentity` is "Vapor Dev" — a self-signed
+      # certificate that exists in one login keychain and nowhere else, so a
+      # runner would fail the bundle step looking for it. `APPLE_SIGNING_IDENTITY`
+      # is read by the CLI and wins over the config file; `-` is codesign's own
+      # spelling of ad-hoc, which is exactly what these builds were doing before
+      # the identity was set at all.
+      #
+      # This is not the release signing story. Every artefact from this job is
+      # still a throwaway that Gatekeeper will refuse on somebody else's Mac —
+      # see the release pipeline in docs/workspace/release-epic.md. It is here
+      # so that setting a local identity does not turn CI red.
       - name: Build
         working-directory: vapor-app
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
         run: npx tauri build
 
       # Everything a person downloads, and nothing that pretends to be signed.

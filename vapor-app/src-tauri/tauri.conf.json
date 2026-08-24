@@ -39,7 +39,10 @@
     ],
     "copyright": "Copyright (c) 2026 Dylan Growcoot. All rights reserved.",
     "category": "Music",
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "Vapor Dev"
+    }
   },
   "plugins": {
     "updater": {
