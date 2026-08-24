@@ -46,6 +46,34 @@ subprojects {
         extensions.configure<com.android.build.gradle.AppExtension>("android") {
             buildTypes.getByName("debug").applicationIdSuffix = ".debug"
 
+            // R8 off, until something has actually proved it safe here.
+            //
+            // The v2.0.0-rc.3 APK crashed on launch. It is the first release
+            // APK this project has ever produced, which makes it also the first
+            // time R8 has ever run: every earlier Android build was `--debug`,
+            // where minification is off, and the debug build launched fine on a
+            // Pixel 9 (AND-4). Between the build that works and the build that
+            // does not there are two differences — the signing key and R8 — and
+            // a signature cannot crash a running process.
+            //
+            // `app/proguard-rules.pro` keeps `com.dylangrowcoot.vapormusic.**`
+            // and every native method name, which is the rule that *should*
+            // have covered it. It evidently did not cover enough — `MainActivity`
+            // extends `TauriActivity`, and the Tauri and wry classes underneath
+            // it are not in that package — and the honest response to "my keep
+            // rules were incomplete" is not a second guess at the keep rules.
+            //
+            // What it costs: the Kotlin half of this app is two files. The APK
+            // is dominated by `libvapor_app_lib.so`, which R8 never touches, so
+            // the size difference is not something anybody downloading this
+            // will notice.
+            //
+            // Turning it back on is a task with a device in someone's hand, not
+            // a line changed on the way past. `app/build.gradle.kts` sets this
+            // true in its release block; the CLI rewrites that file from its
+            // template on every build (AND-3), so the override lives here.
+            buildTypes.getByName("release").isMinifyEnabled = false
+
             val keystoreProperties = rootProject.file("keystore.properties")
             if (keystoreProperties.exists()) {
                 val props = java.util.Properties()
