@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUxNzc4MUE1RUIxQkM4RDYKUldUV3lCdnJwWUYzNFprNitsdk5pZ1l0ZFlFOEpYd0o2TVVEVjdmMGQ1K05xcktiYXJtZXViVHUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCQTRBNDgxN0NCRTY3MjgKUldRb1o3NThnYVNrVzBJQ0xqeWNiTjErMXlNYm9CZEpFMjhlRjkzZ3ZyRHhJSlVKM3FocnpCK1gK",
       "endpoints": [
         "https://github.com/Ghigog/vapor-music/releases/latest/download/latest.json"
       ]
