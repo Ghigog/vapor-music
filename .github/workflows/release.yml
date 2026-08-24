@@ -391,6 +391,28 @@ jobs:
           PROPS
           echo "keystore written"
 
+      # The same set the desktop matrix installs on Linux, and for a reason
+      # that is not obvious on a job that targets Android: `tauri android
+      # build` runs `beforeBuildCommand`, which is `npm run build`, which is
+      # `npm run types:check`, which runs `cargo test export_bindings` in both
+      # crates **for the host**. That host build is an ordinary Linux build —
+      # cpal wants ALSA, keyring and souvlaki want D-Bus, and tauri wants
+      # WebKitGTK — and none of it has anything to do with the APK.
+      #
+      # Without them the job dies in 81 seconds on `alsa-sys`, which reads as
+      # an Android toolchain fault and is not one. Found on the first run that
+      # ever reached this job, 2026-08-24.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libdbus-1-dev
+
       - name: Install frontend dependencies
         working-directory: vapor-app
         run: npm ci
