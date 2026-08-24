@@ -124,6 +124,50 @@ CI builds it: `.github/workflows/release.yml`, `Android (arm64)`, on a
 `v*.*.*` tag. **arm64 only** — armv7 roughly doubles the Rust half for devices
 nobody testing this has, and x86_64 is emulators.
 
+### R8 is off, and what that cost to learn
+
+`v2.0.0-rc.3` was the first release APK this project ever produced. It
+installed and crashed on launch, and the release build type is now
+`isMinifyEnabled = false`, set in the **root** `gen/android/build.gradle.kts`
+because the CLI rewrites `app/build.gradle.kts` (AND-3).
+
+What was checked against that APK before deciding, because "it must be R8" is a
+guess until something looks:
+
+| Ruled out | How |
+|---|---|
+| JNI symbols broken | All 25 `Java_com_dylangrowcoot_vapormusic_*` exports have a matching class and method in the DEX |
+| Classes resolved by `find_class` gone | `app/tauri/plugin/Plugin` and `PluginManager` both present |
+| Frontend missing | `/index.html` and `/assets/index-*.js` are embedded in `libvapor_app_lib.so`, as Tauri v2 does |
+| Wrong or missing native library | `lib/arm64-v8a/` has `libvapor_app_lib.so` and `libc++_shared.so` |
+
+So the keep rules in `app/proguard-rules.pro` did their job, and the cause is
+something they were never going to cover. The likeliest remaining mechanism is
+**field** renaming: `app.tauri.plugin.Config`, `CommandData` and
+`RegisterListenerArgs` are deserialised reflectively from the `tauri.conf.json`
+in the APK's assets at startup, and R8 renames fields on classes it is keeping.
+
+That is not confirmed — confirming it needs `mapping.txt` or logcat from a
+device. It is written down because the next person to consider turning
+minification back on should know the shape of what they are re-enabling, and
+that a keep rule for classes and methods is not sufficient.
+
+**Turning it back on is a task with a phone in someone's hand.** Not a line
+changed on the way past.
+
+### `verify-apk.mjs`, and what it does not do
+
+`vapor-app/scripts/verify-apk.mjs` runs in CI on every release APK. It pulls the
+JNI symbol names out of the `.so` and the class and method names out of the DEX
+and fails if they disagree — the check that turns "renamed a JNI target" from a
+launch crash into a red build.
+
+**It did not catch rc.3**, and it is documented here saying so. It is a floor,
+not a gate: the only thing that proves an APK starts is starting it. The gap
+that let rc.3 ship is that nothing in this repository has ever launched the
+app — `app.yml` runs `cargo check` and `cargo clippy` for the Android target,
+which prove the Rust compiles and nothing else.
+
 To build one locally, the keystore has to exist and be described. `keytool`
 command and the four CI secret names are in `docs/RELEASE.md` §1; locally it is
 `gen/android/keystore.properties`, which `.gitignore` already covers:

@@ -439,6 +439,20 @@ jobs:
           ls -lh "$out"
           echo "path=$out" >> "$GITHUB_OUTPUT"
 
+      # The first thing in this pipeline that looks *inside* what it built.
+      #
+      # Everything else here proves the code compiles and that Gradle produced
+      # a file. v2.0.0-rc.3 passed all of it and crashed on launch, because the
+      # Rust half reaches the Java half by string — JNI symbol names and
+      # `find_class` — and nothing links those at build time.
+      #
+      # Read `scripts/verify-apk.mjs` before trusting it: it catches a renamed
+      # or removed JNI target, and it does NOT catch everything that can stop
+      # an APK starting. It did not catch rc.3. It is a floor, not a gate.
+      - name: The Java and native halves agree on their names
+        working-directory: vapor-app
+        run: node scripts/verify-apk.mjs "../${{ steps.apk.outputs.path }}"
+
       # The keystore is gone before anything is uploaded anywhere.
       - name: Shred the keystore
         if: always()
