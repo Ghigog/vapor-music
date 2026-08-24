@@ -49,12 +49,17 @@ allow = [
     "Unicode-3.0",
 ]
 
-# The four crates in this repository. They declare `LicenseRef-Proprietary`,
+# The five crates in this repository. They declare `LicenseRef-Proprietary`,
 # the SPDX form for "not one of the standard identifiers" — see
 # docs/LICENSING.md §"Where it is declared" — so there is nothing to evaluate.
 # Named one at a time rather than allowing the identifier globally: a
 # third-party crate arriving with a LicenseRef of its own should still stop
 # the build.
+#
+# Which is also why adding a crate to this workspace turns CI red until it is
+# named here, as `vapor-dj` did on 2026-08-23. That is the gate working: the
+# list is a list of crates somebody has looked at, and a new one has not been
+# looked at until somebody adds the line.
 [[licenses.exceptions]]
 crate = "vapor-app"
 allow = ["LicenseRef-Proprietary"]
@@ -69,6 +74,10 @@ allow = ["LicenseRef-Proprietary"]
 
 [[licenses.exceptions]]
 crate = "vapor-library"
+allow = ["LicenseRef-Proprietary"]
+
+[[licenses.exceptions]]
+crate = "vapor-dj"
 allow = ["LicenseRef-Proprietary"]
 
 [advisories]
