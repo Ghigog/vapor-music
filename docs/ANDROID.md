@@ -155,6 +155,19 @@ that a keep rule for classes and methods is not sufficient.
 **Turning it back on is a task with a phone in someone's hand.** Not a line
 changed on the way past.
 
+**It has to be set from `afterEvaluate`, and the first attempt was not.**
+`plugins.withId("com.android.application")` fires the instant the plugin is
+applied — the first line of `app/build.gradle.kts` — so an assignment there runs
+*before* that file's own `buildTypes { getByName("release") { isMinifyEnabled =
+true } }`, and is overwritten by it. Nothing reports this: the build is green and
+the APK comes out the same size as before. `v2.0.0-rc.4` shipped that way, with
+R8 still on, and was found only by comparing the published APK's byte count
+against the previous one. `applicationIdSuffix` above survives the same
+lifecycle only because nothing else assigns it.
+
+`verify-apk.mjs` now fails on any obfuscated class name, so the override going
+quiet again turns the build red rather than shipping.
+
 ### `verify-apk.mjs`, and what it does not do
 
 `vapor-app/scripts/verify-apk.mjs` runs in CI on every release APK. It pulls the

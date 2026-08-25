@@ -43,36 +43,42 @@ allprojects {
 // asks for and the only order that is any use.
 subprojects {
     plugins.withId("com.android.application") {
+        // R8 off, and it has to be set from `afterEvaluate` to stay off.
+        //
+        // The first attempt at this set `isMinifyEnabled = false` in the
+        // `configure` block above, and it silently did nothing. `plugins.withId`
+        // fires the moment the Android plugin is applied — which is the first
+        // line of `app/build.gradle.kts` — so the assignment ran, and then that
+        // file's own `buildTypes { getByName("release") { isMinifyEnabled =
+        // true } }` executed afterwards and put it back.
+        //
+        // Nothing reported this. The build was green, the APK was byte-for-byte
+        // the same size as the one before it, and v2.0.0-rc.4 shipped with R8
+        // still on. `applicationIdSuffix` above survives only because no other
+        // build script sets that property; anything the template *does* set has
+        // to be overridden after the template has had its turn.
+        //
+        // Why R8 is off at all: rc.3 was the first release APK this project
+        // ever produced, and the first time R8 ran against it. It crashed on
+        // launch. The JNI names, the classes wry resolves by string, the
+        // embedded frontend and the native libraries were all verified intact
+        // in that APK, so the keep rules in `app/proguard-rules.pro` were not
+        // the problem — the likeliest remaining mechanism is field renaming on
+        // the plugin config classes, which are deserialised reflectively at
+        // startup. Unconfirmed, and not worth another guess.
+        //
+        // `scripts/verify-apk.mjs` now fails the build if R8 ran at all, so
+        // this cannot go quiet a second time. Turning minification back on is a
+        // task with a phone in someone's hand, and it means changing that check
+        // too — deliberately, which is the point.
+        afterEvaluate {
+            extensions.configure<com.android.build.gradle.AppExtension>("android") {
+                buildTypes.getByName("release").isMinifyEnabled = false
+            }
+        }
+
         extensions.configure<com.android.build.gradle.AppExtension>("android") {
             buildTypes.getByName("debug").applicationIdSuffix = ".debug"
-
-            // R8 off, until something has actually proved it safe here.
-            //
-            // The v2.0.0-rc.3 APK crashed on launch. It is the first release
-            // APK this project has ever produced, which makes it also the first
-            // time R8 has ever run: every earlier Android build was `--debug`,
-            // where minification is off, and the debug build launched fine on a
-            // Pixel 9 (AND-4). Between the build that works and the build that
-            // does not there are two differences — the signing key and R8 — and
-            // a signature cannot crash a running process.
-            //
-            // `app/proguard-rules.pro` keeps `com.dylangrowcoot.vapormusic.**`
-            // and every native method name, which is the rule that *should*
-            // have covered it. It evidently did not cover enough — `MainActivity`
-            // extends `TauriActivity`, and the Tauri and wry classes underneath
-            // it are not in that package — and the honest response to "my keep
-            // rules were incomplete" is not a second guess at the keep rules.
-            //
-            // What it costs: the Kotlin half of this app is two files. The APK
-            // is dominated by `libvapor_app_lib.so`, which R8 never touches, so
-            // the size difference is not something anybody downloading this
-            // will notice.
-            //
-            // Turning it back on is a task with a device in someone's hand, not
-            // a line changed on the way past. `app/build.gradle.kts` sets this
-            // true in its release block; the CLI rewrites that file from its
-            // template on every build (AND-3), so the override lives here.
-            buildTypes.getByName("release").isMinifyEnabled = false
 
             val keystoreProperties = rootProject.file("keystore.properties")
             if (keystoreProperties.exists()) {

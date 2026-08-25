@@ -161,12 +161,49 @@ for (const cls of resolved) {
 }
 
 // ---------------------------------------------------------------------------
+// 3. R8 must not have run at all.
+//
+// Minification is off for the release build (gen/android/build.gradle.kts),
+// because the first APK it ever touched crashed on launch. This check exists
+// because turning it off is easy to do and easy to *think* you have done: the
+// first attempt set `isMinifyEnabled = false` at a point in Gradle's lifecycle
+// where the Android template's own release block overwrote it afterwards. The
+// build stayed green, the APK came out the same size as the broken one, and
+// v2.0.0-rc.4 shipped with R8 still on.
+//
+// The tell is a class whose last package segment is a single lowercase letter.
+// R8 renames what it cannot see referenced, starting at `a`, and nothing in
+// either of these packages is legitimately named that.
+//
+// If minification is ever turned back on deliberately — with a device to prove
+// it — this check has to be removed in the same change. That is the point of
+// it: the decision becomes visible instead of silent.
+// ---------------------------------------------------------------------------
+const renamed = [
+  ...new Set(
+    dexText.match(/L(?:app\/tauri|com\/dylangrowcoot)[A-Za-z0-9/$_]*\/[a-z];/g) ??
+      [],
+  ),
+];
+
+if (renamed.length > 0) {
+  problems.push(
+    `R8 ran on this APK, and it is supposed to be off.\n    ` +
+      `${renamed.length} obfuscated class name(s), e.g. ${renamed.slice(0, 3).join(", ")}\n    ` +
+      `gen/android/build.gradle.kts sets isMinifyEnabled = false from ` +
+      `afterEvaluate.\n    If that stopped taking effect, the release build ` +
+      `type is being reconfigured after it.`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 console.log(`apk        ${apk}`);
 console.log(`dex        ${dexes.join(", ")}`);
 console.log(`native     ${sos.join(", ")}`);
 console.log(`jni exports checked      ${jni.length}`);
 console.log(`resolved classes checked ${resolved.length}`);
+console.log(`obfuscated class names     ${renamed.length} (expected 0)`);
 
 if (problems.length > 0) {
   console.error(
