@@ -144,7 +144,7 @@ at all.
 | **AUD-23** the front door | **moved to v2.1.0** (2026-08-24) — as onboarding, not marketing. Unchanged in scope; it is simply not what v1 waits on | Nothing |
 | **AUD-21** the updater keypair | **done 2026-08-24** — `tauri.conf.json` now carries `E17781A5EB1BC8D6`, the public half of the pair rotated on 2026-08-22. No new key was needed; the private half was on disk all along | Dylan: the key file's contents into `TAURI_SIGNING_PRIVATE_KEY`, and a backup |
 | **REL-001** release signing | **wired 2026-08-24** — Android `signingConfigs` in `gen/android/build.gradle.kts`, four secrets read by `release.yml` | Dylan: `keytool -genkeypair`, then the four repository secrets |
-| **AUD-22** first release | **in progress** — `release.yml` now builds four platforms and the version gate accepts an `-rc` | The two key steps above, and nothing else |
+| **AUD-22** first release | **done 2026-08-25** — `v2.0.0-rc.7` published all 4 platforms (macOS, Windows, Linux, Android) with signed bundles, APK, SHA256SUMS and updater manifest | — |
 
 ## What is actually decided
 
