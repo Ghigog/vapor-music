@@ -43,39 +43,26 @@ allprojects {
 // asks for and the only order that is any use.
 subprojects {
     plugins.withId("com.android.application") {
-        // R8 off, and it has to be set from `afterEvaluate` to stay off.
+        // R8 is neutered from `app/proguard-rules.pro`, not from here.
         //
-        // The first attempt at this set `isMinifyEnabled = false` in the
-        // `configure` block above, and it silently did nothing. `plugins.withId`
-        // fires the moment the Android plugin is applied — which is the first
-        // line of `app/build.gradle.kts` — so the assignment ran, and then that
-        // file's own `buildTypes { getByName("release") { isMinifyEnabled =
-        // true } }` executed afterwards and put it back.
+        // Two attempts to set `isMinifyEnabled = false` from this file both
+        // failed, and both failed silently:
         //
-        // Nothing reported this. The build was green, the APK was byte-for-byte
-        // the same size as the one before it, and v2.0.0-rc.4 shipped with R8
-        // still on. `applicationIdSuffix` above survives only because no other
-        // build script sets that property; anything the template *does* set has
-        // to be overridden after the template has had its turn.
+        //   1. In the `configure` block below. `plugins.withId` fires the
+        //      moment the Android plugin is applied — the first line of
+        //      `app/build.gradle.kts` — so the template's own release block ran
+        //      afterwards and set it back. v2.0.0-rc.4 shipped that way.
+        //   2. From `afterEvaluate`. AGP registers its own `afterEvaluate` when
+        //      the plugin is applied, which is *before* this one, and it has
+        //      created the variants by the time this runs. v2.0.0-rc.5 failed
+        //      the APK check on it — caught this time, published nothing.
         //
-        // Why R8 is off at all: rc.3 was the first release APK this project
-        // ever produced, and the first time R8 ran against it. It crashed on
-        // launch. The JNI names, the classes wry resolves by string, the
-        // embedded frontend and the native libraries were all verified intact
-        // in that APK, so the keep rules in `app/proguard-rules.pro` were not
-        // the problem — the likeliest remaining mechanism is field renaming on
-        // the plugin config classes, which are deserialised reflectively at
-        // startup. Unconfirmed, and not worth another guess.
-        //
-        // `scripts/verify-apk.mjs` now fails the build if R8 ran at all, so
-        // this cannot go quiet a second time. Turning minification back on is a
-        // task with a phone in someone's hand, and it means changing that check
-        // too — deliberately, which is the point.
-        afterEvaluate {
-            extensions.configure<com.android.build.gradle.AppExtension>("android") {
-                buildTypes.getByName("release").isMinifyEnabled = false
-            }
-        }
+        // There is no third guess at the lifecycle. `-dontshrink`,
+        // `-dontoptimize` and `-dontobfuscate` in `app/proguard-rules.pro` make
+        // R8 a pass-through instead, which is the same outcome by a route that
+        // does not depend on when anything is evaluated: that file is ours, the
+        // CLI does not rewrite it (AND-3 covers `build.gradle.kts` only), and
+        // the template already wires it in through `proguardFiles`.
 
         extensions.configure<com.android.build.gradle.AppExtension>("android") {
             buildTypes.getByName("debug").applicationIdSuffix = ".debug"

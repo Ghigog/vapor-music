@@ -45,3 +45,35 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# ---------------------------------------------------------------------------
+# R8 does nothing. Added 2026-08-25, after two failed attempts to turn it off.
+#
+# `isMinifyEnabled = true` is in Tauri's own template for the release build
+# type, and the CLI rewrites `app/build.gradle.kts` from that template on every
+# `tauri android build` (AND-3). Overriding the property from the root build
+# script does not work: set in a `plugins.withId` callback it is overwritten by
+# the template moments later (v2.0.0-rc.4 shipped minified because of it), and
+# set in `afterEvaluate` it lands after AGP has already created the variants
+# (v2.0.0-rc.5 failed the APK check on it).
+#
+# These three do not depend on Gradle's evaluation order at all. R8 still runs
+# as a dexer and changes nothing on the way through, which is the outcome that
+# was wanted. This file is not regenerated, and the template already passes it
+# to `proguardFiles`.
+#
+# Why R8 is unwanted: v2.0.0-rc.3 was the first release APK this project ever
+# built and the first time R8 ever ran here, and it crashed on launch. The JNI
+# symbols, the classes wry resolves by string, the embedded frontend and the
+# native libraries were all verified intact in that APK, so the keep rules
+# above were not the problem. The likeliest remaining mechanism is field
+# renaming on the plugin config classes, which are deserialised reflectively at
+# startup — unconfirmed, and not worth a fourth guess.
+#
+# `scripts/verify-apk.mjs` fails the build if any obfuscated class name reaches
+# the APK, so if these stop working it is red rather than quiet. Re-enabling
+# minification means deleting these three lines *and* that check, deliberately,
+# with a device to hand.
+-dontshrink
+-dontoptimize
+-dontobfuscate
