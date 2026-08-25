@@ -72,8 +72,11 @@
 #
 # `scripts/verify-apk.mjs` fails the build if any obfuscated class name reaches
 # the APK, so if these stop working it is red rather than quiet. Re-enabling
-# minification means deleting these three lines *and* that check, deliberately,
+# minification means deleting these rules *and* that check, deliberately,
 # with a device to hand.
 -dontshrink
 -dontoptimize
 -dontobfuscate
+-dontwarn **
+-ignorewarnings
+

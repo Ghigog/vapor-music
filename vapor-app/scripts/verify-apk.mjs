@@ -190,9 +190,8 @@ if (renamed.length > 0) {
   problems.push(
     `R8 ran on this APK, and it is supposed to be off.\n    ` +
       `${renamed.length} obfuscated class name(s), e.g. ${renamed.slice(0, 3).join(", ")}\n    ` +
-      `gen/android/build.gradle.kts sets isMinifyEnabled = false from ` +
-      `afterEvaluate.\n    If that stopped taking effect, the release build ` +
-      `type is being reconfigured after it.`,
+      `app/proguard-rules.pro disables shrinking and obfuscation.\n    ` +
+      `If that stopped taking effect, check app/proguard-rules.pro.`,
   );
 }
 
