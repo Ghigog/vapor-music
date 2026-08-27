@@ -311,12 +311,46 @@ where
     let _ = PRESS_HANDLER.set(Box::new(handler));
 }
 
+/// Smallest gap between two progress posts.
+///
+/// The pass reports once per analysed track, and a local or cached track is
+/// done in well under a fifth of a second — so unthrottled this posted
+/// notifications faster than Android accepts them: `NotificationService:
+/// Package enqueue rate is 5.18. Shedding ...` (AND-8). Shed notifications are
+/// the visible half. The other half is five `startForegroundService` calls a
+/// second, each owing a `startForeground`, which is the machinery that killed
+/// AND-5.
+///
+/// A second is far slower than anyone reads a counter and far below what the
+/// rate limiter objects to. `media::POSITION_REFRESH` is the same idea for the
+/// playback path, which has had it since it was written.
+const ANALYSIS_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// When the last progress post went out, so the next one can be dropped.
+static LAST_ANALYSIS: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
 /// Tell the service a pass is running, and how far it has got.
 ///
 /// Analysis is a long, download-bound job, and a backgrounded app is frozen —
 /// so before this it stopped the moment someone switched to another app, with
 /// nothing playing to keep the service up on playback's behalf.
 pub fn service_analysis(done: usize, total: usize, active: bool) {
+    // Starting and stopping always go through; only progress is throttled.
+    // A dropped `active = false` leaves a notification up for a pass that has
+    // finished, and a dropped first post is a pass that looks like it never
+    // began — which is the bug the call site above this one exists to fix.
+    if let Ok(mut last) = LAST_ANALYSIS.lock() {
+        if active {
+            match *last {
+                Some(at) if at.elapsed() < ANALYSIS_REFRESH => return,
+                _ => *last = Some(std::time::Instant::now()),
+            }
+        } else {
+            *last = None;
+        }
+    }
+
     report(with_context(|env, context| {
         env.call_static_method(
             service_class(),

@@ -2190,6 +2190,44 @@ the static pointing at a collected object.
 that installed. Nothing about the failure is visible from a build — which is the
 argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
+### AND-8 : the analysis pass posted notifications faster than Android accepts (fixed 2026-08-27)
+
+Found in AND-7's logcat, and not the cause of it:
+
+```
+E NotificationService: Package enqueue rate is 5.184566.
+  Shedding 0|com.dylangrowcoot.vapormusic|1|null|10547
+```
+
+`android::service_analysis` is called from the analysis progress callback,
+which fires once per analysed track. A local or cached track is done in well
+under a fifth of a second, so the pass posted a notification — and made a
+`startForegroundService` call — more than five times a second, for as long as
+the pass ran. Android shed them.
+
+Two costs. The visible one is that the progress notification and its Stop
+button stop updating when the shedding starts. The other is that each
+`startForegroundService` owes a `startForeground` within a few seconds, and
+that unanswered pair is exactly what killed AND-5. Running it at 5 Hz for
+hours is asking for an intermittent, uncatchable repeat.
+
+Fixed with a one-second floor between progress posts. Start and stop always go
+through: a dropped `active = false` leaves a notification up for a finished
+pass, and a dropped first post is a pass that looks like it never began, which
+is the bug the call site at `start_analysis` already exists to prevent.
+
+**The playback path was accused first and was innocent.** `media::worth_sending`
+has gated it since it was written — `POSITION_REFRESH = 5.0`, so position
+updates go out at 0.2 Hz and everything else only on a real change. The first
+reading of this log blamed `service_update` for the enqueue rate and was wrong;
+reading `worth_sending` is what corrected it. The analysis path simply never
+got the same treatment.
+
+Landed as its own commit, separate from AND-7's fix, so that if the tag that
+carries both misbehaves either can be reverted without the other. AND-7's
+effect is measured in isolation (155.7 MB to 53.8 MB peak) and does not depend
+on this one.
+
 ### AND-7 : the analysis pass ran the phone out of memory (fixed 2026-08-27)
 
 `v2.0.0-rc.8` launched, played, and then aborted after about fifteen minutes
