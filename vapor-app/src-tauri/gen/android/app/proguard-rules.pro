@@ -66,9 +66,16 @@
 # built and the first time R8 ever ran here, and it crashed on launch. The JNI
 # symbols, the classes wry resolves by string, the embedded frontend and the
 # native libraries were all verified intact in that APK, so the keep rules
-# above were not the problem. The likeliest remaining mechanism is field
-# renaming on the plugin config classes, which are deserialised reflectively at
-# startup — unconfirmed, and not worth a fourth guess.
+# above were not the problem.
+#
+# CORRECTED 2026-08-27: R8 was not the problem either. These three rules did
+# work — rc.7's APK is provably unobfuscated — and it crashed exactly the same,
+# because the crash was `PlaybackService` breaking the `startForegroundService`
+# / `startForeground` contract and being killed for it. See AND-5.
+#
+# They stay because R8 buys this project nothing (the APK is dominated by
+# `libvapor_app_lib.so`, which R8 never touches) and turning it back on is a
+# change that wants a device to hand. They are not a fix for anything.
 #
 # `scripts/verify-apk.mjs` fails the build if any obfuscated class name reaches
 # the APK, so if these stop working it is red rather than quiet. Re-enabling

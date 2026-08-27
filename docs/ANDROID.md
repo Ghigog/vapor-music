@@ -102,6 +102,12 @@ it:
 Added 2026-08-24, for the first build that goes to somebody who is not Dylan.
 Everything above this section is the debug loop and is unchanged by it.
 
+**If a release APK misbehaves, get a logcat before you change a line.** Five
+tags (rc.3 to rc.7) went to a cause reasoned from the build and never from the
+device, and all five were wrong; the first logcat took two minutes and named the
+class, the method and the line. See AND-5, and `## Reading a crash off the
+device` below.
+
 Two things are different from the debug build, and both matter more than they
 look:
 
@@ -141,19 +147,23 @@ guess until something looks:
 | Frontend missing | `/index.html` and `/assets/index-*.js` are embedded in `libvapor_app_lib.so`, as Tauri v2 does |
 | Wrong or missing native library | `lib/arm64-v8a/` has `libvapor_app_lib.so` and `libc++_shared.so` |
 
-So the keep rules in `app/proguard-rules.pro` did their job, and the cause is
-something they were never going to cover. The likeliest remaining mechanism is
-**field** renaming: `app.tauri.plugin.Config`, `CommandData` and
-`RegisterListenerArgs` are deserialised reflectively from the `tauri.conf.json`
-in the APK's assets at startup, and R8 renames fields on classes it is keeping.
+So the keep rules in `app/proguard-rules.pro` did their job, and the cause was
+something they were never going to cover.
 
-That is not confirmed — confirming it needs `mapping.txt` or logcat from a
-device. It is written down because the next person to consider turning
-minification back on should know the shape of what they are re-enabling, and
-that a keep rule for classes and methods is not sufficient.
+**It was not R8 at all — see AND-5.** This section used to name reflective
+*field* renaming on `app.tauri.plugin.Config` as the likeliest remaining
+mechanism. It was wrong. rc.7 shipped with R8 provably changing nothing (zero
+obfuscated names in the APK, verified by `verify-apk.mjs`) and crashed
+identically. The real cause was `PlaybackService` calling
+`startForegroundService` and then stopping without `startForeground`, which
+Android punishes with an uncatchable
+`ForegroundServiceDidNotStartInTimeException`. One logcat named it.
 
-**Turning it back on is a task with a phone in someone's hand.** Not a line
-changed on the way past.
+The R8-neutering below stays because it is now load-bearing for nothing and
+harmless, and because re-enabling minification is still a change that wants a
+device to hand — but it is no longer a suspect, and nobody should spend another
+evening on it. **Turning it back on is a task with a phone in someone's hand.**
+Not a line changed on the way past.
 
 **Corrected 2026-08-25: it cannot be set from this file at all.** Both attempts
 failed, and the note below is kept because the reasoning was right and the
@@ -189,6 +199,31 @@ lifecycle only because nothing else assigns it.
 
 `verify-apk.mjs` now fails on any obfuscated class name, so the override going
 quiet again turns the build red rather than shipping.
+
+### Reading a crash off the device
+
+Wireless debugging is enough; pairing survives across sessions, the connection
+does not, so `adb connect <ip>:<port>` with the port on the phone's Wireless
+debugging screen. With more than one transport attached every command needs
+`-s <serial>`.
+
+```bash
+ADB=~/Library/Android/sdk/platform-tools/adb
+$ADB devices -l
+DEV=<serial or ip:port>
+
+$ADB -s $DEV install -r <apk>
+$ADB -s $DEV logcat -c
+$ADB -s $DEV shell monkey -p com.dylangrowcoot.vapormusic -c android.intent.category.LAUNCHER 1
+sleep 8
+$ADB -s $DEV logcat -d -b main,crash,system > /tmp/vapor-crash.txt
+grep -n -E 'FATAL EXCEPTION|beginning of crash|signal [0-9]+ \(SIG|backtrace:' /tmp/vapor-crash.txt
+```
+
+`monkey -p` rather than `am start -n`, because it launches by package and does
+not need the activity's class name to be right. The release `.so` is **not**
+stripped, so a native crash comes back with real function names rather than
+hex.
 
 ### `verify-apk.mjs`, and what it does not do
 

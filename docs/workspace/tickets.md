@@ -2190,6 +2190,57 @@ the static pointing at a collected object.
 that installed. Nothing about the failure is visible from a build — which is the
 argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
+### AND-5 : the release APK killed itself on launch (fixed 2026-08-27)
+
+`v2.0.0-rc.3` was the first release APK this project ever built, and it closed
+the moment it opened. So did rc.4, rc.5, rc.6 and rc.7. Five tags went to R8 —
+keep rules, `isMinifyEnabled` from two different points in the Gradle
+lifecycle, and finally `-dontshrink`/`-dontoptimize`/`-dontobfuscate`, which
+did work: rc.7's APK is provably unobfuscated, and it crashed exactly the same.
+
+R8 was never involved. From logcat, on the first device this had ever been
+attached to:
+
+```
+FATAL EXCEPTION: main
+android.app.RemoteServiceException$ForegroundServiceDidNotStartInTimeException:
+  Context.startForegroundService() did not then call Service.startForeground():
+  ServiceRecord{... com.dylangrowcoot.vapormusic/.PlaybackService ...}
+    at PlaybackService$Companion.update(SourceFile:363)
+    at PlaybackService$Companion.stop(SourceFile:399)
+```
+
+`startForegroundService` is a promise that `startForeground` follows within a
+few seconds, and Android holds the app to it even if the service stops first.
+`PlaybackService.stop()` was `update(context, "", "", false, 0, 0)` — a
+delivery that starts the service — and `onStartCommand` answered it with
+"nothing left to stay up for", `stopSelf()`, and no `startForeground`. The
+framework posts `ForegroundServiceDidNotStartInTimeException` to the main
+thread; it is not catchable, and the process dies.
+
+On a cold start the Rust side publishes "nothing playing" before anything has
+played, so `stop()` is the *first* thing the service ever hears. The crash was
+therefore guaranteed on every launch of a fresh install.
+
+Fixed in `PlaybackService.kt`, twice over: `onStartCommand` now calls
+`startForeground` before it stops, and `send()` does not start the service at
+all for a delivery that says nothing is happening when it is not already
+running.
+
+**Why the debug loop never showed it.** Not confirmed, and worth holding
+loosely: the likeliest reading is that the debug installs were launched on a
+phone that already had library state, so the first publish carried a title and
+took the `publish()` path instead. A fresh install with nothing playing is the
+crashing case, and a fresh install is what every release APK was.
+
+**What it cost, and the lesson that is actually transferable.** Five tags and
+an evening, spent on a hypothesis nobody could test, because "the first APK
+where R8 ran is the first APK that crashed" is a very good correlation and a
+completely wrong cause. Every one of those five attempts was reasoned from the
+build; none was reasoned from the device. The first logcat took two minutes and
+named the class, the method and the line. `docs/ANDROID.md` now says to get one
+before touching anything.
+
 ### VDJ-4 : the identify pass has never been run (done 2026-08-23 — it does not need running)
 
 `identify_library` asks Deezer for each track's tempo and album genre, and uses

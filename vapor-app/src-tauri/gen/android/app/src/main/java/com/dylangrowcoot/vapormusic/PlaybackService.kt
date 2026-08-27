@@ -132,6 +132,22 @@ class PlaybackService : android.app.Service() {
 
         // Nothing left to stay up for.
         if (!playing && title.isEmpty() && !analysing) {
+            /*
+             * Answer the promise before going, even though we are going.
+             *
+             * `startForegroundService` is a promise that `startForeground`
+             * follows within a few seconds, and Android holds the app to it
+             * whatever happens in between: stopping without one is
+             * `ForegroundServiceDidNotStartInTimeException`, which is not an
+             * exception the app can catch — the framework posts it to the main
+             * thread and the process dies. That is what killed every release
+             * APK from v2.0.0-rc.3 to rc.7 on launch, and none of it was R8.
+             *
+             * The notification goes up and comes down in the same breath, so
+             * nothing is drawn. It is the documented way to answer a start you
+             * no longer want.
+             */
+            enterForeground(notification())
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -154,9 +170,9 @@ class PlaybackService : android.app.Service() {
     }
 
     private fun publish() {
-        val session = session ?: return
-
-        session.setMetadata(
+        // Null-safe rather than an early return: whatever the session is doing,
+        // this call owes Android a `startForeground` and has to reach the end.
+        session?.setMetadata(
             MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
@@ -164,7 +180,7 @@ class PlaybackService : android.app.Service() {
                 .build(),
         )
 
-        session.setPlaybackState(
+        session?.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY or
@@ -184,6 +200,17 @@ class PlaybackService : android.app.Service() {
                 .build(),
         )
 
+        enterForeground(notification())
+    }
+
+    /**
+     * The notification this service is required to have, for whichever of its
+     * two reasons is current.
+     *
+     * Separate from [publish] because [onStartCommand] needs one on the way out
+     * as well, where there is no session state left to publish.
+     */
+    private fun notification(): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -229,7 +256,7 @@ class PlaybackService : android.app.Service() {
                 )
                 .setStyle(
                     MediaStyle()
-                        .setMediaSession(session.sessionToken)
+                        .setMediaSession(session?.sessionToken)
                         // Which of the three stay visible when the shade is
                         // collapsed: back, play/pause, forward.
                         .setShowActionsInCompactView(0, 1, 2),
@@ -257,8 +284,11 @@ class PlaybackService : android.app.Service() {
                 )
         }
 
-        val notification: Notification = builder.build()
+        return builder.build()
+    }
 
+    /** `startForeground`, with the type Android 14 and up require. */
+    private fun enterForeground(notification: Notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -271,6 +301,7 @@ class PlaybackService : android.app.Service() {
     }
 
     override fun onDestroy() {
+        started = false
         if (wakeLock?.isHeld == true) wakeLock?.release()
         wakeLock = null
         session?.isActive = false
@@ -357,13 +388,7 @@ class PlaybackService : android.app.Service() {
                 putExtra(EXTRA_POSITION, position)
                 putExtra(EXTRA_DURATION, duration)
             }
-            // `startForegroundService` promises a `startForeground` within a few
-            // seconds, which `onStartCommand` does on every delivery.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            send(context, intent, wanted = playing || title.isNotEmpty())
         }
 
         /**
@@ -381,11 +406,7 @@ class PlaybackService : android.app.Service() {
                 putExtra(EXTRA_DONE, done)
                 putExtra(EXTRA_TOTAL, total)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            send(context, intent, wanted = active)
         }
 
         /**
@@ -397,6 +418,38 @@ class PlaybackService : android.app.Service() {
         @JvmStatic
         fun stop(context: Context) {
             update(context, "", "", false, 0L, 0L)
+        }
+
+        /**
+         * Whether the service is up, or on its way up.
+         *
+         * Set when a delivery is sent rather than in `onCreate`, so a stop that
+         * overtakes a start still reaches the service instead of being dropped
+         * in the window before it exists.
+         */
+        @Volatile
+        private var started = false
+
+        /**
+         * Deliver [intent], starting the service if there is a reason for it to
+         * be running.
+         *
+         * A delivery that says "nothing is happening" to a service that is not
+         * running is nothing at all. It used to be a `startForegroundService`
+         * followed immediately by `stopSelf`, which is the fatal pair described
+         * in [onStartCommand]: on a cold start Rust publishes "nothing playing"
+         * before anything has played, so the app killed itself on launch every
+         * time. [onStartCommand] keeps the contract on its own now; this keeps
+         * the promise from being made when there was never anything to promise.
+         */
+        private fun send(context: Context, intent: Intent, wanted: Boolean) {
+            if (!wanted && !started) return
+            started = true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         private fun PlaybackService.action(action: Long): PendingIntent =
