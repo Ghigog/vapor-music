@@ -269,6 +269,40 @@ jobs:
           if (-not $dumpbin) { Write-Host 'no x64 dumpbin on this image'; exit 0 }
           Write-Host "dumpbin: $($dumpbin.FullName)"
 
+          # The decisive fact, which this step used to leave out.
+          #
+          # System32's comctl32 is 5.82 and has never exported
+          # `TaskDialogIndirect`; version 6, in WinSxS, does. The loader reaches
+          # version 6 only through the activation context that an embedded
+          # manifest declaring Microsoft.Windows.Common-Controls 6.0.0.0
+          # creates, which is what `build.rs` asks the linker for on every
+          # target.
+          #
+          # So "TaskDialogIndirect missing from System32\comctl32.dll" in the
+          # result below is *also* what a correctly manifested binary looks like
+          # to a walker that has no activation context. It is the answer only if
+          # the manifest is absent, and until this step said which, reading that
+          # line as the cause was a guess. Ask the binary instead.
+          Write-Host "--- embedded manifest ---"
+          $manifest = & $dumpbin.FullName /manifest $exe.FullName 2>$null
+          $lines = $manifest | Where-Object {
+            $_ -match 'assemblyIdentity|dependen|<\?xml|Common-Controls|requestedExecutionLevel'
+          }
+          if (-not $lines) {
+            Write-Host "  NO EMBEDDED MANIFEST"
+            Write-Host "  => that is the fault. build.rs asks for it with /MANIFEST:EMBED and"
+            Write-Host "     /MANIFESTDEPENDENCY; something is dropping it. Fix it there."
+          } else {
+            $lines | ForEach-Object { Write-Host "  $_" }
+            if ($manifest -match 'Common-Controls') {
+              Write-Host "  => Common-Controls 6 IS declared. The comctl32 line in the result"
+              Write-Host "     below is expected and is NOT the fault; look elsewhere."
+            } else {
+              Write-Host "  => a manifest is embedded but declares no Common-Controls"
+              Write-Host "     dependency. That is the fault, and build.rs is where it is fixed."
+            }
+          }
+
           # `/imports` prints "    <name>.dll" for each module, then one line
           # per imported symbol as "<hex hint> <name>", or "Ordinal <n>" when
           # the import is by ordinal. The trailing Summary section has lines
@@ -385,6 +419,11 @@ jobs:
             Write-Host "no missing export anywhere in the walked graph"
           } else {
             $problems | ForEach-Object { Write-Host $_ }
+            Write-Host ""
+            Write-Host "Read this against the embedded-manifest section above before"
+            Write-Host "concluding anything: a comctl32/TaskDialogIndirect line here is"
+            Write-Host "expected when the manifest is present, and is the fault only when"
+            Write-Host "it is not."
           }
           exit 0
 

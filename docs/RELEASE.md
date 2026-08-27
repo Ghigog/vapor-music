@@ -386,8 +386,11 @@ Decisions, not oversights. Each is recorded where it was made.
 
 * **Version lives in three files** which must agree:
   `vapor-app/package.json`, `vapor-app/src-tauri/tauri.conf.json`,
-  `vapor-app/src-tauri/Cargo.toml`. Nothing enforces that they agree. A release
-  that disagrees with itself is confusing in a way that surfaces weeks later.
+  `vapor-app/src-tauri/Cargo.toml`. The `verify` job compares all three against
+  the tag and fails the run if any disagree, with a prerelease suffix compared
+  away rather than required to match — the files carry a version, not a
+  channel, so `v2.0.0-rc.1` and `v2.0.0` both satisfy `2.0.0`. A release that
+  disagrees with itself is confusing in a way that surfaces weeks later.
 * **The updater is configured, and silent.** Desktop only —
   `tauri-plugin-updater` is not built for Android or iOS, which update through
   their stores. It checks once at launch on a background task and installs what
@@ -395,14 +398,25 @@ Decisions, not oversights. Each is recorded where it was made.
   underneath anyone mid-track. There is no update UI, which is deliberate: a
   check that only reported to a screen nobody has built would never install
   anything. Every failure is logged with an `updater:` prefix and swallowed.
-* **The release half is built and has never run.** `release.yml` produces the
-  bundles, the `.sig` files and the `latest.json` the app goes looking for, on a
-  `v*.*.*` tag. Zero runs as of 2026-08-24 — this bullet said "has not been
-  built" until the workflow landed on 2026-08-22 and was still saying it two
-  days later, which is the shape of staleness worth watching for in this
-  document. The updater stays inert until the first tag publishes, which is
-  fine, and is why the config went in first: the key and the endpoint are
-  compiled into the binary and cannot be added to a build already handed out.
+* **The release half runs on a `v*.*.*` tag.** `release.yml` produces the
+  bundles, the `.sig` files and the `latest.json` the app goes looking for.
+  Dated record rather than a status, because this bullet has gone stale twice:
+  it claimed the workflow had not been built until it landed on 2026-08-22, and
+  claimed it had not run until 2026-08-27, by which point it had run nine times
+  and published eight releases. (The second claim is what `docs_state_claims`
+  caught, three days after it stopped being true.) First run 2026-08-24 (`v2.0.0-rc.1`, which died
+  on the signing key); first publish on four platforms 2026-08-25
+  (`v2.0.0-rc.7`); first build shown to launch and play on a phone 2026-08-27
+  (`v2.0.0-rc.8`, see AND-5).
+* **A prerelease leaves the updater inert, by GitHub's rules rather than ours.**
+  `releases/latest` skips prereleases, and the endpoint compiled into every
+  binary is `releases/latest/download/latest.json`, so every `-rc` tag published
+  a manifest nothing would ever fetch. The first tag without an `-rc` suffix is
+  therefore the one that switches updating on for every install already out
+  there — worth treating as its own decision rather than a side effect of
+  dropping four characters from a tag name. It is also why the updater config
+  went in before the first build was handed to anyone: the key and the endpoint
+  are compiled into the binary and cannot be added to one already distributed.
 * **`[profile.dev.package."*"] opt-level = 2`** exists because unoptimised image
   decoding made thumbnail generation 330 ms per cover. It affects dev builds
   only; release is unaffected.

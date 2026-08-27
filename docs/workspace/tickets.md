@@ -2190,6 +2190,57 @@ the static pointing at a collected object.
 that installed. Nothing about the failure is visible from a build — which is the
 argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
+### AND-6 : the Windows shell job has been red since 2026-08-24 (open)
+
+`shell (windows-latest)` in `app.yml` dies at `cargo test` with
+`STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) before any test runs. Every push to
+`main` since `c2c7c26c` (2026-08-24 04:22, the last green) has failed this way,
+which is nine runs and counting, and it is why `main` was red throughout the
+v2.0.0-rc.1..rc.8 release push.
+
+Same *shape* as AND-2, which was fixed on 2026-08-17: `rfd`, by way of
+`tauri-plugin-dialog`, imports `TaskDialogIndirect`; only comctl32 version 6
+exports it; version 6 lives in WinSxS and the loader reaches it only through
+the activation context an embedded manifest creates. `build.rs` still carries
+that fix — `WindowsAttributes::new_without_app_manifest()` plus
+`/MANIFEST:EMBED` and `/MANIFESTDEPENDENCY` through `cargo:rustc-link-arg`, so
+it applies to every target and not only to bins.
+
+**Ruled out: a change in this repository.** The only commits between the last
+green and the first red are `fabc0ac` and `32a9a45`, which touch
+`release.yml`, four documents, the Android gradle files and one line of
+`tauri.conf.json`. No Rust, no `build.rs`, no `Cargo.toml`, no dependency.
+
+**Not ruled out: the runner image.** It has moved twice across the window and
+now reports `win25-vs2026 20260824.214.3`, with dumpbin coming from Visual
+Studio 18 and MSVC 14.51.36231. A cache miss forcing a relink on the new
+toolchain would explain why the break appears at exactly this point rather than
+when `build.rs` last changed. That is a hypothesis, not a finding.
+
+**What the diagnostic could not say, and now can.** The DLL walker reported
+"MISSING from System32\comctl32.dll: TaskDialogIndirect", which reads as the
+answer and is not one: System32's comctl32 is 5.82 and never exported it, so a
+walker with no activation context prints that line for a *correctly* manifested
+binary too. The step now dumps the binary's embedded manifest first, which
+splits the space cleanly:
+
+* no manifest, or a manifest without Common-Controls → the link arguments are
+  not reaching the lib unit-test harness on this toolchain, and `build.rs` is
+  where it is fixed;
+* manifest present and declaring Common-Controls 6.0.0.0 → the activation
+  context is not the cause at all, the comctl32 line is a red herring, and the
+  0xc0000139 is coming from something else in the graph.
+
+No fix attempted until that comes back. AND-5 cost five tags to a cause that
+was reasoned from a build artifact instead of measured, and this is the same
+trap with the same shape.
+
+**The shipped Windows app is a separate question.** The binary that fails is
+the lib unit-test harness. `vapor-app.exe` gets the same manifest by the same
+route, so it is probably fine — but "probably" is what AND-5 was made of, and
+nobody has launched the Windows build. Do that before `v2.0.0`, and open the
+folder picker, which is the feature that would fail.
+
 ### AND-5 : the release APK killed itself on launch (fixed 2026-08-27)
 
 `v2.0.0-rc.3` was the first release APK this project ever built, and it closed
