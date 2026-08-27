@@ -2227,6 +2227,25 @@ Fixed in `PlaybackService.kt`, twice over: `onStartCommand` now calls
 all for a delivery that says nothing is happening when it is not already
 running.
 
+**Confirmed on device.** `v2.0.0-rc.8` installs and launches on the phone and
+stays up; `logcat -b main,crash,system` across a cold start has no
+`FATAL EXCEPTION` and no native signal. Six tags in, this is the first time
+anything in this project has been shown to *run* on Android from a signed
+release build rather than shown to compile.
+
+The fix was also verified present in the shipped APK rather than assumed:
+rc.8's `classes.dex` carries `enterForeground` and `started`, neither of which
+is in rc.7's. Worth the two minutes it cost, because the two APKs came out the
+*same byte count* — 41,128,206 — with zipalign padding absorbing a 424-byte DEX
+change, and an identical byte count is exactly the signal that caught rc.4
+shipping a change that had silently not applied.
+
+**Launching is not playing.** Only the cold start is proven. `send()` now keeps
+the service down until something plays, so the first press of play is the next
+thing that has never been exercised on a device — and `PlaybackService` is
+precisely what changed. If it misbehaves there it will read as no sound, or a
+crash on play, rather than a crash on launch.
+
 **Why the debug loop never showed it.** Not confirmed, and worth holding
 loosely: the likeliest reading is that the debug installs were launched on a
 phone that already had library state, so the first publish carried a title and
