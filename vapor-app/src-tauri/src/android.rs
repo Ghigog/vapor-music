@@ -327,8 +327,7 @@ where
 const ANALYSIS_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// When the last progress post went out, so the next one can be dropped.
-static LAST_ANALYSIS: std::sync::Mutex<Option<std::time::Instant>> =
-    std::sync::Mutex::new(None);
+static LAST_ANALYSIS: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 /// Tell the service a pass is running, and how far it has got.
 ///
