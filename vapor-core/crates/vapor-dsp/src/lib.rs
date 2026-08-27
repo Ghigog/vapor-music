@@ -164,9 +164,9 @@ pub fn retrack_beats(audio: &decode::DecodedAudio, bpm: f32) -> Result<Vec<f32>,
     // The same whole-track onset function `analyze_decoded` tracks against, so
     // a re-tracked grid is comparable with a freshly analysed one. The tempo
     // estimate it also carries is discarded: the caller's number is the point.
-    let tempo_spec = spectrum::for_tempo(&audio.samples, rate);
-    let tempo = tempo::estimate_windowed(
-        &tempo_spec,
+    let tempo = tempo::estimate_windowed_streaming(
+        &audio.samples,
+        rate,
         TEMPO_SKIP_SECS as f32,
         TEMPO_WINDOW_SECS as f32,
     )
@@ -269,9 +269,9 @@ pub fn analyze_decoded(audio: &decode::DecodedAudio) -> Result<Analysis, Analysi
     //
     // Tempo is picked from a representative middle span of the same onset
     // function; see `tempo::estimate_windowed` for why the two differ.
-    let tempo_spec = spectrum::for_tempo(&audio.samples, rate);
-    let tempo = tempo::estimate_windowed(
-        &tempo_spec,
+    let tempo = tempo::estimate_windowed_streaming(
+        &audio.samples,
+        rate,
         TEMPO_SKIP_SECS as f32,
         TEMPO_WINDOW_SECS as f32,
     )

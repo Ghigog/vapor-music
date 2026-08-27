@@ -14,7 +14,7 @@
 //! failure mode in every beat tracker, so they are handled explicitly in
 //! `pick_tempo` rather than left to the raw autocorrelation peak.
 
-use crate::spectrum::Spectrogram;
+use crate::spectrum::{self, Spectrogram, TEMPO_HOP, TEMPO_WINDOW};
 
 /// Tempo search range. The real library spans 69.5–184.6 BPM; this is widened
 /// to the conventional range so the estimator is not tuned to one collection.
@@ -57,10 +57,45 @@ pub fn estimate_windowed(
     if spec.frames.len() < 32 {
         return None;
     }
+    estimate_from_odf(
+        onset_detection_function(spec),
+        spec.frame_rate(),
+        skip_secs,
+        window_secs,
+    )
+}
 
-    let odf = onset_detection_function(spec);
-    let odf_rate = spec.frame_rate();
+/// [`estimate_windowed`] without building a spectrogram in order to throw it
+/// away.
+///
+/// Identical output: the flux reads two neighbouring frames and nothing else,
+/// so the full `Vec<Vec<f32>>` was never needed. It was, however, eight times
+/// the size of the track — see [`spectrum::for_each_frame`] and AND-7. This is
+/// what the analysis pass calls.
+pub fn estimate_windowed_streaming(
+    samples: &[f32],
+    sample_rate: u32,
+    skip_secs: f32,
+    window_secs: f32,
+) -> Option<TempoResult> {
+    if spectrum::frame_count(samples.len(), TEMPO_WINDOW, TEMPO_HOP) < 32 {
+        return None;
+    }
+    let odf = streaming_odf(samples, sample_rate);
+    estimate_from_odf(
+        odf,
+        sample_rate as f32 / TEMPO_HOP as f32,
+        skip_secs,
+        window_secs,
+    )
+}
 
+fn estimate_from_odf(
+    odf: Vec<f32>,
+    odf_rate: f32,
+    skip_secs: f32,
+    window_secs: f32,
+) -> Option<TempoResult> {
     // Clamp the tempo window into the available onset function; short tracks
     // just use all of it.
     let start = ((skip_secs * odf_rate) as usize).min(odf.len() / 8);
@@ -110,6 +145,47 @@ fn onset_detection_function(spec: &Spectrogram) -> Vec<f32> {
         }
         odf.push(flux);
     }
+
+    whiten(&mut odf);
+    odf
+}
+
+/// [`onset_detection_function`] over streamed frames.
+///
+/// The same arithmetic in the same order, so the result is identical — pinned
+/// by `the_streaming_odf_matches_the_spectrogram_one`. Only the `hi` bins the
+/// flux actually reads are carried between frames rather than all `window / 2`:
+/// nothing above 5 kHz is looked at, which at 44.1 kHz is 233 of 1024.
+fn streaming_odf(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    let bins = TEMPO_WINDOW / 2;
+    let bin_1 = sample_rate as f32 / TEMPO_WINDOW as f32;
+    let lo = ((30.0 / bin_1).ceil() as usize).max(1);
+    let hi = bins.min(((5000.0 / bin_1).ceil() as usize).max(lo + 1));
+
+    let mut odf = Vec::with_capacity(spectrum::frame_count(
+        samples.len(),
+        TEMPO_WINDOW,
+        TEMPO_HOP,
+    ));
+    let mut prev = vec![0.0f32; hi];
+    let mut first = true;
+
+    spectrum::for_each_frame(samples, TEMPO_WINDOW, TEMPO_HOP, |mags| {
+        if first {
+            odf.push(0.0);
+            first = false;
+        } else {
+            let mut flux = 0.0f32;
+            for k in lo..hi {
+                let d = (1.0 + mags[k]).ln() - (1.0 + prev[k]).ln();
+                if d > 0.0 {
+                    flux += d;
+                }
+            }
+            odf.push(flux);
+        }
+        prev.copy_from_slice(&mags[..hi]);
+    });
 
     whiten(&mut odf);
     odf
@@ -284,6 +360,23 @@ mod tests {
             i += period;
         }
         s
+    }
+
+    /// The streaming onset function is the materialised one, exactly.
+    ///
+    /// If this fails, `analyze_decoded` and `retrack_beats` have quietly
+    /// changed their answers. AND-7's fix was meant to cost memory and nothing
+    /// else, and 563 Essentia comparisons rest on that being true.
+    #[test]
+    fn the_streaming_odf_matches_the_spectrogram_one() {
+        let s = click_track(128.0, 12.0, 44100);
+        let materialised = onset_detection_function(&crate::spectrum::for_tempo(&s, 44100));
+        let streamed = streaming_odf(&s, 44100);
+
+        assert_eq!(materialised.len(), streamed.len(), "frame counts differ");
+        for (i, (a, b)) in materialised.iter().zip(streamed.iter()).enumerate() {
+            assert_eq!(a, b, "onset function diverges at frame {i}");
+        }
     }
 
     #[test]

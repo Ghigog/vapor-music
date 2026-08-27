@@ -56,6 +56,18 @@ impl Spectrogram {
     }
 }
 
+/// Number of STFT frames [`compute`] and [`for_each_frame`] produce.
+///
+/// Shared so the two cannot drift: the streaming path is only interchangeable
+/// with the materialised one for as long as they agree on framing.
+pub fn frame_count(len: usize, window: usize, hop: usize) -> usize {
+    if len < window {
+        0
+    } else {
+        (len - window) / hop + 1
+    }
+}
+
 pub fn compute(samples: &[f32], sample_rate: u32, window: usize, hop: usize) -> Spectrogram {
     let mut planner = FftPlanner::<f32>::new();
     let fft: Arc<dyn Fft<f32>> = planner.plan_fft_forward(window);
@@ -63,11 +75,7 @@ pub fn compute(samples: &[f32], sample_rate: u32, window: usize, hop: usize) -> 
     let win = hann(window);
     let half = window / 2;
 
-    let frame_count = if samples.len() < window {
-        0
-    } else {
-        (samples.len() - window) / hop + 1
-    };
+    let frame_count = frame_count(samples.len(), window, hop);
 
     let mut frames = Vec::with_capacity(frame_count);
     let mut buf = vec![Complex32::new(0.0, 0.0); window];
@@ -92,6 +100,41 @@ pub fn compute(samples: &[f32], sample_rate: u32, window: usize, hop: usize) -> 
         sample_rate,
         window,
         hop,
+    }
+}
+
+/// The same frames as [`compute`], one at a time, into a reused buffer.
+///
+/// `compute` holds a `Vec<Vec<f32>>`. For the tempo transform that is eight
+/// times the size of the audio it came from — a five-minute track costs about
+/// 106 MB on top of the 53 MB of samples it was built from — and it is what
+/// aborted the analysis pass on Android (AND-7). The allocation that failed
+/// there was 4096 bytes, which is exactly one frame's `mags`.
+///
+/// Callers that walk frames in order, keeping no more than a couple at a time,
+/// take this instead. The slice handed to `each` is `window / 2` magnitudes and
+/// is overwritten on the next frame.
+pub fn for_each_frame(samples: &[f32], window: usize, hop: usize, mut each: impl FnMut(&[f32])) {
+    let mut planner = FftPlanner::<f32>::new();
+    let fft: Arc<dyn Fft<f32>> = planner.plan_fft_forward(window);
+
+    let win = hann(window);
+    let half = window / 2;
+
+    let mut buf = vec![Complex32::new(0.0, 0.0); window];
+    let mut scratch = vec![Complex32::new(0.0, 0.0); fft.get_inplace_scratch_len()];
+    let mut mags = vec![0.0f32; half];
+
+    for f in 0..frame_count(samples.len(), window, hop) {
+        let start = f * hop;
+        for i in 0..window {
+            buf[i] = Complex32::new(samples[start + i] * win[i], 0.0);
+        }
+        fft.process_with_scratch(&mut buf, &mut scratch);
+        for (m, c) in mags.iter_mut().zip(buf.iter()) {
+            *m = c.norm();
+        }
+        each(&mags);
     }
 }
 

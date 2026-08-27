@@ -2190,6 +2190,82 @@ the static pointing at a collected object.
 that installed. Nothing about the failure is visible from a build — which is the
 argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
+### AND-7 : the analysis pass ran the phone out of memory (fixed 2026-08-27)
+
+`v2.0.0-rc.8` launched, played, and then aborted after about fifteen minutes
+with the app open, a track playing and the analysis pass scanning.
+
+```
+F libc  : Fatal signal 6 (SIGABRT) in tid 11513 (Thread-249)
+I RustStdoutStderr: memory allocation of 4096 bytes failed
+   #07 alloc::alloc::handle_alloc_error
+   #09 vapor_dsp::spectrum::compute+1808
+   #10 vapor_dsp::analyze_decoded
+   #11 vapor_dsp::analyze_file
+   #12 vapor_app_lib::analysis::run
+```
+
+**4096 bytes** is the tell. That is exactly `Vec::with_capacity(1024)` of `f32`
+— one frame's `mags` inside `compute`. Nothing asked for anything absurd; the
+process had simply run out, and this was the request that found out. Android's
+low-memory killer had swept about thirty cached processes seven minutes
+earlier, which is the same story from the other side.
+
+**Where it went.** `spectrum::compute` materialises `frames: Vec<Vec<f32>>`,
+and `analyze_decoded` runs it over the *whole* track — correctly, and
+deliberately: windowing beat tracking capped recall at ~0.41 against Essentia,
+and a grid with no beats near the outro is useless where transitions are
+scheduled. With `TEMPO_WINDOW = 2048` and `TEMPO_HOP = 512` that spectrogram is
+**eight times the size of the audio**, held alongside the samples:
+
+| Track | decoded | spectrogram |
+|---|---|---|
+| 3 min | 32 MB | 64 MB |
+| 5 min | 53 MB | 106 MB |
+| 10 min | 106 MB | 212 MB |
+| 60 min | 635 MB | 1.27 GB |
+
+Tens of thousands of separate 4 KB allocations also fragment the heap, which is
+how a 4 KB request fails while the process is otherwise alive.
+
+**The fix is exact, not a trade.** `estimate_windowed` touches the spectrogram
+in one place — `onset_detection_function`, a spectral flux that reads
+`frames[i-1]` and `frames[i]`. The whole structure existed for a sliding window
+of width two. `spectrum::for_each_frame` streams frames into a reused buffer,
+`tempo::streaming_odf` builds the onset function from it carrying only the 233
+bins below 5 kHz that the flux reads, and both `analyze_decoded` and
+`retrack_beats` use it.
+
+Measured on a five-minute signal, release build, both paths in the same
+program:
+
+| Path | Peak RSS | BPM |
+|---|---|---|
+| spectrogram | 155.7 MB | 120.104706 |
+| streaming | 53.8 MB | 120.104706 |
+
+2.9x lower peak, 101.9 MB saved, identical answer. What remains is the samples
+themselves (52.9 MB); tempo analysis now costs about 1 MB on top of the audio.
+
+`the_streaming_odf_matches_the_spectrogram_one` asserts the two onset functions
+are equal element-for-element, so a future divergence is red rather than a
+quietly different BPM. 563 Essentia comparisons rest on that.
+
+**Still unfixed, and out of scope here.** `audio.samples` is `4N` bytes and
+lives for the whole analysis — 635 MB for a sixty-minute mix before any
+spectrogram exists. This takes the peak from roughly `12N` to `4N`, which is
+enough for ordinary tracks and is not enough for long DJ mixes. Streaming the
+decode is a bigger, separate question; Dylan's call was to land the exact fix
+first and measure.
+
+**Two things found on the way, neither fixed.** The media notification is
+posted more than five times a second and Android sheds it
+(`NotificationService: Package enqueue rate is 5.18`), because every position
+tick is a `startForegroundService`. And `PlaybackService` re-posts on position
+changes the shade advances by itself. Both are real, neither is this crash, and
+the first theory of this bug blamed them — wrongly, for the third time this
+week that a coherent story lost to a stack trace.
+
 ### AND-6 : the Windows shell job has been red since 2026-08-24 (open)
 
 `shell (windows-latest)` in `app.yml` dies at `cargo test` with
