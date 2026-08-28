@@ -50,7 +50,7 @@ describe("Settings — connecting a server", () => {
       "https://app.koofr.net",
     );
     await user.type(screen.getByLabelText("Username"), "someone@example.com");
-    await user.type(screen.getByLabelText("Password"), "hunter2");
+    await user.type(screen.getByLabelText("App password"), "hunter2");
     await user.clear(screen.getByLabelText("Folder"));
     await user.type(screen.getByLabelText("Folder"), "/dav/Koofr/Music");
 
@@ -82,7 +82,7 @@ describe("Settings — connecting a server", () => {
       "https://app.koofr.net",
     );
     await user.type(screen.getByLabelText("Username"), "someone@example.com");
-    await user.type(screen.getByLabelText("Password"), "hunter2");
+    await user.type(screen.getByLabelText("App password"), "hunter2");
     await user.clear(screen.getByLabelText("Folder"));
     await user.type(screen.getByLabelText("Folder"), "/dav/Koofr/Music");
 
@@ -185,7 +185,7 @@ describe("Settings — a notice may only say what was checked", () => {
     const user = userEvent.setup();
     render(<Settings />);
 
-    await user.type(await screen.findByLabelText("Password"), "an-app-password");
+    await user.type(await screen.findByLabelText("App password"), "an-app-password");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     // The failure is stated, not implied by the absence of a success.
@@ -201,7 +201,7 @@ describe("Settings — a notice may only say what was checked", () => {
     const user = userEvent.setup();
     render(<Settings />);
 
-    await user.type(await screen.findByLabelText("Password"), "an-app-password");
+    await user.type(await screen.findByLabelText("App password"), "an-app-password");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(
@@ -222,7 +222,7 @@ describe("Settings — a notice may only say what was checked", () => {
     // Nothing stored: the backend says so on load.
     expect(await screen.findByText(/no password saved yet/i)).toBeInTheDocument();
 
-    await user.type(await screen.findByLabelText("Password"), "typing");
+    await user.type(await screen.findByLabelText("App password"), "typing");
 
     expect(screen.queryByText(/stored in your operating system/i)).toBeNull();
     expect(screen.getByText(/not saved yet/i)).toBeInTheDocument();
@@ -252,7 +252,7 @@ describe("Settings — the password, and knowing whether one is stored", () => {
     render(<Settings />);
 
     expect(await screen.findByText(/no password saved yet/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("Password")).toHaveAttribute(
+    expect(screen.getByLabelText("App password")).toHaveAttribute(
       "placeholder",
       "required",
     );
@@ -263,7 +263,7 @@ describe("Settings — the password, and knowing whether one is stored", () => {
     render(<Settings />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Password")).toHaveAttribute(
+      expect(screen.getByLabelText("App password")).toHaveAttribute(
         "placeholder",
         "unchanged",
       );
@@ -418,7 +418,7 @@ describe("Settings — the field hints", () => {
     render(<Settings />);
 
     const toggle = await screen.findByRole("button", {
-      name: /what goes in password/i,
+      name: /what goes in app password/i,
     });
     toggle.focus();
     await user.keyboard("{Enter}");
@@ -603,15 +603,19 @@ describe("which build this is", () => {
  * deleting them is one nobody presses twice.
  */
 describe("music on this device", () => {
-  it("says what to do when there are no folders yet", async () => {
+  /* POL-2. The empty state used to carry a sentence selling the feature —
+     "no server, no account, nothing to set up" — under a heading that had
+     already said it. Four words is the whole state. */
+  it("says there are no folders yet, and no more than that", async () => {
     render(<Settings />);
 
     expect(
       await screen.findByRole("heading", { name: /music on this device/i }),
     ).toBeInTheDocument();
+    expect(screen.getByText("No folders yet.")).toBeInTheDocument();
     expect(
-      screen.getByText(/no server, no account, nothing to set up/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/no server, no account, nothing to set up/i),
+    ).not.toBeInTheDocument();
   });
 
   it("lists a configured folder and offers to forget it, not delete it", async () => {
@@ -626,6 +630,158 @@ describe("music on this device", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(/your files are not touched/i),
+    ).toBeInTheDocument();
+  });
+});
+
+/**
+ * POL-3. Typing a provider's name instead of its address.
+ *
+ * Nobody knows their WebDAV address; they know who they pay. The list behind
+ * this was read off each provider's own documentation, and the reason these
+ * tests name Proton Drive as loudly as they name Koofr is that half the
+ * answers are "that provider has none" — and inventing an endpoint for one of
+ * those is the failure this feature could most easily become.
+ */
+describe("Settings — naming a provider instead of typing its address", () => {
+  it("offers the real address for a name that was typed", async () => {
+    useBackend({ connected: false });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.type(await screen.findByLabelText("Server address"), "koofr");
+
+    const pick = await screen.findByRole("button", {
+      name: /koofr.*app\.koofr\.net/i,
+    });
+    await user.click(pick);
+
+    expect(screen.getByLabelText("Server address")).toHaveValue(
+      "https://app.koofr.net",
+    );
+    // And the path it mounts under, so only the last part is left to type.
+    expect(screen.getByLabelText("Folder")).toHaveValue("/dav/Koofr/");
+  });
+
+  it("says a provider has no WebDAV rather than inventing one", async () => {
+    useBackend({ connected: false });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.type(await screen.findByLabelText("Server address"), "proton");
+
+    expect(
+      await screen.findByText(/proton drive has no webdav/i),
+    ).toBeInTheDocument();
+    // Emphatically not a button offering to fill something in.
+    expect(
+      screen.queryByRole("button", { name: /proton/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stops suggesting once an address is being typed", async () => {
+    useBackend({ connected: false });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.type(
+      await screen.findByLabelText("Server address"),
+      "app.koofr.net",
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /https:\/\/app\.koofr\.net/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers the folder a known address starts at", async () => {
+    useBackend({ connected: false });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.type(
+      await screen.findByLabelText("Server address"),
+      "https://app.koofr.net",
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: /koofr starts at/i }),
+    );
+
+    expect(screen.getByLabelText("Folder")).toHaveValue("/dav/Koofr/");
+  });
+});
+
+/**
+ * POL-5. The shape of the screen, which Dylan signed off.
+ *
+ * Two sections were called "Library" and the only section whose title sat
+ * inside itself was Network. What is asserted here is the arrangement rather
+ * than the wording: where the first control is, and that Network is gone.
+ */
+describe("Settings — the shape of the screen", () => {
+  it("puts Add a folder first, in Where your music lives", async () => {
+    useBackend({ connected: true });
+    render(<Settings />);
+
+    const card = (
+      await screen.findByRole("heading", { name: /where your music lives/i })
+    ).closest("section") as HTMLElement;
+
+    const add = within(card).getByRole("button", { name: /add a folder/i });
+    expect(add).toBeInTheDocument();
+    // Before the server form, not after it.
+    expect(
+      add.compareDocumentPosition(within(card).getByLabelText("Server address")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  /*
+   * One "library", where there were two.
+   *
+   * Network is not asserted here, and the omission is deliberate: its heading
+   * is drawn by `components/SyncPanel.tsx`, which is another lane's file, and
+   * this screen suppresses it from `settings.css`. jsdom does not apply that
+   * stylesheet, so a test asserting its absence would be asserting something
+   * this environment cannot see. It goes when the component stops drawing it.
+   */
+  it("has one Library heading, not two", async () => {
+    useBackend({ connected: true });
+    render(<Settings />);
+
+    await screen.findByRole("heading", { name: /where your music lives/i });
+
+    expect(
+      screen.getAllByRole("heading", { name: /^library$/i }),
+    ).toHaveLength(1);
+  });
+
+  it("keeps sharing with your own devices among the library rows", async () => {
+    useBackend({ connected: true });
+    render(<Settings />);
+
+    const group = (
+      await screen.findByRole("heading", { name: /^library$/i })
+    ).closest("section") as HTMLElement;
+
+    expect(
+      await within(group).findByLabelText("Share across this network"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps Analyse in the same group as the other library rows", async () => {
+    useBackend({ connected: true });
+    render(<Settings />);
+
+    const group = (
+      await screen.findByRole("heading", { name: /^library$/i })
+    ).closest("section") as HTMLElement;
+
+    expect(
+      within(group).getByRole("button", { name: /^analyse$/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(group).getByLabelText("Hide duplicates"),
     ).toBeInTheDocument();
   });
 });

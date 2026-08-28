@@ -29,7 +29,7 @@ import { YourData } from "./YourData";
 import { SupporterPins } from "../components/SupporterPins";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { SyncPanel } from "../components/SyncPanel";
-import { VaporMark, LOGO_POSE } from "../components/VaporMark";
+import { VaporMark } from "../components/VaporMark";
 import { HelpModal } from "../components/HelpModal";
 import { AnalysisFailures } from "../components/AnalysisFailures";
 import { SettingRow, SettingGroup } from "../components/SettingRow";
@@ -59,6 +59,99 @@ export function withoutDoubledScheme(value: string): string {
 }
 
 /**
+ * A storage provider, by the name somebody types into the address box.
+ *
+ * ## Nothing is in here that was not read off the provider's own documentation
+ *
+ * Every address and path below was checked against the provider's own help
+ * pages on 2026-08-28. That is the whole reason the list is short: a
+ * suggestion that fills the field with an address which cannot work is worse
+ * than no suggestion, because it moves the failure from "I do not know what to
+ * type" to "I typed what it told me and it is broken".
+ *
+ * ## `address: null` is an answer, not a gap
+ *
+ * The three providers people reach for first — Google Drive, Proton Drive,
+ * Dropbox — have no WebDAV at all. Staying silent about those leaves someone
+ * hunting for an address that does not exist, so the list says so instead.
+ * Anything not named here gets silence, which is honest: it means this app
+ * does not know, not that the provider has nothing.
+ */
+type Provider = {
+  /** As printed. */
+  name: string;
+  /** What somebody might type. Matched as a prefix. */
+  typed: string[];
+  /** The verified WebDAV address, or null where the provider offers none. */
+  address: string | null;
+  /** Where that account's own files start, where the provider fixes it. */
+  folder?: string;
+};
+
+const PROVIDERS: Provider[] = [
+  {
+    name: "Koofr",
+    typed: ["koofr"],
+    address: "https://app.koofr.net",
+    folder: "/dav/Koofr/",
+  },
+  // Two data regions, two hosts, and the account decides which — so both are
+  // offered rather than one guessed at.
+  {
+    name: "pCloud (Europe)",
+    typed: ["pcloud"],
+    address: "https://ewebdav.pcloud.com",
+    folder: "/",
+  },
+  {
+    name: "pCloud (US)",
+    typed: ["pcloud"],
+    address: "https://webdav.pcloud.com",
+    folder: "/",
+  },
+  // `myfiles` rather than `webdav`: the same page documents both, and this one
+  // is rooted in the account's own files instead of a directory above them.
+  {
+    name: "Fastmail",
+    typed: ["fastmail"],
+    address: "https://myfiles.fastmail.com",
+    folder: "/",
+  },
+  {
+    name: "Yandex Disk",
+    typed: ["yandex"],
+    address: "https://webdav.yandex.ru",
+    folder: "/",
+  },
+  { name: "Google Drive", typed: ["googledrive", "gdrive"], address: null },
+  { name: "Proton Drive", typed: ["proton", "protondrive"], address: null },
+  { name: "Dropbox", typed: ["dropbox"], address: null },
+];
+
+/**
+ * Providers matching what is in the address box, while it is still a name.
+ *
+ * A dot or a slash means the address is being typed rather than asked for, so
+ * suggestions stop — otherwise a pasted `https://app.koofr.net` would sit
+ * under a button offering to type it again.
+ */
+export function providersFor(value: string): Provider[] {
+  const rest = value.replace(/^https?:\/\//i, "").trim();
+  if (rest.length < 2 || rest.includes(".") || rest.includes("/")) return [];
+  const word = rest.replace(/[\s\-_]/g, "").toLowerCase();
+  return PROVIDERS.filter((p) => p.typed.some((t) => t.startsWith(word)));
+}
+
+/** The provider an address belongs to, so its folder can be offered. */
+export function providerAt(value: string): Provider | undefined {
+  const host = value.replace(/^https?:\/\//i, "").split("/")[0]?.toLowerCase();
+  if (!host) return undefined;
+  return PROVIDERS.find(
+    (p) => p.address && p.address.replace(/^https?:\/\//i, "") === host,
+  );
+}
+
+/**
  * Folders on this device the library reads from.
  *
  * Additive to the server above it, not an alternative — a person can have
@@ -69,10 +162,14 @@ export function withoutDoubledScheme(value: string): string {
  * these are somebody's own files, and a settings screen that might be deleting
  * music is one nobody will touch twice.
  */
-function FoldersCard() {
+function useLocalFolders() {
   const [folders, setFolders] = useState<core.LocalFolder[]>([]);
   const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState("");
+  /* Kept apart, because the button that adds and the buttons that forget are
+   * no longer on the same card (POL-5) — one shared string would have printed
+   * a failed add underneath the list, a section away from the press. */
+  const [addProblem, setAddProblem] = useState("");
+  const [forgetProblem, setForgetProblem] = useState("");
 
   useEffect(() => {
     core
@@ -82,7 +179,7 @@ function FoldersCard() {
   }, []);
 
   async function add() {
-    setProblem("");
+    setAddProblem("");
     const picked = await open({ directory: true, multiple: false });
     if (typeof picked !== "string") return;
     setBusy(true);
@@ -92,34 +189,47 @@ function FoldersCard() {
       // the list whose tracks are not in the library is a lie the screen tells.
       await core.scanLibrary();
     } catch (e) {
-      setProblem(e instanceof Error ? e.message : String(e));
+      setAddProblem(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   }
 
   async function forget(id: string) {
-    setProblem("");
+    setForgetProblem("");
     setBusy(true);
     try {
       setFolders(await core.removeLocalFolder(id));
       await core.scanLibrary();
     } catch (e) {
-      setProblem(e instanceof Error ? e.message : String(e));
+      setForgetProblem(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   }
 
+  return { folders, busy, addProblem, forgetProblem, add, forget };
+}
+
+/** What is on this device, listed. Adding one is up in "Where your music
+ *  lives", which is the question this card answers the other half of. */
+function FoldersCard({
+  folders,
+  busy,
+  problem,
+  forget,
+}: {
+  folders: core.LocalFolder[];
+  busy: boolean;
+  problem: string;
+  forget: (id: string) => void;
+}) {
   return (
     <section className="settings__card glass">
       <h2 className="settings__section">Music on this device</h2>
 
       {folders.length === 0 ? (
-        <p className="settings__hint">
-          No folders yet. Add one and Vapor reads what is already there — no
-          server, no account, nothing to set up.
-        </p>
+        <p className="settings__hint">No folders yet.</p>
       ) : (
         <ul className="folders">
           {folders.map((folder) => (
@@ -142,17 +252,6 @@ function FoldersCard() {
 
       {problem && <p className="settings__error">{problem}</p>}
 
-      <div className="settings__actions">
-        <button
-          type="button"
-          className="settings__button settings__button--primary"
-          onClick={add}
-          disabled={busy}
-        >
-          {busy ? "Reading…" : "Add a folder"}
-        </button>
-      </div>
-
       <p className="settings__hint">
         Forgetting a folder removes it from the library. Your files are not
         touched.
@@ -164,6 +263,9 @@ function FoldersCard() {
 export function Settings() {
   /** Whether the licences sheet is open. */
   const [licences, setLicences] = useState(false);
+  /** Folders on this device. Lifted out of the card below, because the button
+   *  that adds one now sits in a different section from the list of them. */
+  const local = useLocalFolders();
   /** How much of the library has been asked about, for the Fetch row. */
   const [looked, setLooked] = useState<core.LookupCounts | null>(null);
 
@@ -484,18 +586,48 @@ export function Settings() {
       </header>
 
       {/*
-        Folders first, and above the server, because the server card is a form
-        and this is a list. A person arriving here to add a second folder should
-        not have to read past four fields about WebDAV to find out they can.
-      */}
-      <FoldersCard />
+        One question — where is the music — answered in one card, cheapest
+        answer first (POL-5). "Add a folder" needs no server, no address and no
+        password, so it is the first control on the screen; the WebDAV form is
+        the alternative, and reads as one.
 
+        The list of folders already added is the card below this, because a
+        list is not a control and putting it above the form pushed the form off
+        a first run's screen.
+      */}
       <section className="settings__card glass">
         <h2 className="settings__section">Where your music lives</h2>
+
+        <div className="settings__actions">
+          <button
+            type="button"
+            className="settings__button settings__button--primary"
+            onClick={() => void local.add()}
+            disabled={local.busy}
+          >
+            {local.busy ? "Reading…" : "Add a folder"}
+          </button>
+        </div>
+
+        {local.addProblem && (
+          <p className="settings__error">{local.addProblem}</p>
+        )}
+
+        <h3 className="label settings__alt">
+          alternatively, play music from the cloud
+        </h3>
 
         <Field
           label="Server address"
           hint="Your storage provider's WebDAV address. It starts with https://."
+          note={<Suggestions
+            typed={url}
+            onPick={(p) => {
+              if (!p.address) return;
+              setUrl(p.address);
+              if (p.folder) setFolder(p.folder);
+            }}
+          />}
         >
           <input
             className="settings__input"
@@ -524,8 +656,8 @@ export function Settings() {
         </Field>
 
         <Field
-          label="Password"
-          hint="Usually an app password generated by your provider, not your account password."
+          label="App password"
+          hint="Generated by your provider for this app, not your account password."
           note={
             /* Three states, because there are three.
              *
@@ -572,6 +704,7 @@ export function Settings() {
         <Field
           label="Folder"
           hint="The full path to your music on that server, not just the folder's name."
+          note={<FolderStart url={url} folder={folder} onPick={setFolder} />}
         >
           <input
             className="settings__input"
@@ -608,6 +741,13 @@ export function Settings() {
           <p className="settings__note">{note.text}</p>
         )}
       </section>
+
+      <FoldersCard
+        folders={local.folders}
+        busy={local.busy}
+        problem={local.forgetProblem}
+        forget={(id) => void local.forget(id)}
+      />
 
       {/* After the storage card, before the library rows: connecting storage
           is what a first run is for, and this is what someone comes back for. */}
@@ -688,11 +828,7 @@ export function Settings() {
         {error?.card === "analysis" && (
           <ErrorNotice error={error.text} onDismiss={() => setError(null)} />
         )}
-      </SettingGroup>
 
-      <SyncPanel />
-
-      <SettingGroup title="library">
         {/*
           Hides, never deletes.
 
@@ -774,18 +910,34 @@ export function Settings() {
           <p className="settings__note">{note.text}</p>
         )}
         {note?.card === "data" && <p className="settings__note">{note.text}</p>}
+
+        {/*
+          Sharing with your own other devices is a library setting, so it is a
+          library row — Network was a section with one switch in it, and it was
+          the only section on the screen whose title sat inside itself.
+
+          The panel still draws its own card and its own "network" heading:
+          both are in `components/SyncPanel.tsx`, which is another lane's file,
+          so `.settings__shared` in settings.css unwraps them here until that
+          component can be changed to stop drawing them.
+        */}
+        <div className="settings__shared">
+          <SyncPanel />
+        </div>
       </SettingGroup>
 
       <section className="settings__card glass">
         <h2 className="settings__section">About</h2>
         {/*
-          The logo, pinned rather than animated. `LOGO_POSE` is the same frame
-          the app icon is rendered from, so this is not a picture *of* the mark
-          — it is the mark, drawn by the same code at the same pose. If the icon
-          is ever repinned, this moves with it.
+          The mark, running (POL-4).
+
+          It used to be pinned to `LOGO_POSE`, the frame the app icon is
+          exported from — which made About a picture of the icon rather than
+          the thing itself. The mark is the one drawing in this app that moves,
+          and About is where somebody looks at it on purpose.
         */}
         <div className="settings__lockup">
-          <VaporMark size={96} pose={LOGO_POSE} />
+          <VaporMark size={96} state="idle" />
           <div className="settings__lockup-text">
             <span className="settings__lockup-name">Vapor Music</span>
             <span className="label">Music, continuous</span>
@@ -945,5 +1097,79 @@ function Field({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Real addresses for a provider name typed into the address box (POL-3a).
+ *
+ * Offered rather than filled in: somebody may be typing a name that only looks
+ * like a provider's, and a field that rewrites itself under the cursor is
+ * worse than one that does nothing.
+ */
+function Suggestions({
+  typed,
+  onPick,
+}: {
+  typed: string;
+  onPick: (p: Provider) => void;
+}) {
+  const matches = providersFor(typed);
+  if (matches.length === 0) return null;
+
+  return (
+    <div className="settings__suggest">
+      {matches.map((p) =>
+        p.address ? (
+          <button
+            key={p.name}
+            type="button"
+            className="settings__suggest-pick"
+            onClick={() => onPick(p)}
+          >
+            <span className="settings__suggest-name">{p.name}</span>{" "}
+            <span className="settings__suggest-url">{p.address}</span>
+          </button>
+        ) : (
+          // The whole point of naming these: somebody typing "proton" is about
+          // to spend an afternoon looking for an address never issued.
+          <p
+            key={p.name}
+            className="settings__field-note settings__field-note--warn"
+          >
+            {p.name} has no WebDAV
+          </p>
+        ),
+      )}
+    </div>
+  );
+}
+
+/**
+ * Where a known provider's files start, so only the last part is typed
+ * (POL-3c). Silent once the box already starts there.
+ */
+function FolderStart({
+  url,
+  folder,
+  onPick,
+}: {
+  url: string;
+  folder: string;
+  onPick: (value: string) => void;
+}) {
+  const provider = providerAt(url);
+  const start = provider?.folder;
+  if (!provider || !start || folder.startsWith(start)) return null;
+
+  return (
+    <button
+      type="button"
+      className="settings__suggest-pick"
+      onClick={() => onPick(start)}
+    >
+      <span className="settings__suggest-name">{provider.name} starts at</span>{" "}
+      <span className="settings__suggest-url">{start}</span>
+    </button>
   );
 }

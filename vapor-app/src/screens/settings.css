@@ -596,3 +596,96 @@
   color: var(--ink-3);
   white-space: nowrap;
 }
+
+/*
+ * ------------------------------------------------------------------
+ * POL-3 and POL-5. Appended, per the seam rule in CLAUDE.md.
+ * ------------------------------------------------------------------
+ */
+
+/* "alternatively, play music from the cloud" — the line between the button
+   that needs nothing and the form that needs four answers. A rule above it,
+   because it divides the card rather than heading it. */
+.settings__alt {
+  display: block;
+  margin: 6px 0 2px;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-rim);
+}
+
+/* Addresses offered for a provider name typed into the box. */
+.settings__suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings__suggest-pick {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--glass-rim);
+  background: var(--fill-raised);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.settings__suggest-pick:hover {
+  background: var(--fill-raised-hover);
+}
+
+.settings__suggest-name {
+  font-weight: var(--fw-medium);
+}
+
+.settings__suggest-url {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--ink-2);
+}
+
+/*
+ * Sharing, folded into the Library group (POL-5).
+ *
+ * `SyncPanel` draws its own glass card and its own "network" heading, and it
+ * lives in another lane's file — so the card is unwrapped here and the heading
+ * removed with `display: none`, which takes it out of the accessibility tree
+ * too rather than merely hiding it from sight. Delete this block when the
+ * component itself stops drawing them.
+ */
+.settings__shared > .settings__card {
+  padding: 0;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* Everything the panel draws below its row — the pairing code, the device
+   lists, the notices — is a card's content with no card left around it. */
+.settings__shared > .settings__card > :not(.setgroup) {
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+.settings__shared .setgroup {
+  margin-bottom: 0;
+}
+
+.settings__shared .setgroup__title {
+  display: none;
+}
+
+.settings__shared .setgroup__rows {
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
