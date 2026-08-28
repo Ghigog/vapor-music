@@ -652,40 +652,24 @@
 /*
  * Sharing, folded into the Library group (POL-5).
  *
- * `SyncPanel` draws its own glass card and its own "network" heading, and it
- * lives in another lane's file — so the card is unwrapped here and the heading
- * removed with `display: none`, which takes it out of the accessibility tree
- * too rather than merely hiding it from sight. Delete this block when the
- * component itself stops drawing them.
+ * `SyncPanel` renders a `SettingRow` and then the pairing code, device lists
+ * and notices beneath it. The row is a library row like any other and needs
+ * nothing here; what follows it is the panel's own content, indented to hang
+ * under the row rather than sit flush against the group's edge.
+ *
+ * This block used to unwrap a glass card the panel drew for itself and hide
+ * its "network" heading with `display: none`. Both are gone from the component
+ * now, so both are gone from here — the heading is not drawn rather than
+ * drawn and suppressed, which is the difference between a screen reader
+ * hearing it and not.
  */
-.settings__shared > .settings__card {
-  padding: 0;
+.settings__shared {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: none;
 }
 
-/* Everything the panel draws below its row — the pairing code, the device
-   lists, the notices — is a card's content with no card left around it. */
-.settings__shared > .settings__card > :not(.setgroup) {
+.settings__shared > :not(.setrow) {
   margin-left: 16px;
   margin-right: 16px;
-}
-
-.settings__shared .setgroup {
-  margin-bottom: 0;
-}
-
-.settings__shared .setgroup__title {
-  display: none;
-}
-
-.settings__shared .setgroup__rows {
-  border: 0;
-  border-radius: 0;
-  background: none;
 }

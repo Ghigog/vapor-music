@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as core from "../lib/core";
-import { SettingRow, SettingGroup } from "./SettingRow";
+import { SettingRow } from "./SettingRow";
 import { Confirm } from "./Confirm";
 import { ErrorNotice, messageOf } from "./ErrorNotice";
 
@@ -188,55 +188,63 @@ export function SyncPanel() {
    * does not do, then the switch, then everything else. What a person wants
    * from a glance is whether it is on and who it reaches; the rest belongs
    * below, and only once it is on.
+   *
+   * ## It draws rows, not a card
+   *
+   * This used to open its own glass card and its own "network" heading, which
+   * made sharing look like a section of Settings rather than the library row
+   * it is (POL-5). Settings then had to unwrap the card in CSS and hide the
+   * heading with `display: none` — which takes it out of the accessibility
+   * tree as well, so a screen reader lost a heading a sighted reader had
+   * already lost. Rendering a fragment instead lets whatever hosts this decide
+   * the framing, and the heading is gone rather than hidden.
    */
   return (
-    <section className="settings__card glass">
-      <SettingGroup title="network">
-        {/*
-          One switch, where there were two.
+    <>
+      {/*
+        One switch, where there were two.
 
-          A `SettingRow` here and a bare checkbox below both called
-          `setSyncEnabled` and both read `view.enabled` — the same setting drawn
-          twice, so each one moved the other and neither was the control.
+        A `SettingRow` here and a bare checkbox below both called
+        `setSyncEnabled` and both read `view.enabled` — the same setting drawn
+        twice, so each one moved the other and neither was the control.
 
-          Named for what it does rather than for the network it does it on: the
-          Wi-Fi name is not obtainable without a location permission on either
-          platform, and this machine is on Ethernet besides, where there is no
-          Wi-Fi name to print. See the commit for the detail.
-        */}
-        <SettingRow
-          title="Share across this network"
-          subtitle={
-            view.enabled
-              ? `This device appears as ${view.deviceName}`
-              : "Off — nothing is announced and nothing is listening"
-          }
-        >
-          <label className="settings__switch settings__switch--bare">
-            <input
-              type="checkbox"
-              aria-label="Share across this network"
-              checked={view.enabled}
-              onChange={(e) => {
-                const on = e.target.checked;
-                // Switching off forgets every pairing, which is a consequence
-                // worth stating rather than leaving somebody to discover.
-                void core
-                  .setSyncEnabled(on)
-                  .then(refresh)
-                  .then(() =>
-                    setNote(
-                      on
-                        ? "This device is now visible to other copies of Vapor on this network."
-                        : "Switched off. Nothing is announced, nothing is listening, and paired devices have been forgotten.",
-                    ),
-                  )
-                  .catch((err: unknown) => setError(messageOf(err)));
-              }}
-            />
-          </label>
-        </SettingRow>
-      </SettingGroup>
+        Named for what it does rather than for the network it does it on: the
+        Wi-Fi name is not obtainable without a location permission on either
+        platform, and this machine is on Ethernet besides, where there is no
+        Wi-Fi name to print. See the commit for the detail.
+      */}
+      <SettingRow
+        title="Share across this network"
+        subtitle={
+          view.enabled
+            ? `This device appears as ${view.deviceName}`
+            : "Off — nothing is announced and nothing is listening"
+        }
+      >
+        <label className="settings__switch settings__switch--bare">
+          <input
+            type="checkbox"
+            aria-label="Share across this network"
+            checked={view.enabled}
+            onChange={(e) => {
+              const on = e.target.checked;
+              // Switching off forgets every pairing, which is a consequence
+              // worth stating rather than leaving somebody to discover.
+              void core
+                .setSyncEnabled(on)
+                .then(refresh)
+                .then(() =>
+                  setNote(
+                    on
+                      ? "This device is now visible to other copies of Vapor on this network."
+                      : "Switched off. Nothing is announced, nothing is listening, and paired devices have been forgotten.",
+                  ),
+                )
+                .catch((err: unknown) => setError(messageOf(err)));
+            }}
+          />
+        </label>
+      </SettingRow>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
@@ -447,7 +455,7 @@ export function SyncPanel() {
           onCancel={() => setForgetting(null)}
         />
       )}
-    </section>
+    </>
   );
 }
 

@@ -916,10 +916,9 @@ export function Settings() {
           library row — Network was a section with one switch in it, and it was
           the only section on the screen whose title sat inside itself.
 
-          The panel still draws its own card and its own "network" heading:
-          both are in `components/SyncPanel.tsx`, which is another lane's file,
-          so `.settings__shared` in settings.css unwraps them here until that
-          component can be changed to stop drawing them.
+          `SyncPanel` now renders that row and nothing around it, so the
+          wrapper here only spaces out what the panel draws below the row. It
+          no longer has a card to unwrap or a heading to suppress.
         */}
         <div className="settings__shared">
           <SyncPanel />

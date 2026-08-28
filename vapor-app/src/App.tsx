@@ -539,7 +539,11 @@ export function App() {
               }}
             />
           ) : playlist ? (
-            <Playlist id={playlist} onOpen={openLiner} />
+            <Playlist
+              id={playlist}
+              onOpen={openLiner}
+              onGone={() => setPlaylist(null)}
+            />
           ) : group ? (
             <SmartGroup
               id={group}

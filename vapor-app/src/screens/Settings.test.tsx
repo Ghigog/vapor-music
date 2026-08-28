@@ -736,15 +736,7 @@ describe("Settings — the shape of the screen", () => {
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
-  /*
-   * One "library", where there were two.
-   *
-   * Network is not asserted here, and the omission is deliberate: its heading
-   * is drawn by `components/SyncPanel.tsx`, which is another lane's file, and
-   * this screen suppresses it from `settings.css`. jsdom does not apply that
-   * stylesheet, so a test asserting its absence would be asserting something
-   * this environment cannot see. It goes when the component stops drawing it.
-   */
+  /* One "library", where there were two. */
   it("has one Library heading, not two", async () => {
     useBackend({ connected: true });
     render(<Settings />);
@@ -754,6 +746,28 @@ describe("Settings — the shape of the screen", () => {
     expect(
       screen.getAllByRole("heading", { name: /^library$/i }),
     ).toHaveLength(1);
+  });
+
+  /*
+   * Network is gone, and this asserts it for real.
+   *
+   * It could not be asserted while `SyncPanel` still drew the heading and
+   * `settings.css` hid it with `display: none`: jsdom applies no stylesheet,
+   * so the heading was in the tree here whatever the CSS said, and a passing
+   * test would have proved nothing. The component no longer draws it, so its
+   * absence is now a fact about the DOM rather than about the stylesheet —
+   * which is also what a screen reader gets, `display: none` having taken the
+   * heading out of the accessibility tree rather than merely out of sight.
+   */
+  it("draws no Network heading at all", async () => {
+    useBackend({ connected: true });
+    render(<Settings />);
+
+    await screen.findByRole("heading", { name: /^library$/i });
+
+    expect(
+      screen.queryByRole("heading", { name: /^network$/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps sharing with your own devices among the library rows", async () => {

@@ -131,3 +131,22 @@
   font-size: var(--fs-sm);
   color: var(--ink-3);
 }
+
+/* Delete, which this screen never had (POL-6 follow-up). The identical block
+   is in `playlist.css`; they have to stay in step, and the reasoning is
+   written out there. */
+.group__delete {
+  align-self: flex-start;
+  margin-top: 10px;
+  border: 1px solid var(--danger-edge);
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 5px 12px;
+  font-size: var(--fs-sm);
+}
+
+.group__delete:hover {
+  background: var(--danger-wash);
+}

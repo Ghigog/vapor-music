@@ -4,13 +4,14 @@
  * Written for POL-6, which is the observation that a playlist and a group are
  * one feature presented as two — different title sizes, a download button on
  * one of them, Play and Delete on one of them, and a rename gesture on one of
- * them that a phone cannot perform. The cases here are the ones that go quiet
+ * them that a phone cannot perform. Play went from both and Delete is on both;
+ * the rest matched up. The cases here are the ones that go quiet
  * when that drifts apart again: they assert what this screen has *in common*
  * with `Playlist`, so a change to one of them fails beside a change to the
  * other.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SmartGroup } from "./SmartGroup";
 import type * as core from "../lib/core";
@@ -74,13 +75,60 @@ describe("SmartGroup — matching the playlist screen", () => {
     expect(keep).toBeDisabled();
   });
 
-  it("has no Play or Delete button, as the playlist screen has none", async () => {
+  it("has no Play button, as the playlist screen has none", async () => {
     useBackend({ groups: [group()] });
     render(<SmartGroup id="g1" onGone={() => {}} />);
 
     await screen.findByRole("heading", { name: "Ambient" });
     expect(screen.queryByRole("button", { name: /^play$/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  });
+
+  /**
+   * Delete, which this screen never had.
+   *
+   * POL-6 matched the two screens by taking Delete off the playlist, which
+   * made them match at nothing: `delete_group` had never had a caller and
+   * `delete_playlist` no longer did, so a group made by mistake could not be
+   * unmade from anywhere in the app. Both screens have it now.
+   */
+  it("deletes the group, once the confirmation is answered", async () => {
+    const backend = useBackend({ groups: [group()] });
+    const user = userEvent.setup();
+    let gone = false;
+    render(<SmartGroup id="g1" onGone={() => { gone = true; }} />);
+
+    await screen.findByRole("heading", { name: "Ambient" });
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(backend.called("delete_group")).toBe(false);
+
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: /^delete$/i,
+      }),
+    );
+
+    await waitFor(() => expect(backend.called("delete_group")).toBe(true));
+    expect(backend.lastArgs("delete_group")?.id).toBe("g1");
+    await waitFor(() => expect(gone).toBe(true));
+  });
+
+  it("deletes nothing when the confirmation is declined", async () => {
+    const backend = useBackend({ groups: [group()] });
+    const user = userEvent.setup();
+    render(<SmartGroup id="g1" onGone={() => {}} />);
+
+    await screen.findByRole("heading", { name: "Ambient" });
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: /cancel/i,
+      }),
+    );
+
+    expect(backend.called("delete_group")).toBe(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   /** The same instruction the playlist's empty state gives, for the same

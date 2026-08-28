@@ -91,7 +91,7 @@ describe("Playlist — showing one", () => {
         }),
       ],
     });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const items = await screen.findAllByRole("listitem");
     expect(within(items[0]!).getByText("Roygbiv")).toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("Playlist — showing one", () => {
         }),
       ],
     });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     await screen.findByText("Windowlicker");
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
@@ -131,7 +131,7 @@ describe("Playlist — showing one", () => {
    */
   it("says what to do when it is empty, naming the bar and not a sidebar", async () => {
     useBackend({ playlists: [playlist({ tracks: [] })] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     expect(await screen.findByText(/nothing in here yet/i)).toBeInTheDocument();
     expect(screen.getByText(/tracks, albums or artists/i)).toBeInTheDocument();
@@ -141,7 +141,7 @@ describe("Playlist — showing one", () => {
 
   it("says so when the playlist does not exist", async () => {
     useBackend({ playlists: [] });
-    render(<Playlist id="gone" onOpen={() => {}} />);
+    render(<Playlist id="gone" onOpen={() => {}} onGone={() => {}} />);
 
     expect(await screen.findByText(/that playlist is gone/i)).toBeInTheDocument();
   });
@@ -149,29 +149,79 @@ describe("Playlist — showing one", () => {
 
 describe("Playlist — acting on one", () => {
   /**
-   * POL-6: a playlist had Play and Delete and a group had neither, which is a
-   * good part of why the two read as separate features. Pressing a row was
-   * already how a playlist gets played, so the button said nothing the list
-   * did not — and nothing on this screen deletes any more.
+   * POL-6: a playlist had Play and a group had neither Play nor Delete, which
+   * is a good part of why the two read as separate features. Pressing a row
+   * was already how a playlist gets played, so the button said nothing the
+   * list did not.
+   *
+   * Delete is asserted present, not absent, and the reversal is deliberate.
+   * Removing it from here made the two screens match by leaving neither able
+   * to delete anything — `delete_playlist` and `delete_group` had no caller in
+   * the app at all. It is on both screens now instead of neither.
    */
-  it("has no Play or Delete button — a row is what plays it", async () => {
+  it("has no Play button — a row is what plays it", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     await screen.findByText("Windowlicker");
     expect(screen.queryByRole("button", { name: /^play$/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
 
     await user.click(screen.getByText("Windowlicker"));
     await waitFor(() => expect(backend.called("play_tracks")).toBe(true));
     expect(backend.lastArgs("play_tracks")?.hrefs).toEqual(playlist().tracks);
   });
 
+  /** The only thing in the app that can delete a playlist. */
+  it("deletes the playlist, once the confirmation is answered", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    const user = userEvent.setup();
+    let gone = false;
+    render(
+      <Playlist id="p1" onOpen={() => {}} onGone={() => { gone = true; }} />,
+    );
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    // Asked, not done: a destructive control in a header beside a rename you
+    // tap is an easy thing to hit by accident on a phone.
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(backend.called("delete_playlist")).toBe(false);
+
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: /^delete$/i,
+      }),
+    );
+
+    await waitFor(() => expect(backend.called("delete_playlist")).toBe(true));
+    expect(backend.lastArgs("delete_playlist")?.id).toBe("p1");
+    // The screen cannot show a playlist that is not there any more.
+    await waitFor(() => expect(gone).toBe(true));
+  });
+
+  it("deletes nothing when the confirmation is declined", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    const user = userEvent.setup();
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+
+    await screen.findByText("Windowlicker");
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: /cancel/i,
+      }),
+    );
+
+    expect(backend.called("delete_playlist")).toBe(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   /** POL-6: the one control both screens are meant to have. */
   it("offers to keep the playlist on the device", async () => {
     useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     expect(
       await screen.findByRole("button", { name: /download/i }),
@@ -181,7 +231,7 @@ describe("Playlist — acting on one", () => {
   it("plays from a chosen track without losing the rest", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     await user.click(await screen.findByText("Xtal"));
 
@@ -206,7 +256,7 @@ describe("Playlist — acting on one", () => {
   it("renames from the title, with one press", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "Late Night" }));
     const box = screen.getByRole("textbox");
@@ -221,7 +271,7 @@ describe("Playlist — acting on one", () => {
   it("abandons a rename on Escape", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "Late Night" }));
     await user.clear(screen.getByRole("textbox"));
@@ -242,18 +292,58 @@ describe("Playlist — acting on one", () => {
    */
   it("removes a track dragged onto the Remove panel", async () => {
     const backend = useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const first = (await screen.findAllByRole("listitem"))[0]!;
     // Nothing to fall onto until something is being carried.
     expect(screen.queryByText("Remove")).toBeNull();
-    expect(within(first).queryByRole("button", { name: /^remove /i })).toBeNull();
+    // The row's remove button exists for the keyboard, but it is `a11y-only`:
+    // no ✕ is drawn back onto the row for a pointer, which is what POL-6 took
+    // out. Asserted by class because jsdom applies no stylesheet — the rule
+    // that hides it cannot be observed here, only the hook it hangs on.
+    expect(
+      within(first).getByRole("button", { name: /^remove /i }),
+    ).toHaveClass("a11y-only");
 
     fireEvent.dragStart(first, { dataTransfer: new DataTransfer() });
 
     const bin = await screen.findByText("Remove");
     fireEvent.dragOver(bin, { dataTransfer: new DataTransfer() });
     fireEvent.drop(bin, { dataTransfer: new DataTransfer() });
+
+    await waitFor(() => {
+      expect(backend.state.playlists[0]?.tracks).toHaveLength(2);
+    });
+    expect(backend.state.playlists[0]?.tracks[0]).toBe("/dav/Koofr/Music/xtal.m4a");
+  });
+
+  /**
+   * And the half a keyboard has, which is neither of the two above.
+   *
+   * Both removal paths are drags, and a keyboard cannot drag — so when POL-6
+   * took the row's ✕ away, desktop keyboard users lost removal outright, on
+   * macOS, Windows and Linux as well as Android. This drives the button the
+   * way they would: tab to it and press it. Nothing here focuses anything
+   * directly, because "is it reachable by tab" is the whole claim.
+   */
+  it("removes a track with the keyboard alone", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    const user = userEvent.setup();
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+
+    const first = (await screen.findAllByRole("listitem"))[0]!;
+    const target = within(first).getByRole("button", {
+      name: /^remove Windowlicker/i,
+    });
+
+    // Bounded so a regression that makes it unreachable fails rather than
+    // hangs. The row has a handful of controls ahead of it, not dozens.
+    for (let i = 0; i < 20 && document.activeElement !== target; i++) {
+      await user.tab();
+    }
+    expect(target).toHaveFocus();
+
+    await user.keyboard("{Enter}");
 
     await waitFor(() => {
       expect(backend.state.playlists[0]?.tracks).toHaveLength(2);
@@ -275,7 +365,7 @@ describe("Playlist — acting on one", () => {
    */
   it("removes a track held and dragged onto the panel with a finger", async () => {
     const backend = useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const first = (await screen.findAllByRole("listitem"))[0]!;
 
@@ -321,7 +411,7 @@ describe("Playlist — acting on one", () => {
    */
   it("still plays a row on a press that outlasts the hold", async () => {
     const backend = useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const first = (await screen.findAllByRole("listitem"))[0]!;
     const open = within(first).getByRole("button", { name: /^Windowlicker/ });
@@ -345,7 +435,7 @@ describe("Playlist — acting on one", () => {
   /** Let go anywhere else and the track stays where it was. */
   it("keeps the track when the finger comes up short of the panel", async () => {
     const backend = useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const first = (await screen.findAllByRole("listitem"))[0]!;
 
@@ -376,7 +466,7 @@ describe("Playlist — acting on one", () => {
   it("reorders with the buttons, so the keyboard is not left out", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const second = (await screen.findAllByRole("listitem"))[1]!;
     await user.click(within(second).getByRole("button", { name: /move .+ up/i }));
@@ -390,7 +480,7 @@ describe("Playlist — acting on one", () => {
 
   it("cannot move the first track up or the last one down", async () => {
     useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     const items = await screen.findAllByRole("listitem");
     expect(
@@ -405,7 +495,7 @@ describe("Playlist — acting on one", () => {
     const backend = useBackend({ playlists: [playlist()] });
     backend.fail("rename_playlist", "A playlist needs a name.");
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
 
     await user.click(await screen.findByRole("button", { name: "Late Night" }));
     await user.clear(screen.getByRole("textbox"));

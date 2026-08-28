@@ -5,12 +5,21 @@
  * library every time this opens, which is the difference from a playlist. So
  * there is no track list to edit here — you edit what the group *is*, and the
  * tracks follow.
+ *
+ * ## Delete, which this screen never had
+ *
+ * A group could be made and never unmade: `delete_group` existed in the
+ * backend with nothing in the UI calling it. The playlist screen's Delete was
+ * removed in POL-6 for symmetry, which left neither screen able to delete
+ * anything — so it came back on both rather than going from both. It asks
+ * first, the same as the playlist's.
  */
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
 import { groupsChanged } from "../components/GroupRail";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { DownloadButton } from "../components/DownloadButton";
+import { Confirm } from "../components/Confirm";
 
 export function SmartGroup({
   id,
@@ -28,6 +37,8 @@ export function SmartGroup({
   const [error, setError] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  /** The Delete in the header has been pressed, and is waiting to be meant. */
+  const [confirming, setConfirming] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -58,6 +69,19 @@ export function SmartGroup({
       // The sidebar lists these by name, so a rename it never hears about
       // leaves the old one on screen until something else reloads it.
       groupsChanged();
+    } catch (e: unknown) {
+      setError(messageOf(e));
+    }
+  }
+
+  /** Delete the group, once the confirmation has been answered. */
+  async function destroy() {
+    setConfirming(false);
+    try {
+      await core.deleteGroup(id);
+      // The rail lists these by name, so it has to be told.
+      groupsChanged();
+      onGone();
     } catch (e: unknown) {
       setError(messageOf(e));
     }
@@ -115,7 +139,26 @@ export function SmartGroup({
             ? "empty"
             : `${group.entities.length} in the set · ${tracks.length} tracks`}
         </p>
+
+        {/* Matched to the playlist's, which is the whole of POL-6. */}
+        <button
+          type="button"
+          className="group__delete"
+          onClick={() => setConfirming(true)}
+        >
+          Delete
+        </button>
       </header>
+
+      {confirming && (
+        <Confirm
+          title={`Delete ${group.name}?`}
+          body="The group goes. Nothing it gathered is deleted — the tracks are in your library, not in here."
+          confirmLabel="Delete"
+          onConfirm={() => void destroy()}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
 
       {/* A group resolves to tracks, so it can be kept like a playlist can —
           and unlike one, what it holds changes as the library grows, so the

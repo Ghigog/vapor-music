@@ -224,3 +224,59 @@
     transition: none;
   }
 }
+
+/*
+ * Delete, back in the header (POL-6 follow-up).
+ *
+ * POL-6 took Play and Delete off this screen so it would match the group
+ * screen, which had neither. Play stays gone — pressing a row plays it. Delete
+ * came back on both screens instead: with it gone from here and never present
+ * there, nothing anywhere in the app could delete a collection, and
+ * `delete_playlist` and `delete_group` sat in the backend with no caller.
+ *
+ * Quiet rather than red. It is a destructive control in a header next to a
+ * title you tap to rename, so it should not be the brightest thing on the
+ * screen; the confirmation is what stops a mistake, not the colour. The
+ * identical block is in `group.css`; they have to stay in step.
+ */
+.playlist__delete {
+  align-self: flex-start;
+  margin-top: 10px;
+  border: 1px solid var(--danger-edge);
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 5px 12px;
+  font-size: var(--fs-sm);
+}
+
+.playlist__delete:hover {
+  background: var(--danger-wash);
+}
+
+/*
+ * The keyboard's way to take a track out.
+ *
+ * `a11y-only` in the markup, so a pointer never sees it — the ✕ revealed on
+ * hover is exactly what POL-6 removed, and the pointer gesture is the drag to
+ * the panel at the bottom. A keyboard cannot drag, though, and this ships on
+ * macOS, Windows and Linux as well as Android, so without this there is no
+ * keyboard path to removal at all.
+ *
+ * Focus gives it its box back. A control you can tab to but cannot see is not
+ * much better than one you cannot reach: `:focus-visible` means a sighted
+ * keyboard user sees what they are about to press, while a mouse click that
+ * happened to land on it does not make it appear. Specificity beats
+ * `.a11y-only`'s single class, which is what puts the clip back when focus
+ * leaves.
+ */
+.playlist__remove:focus-visible {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+  white-space: nowrap;
+}

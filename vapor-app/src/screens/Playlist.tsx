@@ -25,19 +25,35 @@
  * as two: different title sizes, a download button on one, Play and Delete
  * buttons on one, and a rename gesture on one that a phone cannot perform. The
  * title treatment, the download button and the tap-the-name rename are now the
- * same on both, and the buttons that were only here are gone. Playing is what
- * pressing a row does; there was no reason for a second control saying so.
+ * same on both.
  *
- * ## Removing a track is a gesture, not a button
+ * Play went and stayed gone: playing is what pressing a row does, and there
+ * was no reason for a second control saying so. Delete came back, because
+ * taking it away left nothing in the app that could delete a playlist —
+ * `delete_playlist` had no caller at all. It is on the group screen too now,
+ * which never had one, so the two screens still match. It asks first: a
+ * destructive control sitting in a header beside a rename you tap is an easy
+ * thing to hit by accident on a phone.
+ *
+ * ## Removing a track is a gesture, and a button the keyboard can reach
  *
  * Hold a row and drag it to the panel that rises at the bottom. The row's ✕
  * was a 24px target revealed on hover, which on a phone means revealed by
  * nothing at all.
+ *
+ * Hover was the wrong trigger; a button was not. A drag is the only way to
+ * express "remove" with a pointer, and a keyboard cannot drag — so the gesture
+ * alone left desktop keyboard users, on three of the four platforms this
+ * ships on, with no way to take a track out. The button is back in the row's
+ * actions, `a11y-only` so no ✕ returns to the row for a pointer, and revealed
+ * when focus reaches it so a keyboard user can see what they are about to
+ * press.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as core from "../lib/core";
 import { DownloadButton } from "../components/DownloadButton";
+import { Confirm } from "../components/Confirm";
 import { Empty } from "../components/States";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { overlayRoot } from "../components/overlay";
@@ -58,14 +74,19 @@ interface Carried {
 export function Playlist({
   id,
   onOpen,
+  onGone,
 }: {
   id: string;
   onOpen: (href: string) => void;
+  /** The playlist was deleted, so there is nothing left to show. */
+  onGone: () => void;
 }) {
   const [meta, setMeta] = useState<core.Playlist | null>(null);
   const [rows, setRows] = useState<core.Row[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [renaming, setRenaming] = useState(false);
+  /** The Delete in the header has been pressed, and is waiting to be meant. */
+  const [confirming, setConfirming] = useState(false);
   const [name, setName] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
@@ -124,6 +145,19 @@ export function Playlist({
     },
     [id, refresh],
   );
+
+  /** Delete the playlist, once the confirmation has been answered. */
+  async function destroy() {
+    setConfirming(false);
+    try {
+      await core.deletePlaylist(id);
+      // The rail lists these; one it never hears about stays on screen.
+      announce();
+      onGone();
+    } catch (e) {
+      setError(e);
+    }
+  }
 
   const hold = useLongPress(
     // Held and released in place does nothing here: a row has no sheet.
@@ -283,6 +317,15 @@ export function Playlist({
 
         {/* Keeping it, which is a different question from playing it. */}
         <DownloadButton kind="playlist" id={id} hrefs={meta.tracks} />
+
+        {/* The only way to delete a playlist anywhere in the app. */}
+        <button
+          type="button"
+          className="playlist__delete"
+          onClick={() => setConfirming(true)}
+        >
+          Delete
+        </button>
       </header>
 
       {/* Conditionally: `ErrorNotice` renders whatever it is given, so an
@@ -407,6 +450,18 @@ export function Playlist({
                 >
                   ⓘ
                 </button>
+                {/* Not drawn for a pointer — that control is the drag, and a
+                    hover-revealed ✕ is what POL-6 took out. `a11y-only` keeps
+                    it in the accessibility tree and in the tab order, and the
+                    stylesheet gives it back its box once focus lands on it. */}
+                <button
+                  className="playlist__remove a11y-only"
+                  aria-label={`Remove ${row.title} from this playlist`}
+                  title="Remove from this playlist"
+                  onClick={() => void remove(index)}
+                >
+                  ✕
+                </button>
               </div>
             </li>
           ))}
@@ -442,6 +497,16 @@ export function Playlist({
         >
           Remove
         </div>
+      )}
+
+      {confirming && (
+        <Confirm
+          title={`Delete ${meta.name}?`}
+          body="The playlist goes. The tracks stay in your library."
+          confirmLabel="Delete"
+          onConfirm={() => void destroy()}
+          onCancel={() => setConfirming(false)}
+        />
       )}
 
       {/* What follows the finger. The class is the drag layer's, which also
