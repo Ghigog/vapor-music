@@ -2190,6 +2190,65 @@ the static pointing at a collected object.
 that installed. Nothing about the failure is visible from a build — which is the
 argument for AND-1 keeping "compiled" and "ran" in separate columns.
 
+### AND-9 : verify-apk.mjs blocked a good APK (fixed 2026-08-27)
+
+`v2.0.0-rc.9` built cleanly on four platforms and then failed its own APK
+check, publishing nothing:
+
+```
+jni exports checked      25
+resolved classes checked 1
+obfuscated class names     0 (expected 0)
+
+The Java and native halves of this APK disagree about 1 name(s):
+  com/dylangrowcoot/vapormusic/PlaybackServiceAESAndroidKeyStorejavax/crypto/KeyGeneratorgetInstance
+```
+
+That "class" is five string literals glued end to end:
+`".../PlaybackService"`, `"AES"`, `"AndroidKeyStore"`,
+`"javax/crypto/KeyGenerator"`, `"getInstance"`. No such class could exist, and
+R8 had renamed nothing — the same run says `obfuscated class names 0`.
+
+**Rust string literals carry no NUL terminator.** The compiler packs them
+contiguously in `.rodata`, so `stringsOf`, which splits on unprintable bytes,
+sees one run where there are five strings. The script's header claims the
+method "produces no false positives, because a name that is present is
+genuinely present". That is true of the DEX — length-prefixed *and*
+NUL-terminated — and was never true of the `.so`. It had held only because the
+rodata layout happened to separate them; AND-8's edit to `android.rs` moved the
+layout and glued `PlaybackService` to `AES`.
+
+The same root cause was quietly costing coverage: the old regex was anchored
+with `\b`, so a name glued to a preceding printable character was not found at
+all. rc.8 reported one resolved class; the same APK under the fix reports
+three.
+
+Fixed by searching each run for the class names it *contains* rather than
+testing the run whole: every position where a package prefix starts is a
+candidate, and the longest prefix from there that the DEX declares is the name.
+Verified both directions with the shipped function against rc.9's exact string
+— with `PlaybackService` present it resolves, and with it removed the run still
+comes back empty, so the check keeps its power. rc.8's APK still passes.
+
+Accepted false negative, recorded: a removed class whose name has a shorter
+real class name as a prefix would be satisfied by the shorter one. False
+negatives here cost nothing by this script's own stated design; a false
+positive costs a release, which is what it just cost.
+
+**Not automatically tested.** Nothing in the repository exercises the glued
+case — the proof above was run by hand, by lifting the function out of the file
+and calling it. `verify-apk.mjs` is a flat top-level script and cannot be
+imported without executing, so a test needs it restructured. Second
+self-inflicted fault in this script (the first discarded strings shorter than
+four characters and reported `Rust.ipc` missing), which is enough of a pattern
+to say plainly: **the checker has now broken a release more often than it has
+caught one.**
+
+Worth keeping in proportion. rc.9's APK was almost certainly fine and the
+check refused it. But the same check stopped rc.5's genuinely broken APK from
+reaching the release page, and the cost of this failure was a tag rather than a
+phone.
+
 ### AND-8 : the analysis pass posted notifications faster than Android accepts (fixed 2026-08-27)
 
 Found in AND-7's logcat, and not the cause of it:

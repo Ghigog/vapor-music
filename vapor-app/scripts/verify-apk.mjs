@@ -144,19 +144,71 @@ for (const sym of jni) {
 // wry and tauri do this from Rust — `find_class("app/tauri/plugin/PluginManager")`
 // — and a missing one is a ClassNotFoundException on the first frame.
 // ---------------------------------------------------------------------------
-const resolved = [
+//
+// **A printable run in the .so is not one string.** Rust string literals carry
+// no NUL terminator — the compiler packs them contiguously in `.rodata` — so a
+// byte scanner sees `"com/dylangrowcoot/vapormusic/PlaybackService"` followed
+// by `"AES"`, `"AndroidKeyStore"`, `"javax/crypto/KeyGenerator"` and
+// `"getInstance"` as a single run. v2.0.0-rc.9 failed here on exactly that,
+// reporting a "missing class" that was five literals glued end to end, on an
+// APK where R8 had renamed nothing (`obfuscated class names 0`). Only the
+// rodata layout had moved.
+//
+// So a run is searched for the class names it *contains* rather than tested
+// whole. Every position where one of the package prefixes starts is a
+// candidate, and the longest prefix from there that the DEX actually declares
+// is the name. A run that contains a package prefix and yields no class at any
+// of them is the real failure this check is for.
+//
+// The header's claim that this method "produces no false positives" was true
+// of the DEX, whose strings are length-prefixed *and* NUL-terminated, and was
+// never true of the .so. rc.9 is the proof.
+//
+// Remaining false negative, accepted: if a removed class has a shorter class
+// name as a prefix of it, the shorter one satisfies the run. False negatives
+// here cost nothing — a device or another check finds it — and a false
+// positive costs a release.
+
+/** Every class the DEX declares, by descriptor, for O(1) lookup. */
+const dexClasses = new Set(
+  (dexText.match(/L[A-Za-z0-9/$_]+;/g) ?? []).map((d) => d.slice(1, -1)),
+);
+
+const PACKAGES = ["app/tauri", "com/dylangrowcoot"];
+
+/** The class names a printable run actually contains. */
+const classesIn = (run) => {
+  const found = [];
+  for (let i = 0; i < run.length; i += 1) {
+    if (!PACKAGES.some((pkg) => run.startsWith(pkg, i))) continue;
+    for (let end = run.length; end > i; end -= 1) {
+      const candidate = run.slice(i, end);
+      if (dexClasses.has(candidate)) {
+        found.push(candidate);
+        break;
+      }
+    }
+  }
+  return found;
+};
+
+const runs = [
   ...new Set(
-    soText.match(/\b(?:app\/tauri|com\/dylangrowcoot)[A-Za-z0-9/$_]*/g) ?? [],
+    soText.match(/(?:app\/tauri|com\/dylangrowcoot)[A-Za-z0-9/$_]*/g) ?? [],
   ),
 ].filter((c) => /\/[A-Z]/.test(c)); // a class, not just a package prefix
 
-for (const cls of resolved) {
-  if (!dexText.includes(`L${cls};`)) {
+const resolved = [];
+for (const run of runs) {
+  const found = classesIn(run);
+  if (found.length === 0) {
     problems.push(
-      `${cls}\n    the native library looks this class up by name, and it is ` +
-        `not in the DEX.\n    R8 renamed or removed it; find_class returns ` +
-        `null and the app dies on launch.`,
+      `${run}\n    the native library looks a class up by name in this run, ` +
+        `and the DEX declares none of the names it could be.\n    R8 renamed ` +
+        `or removed it; find_class returns null and the app dies on launch.`,
     );
+  } else {
+    resolved.push(...found);
   }
 }
 
