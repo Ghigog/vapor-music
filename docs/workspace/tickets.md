@@ -2348,6 +2348,13 @@ themselves (52.9 MB); tempo analysis now costs about 1 MB on top of the audio.
 are equal element-for-element, so a future divergence is red rather than a
 quietly different BPM. 563 Essentia comparisons rest on that.
 
+**Confirmed on the device, 2026-08-28.** `v2.0.0-rc.10` ran for several hours
+with the app open, a track playing and the analysis pass scanning, and did not
+abort. `rc.8` died at about fifteen minutes doing the same thing. The bench
+measurement said the peak should fall by 2.9x; this is the part the bench could
+not answer — whether what remains is low enough for a real library on a real
+phone. For ordinary tracks it is.
+
 **Still unfixed, and out of scope here.** `audio.samples` is `4N` bytes and
 lives for the whole analysis — 635 MB for a sixty-minute mix before any
 spectrogram exists. This takes the peak from roughly `12N` to `4N`, which is
