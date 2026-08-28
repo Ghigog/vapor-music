@@ -173,10 +173,7 @@ export function LyricsPanel({
         <p className="lyrics__plain">{lyrics.plain}</p>
       )}
       <p className="lyrics__note">
-        From LRCLIB.
-        {synced
-          ? " Timed by whoever transcribed them, so the alignment is theirs."
-          : " No timed version was available, so these are the words without the timings."}
+        From LRCLIB.{synced ? "" : " Not timed."}
       </p>
     </section>
   );
