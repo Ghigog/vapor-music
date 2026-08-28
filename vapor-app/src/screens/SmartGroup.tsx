@@ -95,16 +95,20 @@ export function SmartGroup({
             }}
           />
         ) : (
-          <button
-            className="group__title"
-            title="Rename"
-            onClick={() => {
-              setName(group.name);
-              setNaming(true);
-            }}
-          >
-            {group.name}
-          </button>
+          /* A heading you press to rename. Matched to the playlist screen's,
+             which is the whole of POL-6: the two are one feature. */
+          <h1 className="group__title">
+            <button
+              className="group__title-edit"
+              title="Rename"
+              onClick={() => {
+                setName(group.name);
+                setNaming(true);
+              }}
+            >
+              {group.name}
+            </button>
+          </h1>
         )}
         <p className="label">
           {group.entities.length === 0
@@ -113,28 +117,28 @@ export function SmartGroup({
         </p>
       </header>
 
-      {/*
-        What the group is, rather than what it currently contains. Removing one
-        of these is what changes the group; the list below simply follows.
-      */}
       {/* A group resolves to tracks, so it can be kept like a playlist can —
           and unlike one, what it holds changes as the library grows, so the
-          set kept is whatever it resolves to at the moment it was asked for. */}
-      {tracks.length > 0 && (
-        <DownloadButton
-          kind="group"
-          id={id}
-          hrefs={tracks.map((t) => t.href)}
-        />
-      )}
+          set kept is whatever it resolves to at the moment it was asked for.
+
+          Drawn whether or not it resolves to anything, because a playlist
+          draws it whether or not it holds anything, and the control disables
+          itself when there is nothing to keep. A button present on a full
+          collection and absent on an empty one is part of how these two came
+          to look like different features. */}
+      <DownloadButton kind="group" id={id} hrefs={tracks.map((t) => t.href)} />
 
       {group.entities.length === 0 ? (
+        /* Named the same way the playlist's empty state is, and for the same
+           reason: there is no sidebar on a phone, so it cannot be the thing
+           the instruction points at. */
         <p className="group__empty">
-          Nothing in this group yet. Drag an artist, album or genre onto it — a
-          group holds those rather than single tracks, which is what keeps it up
-          to date as the library grows.
+          Drag artists, albums or genres onto this group in the bar at the
+          bottom.
         </p>
       ) : (
+        /* What the group is, rather than what it currently contains. Removing
+           one of these is what changes the group; the list below follows. */
         <ul className="group__chips">
           {group.entities.map((e) => (
             <li key={`${e.entityType}:${e.value}`}>

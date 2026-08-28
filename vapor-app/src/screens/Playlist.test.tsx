@@ -7,8 +7,15 @@
  * the library, an optimistic reorder that the backend then refuses, and a drop
  * that adds nothing because everything dropped was already there.
  */
-import { describe, expect, it } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Playlist } from "./Playlist";
 import { PlaylistRail, PLAYLIST_DRAG_TYPE } from "../components/PlaylistRail";
@@ -44,6 +51,34 @@ function dropOn(element: HTMLElement, hrefs: string[]) {
   );
 }
 
+/**
+ * A pointer event jsdom will carry the coordinates of.
+ *
+ * The drag listens on `window`, because a finger that leaves the row it
+ * started on has to keep being followed — so these are dispatched there rather
+ * than through `fireEvent` on an element.
+ */
+function finger(type: string, x: number, y: number): Event {
+  const event = new Event(type, { bubbles: true });
+  Object.assign(event, { clientX: x, clientY: y, button: 0 });
+  return event;
+}
+
+/** Put an element's box along the bottom of a 400x600 screen. */
+function atBottom(element: HTMLElement) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    right: 400,
+    top: 500,
+    bottom: 600,
+    x: 0,
+    y: 500,
+    width: 400,
+    height: 100,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
 describe("Playlist — showing one", () => {
   it("lists its tracks in playlist order, not sorted", async () => {
     useBackend({
@@ -56,7 +91,7 @@ describe("Playlist — showing one", () => {
         }),
       ],
     });
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     const items = await screen.findAllByRole("listitem");
     expect(within(items[0]!).getByText("Roygbiv")).toBeInTheDocument();
@@ -80,45 +115,73 @@ describe("Playlist — showing one", () => {
         }),
       ],
     });
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     await screen.findByText("Windowlicker");
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByText(/not in the library/i)).toBeInTheDocument();
   });
 
-  it("offers nothing to play when it is empty, and says what to do", async () => {
+  /**
+   * The instruction has to be performable on the device it is read on.
+   *
+   * It said "drag tracks from Songs onto this playlist in the sidebar". On a
+   * phone there is no sidebar — it is a bar along the bottom at that width —
+   * and it is not only tracks that can be dropped (POL-7).
+   */
+  it("says what to do when it is empty, naming the bar and not a sidebar", async () => {
     useBackend({ playlists: [playlist({ tracks: [] })] });
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     expect(await screen.findByText(/nothing in here yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^play$/i })).toBeDisabled();
+    expect(screen.getByText(/tracks, albums or artists/i)).toBeInTheDocument();
+    expect(screen.getByText(/bar at the bottom/i)).toBeInTheDocument();
+    expect(screen.queryByText(/sidebar/i)).toBeNull();
   });
 
   it("says so when the playlist does not exist", async () => {
     useBackend({ playlists: [] });
-    render(<Playlist id="gone" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="gone" onOpen={() => {}} />);
 
     expect(await screen.findByText(/that playlist is gone/i)).toBeInTheDocument();
   });
 });
 
 describe("Playlist — acting on one", () => {
-  it("plays the whole playlist in order", async () => {
+  /**
+   * POL-6: a playlist had Play and Delete and a group had neither, which is a
+   * good part of why the two read as separate features. Pressing a row was
+   * already how a playlist gets played, so the button said nothing the list
+   * did not — and nothing on this screen deletes any more.
+   */
+  it("has no Play or Delete button — a row is what plays it", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
-    await user.click(await screen.findByRole("button", { name: /^play$/i }));
+    await screen.findByText("Windowlicker");
+    expect(screen.queryByRole("button", { name: /^play$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
 
+    await user.click(screen.getByText("Windowlicker"));
     await waitFor(() => expect(backend.called("play_tracks")).toBe(true));
     expect(backend.lastArgs("play_tracks")?.hrefs).toEqual(playlist().tracks);
+  });
+
+  /** POL-6: the one control both screens are meant to have. */
+  it("offers to keep the playlist on the device", async () => {
+    useBackend({ playlists: [playlist()] });
+    render(<Playlist id="p1" onOpen={() => {}} />);
+
+    expect(
+      await screen.findByRole("button", { name: /download/i }),
+    ).toBeInTheDocument();
   });
 
   it("plays from a chosen track without losing the rest", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     await user.click(await screen.findByText("Xtal"));
 
@@ -133,12 +196,19 @@ describe("Playlist — acting on one", () => {
     expect(backend.lastArgs("play_tracks")?.scope).toBe(playlist().name);
   });
 
-  it("renames on a double-click", async () => {
+  /**
+   * POL-6 records this as "playlists cannot be renamed at all".
+   *
+   * They could — on a double-click of the heading, which is a gesture a phone
+   * does not have, so on the device this app is for it was true. One press of
+   * the title now, the same as a group's.
+   */
+  it("renames from the title, with one press", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
-    await user.dblClick(await screen.findByRole("heading", { name: "Late Night" }));
+    await user.click(await screen.findByRole("button", { name: "Late Night" }));
     const box = screen.getByRole("textbox");
     await user.clear(box);
     await user.type(box, "Very Late Night{Enter}");
@@ -151,9 +221,9 @@ describe("Playlist — acting on one", () => {
   it("abandons a rename on Escape", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
-    await user.dblClick(await screen.findByRole("heading", { name: "Late Night" }));
+    await user.click(await screen.findByRole("button", { name: "Late Night" }));
     await user.clear(screen.getByRole("textbox"));
     await user.type(screen.getByRole("textbox"), "Discarded{Escape}");
 
@@ -163,13 +233,27 @@ describe("Playlist — acting on one", () => {
     expect(backend.called("rename_playlist")).toBe(false);
   });
 
-  it("removes a track", async () => {
+  /**
+   * Removing is a gesture now (POL-6).
+   *
+   * The row's ✕ was revealed on hover, and a phone has no hover — so on the
+   * device this app is for the control was revealed by nothing at all. A row
+   * is dragged to a panel that rises at the bottom instead.
+   */
+  it("removes a track dragged onto the Remove panel", async () => {
     const backend = useBackend({ playlists: [playlist()] });
-    const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     const first = (await screen.findAllByRole("listitem"))[0]!;
-    await user.click(within(first).getByRole("button", { name: /^remove /i }));
+    // Nothing to fall onto until something is being carried.
+    expect(screen.queryByText("Remove")).toBeNull();
+    expect(within(first).queryByRole("button", { name: /^remove /i })).toBeNull();
+
+    fireEvent.dragStart(first, { dataTransfer: new DataTransfer() });
+
+    const bin = await screen.findByText("Remove");
+    fireEvent.dragOver(bin, { dataTransfer: new DataTransfer() });
+    fireEvent.drop(bin, { dataTransfer: new DataTransfer() });
 
     await waitFor(() => {
       expect(backend.state.playlists[0]?.tracks).toHaveLength(2);
@@ -177,10 +261,122 @@ describe("Playlist — acting on one", () => {
     expect(backend.state.playlists[0]?.tracks[0]).toBe("/dav/Koofr/Music/xtal.m4a");
   });
 
+  /**
+   * And the half a phone actually has.
+   *
+   * HTML5 drag does not exist on touch — `dragstart` never fires — so the test
+   * above proves nothing about the device this is for. Hold, then move, and
+   * the row comes with you; release it over the panel and it is gone. Moving
+   * before the hold arms is a scroll, which is the case after this one.
+   *
+   * `getBoundingClientRect` answers zero for everything in jsdom, which would
+   * put the panel at the origin and make every release land on it. Its box is
+   * stubbed so a test can miss the panel as well as hit it.
+   */
+  it("removes a track held and dragged onto the panel with a finger", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    render(<Playlist id="p1" onOpen={() => {}} />);
+
+    const first = (await screen.findAllByRole("listitem"))[0]!;
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(first, { button: 0, clientX: 20, clientY: 60 });
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      act(() => {
+        window.dispatchEvent(finger("pointermove", 20, 74));
+      });
+
+      atBottom(screen.getByText("Remove"));
+
+      act(() => {
+        window.dispatchEvent(finger("pointermove", 200, 550));
+      });
+      act(() => {
+        window.dispatchEvent(finger("pointerup", 200, 550));
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await waitFor(() => {
+      expect(backend.state.playlists[0]?.tracks).toHaveLength(2);
+    });
+    expect(backend.state.playlists[0]?.tracks[0]).toBe("/dav/Koofr/Music/xtal.m4a");
+    // And it did not play on the way out. A row plays when it is tapped, and
+    // a gesture that ends in a click on the row it started from would play the
+    // track it was taking away.
+    expect(backend.called("play_tracks")).toBe(false);
+  });
+
+  /**
+   * A press is not a pick-up until it moves.
+   *
+   * `useLongPress` marks any press that outlives the hold delay as having done
+   * something, which on a mouse is an ordinary slow click — so reading that
+   * flag to decide whether to play would stop a deliberate press working at
+   * all. Only an actual pick-up swallows the click.
+   */
+  it("still plays a row on a press that outlasts the hold", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    render(<Playlist id="p1" onOpen={() => {}} />);
+
+    const first = (await screen.findAllByRole("listitem"))[0]!;
+    const open = within(first).getByRole("button", { name: /^Windowlicker/ });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(open, { button: 0, clientX: 20, clientY: 60 });
+      act(() => {
+        vi.advanceTimersByTime(900);
+      });
+      fireEvent.pointerUp(open, { button: 0, clientX: 20, clientY: 60 });
+      fireEvent.click(open);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await waitFor(() => expect(backend.called("play_tracks")).toBe(true));
+    expect(backend.called("remove_playlist_track")).toBe(false);
+  });
+
+  /** Let go anywhere else and the track stays where it was. */
+  it("keeps the track when the finger comes up short of the panel", async () => {
+    const backend = useBackend({ playlists: [playlist()] });
+    render(<Playlist id="p1" onOpen={() => {}} />);
+
+    const first = (await screen.findAllByRole("listitem"))[0]!;
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(first, { button: 0, clientX: 20, clientY: 60 });
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      act(() => {
+        window.dispatchEvent(finger("pointermove", 20, 74));
+      });
+
+      atBottom(screen.getByText("Remove"));
+
+      act(() => {
+        window.dispatchEvent(finger("pointerup", 200, 300));
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(backend.called("remove_playlist_track")).toBe(false);
+    expect(screen.queryByText("Remove")).toBeNull();
+  });
+
   it("reorders with the buttons, so the keyboard is not left out", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     const second = (await screen.findAllByRole("listitem"))[1]!;
     await user.click(within(second).getByRole("button", { name: /move .+ up/i }));
@@ -194,7 +390,7 @@ describe("Playlist — acting on one", () => {
 
   it("cannot move the first track up or the last one down", async () => {
     useBackend({ playlists: [playlist()] });
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
     const items = await screen.findAllByRole("listitem");
     expect(
@@ -205,27 +401,13 @@ describe("Playlist — acting on one", () => {
     ).toBeDisabled();
   });
 
-  it("deletes, and tells the shell there is nothing left to show", async () => {
-    const backend = useBackend({ playlists: [playlist()] });
-    const user = userEvent.setup();
-    let gone = false;
-    render(
-      <Playlist id="p1" onOpen={() => {}} onGone={() => { gone = true; }} />,
-    );
-
-    await user.click(await screen.findByRole("button", { name: /delete the playlist/i }));
-
-    await waitFor(() => expect(gone).toBe(true));
-    expect(backend.state.playlists).toHaveLength(0);
-  });
-
   it("surfaces a refused rename rather than pretending it worked", async () => {
     const backend = useBackend({ playlists: [playlist()] });
     backend.fail("rename_playlist", "A playlist needs a name.");
     const user = userEvent.setup();
-    render(<Playlist id="p1" onOpen={() => {}} onGone={() => {}} />);
+    render(<Playlist id="p1" onOpen={() => {}} />);
 
-    await user.dblClick(await screen.findByRole("heading", { name: "Late Night" }));
+    await user.click(await screen.findByRole("button", { name: "Late Night" }));
     await user.clear(screen.getByRole("textbox"));
     await user.type(screen.getByRole("textbox"), "x{Enter}");
 

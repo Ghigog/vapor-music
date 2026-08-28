@@ -30,7 +30,9 @@ import { boot } from "./harness";
  *   - "a playlist can be filed into a folder and taken back out"
  *     covered by Playlist.test.tsx — 'files a playlist into a folder when it is dragged onto one' and 'takes a playlist back out again'
  *   - "a playlist can be renamed and deleted"
- *     covered by Playlist.test.tsx — 'renames on a double-click' and 'deletes, and tells the shell there is nothing left to show'
+ *     covered by Playlist.test.tsx — 'renames from the title, with one press'.
+ *     Deleting went with POL-6: this screen has no Delete button any more, and
+ *     nothing else in the app deletes a playlist.
  *   - "a hand-typed BPM is accepted and marked as a correction"
  *     covered by Songs.test.tsx — 'accepts a hand-typed BPM'
  *

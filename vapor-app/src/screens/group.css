@@ -7,28 +7,42 @@
   margin-bottom: 16px;
 }
 
-.group__title,
+/* One title treatment, and it is the app's (POL-6).
+
+   This was the 66px hero while the playlist screen's fell back to the
+   browser's h1 default, which is a good part of why the two read as separate
+   features. Both are now `--fs-display`, like every other screen title. The
+   identical block is in `playlist.css`; they have to stay in step. */
+.group__title {
+  margin: 0;
+}
+
+.group__title-edit,
 .group__rename {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 0;
   border: 0;
   background: none;
-  padding: 0;
   text-align: left;
   font-family: var(--font-display);
-  font-weight: 200;
-  font-size: var(--fs-hero);
-  letter-spacing: var(--ls-hero);
-  line-height: 1.05;
+  font-weight: var(--fw-light);
+  font-size: var(--fs-display);
+  letter-spacing: var(--ls-display);
+  line-height: 1.04;
   color: var(--ink);
 }
 
-.group__title {
+.group__title-edit {
   cursor: pointer;
 }
 
 .group__rename {
-  border-bottom: 1px solid var(--accent);
+  border-bottom: 1px solid var(--edge-strong);
+  padding-bottom: 2px;
   outline: none;
-  width: 100%;
 }
 
 .group__empty {
