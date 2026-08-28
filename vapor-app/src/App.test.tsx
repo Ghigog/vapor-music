@@ -11,10 +11,11 @@
  * without it a person is shown an empty library with no indication that their
  * data is sitting on disk, intact and merely unreadable.
  */
-import { describe, expect, it } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
+import * as drag from "./lib/drag";
 import { useBackend } from "./test/setup";
 
 describe("App — startup damage", () => {
@@ -116,5 +117,98 @@ describe("App — the library tab is a place", () => {
         "true",
       ),
     );
+  });
+});
+
+/**
+ * The tab bar as a drop target (POL-7).
+ *
+ * At the width that shows it there is no sidebar rail, so the tab is the only
+ * way to a playlist — and a tab is not a target: the list you have to land on
+ * only exists once it is open. A finger resting on one has opened it since the
+ * touch drag was built (`DragLayer` times a dwell over `[data-tab]`); a drag
+ * the browser itself is running had no equivalent, so on a narrow window an
+ * album carried to Playlists had nothing under it.
+ */
+describe("App — dragging at the playlists tab", () => {
+  /** A native drag of one album, as a tile in the library produces one. */
+  function dragOver(element: HTMLElement) {
+    const data = new DataTransfer();
+    drag.writeDrag(data, {
+      kind: "album",
+      values: ["Selected Ambient Works"],
+      label: "Selected Ambient Works",
+    });
+    element.dispatchEvent(
+      new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      }),
+    );
+  }
+
+  it("opens the list when a drag rests on the tab", async () => {
+    useBackend({
+      playlists: [
+        {
+          id: "p1",
+          name: "Late Night",
+          customCoverPath: "",
+          tracks: [],
+          folderId: "",
+        },
+      ],
+    });
+    render(<App />);
+
+    await screen.findByRole("navigation", { name: /screens and playlists/i });
+    const tab = document.querySelector<HTMLElement>('[data-tab="playlist"]');
+    expect(tab).not.toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    vi.useFakeTimers();
+    try {
+      // Resting, not passing through: `dragover` repeats while the cursor is
+      // over the target, and the list opens only once the dwell is served.
+      act(() => {
+        dragOver(tab!);
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(drag.DWELL_MS + 50);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const menu = await screen.findByRole("dialog", { name: /playlists/i });
+    // And it is a target now: the row carries what a drop needs to act on.
+    expect(
+      menu.querySelector('[data-drop-name="Late Night"]'),
+    ).not.toBeNull();
+  });
+
+  it("leaves the list shut for a drag that only passes over the tab", async () => {
+    useBackend();
+    render(<App />);
+
+    await screen.findByRole("navigation", { name: /screens and playlists/i });
+    const tab = document.querySelector<HTMLElement>('[data-tab="playlist"]');
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        dragOver(tab!);
+        tab!.dispatchEvent(new DragEvent("dragleave", { bubbles: true }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(drag.DWELL_MS + 50);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

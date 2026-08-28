@@ -356,6 +356,19 @@
  */
 .card--entity {
   position: relative;
+  /*
+   * A tile is picked up by holding it (`useEntityDrag`), so it must not be
+   * selectable text and must not decide it is being panned sideways. Android
+   * raises its own selection handles at about the delay the hold fires at, and
+   * the selection cancels the gesture — which is POL-7's "dragging an album
+   * onto the playlists area does not open the sub-menu": the drag it would
+   * have opened for never started. `.songrow` has carried these three for the
+   * same gesture since the Songs table got it.
+   */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-y;
 }
 
 .card__open {

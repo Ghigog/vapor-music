@@ -33,6 +33,7 @@ import { Settings } from "./screens/Settings";
 import { SmartGroup } from "./screens/SmartGroup";
 import { Onboarding } from "./screens/Onboarding";
 import * as core from "./lib/core";
+import * as drag from "./lib/drag";
 import { adoptAppearance, asAppearance } from "./lib/theme";
 import "./components/transport.css";
 import "./components/states.css";
@@ -360,6 +361,45 @@ export function App() {
     setMenu(which);
   }
 
+  /**
+   * Resting a native drag on a tab opens its list (POL-7).
+   *
+   * A finger already does this — `DragLayer` times a dwell over `[data-tab]`
+   * — and a mouse did not, so on a window narrow enough to show the tab bar
+   * an album dragged at Playlists had nothing to drop into: the list it needs
+   * to land on only exists once the tab is open.
+   *
+   * HTML5 drag has no dwell of its own. `dragover` repeats while the cursor is
+   * over the target, so the timer is started on the first one and cleared when
+   * the drag leaves or lands — the same `DWELL_MS` the touch path waits, so
+   * the two gestures do not feel like different lengths of patience.
+   */
+  const tabDwell = useRef<number | null>(null);
+  const clearTabDwell = useCallback(() => {
+    if (tabDwell.current !== null) window.clearTimeout(tabDwell.current);
+    tabDwell.current = null;
+  }, []);
+  useEffect(() => clearTabDwell, [clearTabDwell]);
+
+  function tabDrag(which: Menu) {
+    return {
+      onDragOver: (e: React.DragEvent) => {
+        // Only ours. Claiming the drop stops the cursor saying "no" over a tab
+        // that is about to become a target.
+        if (!drag.kindOf(e.dataTransfer)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        if (menu === which || tabDwell.current !== null) return;
+        tabDwell.current = window.setTimeout(() => {
+          tabDwell.current = null;
+          void openMenu(which);
+        }, drag.DWELL_MS);
+      },
+      onDragLeave: clearTabDwell,
+      onDrop: clearTabDwell,
+    };
+  }
+
   function openLiner(href: string) {
     setLiner({ href, from: screen });
   }
@@ -499,11 +539,7 @@ export function App() {
               }}
             />
           ) : playlist ? (
-            <Playlist
-              id={playlist}
-              onOpen={openLiner}
-              onGone={() => setPlaylist(null)}
-            />
+            <Playlist id={playlist} onOpen={openLiner} />
           ) : group ? (
             <SmartGroup
               id={group}
@@ -597,6 +633,7 @@ export function App() {
             aria-haspopup="dialog"
             aria-expanded={menu === "playlist"}
             onClick={() => void openMenu("playlist")}
+            {...tabDrag("playlist")}
           >
             Playlists
           </button>
@@ -606,6 +643,7 @@ export function App() {
             aria-haspopup="dialog"
             aria-expanded={menu === "group"}
             onClick={() => void openMenu("group")}
+            {...tabDrag("group")}
           >
             Groups
           </button>

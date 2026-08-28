@@ -8,25 +8,46 @@
   margin-bottom: 20px;
 }
 
+/* One title treatment, and it is the app's (POL-6).
+
+   These two screens are one feature and read as two. Part of that was here:
+   `--fs-title` and `--ls-title` are not tokens — they are defined nowhere in
+   `public/tokens.css` — so this fell back to the browser's own h1 size while
+   the group screen's title was the 66px hero. Both are now `--fs-display`,
+   which is what Queue, Settings, Your Data and Vibe already set their titles
+   in. The identical block is in `group.css`; they have to stay in step. */
 .playlist__title {
-  font-family: var(--font-display);
-  font-weight: 200;
-  font-size: var(--fs-title);
-  letter-spacing: var(--ls-title);
   margin: 0;
-  cursor: text;
+}
+
+.playlist__title-edit,
+.playlist__rename {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-family: var(--font-display);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-display);
+  letter-spacing: var(--ls-display);
+  line-height: 1.04;
+  color: var(--ink);
+}
+
+/* Pressed to rename, which a phone can do — the gesture was a double-click,
+   so a playlist could not be renamed at all on the device this is for. */
+.playlist__title-edit {
+  cursor: pointer;
 }
 
 .playlist__rename {
-  font-family: var(--font-display);
-  font-weight: 200;
-  font-size: var(--fs-title);
-  letter-spacing: var(--ls-title);
-  width: 100%;
-  border: 0;
   border-bottom: 1px solid var(--edge-strong);
-  background: none;
-  padding: 0 0 2px;
+  padding-bottom: 2px;
+  outline: none;
 }
 
 .playlist__meta {
@@ -38,31 +59,6 @@
    file can leave the library after it was added. */
 .playlist__missing {
   color: var(--ink-3);
-}
-
-.playlist__actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.playlist__actions button {
-  border: 1px solid var(--edge);
-  background: var(--fill-raised);
-  border-radius: var(--r-md);
-  padding: 8px 18px;
-  font-family: var(--font-ui);
-  font-size: var(--fs-body);
-  cursor: pointer;
-}
-
-.playlist__actions button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.playlist__delete {
-  color: var(--ink-2);
 }
 
 .playlist__list {
@@ -80,6 +76,14 @@
   border-radius: var(--r-md);
   background: var(--fill-quiet);
   margin-bottom: 4px;
+  /* A row is picked up by holding it, so it must not be selectable text and
+     must not decide it is being panned sideways. Android raises its own
+     selection handles at about the delay the hold fires at — the same three
+     properties `.songrow` needs, for the same gesture. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-y;
 }
 
 .playlist__row--dragging {
@@ -167,4 +171,56 @@
 .playlist__row-actions button:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+/*
+ * Where a row goes to be taken out.
+ *
+ * Fixed to the bottom edge rather than sitting in the list, because the
+ * gesture that reaches it starts anywhere in a list that scrolls, and because
+ * the thumb is already down there. It is drawn only while something is being
+ * carried: a permanent bin is a thing to fall onto by accident.
+ *
+ * It replaces the row's own ✕, which was a 24px target revealed on hover —
+ * and a phone has no hover, so on the device this app is for the control was
+ * revealed by nothing at all.
+ */
+.playlist__bin {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Above the tab bar (30) and the tab menu (35), below the thing following
+     the finger (60) and the drop message (50). */
+  z-index: 45;
+  padding: 20px 16px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--fill-strong);
+  box-shadow: var(--shadow-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.playlist__bin--over {
+  /* The wash is translucent by design, so it goes *over* the panel's own fill
+     rather than replacing it — a bin you can see the list through reads as a
+     bin that has stopped being there. */
+  background:
+    linear-gradient(var(--danger-wash), var(--danger-wash)),
+    var(--fill-strong);
+  box-shadow:
+    inset 0 0 0 1px var(--danger-edge),
+    var(--shadow-md);
+  color: var(--danger-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist__bin {
+    transition: none;
+  }
 }
