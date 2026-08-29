@@ -385,6 +385,37 @@ mod tests {
         assert!(seen.iter().all(|(_, failed)| *failed));
     }
 
+    /// A fully analysed library has nothing pending — which is why Analyse
+    /// used to do nothing at all.
+    ///
+    /// Not a complaint about this function, which is correct: skipping work
+    /// already done is what makes a second launch instant. It is a note about
+    /// what sits on top of it. `start_analysis` returned early on an empty
+    /// todo, and the identify pass — tempo octaves, album facts, artist genres
+    /// — is chained to the *end* of a real pass, so the moment a library was
+    /// fully measured the only route to identify closed and the button became a
+    /// no-op. An empty todo now runs identify on its own; this pins the
+    /// precondition that made it necessary, because if this ever stops being
+    /// empty for a done library the early return stops being reachable and that
+    /// branch is dead code nobody noticed.
+    #[test]
+    fn a_library_that_is_fully_analysed_has_no_pending_work() {
+        let mut cache = Cache::new();
+        let hrefs = vec!["/a.mp3".to_string(), "/b.mp3".to_string()];
+        for h in &hrefs {
+            cache.insert(h.clone(), analysed(ANALYSIS_VERSION));
+        }
+
+        assert!(
+            pending(&hrefs, &cache, &Failures::new()).is_empty(),
+            "nothing outstanding, so `start_analysis` takes its early return"
+        );
+        assert!(
+            pending_first(&hrefs, &cache, &Failures::new(), &hrefs).is_empty(),
+            "and the priority ordering does not resurrect finished work"
+        );
+    }
+
     /// A file the decoder has refused is not outstanding work.
     ///
     /// Only permanent failures are recorded, so a track here is one that will

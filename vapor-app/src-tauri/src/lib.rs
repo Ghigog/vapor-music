@@ -5786,7 +5786,37 @@ pub(crate) fn start_analysis(app_handle: &tauri::AppHandle, shared: &Shared) -> 
         )
     };
 
+    /*
+     * Nothing to measure is not nothing to do.
+     *
+     * The identify pass — tempo octaves, album facts, artist genres — is
+     * chained to the *end* of analysis rather than given a button of its own,
+     * on the reasoning that it is the second half of one intention. But this
+     * early return is before the chain, so the moment a library is fully
+     * analysed, pressing Analyse did nothing at all and there was no other way
+     * to reach identify from anywhere in the app. A person whose library is
+     * already measured is exactly the person who wants the metadata pass.
+     *
+     * So an empty todo now runs the second half on its own. The `may_look_up`
+     * gate is the same one the chained call uses, so a person who has not
+     * permitted lookups still gets silence rather than a surprise round of
+     * requests to a stranger.
+     */
     if todo.is_empty() {
+        let may_look_up = shared
+            .lock()
+            .map(|app| app.settings.metadata_lookup_enabled)
+            .unwrap_or(false);
+        if may_look_up {
+            // Swallowed, like the chained call at the end of a real pass. The
+            // one error it raises is "nothing to identify yet", which on an
+            // empty library is true and useless — a person who pressed Analyse
+            // with no music does not need to be told about a metadata pass they
+            // have never heard of.
+            if let Err(e) = identify_library_in_background(app_handle, shared) {
+                eprintln!("identify not started: {}", e.0);
+            }
+        }
         return Ok(());
     }
 
