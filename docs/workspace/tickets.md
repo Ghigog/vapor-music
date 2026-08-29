@@ -3442,6 +3442,39 @@ Deezer is called unregistered against an API that documents no quota. What
 changed is that the granular sources are now asked **first**, so Deezer's
 answer is only kept when it says something the others do not.
 
+### Last.fm is built but not switched on — parked 2026-08-29
+
+**Dylan's call: ship with MusicBrainz only and see whether it is enough.** The
+Last.fm path is written, tested and inert; it needs an API key and nothing else,
+and without one the code takes the MusicBrainz branch silently. Registering a
+key is a five-minute job that can be done at any point, so doing it *before*
+there is evidence it is needed would be buying a second network dependency, a
+build-time secret and a repository secret against a problem nobody has confirmed
+still exists.
+
+**The trigger to unpark it is Dylan raising genre granularity again.** If he
+says the genres still read too coarse — everything landing on "Electronic",
+Nils Frahm and Eptic on one shelf, the original AUD-24 complaint — then the next
+suggestion is the Last.fm key, not another pass at the ranking rules. Do not
+re-derive this from scratch; the analysis is above and the code is waiting.
+
+**Say what it costs when suggesting it**, because it is not free:
+
+* An account at `last.fm/api/account/create`. The **API key** only — the shared
+  secret is for scrobbling and user sessions, which this app does not do.
+* `VAPOR_LASTFM_API_KEY` exported locally, and the same as a repository secret
+  passed at build time by `release.yml` — `option_env!` bakes it in, because a
+  double-clicked app gets no shell environment.
+* One more stranger in `PRIVACY.md` and `RELEASE.md` §3. Those already list it,
+  so the documents are correct either way.
+
+**What would settle it with a number rather than an impression:** after an
+Identify pass, count how many rows still resolve to a genre in
+`metadata::UMBRELLA_GENRES`. That is the measurement AUD-24 never had, and it
+turns "still too coarse" into a proportion. Neither service has been contacted
+from any container this was built in, so that count is also the first real
+evidence that any of this works.
+
 **Half done:** The calls are identified and paced, which is worth having
 whichever way the decision goes. Every request carries a `User-Agent` naming
 the app, its version and the project URL — LRCLIB requires that in as many

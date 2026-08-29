@@ -136,7 +136,15 @@ const LASTFM_KEY_ENV: &str = "VAPOR_LASTFM_API_KEY";
 /// one, which matters because the only way to know this works is to run it.
 ///
 /// Absent from both is a supported state and returns `None`. It is not an error
-/// and nothing reports it: an install with no key is the ordinary case.
+/// and nothing reports it: an install with no key is the ordinary case — and
+/// **as of 2026-08-29 it is the only case**, because no key has been registered.
+///
+/// That is a decision rather than an omission (AUD-18, "Last.fm is built but not
+/// switched on"): MusicBrainz needs no key and answers the same question, so
+/// this ships inert until there is evidence it is needed. **If genres are ever
+/// reported as still too coarse, registering a key is the next lever to pull
+/// and it is a five-minute job** — read AUD-18 before reaching for the ranking
+/// rules in [`best_genre`], which is the more tempting and less likely fix.
 fn lastfm_key() -> Option<String> {
     let from_env = std::env::var(LASTFM_KEY_ENV).ok();
     let key = from_env
