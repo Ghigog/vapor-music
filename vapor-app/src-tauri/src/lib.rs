@@ -1475,7 +1475,12 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
             // simply an empty string — there is no `Source` to consult.
             By::Genre => {
                 let g = genre_of(app, &row.href);
-                let known = !g.trim().is_empty();
+                // `is_unknown_genre`, not `is_empty`. A tagger that writes
+                // "Unknown genre" into the file has said the same thing as one
+                // that wrote nothing, and testing only for blank turned that
+                // into a tile on the Genres tab called "Unknown genre" — a
+                // heading that claims a genre exists and is named that.
+                let known = !vapor_library::is_unknown_genre(&g);
                 (g, known)
             }
         };
@@ -3389,8 +3394,11 @@ fn genre_from_tag_or_lookup(app: &AppState, href: &str) -> String {
 /// tag, because it is per *artist*: a specific track tagged "Liquid DNB" in its
 /// own file is a sharper statement than the artist's overall cloud.
 fn genre_from_tag_or_lookup_for(app: &AppState, href: &str, artist: &str) -> String {
+    // A placeholder is not an answer. `is_unknown_genre` rather than a blank
+    // test, so a file tagged "Unknown genre" or "N/A" falls through to the next
+    // source instead of stopping the chain with a word that means nothing.
     if let Some(tagged) = app.tags.get(href).and_then(|t| t.genre.clone()) {
-        if !tagged.trim().is_empty() {
+        if !vapor_library::is_unknown_genre(&tagged) {
             return tagged;
         }
     }
@@ -7722,6 +7730,52 @@ mod tests {
         assert_eq!(r.album, "Real Album", "the lookup overwrote the path");
         assert_eq!(r.artist, "Real Artist");
         assert_eq!(r.album_source, vapor_library::index::Source::Folder);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// "Unknown genre" is not a genre, whoever wrote it.
+    ///
+    /// A tagger that writes the words into the file has said exactly what one
+    /// that wrote nothing said, and the tab tested only for blank — so the
+    /// Genres grid drew a tile headed "Unknown genre", which claims a genre
+    /// exists and is named that. Deezer's own placeholders are already stripped
+    /// on the way in; a file's are not, and this is the last place to catch it.
+    #[test]
+    fn a_placeholder_genre_gets_no_tile_of_its_own() {
+        let (mut app, dir) = app();
+        for (href, genre) in [
+            ("/a.mp3", "House"),
+            ("/b.mp3", "Unknown genre"),
+            ("/c.mp3", "unknown"),
+            ("/d.mp3", "N/A"),
+            ("/e.mp3", "none"),
+            ("/f.mp3", ""),
+        ] {
+            let mut r = row(href, href);
+            r.genre = genre.to_string();
+            app.rows.push(r);
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("genre".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let names: Vec<String> = library_entities_for(&app, &view)
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+
+        assert_eq!(
+            names,
+            vec!["House"],
+            "a placeholder became a genre tile: {names:?}"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
