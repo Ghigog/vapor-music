@@ -783,6 +783,33 @@ describe("Settings — the shape of the screen", () => {
     ).toBeInTheDocument();
   });
 
+  /*
+   * The metadata pass needs a control of its own.
+   *
+   * It is chained to the end of an analysis pass, on the reasoning that it is
+   * the second half of one intention — but a library that is already analysed
+   * has no pass to chain to, and this is a lookup that genuinely wants
+   * repeating, because it depends on what two public services say today. The
+   * only route to it was "press Analyse when nothing is pending", which is not
+   * a thing anybody would work out.
+   */
+  it("runs the metadata pass without re-analysing anything", async () => {
+    const backend = useBackend({ connected: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /^refresh metadata$/i }),
+    );
+
+    await waitFor(() => {
+      expect(backend.called("identify_library")).toBe(true);
+    });
+    // And emphatically not the expensive one: re-measuring 823 tracks to learn
+    // what a web service calls them is the wrong lever entirely.
+    expect(backend.called("analyse_library")).toBe(false);
+  });
+
   it("keeps Analyse in the same group as the other library rows", async () => {
     useBackend({ connected: true });
     render(<Settings />);

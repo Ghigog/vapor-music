@@ -40,7 +40,7 @@ import { AppearanceControl } from "../components/Appearance";
 // a convenience — CC BY wants attribution the user can actually see.
 import notices from "../../../THIRD_PARTY_NOTICES.md?raw";
 
-type Busy = "idle" | "saving" | "scanning" | "analysing";
+type Busy = "idle" | "saving" | "scanning" | "analysing" | "refreshing";
 
 /** Which card a notice belongs to, so an answer appears beside its question. */
 type Card = "remote" | "analysis" | "data" | "dupes";
@@ -579,6 +579,22 @@ export function Settings() {
     await refresh();
   }
 
+  /**
+   * Re-run the metadata pass without re-measuring anything.
+   *
+   * Tempo octaves, album track counts and artist genres, none of which need a
+   * byte of audio. It is chained to the end of an analysis pass because it is
+   * the second half of that intention, but a library that is already analysed
+   * has no pass to chain to — and this is a lookup that genuinely wants
+   * repeating, because it depends on what two public services say today.
+   */
+  async function refreshMetadata() {
+    await run("refreshing", "analysis", core.identifyLibrary, () => {});
+    // The pass runs on a background thread and reports through the same
+    // progress channel as analysis, so the meter picks it up from here.
+    await refresh();
+  }
+
   return (
     <div className="settings">
       <header className="settings__head">
@@ -815,13 +831,22 @@ export function Settings() {
               Stop
             </button>
           ) : (
-            <button
-              className="settings__rowbutton"
-              disabled={busy === "analysing"}
-              onClick={() => void analyse()}
-            >
-              Analyse
-            </button>
+            <>
+              <button
+                className="settings__rowbutton settings__rowbutton--plain"
+                disabled={busy === "analysing" || busy === "refreshing"}
+                onClick={() => void refreshMetadata()}
+              >
+                Refresh metadata
+              </button>
+              <button
+                className="settings__rowbutton"
+                disabled={busy === "analysing" || busy === "refreshing"}
+                onClick={() => void analyse()}
+              >
+                Analyse
+              </button>
+            </>
           )}
         </SettingRow>
 

@@ -673,3 +673,21 @@
   margin-left: 16px;
   margin-right: 16px;
 }
+
+/*
+ * The neutral variant of a row button.
+ *
+ * `--fill-raised` rather than a literal white: it is white in Daylight, which
+ * is what this is for, and a warm dark in Lamplight — a hardcoded #fff would
+ * be a glaring slab in the dark theme, which is the thing the token system
+ * exists to prevent.
+ */
+.settings__rowbutton--plain {
+  background: var(--fill-raised);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.settings__rowbutton--plain:hover:not(:disabled) {
+  background: var(--fill-raised-hover);
+}
