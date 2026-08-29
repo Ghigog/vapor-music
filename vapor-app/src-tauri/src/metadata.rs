@@ -121,6 +121,31 @@ const LASTFM_GAP: Duration = Duration::from_millis(250);
 /// lookups degrade rather than stop. See [`Lookup::artist_genre`].
 const LASTFM_KEY_ENV: &str = "VAPOR_LASTFM_API_KEY";
 
+/// The Last.fm key, from the build or from the environment.
+///
+/// **Both, and the environment wins.** Reading only the environment was wrong
+/// and shipped that way for one commit: a desktop app is launched from Finder,
+/// Explorer or an Android launcher, none of which pass a shell's exported
+/// variables, so a released build would have found nothing and silently used
+/// MusicBrainz for ever. `option_env!` reads the variable **at compile time**
+/// and bakes it into the binary, which is how the release workflow puts a
+/// repository secret into a shipped app.
+///
+/// The runtime variable is kept on top of it so a key can be tried, rotated or
+/// removed without a rebuild — a five-minute loop instead of a twenty-minute
+/// one, which matters because the only way to know this works is to run it.
+///
+/// Absent from both is a supported state and returns `None`. It is not an error
+/// and nothing reports it: an install with no key is the ordinary case.
+fn lastfm_key() -> Option<String> {
+    let from_env = std::env::var(LASTFM_KEY_ENV).ok();
+    let key = from_env
+        .as_deref()
+        .or(option_env!("VAPOR_LASTFM_API_KEY"))?
+        .trim();
+    (!key.is_empty()).then(|| key.to_string())
+}
+
 /// How many times one request is sent before it is given up on.
 ///
 /// Four attempts with a doubling wait spends at most 3.5 s of backoff, which
@@ -1520,18 +1545,15 @@ impl Lookup {
 
     /// Last.fm's view of what an artist is, or nothing without a key.
     fn lastfm_artist_tags(&self, artist: &str) -> Vec<RankedTag> {
-        let Ok(key) = std::env::var(LASTFM_KEY_ENV) else {
+        let Some(key) = lastfm_key() else {
             return Vec::new();
         };
-        if key.trim().is_empty() {
-            return Vec::new();
-        }
         // `autocorrect=1` is Last.fm's own spelling fix — "Aphex twin" and
         // "aphex twin" both resolve — and costs nothing.
         let url = format!(
             "https://ws.audioscrobbler.com/2.0/?method=artist.gettoptags&artist={}&api_key={}&autocorrect=1&format=json",
             encode(artist),
-            encode(key.trim())
+            encode(&key)
         );
         self.get(&url)
             .map(|b| lastfm_tags_of(&b))
