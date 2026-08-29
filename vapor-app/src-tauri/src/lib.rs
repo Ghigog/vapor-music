@@ -1708,6 +1708,25 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
         let total = todo.len();
         let (mut corrected, mut genres) = (0usize, 0usize);
 
+        /*
+         * One answer per artist, not per track.
+         *
+         * This is what makes the granular sources affordable. MusicBrainz
+         * permits one request a second and means it, so asking per track would
+         * make a 563-track pass take at least nineteen minutes on that clock
+         * alone. This library is a couple of hundred artists, and an artist's
+         * genre does not change between two of their records — so the second
+         * track by an artist costs nothing at all.
+         *
+         * Keyed on a lowercased name because "Aphex Twin" and "aphex twin"
+         * arrive from different files and are one artist. An empty answer is
+         * cached too: "this service has nothing for them" is worth remembering
+         * exactly as much as an answer is, and not caching it would ask the
+         * same hopeless question once per track.
+         */
+        let mut artist_genres: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
         for (i, (href, title, artist, album, bpm, duration)) in todo.into_iter().enumerate() {
             /*
              * Facts and artwork, not words.
@@ -1723,11 +1742,28 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
              * Asked concurrently: two independent services, and in turn this
              * pass was two round trips deep per track over hundreds of them.
              */
-            let (facts, sleeve) = std::thread::scope(|scope| {
+            let cached = artist_genres.get(&artist.to_lowercase()).cloned();
+            let (facts, sleeve, asked) = std::thread::scope(|scope| {
                 let f = scope.spawn(|| lookup.track_facts(&artist, &title));
                 let a = scope.spawn(|| lookup.album(&artist, &album));
-                (f.join().unwrap_or(None), a.join().unwrap_or_default())
+                // Third stranger, third clock, same scope: it is a different
+                // service from the other two, so it queues behind neither.
+                let g = cached
+                    .is_none()
+                    .then(|| scope.spawn(|| lookup.artist_genre(&artist)));
+                (
+                    f.join().unwrap_or(None),
+                    a.join().unwrap_or_default(),
+                    g.map(|h| h.join().unwrap_or_default()),
+                )
             });
+            let from_artist = match asked {
+                Some(found) => {
+                    artist_genres.insert(artist.to_lowercase(), found.clone());
+                    found
+                }
+                None => cached.unwrap_or_default(),
+            };
             // `album` returns the art URL and the genre together, and only the
             // genre is kept. That looks wasteful and is deliberate: the URL is
             // useless without the image file beside it, because the CSP blocks
@@ -1740,7 +1776,26 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
             // whole library on one button press. The words were moved out of
             // this pass for exactly that reason; the sleeve stays out with them
             // and arrives as a track is played.
-            let genre = sleeve.genre;
+            //
+            // Which of the two genres is kept (AUD-24, AUD-18). Deezer's is
+            // release-specific and almost always one of about twenty-five
+            // words; the artist one is broader in scope and far narrower in
+            // meaning. So the release's answer is preferred *when it says
+            // something* — "Electro" beats an artist-level guess for the record
+            // it was actually filed against — and an umbrella like "Electronic"
+            // loses to "Neurofunk", which is the whole point of asking.
+            //
+            // Neither outranks the file's own tag. That decision is older than
+            // this one and is made in `genre_from_tag_or_lookup`, where the
+            // lookup is read last and only ever fills a gap.
+            let genre =
+                if !sleeve.genre.trim().is_empty() && !metadata::is_umbrella_genre(&sleeve.genre) {
+                    sleeve.genre
+                } else if !from_artist.trim().is_empty() {
+                    from_artist
+                } else {
+                    sleeve.genre
+                };
 
             /*
              * A track with no album still came off a record.

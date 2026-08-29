@@ -3429,8 +3429,18 @@ no `User-Agent` naming a contact.
 An analysis pass over a whole library is a lot of requests. `docs/RELEASE.md` §3
 already lists reviewing the rate limits and terms as outstanding.
 
-**Waiting for:** Deezer or MusicBrainz. That is a decision, not work, and it is
-Dylan's — see `docs/workspace/release-epic.md`.
+**Decided 2026-08-29: both, and Last.fm as well — added beside Deezer rather
+than replacing it.** Dylan's question was not the compliance one this ticket was
+filed for; it was "all I want is for tracks to come with metadata that contain
+their genre", after measuring that **about half his library carries a usable
+genre in its own file tags.** The other half was getting one of Deezer's ~25
+words, which is AUD-24's complaint and is what made this a decision worth
+making rather than a risk worth recording.
+
+The compliance half of this ticket is unchanged and still argues for the move:
+Deezer is called unregistered against an API that documents no quota. What
+changed is that the granular sources are now asked **first**, so Deezer's
+answer is only kept when it says something the others do not.
 
 **Half done:** The calls are identified and paced, which is worth having
 whichever way the decision goes. Every request carries a `User-Agent` naming
@@ -3439,8 +3449,17 @@ words and a URL satisfies it, so nothing here invents a contact address, and
 the same header is what MusicBrainz asks for should the lookups move. One line
 to change if a mailbox is wanted instead.
 
-Three clocks: 200 ms Deezer, 300 ms LRCLIB (the middle of the band they name
-for scanning a library), 200 ms for the artwork CDN. Separate so a slow answer
+Five clocks now: 200 ms Deezer, 300 ms LRCLIB (the middle of the band they name
+for scanning a library), 200 ms for the artwork CDN, **1100 ms MusicBrainz** and
+**250 ms Last.fm**.
+
+MusicBrainz's is the one that shaped the design. One request per second is a
+published rule rather than a convention, and asking per track would put a
+563-track pass at nineteen minutes on that clock alone. So the genre question is
+asked **once per artist** and cached for the pass — which is also how Spotify
+models genre, and cuts this library to a couple of hundred requests. 1100 ms
+rather than 1000 because the gap is measured from when the last request was
+sent, and aiming exactly at a limit spends half your attempts past it. Separate so a slow answer
 from one service cannot spend the other's budget, shared across threads so two
 lookups queue rather than each keeping its own polite gap. Four attempts with a
 doubling wait, at most 3.5 s.
