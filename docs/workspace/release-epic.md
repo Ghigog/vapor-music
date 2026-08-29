@@ -51,9 +51,10 @@ keys exist  ->  builds are signed  ->  the pipeline runs on a tag
 ```
 
 `release.yml`'s `verify` job fails without the signing secret, so the tag step
-cannot be exercised at all until the keys are answered. Nothing else in this
-epic is blocked by anything else in it — the rest are independent, and several
-are already done.
+could not be exercised at all until the keys were answered. **That chain is
+walked**: the keys were answered on 2026-08-24 and eleven runs have gone through
+it since. Nothing else in this epic is blocked by anything else in it — the rest
+are independent, and most are now done.
 
 **Those first two steps stopped being tickets on 2026-08-23**, at Dylan's
 direction: signing is not a defect somebody forgot to fix, it is the last part
@@ -128,8 +129,17 @@ config. Mechanical once step 1 is answered.
 
 **3. The first tag.** An `-rc`, per `docs/RELEASE.md`, so a mistake costs a
 draft rather than the release that `releases/latest` resolves to — which is the
-URL compiled into every binary. This is also the first time `release.yml` runs
-at all.
+URL compiled into every binary. It was also the first time `release.yml` ran at
+all, which is what the last section of this file is about.
+
+*Done 2026-08-24, and it went on being done ten more times.* `v2.0.0-rc.1`
+through `rc.10`. The `-rc` decision earned itself immediately: five of the
+eleven runs failed, and each failure cost a draft rather than the release every
+shipped binary resolves to. The suffix has a second consequence nobody planned —
+`releases/latest` skips prereleases, so every `-rc` published a `latest.json`
+that nothing fetches. **The first tag without the suffix is what switches
+updating on for every install already out there**, which makes it a decision
+rather than four characters being dropped.
 
 ## Status
 
@@ -142,9 +152,9 @@ at all.
 | **AUD-18** Deezer terms | **half done** — every request identified by `User-Agent`, three per-service clocks, four attempts with backoff | Dylan: Deezer or MusicBrainz. The calls are polite either way |
 | **AUD-3** what a supporter gets | **built** — a pin per donation at the bottom of Settings, count written in by hand from Ko-fi | A Ko-fi handle. The card does not render without one |
 | **AUD-23** the front door | **moved to v2.1.0** (2026-08-24) — as onboarding, not marketing. Unchanged in scope; it is simply not what v1 waits on | Nothing |
-| **AUD-21** the updater keypair | **done 2026-08-24** — `tauri.conf.json` now carries `E17781A5EB1BC8D6`, the public half of the pair rotated on 2026-08-22. No new key was needed; the private half was on disk all along | Dylan: the key file's contents into `TAURI_SIGNING_PRIVATE_KEY`, and a backup |
-| **REL-001** release signing | **wired 2026-08-24** — Android `signingConfigs` in `gen/android/build.gradle.kts`, four secrets read by `release.yml` | Dylan: `keytool -genkeypair`, then the four repository secrets |
-| **AUD-22** first release | **done 2026-08-25** — `v2.0.0-rc.7` published all 4 platforms (macOS, Windows, Linux, Android) with signed bundles, APK, SHA256SUMS and updater manifest | — |
+| **AUD-21** the updater keypair | **done 2026-08-24** — and superseded the same day: `tauri.conf.json` carries `5BA4A4817CBE6728`, generated fresh with an empty password because the rotated pair's password could not be reproduced. `verify` fails the run if the 2026-08-22 key ever reappears | — the secret is set and has signed eleven runs. **A backup outside `~/.tauri/` is the one part nobody can verify from the repo** |
+| **REL-001** release signing | **done 2026-08-24** — Android `signingConfigs` in `gen/android/build.gradle.kts`, four secrets read by `release.yml`, keystore decoded into `$RUNNER_TEMP` and shredded before anything uploads | — all four secrets are set. `verify` refuses to start without them, and it has passed on every tag since |
+| **AUD-22** first release | **done 2026-08-25** — `v2.0.0-rc.7` published all 4 platforms (macOS, Windows, Linux, Android) with signed bundles, APK, SHA256SUMS and updater manifest. Eleven runs by 2026-08-28, latest `v2.0.0-rc.10` | — |
 
 ## What is actually decided
 
@@ -332,14 +342,28 @@ comment is what is wrong.
 — are among the ones it does not show, so the Your Data screen understates
 what is kept.
 
-## The measurement that is missing
+## The measurement that was missing, and what it came back with
 
-No release has ever run. `release.yml`'s logic is verified as far as it can be
-locally — the version check runs against the real files, the YAML parses, a
-local `tauri build` produces exactly the artefacts it expects including the
-`.sig` — and none of that is the same as having run. Two of its pinned action
-SHAs pointed at commits that do not exist and nothing noticed, because nothing
-had ever executed the file. Expect more of that shape on the first `-rc`.
+*Written when no release had ever run; kept because the prediction it made was
+right, and the tally below is what it predicted.* `release.yml`'s logic was
+verified as far as it could be locally — the version check ran against the real
+files, the YAML parsed, a local `tauri build` produced exactly the artefacts it
+expected including the `.sig` — and none of that was the same as having run. Two
+of its pinned action SHAs pointed at commits that did not exist and nothing
+noticed, because nothing had ever executed the file. "Expect more of that shape
+on the first `-rc`."
+
+**Eleven runs later, the tally.** Five failed, and every one of the five was a
+fault of exactly that shape — sitting in the file, invisible to review, and
+findable only by executing it: two dead action SHAs, a signing secret that was a
+shell prompt and a base64 string at the same time, an Android job that could
+never have produced an APK because `tauri-action` wraps the wrong CLI verb, and
+a macOS signing override present in the workflow that ran and absent from the
+one that never had. None of them were in the app.
+
+The APK checker earned its own line: it has now broken a release more often than
+it has caught one (AND-9), against the fact that it stopped `rc.5`'s genuinely
+broken APK reaching anybody.
 
 **Two more of that exact shape, found 2026-08-24 while wiring the build.**
 Both were sitting in the file, both would have failed the first tag, and

@@ -2363,7 +2363,7 @@ changes the shade advances by itself. Both are real, neither is this crash, and
 the first theory of this bug blamed them — wrongly, for the third time this
 week that a coherent story lost to a stack trace.
 
-### AND-6 : the Windows shell job has been red since 2026-08-24 (open)
+### AND-6 : the Windows shell job was red from 2026-08-24 to 2026-08-27 (open, not failing)
 
 `shell (windows-latest)` in `app.yml` dies at `cargo test` with
 `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) before any test runs. Every push to
@@ -2408,7 +2408,25 @@ No fix attempted until that comes back. AND-5 cost five tags to a cause that
 was reasoned from a build artifact instead of measured, and this is the same
 trap with the same shape.
 
-**The shipped Windows app is a separate question.** The binary that fails is
+**It stopped on 2026-08-27, and nothing in this repository fixed it.** The
+diagnostic above landed in `a640028`; the very next run on `main` — 181, the
+same commit — passed `shell (windows-latest)` green, and 182, 183 and 184 have
+passed it since. The diagnostic never fired, because the job it was written to
+explain did not fail again. So the step that would name the cause has never
+run, and the cause is still unnamed.
+
+That is evidence for the runner-image hypothesis and against everything else:
+no commit in the window touched Rust, `build.rs`, `Cargo.toml` or a dependency,
+and none touched them on the way out either. Run 181's `Check` step took
+11m52s — a cold cache, which is the relink the hypothesis predicted.
+
+**Left open on purpose.** A fault that left without being understood can come
+back the same way, and the only thing that changed is somebody else's image.
+The diagnostic stays. Close this when the Windows build has been launched and
+its folder picker opened, which is the check below and is what would prove the
+shipped app was never affected.
+
+**The shipped Windows app is a separate question.** The binary that failed is
 the lib unit-test harness. `vapor-app.exe` gets the same manifest by the same
 route, so it is probably fine — but "probably" is what AND-5 was made of, and
 nobody has launched the Windows build. Do that before `v2.0.0`, and open the
@@ -3511,7 +3529,7 @@ still carries the old public key, the private half of it is still the
 `.COMPROMISED-2026-08-22` file, and the first signed build is still where that
 bites.
 
-### AUD-22 : nothing has been released, and the pipeline is unexercised (open)
+### AUD-22 : nothing has been released, and the pipeline is unexercised (done 2026-08-25, ten runs by 2026-08-28)
 
 `release.yml` exists and its logic is verified as far as it can be locally — the
 version check runs against the real files, the YAML parses, and a local
@@ -3531,6 +3549,19 @@ record: **no document anywhere names a feature set for v1.** `DECISIONS.md` §3
 picks a distribution channel for it, §2 defers a question to v1.1, and
 `RELEASE.md` costs it. Donation and onboarding are the first two things anybody
 has said are in it.
+
+**Closed.** Both of those were answered on 2026-08-24 — the keys and the signed
+builds are pipeline steps 1 and 2 and were wired that day, and v1 is "whatever
+exists on 2026-08-24", which includes donation and not onboarding. The pipeline
+has run **eleven times** since, publishing `v2.0.0-rc.1` through `rc.10` on
+macOS, Windows, Linux and Android with signed bundles, an APK, `SHA256SUMS` and
+an updater manifest. `rc.10` published green on 2026-08-28.
+
+What the ticket wanted was the measurement, and it got one: five of those runs
+failed, each on something only executing the file could have shown — two dead
+action SHAs, a signing key that was a shell prompt, an Android job that did not
+exist, and a macOS override present in one workflow and not the other. All are
+recorded above and in `release-epic.md`.
 
 ### AUD-23 : the app has no front door (redefined 2026-08-23 — it is onboarding, not marketing)
 
@@ -3622,7 +3653,19 @@ unknown, so provenance has somewhere to go.
 under several genres — which is the thing that makes granularity useful and is
 a real change to how the tab reads.
 
-**Closed:** Genre aliases landed in `vapor-library/src/genre.rs` with Last.fm alongside Deezer, so the Electronic bucket resolves to the specific label rather than the coarse one. Merged in `df747d2`.
+**Closed:** Every genre the Deezer **album** response names is kept and read a
+segment at a time, rather than `genres.data[0]`, and `genre.rs` gained
+`normalise()` plus a `TEMPO_BANDS` table keyed on the spellings taggers
+actually write. Merged in `df747d2`.
+
+**No second service landed, and an earlier version of this line said one did.**
+It read "with Last.fm alongside Deezer", which is wrong twice: nothing in the
+tree calls Last.fm, and `genre.rs` has no network code at all — the aliases are
+a compiled-in table. `df747d2`'s own message says it in as many words: "no new
+service was added — that is AUD-18's decision, not this task's." Corrected
+2026-08-29 after the claim was read back as fact and sent a session looking for
+a MusicBrainz integration that does not exist. The paragraph 25 lines above,
+"there is no last.fm or MusicBrainz work anywhere", was right all along.
 
 ### AUD-25 : drag and drop is broken, and the fix is sitting on a branch (done 2026-08-23)
 
