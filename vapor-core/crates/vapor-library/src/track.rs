@@ -298,4 +298,69 @@ mod tests {
         assert_eq!(intensity_from_lufs(f32::NAN), 0.5);
         assert_eq!(intensity_from_lufs(f32::INFINITY), 0.5);
     }
+
+    /// The set-building failure this was reported as, priced.
+    ///
+    /// An ambient piece with no percussion gets read at 178, which is a real
+    /// reading of a real signal and not a bug the estimator can fix. Two things
+    /// then have to happen for a set not to mix it into a brostep record:
+    /// `octave_correct` has to bring the tempo back to the octave a listener
+    /// counts, and the genre term has to make the pairing expensive even after
+    /// the tempi stop arguing.
+    ///
+    /// Only the second is measured here — see `genre.rs` for the first. What it
+    /// pins is that the genre term now *discriminates*: before the taxonomy
+    /// grew, neither `ambient` nor `brostep` nor `modern classical` was in it,
+    /// every pair scored `UNRELATED_COST`, and these two costs were equal.
+    #[test]
+    fn a_set_prefers_the_neighbouring_genre_to_the_distant_one() {
+        // The corrected tempo, not the 178 that was measured.
+        let budd = track(89.0, "8A", 0.15, "Ambient");
+        // Same shelf: quiet, slow, adjacent in the taxonomy.
+        let neighbour = track(92.0, "8A", 0.20, "Modern Classical");
+        // The record it was being mixed into. Deliberately given the *same key*
+        // and a plausible tempo, so key and tempo cannot be what separates them
+        // — the genre has to.
+        let skrillex = track(140.0, "8A", 0.85, "Brostep");
+
+        let near = transition_cost(&budd, &neighbour, DEFAULT_ENERGY_THRESHOLD, 0.0);
+        let far = transition_cost(&budd, &skrillex, DEFAULT_ENERGY_THRESHOLD, 0.0);
+
+        assert!(
+            near < far,
+            "ambient->modern classical cost {near}, ambient->brostep cost {far}"
+        );
+
+        // And by a margin the planner cannot shrug off. The A* sums these over
+        // a whole set, so a difference of a point or two would be swamped by
+        // one lucky key match somewhere else in the path.
+        assert!(
+            far - near > 20.0,
+            "the gap is only {}, which a single good key match could cancel",
+            far - near
+        );
+    }
+
+    /// A track nobody has identified is not treated as the worst possible one.
+    ///
+    /// The regression this guards against is subtle and is *caused* by fixing
+    /// the genre source: in a part-identified library, if an absent genre costs
+    /// the same as a clashing one, then every track still waiting to be looked
+    /// up is as expensive as the worst pairing available and the planner works
+    /// around all of them.
+    #[test]
+    fn an_unidentified_track_is_not_ranked_below_a_genre_clash() {
+        let budd = track(89.0, "8A", 0.15, "Ambient");
+        let unknown = track(92.0, "8A", 0.20, "");
+        let clashing = track(92.0, "8A", 0.20, "Brostep");
+
+        let unknown_cost = transition_cost(&budd, &unknown, DEFAULT_ENERGY_THRESHOLD, 0.0);
+        let clash_cost = transition_cost(&budd, &clashing, DEFAULT_ENERGY_THRESHOLD, 0.0);
+
+        assert!(
+            unknown_cost < clash_cost,
+            "not-yet-looked-up ({unknown_cost}) must not cost more than a known \
+             clash ({clash_cost})"
+        );
+    }
 }

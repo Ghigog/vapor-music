@@ -14,12 +14,91 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
 
-/// Cost returned when a genre is unknown, absent, or not in the tree.
+/// Cost returned when two genres are both known and share no ancestry.
+///
+/// Also the ceiling on any distance: with the families joined under one root
+/// (see [`TAXONOMY`]) a path exists between almost any two nodes, and an
+/// uncapped walk from qawwali to brostep would return a number larger than
+/// "unrelated" and blow past the scale every weight in `track.rs` is tuned to.
 pub const UNRELATED_COST: f32 = 5.0;
 
+/// Cost returned when either side has no genre at all.
+///
+/// **Deliberately below [`UNRELATED_COST`], and this is a change in meaning.**
+/// Absence used to score the same as a known clash, which was harmless while it
+/// was universal — every track in this library had an empty genre, so the term
+/// was a constant that cancelled out of every comparison the planner made.
+///
+/// It stops being harmless the moment genres start arriving. A part-identified
+/// library has some tracks with a real genre and some without, and if absence
+/// scores as the maximum then every un-identified track is as expensive as the
+/// worst possible pairing — so the planner would work its way through the
+/// identified half and quietly avoid the rest. That is a bias introduced by
+/// *fixing* the genre source, which is the wrong direction to fail.
+///
+/// Halfway is the honest position: no evidence should neither recommend a track
+/// nor rule it out. Reasoned rather than measured — the library it would be
+/// measured against has not been identified yet — and this note is here so the
+/// number is not later mistaken for one that came off a distribution.
+pub const UNKNOWN_COST: f32 = 2.5;
+
+/// No evidence must never cost more than a known clash.
+///
+/// Checked at compile time rather than in a test: it is a relationship between
+/// two constants, so there is no run in which it could hold and a later one in
+/// which it could not. If someone raises [`UNKNOWN_COST`] past
+/// [`UNRELATED_COST`], the build stops — which is the moment the planner would
+/// otherwise have quietly gone back to avoiding every un-identified track.
+const _: () = assert!(UNKNOWN_COST < UNRELATED_COST);
+
+/// How many edges apart two genres can be and still count as one family.
+///
+/// Two, which is a node and its parent's other children: `Neurofunk` and
+/// `Jungle` are both drum & bass, `Tech House` and `Deep House` are both house.
+/// Three would reach across [`TAXONOMY`]'s next tier up — Tech House to Techno —
+/// and those are a gear change a set should be allowed to notice.
+pub const FAMILY_DISTANCE: f32 = 2.0;
+
 /// The taxonomy. Sole copy since the Godot tree was removed.
+///
+/// An **undirected graph**, not a tree, despite the parent-and-children shape:
+/// [`graph`] links every pair symmetrically, so an entry can also state a
+/// crossing edge between two families. `Ambient`/`Modern Classical` is one, and
+/// it is there because Harold Budd is honestly both — a taxonomy that filed him
+/// only under one would put the other half of his catalogue five edges away.
+///
+/// # Why it grew
+///
+/// It used to hold nineteen nodes: house, techno, drum & bass and rock. That was
+/// enough while every track's genre was empty, because nothing ever reached a
+/// lookup. Now that MusicBrainz supplies names for a real library, the names it
+/// supplies — `ambient`, `modern classical`, `brostep`, `smooth jazz`,
+/// `psychedelic rock` — were none of them in here, so [`genre_distance`] hit
+/// [`UNRELATED_COST`] for nearly every pair and the genre term went back to
+/// being a constant. A cost that is the same for everything cannot order
+/// anything, which is the exact failure this replaced in a new disguise.
+///
+/// # What the arrangement has to preserve
+///
+/// The Godot distances are pinned by `distances_match_the_godot_values`, and
+/// the tiers here keep them: `Tech House` to `Techno` is still three edges, via
+/// `House` and `Club Music`. Adding `Electronic` above `Club Music` lengthens
+/// no existing shortest path, because nothing existing routed through the top.
 const TAXONOMY: &[(&str, &[&str])] = &[
-    ("Club Music", &["House", "Techno"]),
+    // ---- Electronic ----------------------------------------------------
+    (
+        "Electronic",
+        &[
+            "Club Music",
+            "Bass Music",
+            "Ambient",
+            "Downtempo",
+            "IDM",
+            "Industrial",
+            "Electronica",
+        ],
+    ),
+    ("Club Music", &["House", "Techno", "Trance", "Disco"]),
     (
         "House",
         &[
@@ -27,15 +106,141 @@ const TAXONOMY: &[(&str, &[&str])] = &[
             "Deep House",
             "Progressive House",
             "Minimal House",
+            "Electro House",
+            "Acid House",
+            "French House",
+            "Disco House",
         ],
     ),
-    ("Techno", &["Acid Techno", "Minimal Techno"]),
-    ("Bass Music", &["Drum & Bass"]),
+    (
+        "Techno",
+        &["Acid Techno", "Minimal Techno", "Detroit Techno"],
+    ),
+    ("Trance", &["Psytrance", "Hardstyle", "Gabber"]),
+    (
+        "Bass Music",
+        &["Drum & Bass", "Dubstep", "Garage", "Breakbeat", "Trap"],
+    ),
     (
         "Drum & Bass",
-        &["Liquid DNB", "Neurofunk", "Jungle", "Drum and Bass"],
+        &[
+            "Liquid DNB",
+            "Neurofunk",
+            "Jungle",
+            "Drum and Bass",
+            "DnB",
+            "Liquid Funk",
+        ],
     ),
-    ("Rock", &["Alternative Rock", "Classic Rock", "Hard Rock"]),
+    ("Dubstep", &["Brostep", "Riddim"]),
+    ("Garage", &["UK Garage", "2 Step", "Future Garage", "Grime"]),
+    ("Breakbeat", &["Big Beat", "Breakcore"]),
+    ("Trap", &["Footwork", "Juke"]),
+    ("Ambient", &["Dark Ambient", "Drone", "Modern Classical"]),
+    ("Downtempo", &["Trip Hop", "Chillout"]),
+    ("IDM", &["Glitch"]),
+    ("Industrial", &["EBM"]),
+    (
+        "Electronica",
+        &["Synth-pop", "Synthwave", "Vaporwave", "Chiptune"],
+    ),
+    // ---- Rock ----------------------------------------------------------
+    (
+        "Rock",
+        &[
+            "Alternative Rock",
+            "Classic Rock",
+            "Hard Rock",
+            "Indie Rock",
+            "Psychedelic Rock",
+            "Post-rock",
+            "Punk",
+            "Metal",
+            "Math Rock",
+            "Noise Rock",
+        ],
+    ),
+    (
+        "Alternative Rock",
+        &["Grunge", "Shoegaze", "Emo", "Dream Pop", "Neo-psychedelia"],
+    ),
+    ("Psychedelic Rock", &["Neo-psychedelia", "Space Rock"]),
+    ("Punk", &["Post-punk", "Hardcore Punk"]),
+    (
+        "Metal",
+        &["Heavy Metal", "Black Metal", "Death Metal", "Doom Metal"],
+    ),
+    // Rock and electronica meet at the synthesiser, which is where post-punk
+    // actually went. Without this edge the whole rock family is unrelated to
+    // everything, and a set that drifts from shoegaze into ambient — an
+    // ordinary and good move — reads as a maximum-cost jump.
+    ("Post-punk", &["Industrial"]),
+    ("Dream Pop", &["Ambient"]),
+    // ---- Song, soul and roots -------------------------------------------
+    (
+        "Pop",
+        &["Art Pop", "Dream Pop", "Synth-pop", "Sophisti-pop"],
+    ),
+    ("Soul", &["Smooth Soul", "Motown", "R&B", "Gospel", "Funk"]),
+    ("R&B", &["Contemporary R&B", "Quiet Storm"]),
+    ("Funk", &["Disco", "Afrobeat"]),
+    (
+        "Folk",
+        &["Folk Rock", "Singer-songwriter", "Americana", "Bluegrass"],
+    ),
+    ("Folk Rock", &["Rock"]),
+    ("Blues", &["Rock", "Soul", "Gospel"]),
+    ("Country", &["Americana", "Bluegrass", "Folk"]),
+    // ---- Hip hop ---------------------------------------------------------
+    (
+        "Hip Hop",
+        &[
+            "Rap",
+            "Boom Bap",
+            "Conscious Hip Hop",
+            "Jazz Rap",
+            "Lo-fi Hip Hop",
+            "Instrumental Hip Hop",
+            "Trap",
+        ],
+    ),
+    ("Jazz Rap", &["Jazz"]),
+    ("Lo-fi Hip Hop", &["Downtempo"]),
+    ("Hip Hop", &["Funk"]),
+    // ---- Jazz and composed ------------------------------------------------
+    (
+        "Jazz",
+        &[
+            "Smooth Jazz",
+            "Jazz Pop",
+            "Jazz Fusion",
+            "Bebop",
+            "Free Jazz",
+        ],
+    ),
+    ("Smooth Jazz", &["Smooth Soul"]),
+    ("Jazz Pop", &["Pop"]),
+    (
+        "Classical",
+        &[
+            "Modern Classical",
+            "Contemporary Classical",
+            "Baroque",
+            "Opera",
+        ],
+    ),
+    ("Modern Classical", &["Minimalism", "Soundtrack"]),
+    ("Soundtrack", &["Score"]),
+    // ---- Elsewhere in the world --------------------------------------------
+    ("Reggae", &["Dub", "Dancehall", "Ska", "Roots Reggae"]),
+    ("Dub", &["Bass Music"]),
+    ("Brazilian", &["Bossa Nova", "Samba", "MPB", "Tropicalia"]),
+    ("Bossa Nova", &["Jazz"]),
+    ("Latin", &["Cumbia", "Salsa", "Brazilian"]),
+    (
+        "Folk",
+        &["Flamenco", "Fado", "Chanson", "Klezmer", "Qawwali"],
+    ),
 ];
 
 /// Where a genre's tempo actually sits, in BPM.
@@ -176,12 +381,13 @@ fn band_of_one(genre: &str) -> Option<(f32, f32)> {
     if let Some(band) = listed(&g) {
         return Some(band);
     }
-    // A genre this table does not list may still be a child of one it does.
-    // The graph is keyed on a plain lowercase, so look it up that way and
-    // normalise the neighbours on the way back out.
-    graph()
+    // A genre this table does not list may still be a child of one it does —
+    // *child*, which is why this reads [`parents`] and not [`graph`]. The map is
+    // keyed on a plain lowercase, so look it up that way and normalise the
+    // names on the way back out.
+    parents()
         .get(&genre.trim().to_lowercase())
-        .and_then(|neighbours| neighbours.iter().find_map(|n| listed(&normalise(n))))
+        .and_then(|above| above.iter().find_map(|n| listed(&normalise(n))))
 }
 
 /// The tempo a trusted reference says this track is really at.
@@ -263,6 +469,31 @@ pub fn octave_correct(bpm: f32, genre: &str) -> Option<f32> {
 }
 
 /// Undirected adjacency, keyed by lowercased genre name.
+/// Which nodes a genre sits *under*, keyed by the child.
+///
+/// [`graph`] deliberately forgets direction — distance does not care which way
+/// an edge points — but one caller does care. [`band_of_one`] infers a tempo
+/// band from a relative, and that inference is only sound *upward*: `Liquid
+/// DNB` may take drum & bass's 160–185 because it is a kind of drum & bass.
+/// Reading the same edge downward is how `Electronic` came to be assigned
+/// ambient's 50–120: an umbrella label borrowing a band from one of the many
+/// different things underneath it, which is a guess dressed as knowledge and is
+/// exactly what `the_coarse_service_label_still_has_no_band` exists to catch.
+fn parents() -> &'static HashMap<String, Vec<String>> {
+    static PARENTS: OnceLock<HashMap<String, Vec<String>>> = OnceLock::new();
+    PARENTS.get_or_init(|| {
+        let mut p: HashMap<String, Vec<String>> = HashMap::new();
+        for (parent, children) in TAXONOMY {
+            for child in *children {
+                p.entry(child.to_lowercase())
+                    .or_default()
+                    .push(parent.to_lowercase());
+            }
+        }
+        p
+    })
+}
+
 fn graph() -> &'static HashMap<String, Vec<String>> {
     static GRAPH: OnceLock<HashMap<String, Vec<String>>> = OnceLock::new();
     GRAPH.get_or_init(|| {
@@ -302,8 +533,19 @@ fn find_node(genre: &str) -> Option<&'static String> {
     if let Some((k, _)) = g.get_key_value(&key) {
         return Some(k);
     }
+    // Longest match, then alphabetical — **not** the first one iteration finds.
+    //
+    // This was `g.keys().find(...)` over a `HashMap`, whose order is arbitrary
+    // and varies between runs. With nineteen nodes a tag rarely matched two of
+    // them and the bug stayed hidden; with the taxonomy above it is routine —
+    // "jazz rap" contains both `jazz` and `rap`, "dub techno" contains both
+    // `dub` and `techno` — and an arbitrary winner means a genre distance, and
+    // therefore a built set, that can differ between two runs over identical
+    // data. Longest is also the better answer on the merits: it is the most
+    // specific node the name contains.
     g.keys()
-        .find(|k| k.contains(&key) || key.contains(k.as_str()))
+        .filter(|k| k.contains(&key) || key.contains(k.as_str()))
+        .max_by(|a, b| a.len().cmp(&b.len()).then_with(|| b.cmp(a)))
 }
 
 /// Edge distance between two genres in the taxonomy.
@@ -312,8 +554,12 @@ fn find_node(genre: &str) -> Option<&'static String> {
 pub fn genre_distance(a: &str, b: &str) -> f32 {
     let (ca, cb) = (a.trim().to_lowercase(), b.trim().to_lowercase());
 
-    if ca.is_empty() || cb.is_empty() || ca == "unknown" || cb == "unknown" {
-        return UNRELATED_COST;
+    // No genre is not the same as a genre that does not fit — see
+    // [`UNKNOWN_COST`]. Asked through `is_unknown_genre` so every placeholder a
+    // real tagger writes ("Other", "Unknown genre") lands here too, rather than
+    // only the one spelling this used to check.
+    if is_unknown_genre(&ca) || is_unknown_genre(&cb) {
+        return UNKNOWN_COST;
     }
     if ca == cb {
         return 0.0;
@@ -332,7 +578,10 @@ pub fn genre_distance(a: &str, b: &str) -> f32 {
 
     while let Some((node, dist)) = queue.pop_front() {
         if node == goal {
-            return dist as f32;
+            // Capped: the families are joined now, so a path exists between
+            // almost any two nodes and the far ones run past the scale the
+            // weights in `track.rs` are tuned against.
+            return (dist as f32).min(UNRELATED_COST);
         }
         for n in g.get(node).map(|v| v.as_slice()).unwrap_or(&[]) {
             if let Some((k, _)) = g.get_key_value(n) {
@@ -352,7 +601,19 @@ pub fn is_similar_genre(a: &str, b: &str) -> bool {
         return false;
     }
     let (ca, cb) = (a.trim().to_lowercase(), b.trim().to_lowercase());
-    ca == cb || ca.contains(&cb) || cb.contains(&ca)
+    if ca == cb || ca.contains(&cb) || cb.contains(&ca) {
+        return true;
+    }
+    // And the taxonomy, which is what makes this useful on granular names.
+    //
+    // Substrings alone answered "different" for `Neurofunk` and `Liquid DNB` —
+    // two kinds of drum & bass that share not one character. Every caller reads
+    // a false here as a deliberate gear change: `exit_between` forces a Switch,
+    // and `choose_transition` hides the mix behind an echo. Doing that between
+    // two drum & bass records is precisely the over-reaction that arrives with
+    // better genre data, and it would have looked like the *new* genres being
+    // wrong rather than this test of them.
+    genre_distance(&ca, &cb) <= FAMILY_DISTANCE
 }
 
 /// Whether a genre string says anything.
@@ -559,10 +820,24 @@ mod tests {
         assert_eq!(genre_distance("techno", "  TECHNO "), 0.0);
     }
 
+    /// Three different states, and they must not all cost the same.
+    ///
+    /// Absence is not a clash. While every track's genre was empty this made no
+    /// difference — the term was a constant — but a part-identified library is
+    /// the case that matters, and there an un-identified track scoring the
+    /// maximum means the planner routes around everything it has not looked up
+    /// yet. See [`UNKNOWN_COST`].
     #[test]
-    fn unknown_genres_take_the_penalty() {
-        assert_eq!(genre_distance("", "Techno"), UNRELATED_COST);
-        assert_eq!(genre_distance("Unknown", "Techno"), UNRELATED_COST);
+    fn an_absent_genre_costs_less_than_a_clashing_one() {
+        assert_eq!(genre_distance("", "Techno"), UNKNOWN_COST);
+        assert_eq!(genre_distance("Unknown", "Techno"), UNKNOWN_COST);
+        // Every placeholder a real tagger writes, not just the one spelling.
+        assert_eq!(genre_distance("Unknown genre", "Techno"), UNKNOWN_COST);
+        assert_eq!(genre_distance("Other", "Techno"), UNKNOWN_COST);
+
+        // A real genre this crate cannot place is a different thing again: we
+        // have a name and it is not one we know, which is evidence of distance
+        // rather than an absence of evidence.
         assert_eq!(genre_distance("Polka", "Techno"), UNRELATED_COST);
     }
 
@@ -968,5 +1243,124 @@ mod tests {
         assert!(!is_known_genre("seen live"));
         assert!(!is_known_genre(""));
         assert!(!is_known_genre("unknown"));
+    }
+
+    // -----------------------------------------------------------------------
+    // What a set needs the taxonomy for
+    // -----------------------------------------------------------------------
+
+    /// The case this was all for: an ambient record read at a dancefloor tempo.
+    ///
+    /// A Harold Budd piece has no percussion to track, so the estimator latches
+    /// onto something and reports 178 — a perfectly ordinary failure, and one
+    /// no amount of signal processing fixes, because 178 *is* present in the
+    /// signal. The genre is the only thing that knows nobody counts an ambient
+    /// record at 178, and with the ambient band at 50–120 the octave below is
+    /// the one a listener would feel.
+    ///
+    /// Without this the planner sees 178 and offers Skrillex as a tempo match.
+    #[test]
+    fn an_ambient_record_read_at_a_dancefloor_tempo_is_brought_back_down() {
+        assert_eq!(octave_correct(178.0, "Ambient"), Some(89.0));
+        // The same for the names MusicBrainz actually returns for that shelf.
+        assert_eq!(octave_correct(178.0, "Dark Ambient"), Some(89.0));
+        assert_eq!(octave_correct(178.0, "Modern Classical"), Some(89.0));
+
+        // And the record it was being mixed into is left exactly where it is:
+        // 140 is where brostep lives, so there is nothing to correct.
+        assert_eq!(octave_correct(140.0, "Brostep"), None);
+    }
+
+    /// And once the tempi are honest, the genres still have to keep them apart.
+    ///
+    /// Correcting 178 to 89 is not on its own enough — a set can still put an
+    /// ambient piece next to a brostep one on a key match. The genre term is
+    /// what makes that expensive, and it can only do so if both names are in
+    /// the taxonomy. Before it grew, neither was, and both pairs below scored
+    /// an identical `UNRELATED_COST`.
+    #[test]
+    fn ambient_and_brostep_are_further_apart_than_ambient_and_its_neighbours() {
+        let far = genre_distance("Ambient", "Brostep");
+        let near = genre_distance("Ambient", "Modern Classical");
+        assert!(
+            near < far,
+            "ambient->modern classical ({near}) should beat ambient->brostep ({far})"
+        );
+        // Not merely ordered: the near pair has to be close enough that a set
+        // is happy to make the move, and the far pair far enough that it is a
+        // deliberate one.
+        assert!(near <= FAMILY_DISTANCE, "{near}");
+        assert!(far >= 4.0, "{far}");
+    }
+
+    /// The vocabulary the genre source actually returns is all placeable.
+    ///
+    /// The failure this guards is silent and total: a name the taxonomy does not
+    /// hold scores `UNRELATED_COST` against everything, so if the common names
+    /// were missing then genre would be a constant again and would order
+    /// nothing — the same dead term as before, wearing better data.
+    #[test]
+    fn the_genres_this_library_actually_carries_are_all_in_the_taxonomy() {
+        for name in [
+            // Measured off the owner's library via MusicBrainz.
+            "drum and bass",
+            "neurofunk",
+            "brostep",
+            "dubstep",
+            "modern classical",
+            "ambient",
+            "smooth jazz",
+            "soul",
+            "psychedelic rock",
+            "neo-psychedelia",
+            "trip hop",
+            "hip hop",
+            "electronic",
+            "jungle",
+            "deep house",
+        ] {
+            assert!(
+                find_node(name).is_some(),
+                "{name} is not in the taxonomy, so it would score UNRELATED against everything"
+            );
+        }
+    }
+
+    /// Two kinds of one genre are not a gear change.
+    ///
+    /// `is_similar_genre` decides whether a transition is a Switch and whether
+    /// the mixer hides it behind an echo. On pure substrings `Neurofunk` and
+    /// `Liquid DNB` share no characters and so read as different music — which
+    /// would have made better genre data look *worse*, by turning every move
+    /// inside drum & bass into a deliberate gear change.
+    #[test]
+    fn two_kinds_of_one_genre_are_not_a_gear_change() {
+        assert!(is_similar_genre("Neurofunk", "Liquid DNB"));
+        assert!(is_similar_genre("Tech House", "Deep House"));
+        assert!(is_similar_genre("Brostep", "Riddim"));
+
+        // But a real change of music still is one.
+        assert!(!is_similar_genre("Ambient", "Brostep"));
+        assert!(!is_similar_genre("Smooth Jazz", "Neurofunk"));
+    }
+
+    /// The same two genres must score the same on every run.
+    ///
+    /// `find_node`'s substring fallback used to be `HashMap::keys().find(..)`,
+    /// whose order is arbitrary — so a name containing two nodes ("jazz rap"
+    /// holds both `jazz` and `rap`) could resolve differently between runs, and
+    /// a set built twice over identical data could differ. Longest match wins,
+    /// which is both stable and the more specific answer.
+    #[test]
+    fn resolution_is_stable_and_prefers_the_most_specific_node() {
+        for name in ["jazz rap", "dub techno", "psychedelic pop", "acid house"] {
+            let first = find_node(name).cloned();
+            for _ in 0..50 {
+                assert_eq!(find_node(name).cloned(), first, "{name} resolved two ways");
+            }
+        }
+        // The specific node, not whichever substring happened to come first.
+        assert_eq!(find_node("jazz rap").map(String::as_str), Some("jazz rap"));
+        assert_eq!(find_node("dub techno").map(String::as_str), Some("techno"));
     }
 }
