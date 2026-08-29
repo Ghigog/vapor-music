@@ -652,40 +652,16 @@
 /*
  * Sharing, folded into the Library group (POL-5).
  *
- * `SyncPanel` draws its own glass card and its own "network" heading, and it
- * lives in another lane's file — so the card is unwrapped here and the heading
- * removed with `display: none`, which takes it out of the accessibility tree
- * too rather than merely hiding it from sight. Delete this block when the
- * component itself stops drawing them.
+ * `SyncPanel` no longer draws a card or a heading of its own, so its switch is
+ * a row of the Library group like any other. What it draws *below* the switch
+ * — the pairing code, the device lists, the notices — is not row-shaped, and
+ * this indents it to the rows' text rather than letting it sit flush.
+ *
+ * An earlier version of this block unwrapped the card and hid the heading with
+ * `display: none`, which took it out of the accessibility tree as well as out
+ * of sight. Fixing the component removed the need for both.
  */
-.settings__shared > .settings__card {
-  padding: 0;
-  gap: 10px;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: none;
-}
-
-/* Everything the panel draws below its row — the pairing code, the device
-   lists, the notices — is a card's content with no card left around it. */
-.settings__shared > .settings__card > :not(.setgroup) {
+.settings__shared > *:not(.setrow) {
   margin-left: 16px;
   margin-right: 16px;
-}
-
-.settings__shared .setgroup {
-  margin-bottom: 0;
-}
-
-.settings__shared .setgroup__title {
-  display: none;
-}
-
-.settings__shared .setgroup__rows {
-  border: 0;
-  border-radius: 0;
-  background: none;
 }

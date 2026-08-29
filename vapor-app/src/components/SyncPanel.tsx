@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as core from "../lib/core";
-import { SettingRow, SettingGroup } from "./SettingRow";
+import { SettingRow } from "./SettingRow";
 import { Confirm } from "./Confirm";
 import { ErrorNotice, messageOf } from "./ErrorNotice";
 
@@ -190,8 +190,15 @@ export function SyncPanel() {
    * below, and only once it is on.
    */
   return (
-    <section className="settings__card glass">
-      <SettingGroup title="network">
+    /* No card and no heading of its own.
+
+       Sharing is a library setting and lives as a row in the Library group
+       (POL-5). Drawing a `settings__card` and a `SettingGroup title="network"`
+       here put a second heading inside another section's rows, which is what
+       `.settings__shared` in settings.css used to unpick with `display: none`
+       — and that hid the heading from the accessibility tree as well as from
+       sight. There is no heading to hide now. */
+    <>
         {/*
           One switch, where there were two.
 
@@ -236,7 +243,6 @@ export function SyncPanel() {
             />
           </label>
         </SettingRow>
-      </SettingGroup>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
@@ -447,7 +453,7 @@ export function SyncPanel() {
           onCancel={() => setForgetting(null)}
         />
       )}
-    </section>
+    </>
   );
 }
 

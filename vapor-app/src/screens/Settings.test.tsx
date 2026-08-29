@@ -737,15 +737,16 @@ describe("Settings — the shape of the screen", () => {
   });
 
   /*
-   * One "library", where there were two.
+   * One "library", where there were two, and no "network" at all.
    *
-   * Network is not asserted here, and the omission is deliberate: its heading
-   * is drawn by `components/SyncPanel.tsx`, which is another lane's file, and
-   * this screen suppresses it from `settings.css`. jsdom does not apply that
-   * stylesheet, so a test asserting its absence would be asserting something
-   * this environment cannot see. It goes when the component stops drawing it.
+   * Network's absence went unasserted at first, deliberately: the heading was
+   * drawn by `components/SyncPanel.tsx` and merely hidden from `settings.css`
+   * with `display: none`, and jsdom applies no stylesheet — so the assertion
+   * would have passed on a heading that was still in the document and still in
+   * the accessibility tree. The component no longer draws it, so this now
+   * tests the thing it appears to test.
    */
-  it("has one Library heading, not two", async () => {
+  it("has one Library heading, and no Network heading", async () => {
     useBackend({ connected: true });
     render(<Settings />);
 
@@ -754,6 +755,9 @@ describe("Settings — the shape of the screen", () => {
     expect(
       screen.getAllByRole("heading", { name: /^library$/i }),
     ).toHaveLength(1);
+    expect(
+      screen.queryByRole("heading", { name: /^network$/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps sharing with your own devices among the library rows", async () => {
