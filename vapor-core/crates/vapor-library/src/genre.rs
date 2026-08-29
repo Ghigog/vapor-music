@@ -361,6 +361,176 @@ pub fn is_similar_genre(a: &str, b: &str) -> bool {
 /// it: a real library carries `"Unknown genre"`, `"Other"` and `"Genre"` too,
 /// and each was being treated as the name of a genre — so two tracks tagged
 /// `"Unknown genre"` counted as a genre *match*, and matched nothing else.
+/// Genre names this crate recognises beyond the taxonomy and the tempo table.
+///
+/// The taxonomy exists to measure *distance* between genres and the tempo table
+/// to pick an octave, so both are deliberately small — they only list what those
+/// two jobs need. Recognising a genre is a third job, and a wider one: a
+/// community tag source offers "brostep", "neo-psychedelia" and "trip hop"
+/// alongside "seen live", "female singer" and "icelandic", and something has to
+/// tell those apart.
+///
+/// An allowlist rather than a blocklist of non-genres. The noise in a tag cloud
+/// is open-ended — nationalities, decades, moods, instruments, "albums I own" —
+/// and a blocklist would be permanently one surprise behind. The cost is that an
+/// artist whose only tags are unlisted falls through to the next source rather
+/// than getting a granular answer, which is the safe direction to fail: the app
+/// keeps the coarse genre it already had instead of filing a record under
+/// "swedish".
+///
+/// **Every entry must be in [`normalise`] form**, like [`TEMPO_BANDS`] — lookups
+/// are normalised before comparison, so an entry that is not would be dead
+/// weight nothing could match. `known_genres_are_normalised` fails the run if
+/// one slips in. Names the tempo table already carries are not repeated here;
+/// [`is_known_genre`] consults both.
+const KNOWN_GENRES: &[&str] = &[
+    // Bass music beyond what the tempo table needs.
+    "future garage",
+    "grime",
+    "big beat",
+    "trap",
+    "footwork",
+    "juke",
+    "breakcore",
+    // Four to the floor.
+    "electro house",
+    "acid house",
+    "disco house",
+    "french house",
+    "detroit techno",
+    "hardstyle",
+    "gabber",
+    // Broader electronic.
+    "electronic",
+    "electronica",
+    "idm",
+    "dark ambient",
+    "drone",
+    "downtempo",
+    "trip hop",
+    "synth pop",
+    "synthwave",
+    "vaporwave",
+    "chiptune",
+    "industrial",
+    "ebm",
+    // Rock and its neighbours.
+    "indie rock",
+    "post rock",
+    "psychedelic rock",
+    "progressive rock",
+    "punk",
+    "post punk",
+    "shoegaze",
+    "grunge",
+    "heavy metal",
+    "black metal",
+    "death metal",
+    "doom metal",
+    "math rock",
+    "emo",
+    "neo psychedelia",
+    "art pop",
+    "dream pop",
+    "noise rock",
+    // Song, soul and roots.
+    "pop",
+    "smooth soul",
+    "r and b",
+    "contemporary r and b",
+    "motown",
+    "blues",
+    "gospel",
+    "country",
+    "folk",
+    "folk rock",
+    "singer songwriter",
+    "americana",
+    "bluegrass",
+    // Hip hop.
+    "boom bap",
+    "conscious hip hop",
+    "jazz rap",
+    "lo fi hip hop",
+    "instrumental hip hop",
+    // Jazz and composed.
+    "jazz",
+    "smooth jazz",
+    "jazz pop",
+    "jazz fusion",
+    "bebop",
+    "free jazz",
+    "classical",
+    "modern classical",
+    "contemporary classical",
+    "minimalism",
+    "baroque",
+    "opera",
+    "soundtrack",
+    "score",
+    // Elsewhere in the world.
+    "dancehall",
+    "ska",
+    "afrobeat",
+    "highlife",
+    "bossa nova",
+    "samba",
+    "mpb",
+    "tropicalia",
+    "cumbia",
+    "salsa",
+    "flamenco",
+    "fado",
+    "chanson",
+    "klezmer",
+    "qawwali",
+];
+
+/// Whether this crate recognises `name` as the name of a genre.
+///
+/// Normalised on both sides, so `"Drum & Bass"`, `"drum and bass"` and
+/// `"DRUM-N-BASS"` are one answer. Consults the tempo table and the taxonomy as
+/// well as [`KNOWN_GENRES`]: a name worth timing or measuring distance with is
+/// automatically a name worth recognising, and repeating those here would be two
+/// lists to keep in step.
+pub fn is_known_genre(name: &str) -> bool {
+    if is_unknown_genre(name) {
+        return false;
+    }
+    let n = normalise(name);
+    if n.is_empty() {
+        return false;
+    }
+    KNOWN_GENRES.contains(&n.as_str())
+        || TEMPO_BANDS.iter().any(|(key, _, _)| *key == n)
+        // The graph is keyed on a plain lowercase rather than the normalised
+        // form — see `normalise`'s note about not changing what the taxonomy
+        // considers equal — so it is asked in its own terms.
+        || graph().contains_key(&name.trim().to_lowercase())
+}
+
+/// Choose one genre from a tag cloud, or nothing.
+///
+/// Community tags are a popularity contest with no schema: they arrive weighted,
+/// and mixed in with things that are not genres at all. This takes the
+/// most-agreed-upon tag that this crate recognises as a genre and ignores the
+/// rest.
+///
+/// Most-agreed rather than most-specific. "Delta Heavy" is tagged `drum and
+/// bass` 12, `jungle` 2, `deep house` 1 — the long tail of a tag cloud is where
+/// the mistakes live, and a rule that reached for the narrowest name would file
+/// a drum & bass act under deep house on one person's say-so. Ties break on the
+/// name so the answer does not depend on iteration order.
+///
+/// `tags` is `(name, count)` in any order. Returns the tag's own spelling, not
+/// the lowercased form, because it is going on a screen.
+pub fn pick_genre_tag<'a>(tags: &[(&'a str, u32)]) -> Option<&'a str> {
+    tags.iter()
+        .filter(|(name, count)| *count > 0 && is_known_genre(name))
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(name, _)| *name)
+}
+
 pub fn is_unknown_genre(g: &str) -> bool {
     let g = g.trim().to_lowercase();
     g.is_empty()
@@ -519,6 +689,23 @@ mod tests {
     /// A key that is not already normalised can never be matched, because the
     /// lookup normalises first. This is the test that catches "drum & bass"
     /// being added back to the table and silently never firing.
+    /// Same rule as [`TEMPO_BANDS`], same reason: a lookup normalises before it
+    /// compares, so an un-normalised entry is one nothing can ever match.
+    #[test]
+    fn known_genres_are_normalised() {
+        for key in KNOWN_GENRES {
+            assert_eq!(&normalise(key), key, "{key} is not in normalised form");
+        }
+        // And not repeated from the tempo table, which `is_known_genre` also
+        // consults — two lists saying the same thing drift apart.
+        for key in KNOWN_GENRES {
+            assert!(
+                !TEMPO_BANDS.iter().any(|(k, _, _)| k == key),
+                "{key} is already in TEMPO_BANDS"
+            );
+        }
+    }
+
     #[test]
     fn keys_are_already_normalised() {
         for (key, _, _) in TEMPO_BANDS {
@@ -657,5 +844,129 @@ mod tests {
     fn an_unrelated_reference_is_ignored() {
         assert_eq!(octave_from_reference(87.0, 128.0), None);
         assert_eq!(octave_from_reference(140.0, 100.0), None);
+    }
+
+    /// Real tag clouds and real counts, captured from MusicBrainz 2026-08-28,
+    /// against the genre Deezer returns for the same artist.
+    ///
+    /// The case for a second source is the right-hand column: Delta Heavy,
+    /// Noisia and Zero T are drum & bass acts and Deezer calls all three
+    /// "Dance", because "Dance" is one of the ten words it has for this whole
+    /// library.
+    #[test]
+    fn a_real_tag_cloud_yields_the_genre_the_artist_actually_plays() {
+        for (artist, tags, want) in [
+            (
+                "Delta Heavy",
+                &[
+                    ("drum and bass", 7u32),
+                    ("electronic", 1),
+                    ("jungle", 1),
+                    ("deep house", 1),
+                ][..],
+                "drum and bass",
+            ),
+            (
+                "Noisia",
+                &[
+                    ("electronic", 8),
+                    ("drum and bass", 8),
+                    ("dubstep", 5),
+                    ("neurofunk", 2),
+                    ("electro house", 2),
+                    ("edm", 2),
+                    ("halftime", 1),
+                    ("dance and electronica", 0),
+                ][..],
+                // A genuine 8–8 tie between a precise name and a vague one, and
+                // the tie-break decides it: alphabetically first wins, which is
+                // "drum and bass". Arbitrary as a rule, but it has to be
+                // *stable* — the alternative is a genre tile that changes its
+                // mind between two reads of the same data.
+                "drum and bass",
+            ),
+            (
+                "Sade",
+                &[
+                    ("smooth jazz", 7),
+                    ("soul", 4),
+                    ("jazz pop", 4),
+                    // Tied with two real genres and not a genre at all. The
+                    // filter has to drop it before the count is consulted.
+                    ("female singer", 4),
+                    ("contemporary r&b", 4),
+                    ("smooth soul", 3),
+                    ("sophisti-pop", 3),
+                ][..],
+                "smooth jazz",
+            ),
+            (
+                "Nils Frahm",
+                &[
+                    // "instrumental" ties for the lead and is not a genre.
+                    ("instrumental", 3),
+                    ("modern classical", 3),
+                    ("electronic", 1),
+                    ("ambient", 1),
+                    ("minimalism", 1),
+                ][..],
+                "modern classical",
+            ),
+            (
+                "Tame Impala",
+                &[
+                    ("psychedelic rock", 13),
+                    ("neo-psychedelia", 12),
+                    ("psychedelic pop", 8),
+                    ("alternative rock", 5),
+                    ("australia", 2),
+                ][..],
+                "psychedelic rock",
+            ),
+        ] {
+            assert_eq!(
+                pick_genre_tag(tags),
+                Some(want),
+                "{artist}: picked the wrong tag out of {tags:?}"
+            );
+        }
+    }
+
+    /// Nothing recognisable means nothing, not a guess.
+    ///
+    /// Falling through leaves whatever coarse genre the app already had, which
+    /// is a far better failure than filing a record under "swedish".
+    #[test]
+    fn a_cloud_with_no_genre_in_it_picks_nothing() {
+        assert_eq!(
+            pick_genre_tag(&[("seen live", 40), ("icelandic", 22), ("female singer", 18)]),
+            None
+        );
+        assert_eq!(pick_genre_tag(&[]), None);
+        // A zero count is an absent vote, not a quiet one.
+        assert_eq!(pick_genre_tag(&[("techno", 0)]), None);
+    }
+
+    /// The spelling that goes on the screen is the one the source used.
+    #[test]
+    fn the_tags_own_spelling_survives() {
+        assert_eq!(
+            pick_genre_tag(&[("Drum & Bass", 5)]),
+            Some("Drum & Bass"),
+            "a recognised genre must not be lowercased on the way out"
+        );
+    }
+
+    #[test]
+    fn recognition_ignores_case_and_reaches_the_taxonomy() {
+        assert!(is_known_genre("DRUM AND BASS"));
+        assert!(is_known_genre("  Tech House  "));
+        // In the taxonomy but not in the extra list — recognised via the graph.
+        assert!(is_known_genre("Liquid DNB"));
+        // In the tempo table.
+        assert!(is_known_genre("hip hop"));
+        assert!(!is_known_genre("seen live"));
+        assert!(!is_known_genre(""));
+        assert!(!is_known_genre("unknown"));
     }
 }

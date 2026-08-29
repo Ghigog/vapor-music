@@ -45,7 +45,7 @@ pub fn look_up_track(href: String, force: bool, state: State<'_, Shared>) -> Res
             .find(|r| r.href == href)
             .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
         let mut row = row.clone();
-        app.apply_tags(&mut row);
+        app.apply_metadata(&mut row);
         (
             row.artist,
             row.album,

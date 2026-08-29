@@ -165,6 +165,56 @@ pub fn strip_track_number(title: &str) -> String {
     }
 }
 
+/// Reduce a track title to what two sources would agree on.
+///
+/// Comparing a library's titles against a service's tracklist is comparing two
+/// people's transcriptions of the same thing. Ours came off a filename, theirs
+/// off a catalogue, and they differ in ways that mean nothing: `"Bangarang
+/// (feat. Sirah)"` against `"Bangarang"`, `"Harder, Better, Faster, Stronger"`
+/// against `"Harder Better Faster Stronger"`, a stray `[Explicit]`, a leading
+/// track number, curly quotes against straight ones.
+///
+/// So: lowercase, drop any bracketed aside, drop punctuation, collapse spaces.
+/// Deliberately blunt — this decides whether to grey out a row, and the cost of
+/// a false match (one track marked held that is a different mix) is far lower
+/// than the cost of a false miss (an album that reads as missing tracks it has
+/// sitting right there).
+///
+/// Bracketed asides go wholesale rather than selectively. `(feat. …)`,
+/// `(Remix)`, `[Explicit]` and `(2011 Remaster)` are all noise for this
+/// purpose, and enumerating which to keep is a losing game — a remix that
+/// genuinely is a different track still matches the album position it sits in,
+/// which is the only thing being decided here.
+pub fn comparable_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut depth = 0usize;
+    for ch in strip_track_number(title.trim()).chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ if depth > 0 => {}
+            c if c.is_alphanumeric() => out.extend(c.to_lowercase()),
+            // Any run of non-alphanumerics becomes one space, so "Harder,
+            // Better" and "Harder Better" land on the same string.
+            _ => {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Whether two titles are plausibly the same recording.
+///
+/// An empty title matches nothing, including another empty one: two files the
+/// parser gave up on are not evidence of the same track.
+pub fn same_title(a: &str, b: &str) -> bool {
+    let (a, b) = (comparable_title(a), comparable_title(b));
+    !a.is_empty() && a == b
+}
+
 /// True when a segment is only a track number, so it can be dropped from a
 /// `" - "`-separated filename.
 pub fn is_track_number(seg: &str) -> bool {
@@ -364,6 +414,47 @@ mod tests {
     fn cleaning_never_empties_a_segment() {
         let c = clean_keep_nonempty("[Dolby Atmos]");
         assert!(!c.text.is_empty(), "a junk name beats a blank one");
+    }
+
+    /// Every one of these pairs is a real disagreement between this library's
+    /// filenames and Deezer's catalogue for the same recording.
+    #[test]
+    fn a_title_and_a_catalogue_entry_for_it_compare_equal() {
+        for (ours, theirs) in [
+            // Deezer names the feature; the file does not, or vice versa.
+            ("Bangarang (feat. Sirah)", "Bangarang"),
+            // As a `Row` carries it — `parse_path` has already taken the
+            // leading number and the artist segment off the filename, so what
+            // reaches here is the title and its asides.
+            ("Bangarang (feat. Sirah)(Explicit)", "Bangarang"),
+            // Punctuation the two transcribed differently.
+            (
+                "Harder, Better, Faster, Stronger",
+                "Harder Better Faster Stronger",
+            ),
+            // A leading track number off a filename.
+            ("01 Space Time", "Space Time"),
+            ("03 - Machine Gun", "Machine Gun"),
+            // Case and stray whitespace.
+            ("  ONE MORE TIME  ", "One More Time"),
+        ] {
+            assert!(
+                same_title(ours, theirs),
+                "{ours:?} and {theirs:?} should compare equal, got {:?} vs {:?}",
+                comparable_title(ours),
+                comparable_title(theirs),
+            );
+        }
+    }
+
+    #[test]
+    fn different_tracks_do_not_compare_equal() {
+        assert!(!same_title("Space Time", "Take the Stairs"));
+        assert!(!same_title("Aerodynamic", "Digital Love"));
+        // A title that reduces to nothing matches nothing — two files the
+        // parser gave up on are not evidence of the same recording.
+        assert!(!same_title("", ""));
+        assert!(!same_title("(Explicit)", "[Bonus]"));
     }
 
     #[test]

@@ -421,3 +421,103 @@ describe("Library — incomplete albums", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("Library — an opened album shows what it is missing", () => {
+  /*
+   * The gap is the point.
+   *
+   * Holding 1 of 19 of a record and drawing one row looks exactly like a
+   * complete album with one track on it. Nothing on the screen said the other
+   * eighteen existed — so this draws the whole release and greys what is not
+   * here, with the count stated in words rather than left to the colour.
+   */
+  it("lists the tracks it does not have, unplayable", async () => {
+    useBackend({
+      rows: [
+        makeRow({
+          href: "/dav/Music/machine-gun.m4a",
+          title: "Machine Gun",
+          artist: "Noisia",
+          album: "Split The Atom",
+        }),
+      ],
+      albums: [
+        makeEntity({
+          name: "Split The Atom",
+          subtitle: "Noisia",
+          tracks: 1,
+          totalTracks: 3,
+          incomplete: true,
+          lead: "/dav/Music/machine-gun.m4a",
+        }),
+      ],
+      albumTracklists: {
+        "Split The Atom": [
+          { position: 1, title: "Machine Gun", href: "/dav/Music/machine-gun.m4a" },
+          { position: 2, title: "Deception", href: "" },
+          { position: 3, title: "Could This Be", href: "" },
+        ],
+      },
+      covers: true,
+    });
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /open the album split the atom/i }),
+    );
+
+    // All three are on the screen, not just the one held.
+    await screen.findByText("Machine Gun");
+    expect(screen.getByText("Deception")).toBeInTheDocument();
+    expect(screen.getByText("Could This Be")).toBeInTheDocument();
+
+    // The held one is pressable; the missing ones are not controls at all.
+    expect(
+      screen.getByRole("button", { name: "Machine Gun" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Deception" }),
+    ).not.toBeInTheDocument();
+
+    // And the shortfall is said in words, not left to the greying — colour is
+    // not available to every reader.
+    expect(screen.getByText(/1 of 3 tracks/)).toBeInTheDocument();
+    expect(screen.getByText(/2 not in your library/)).toBeInTheDocument();
+  });
+
+  /*
+   * An album nobody has looked up falls back to the ordinary table.
+   *
+   * Every album is in that state until the identify pass runs. Building a
+   * tracklist out of the files to hand would produce the one list that can
+   * never show a gap, which would be worse than not trying.
+   */
+  it("falls back to the plain table when the release is unknown", async () => {
+    useBackend({
+      rows: album(),
+      albums: [
+        makeEntity({
+          name: "Currents",
+          subtitle: "Tame Impala",
+          tracks: 2,
+          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+        }),
+      ],
+      // No albumTracklists entry: the backend answers empty.
+      covers: true,
+    });
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /open the album currents/i }),
+    );
+
+    // The tracks are still listed — via Songs — and nothing claims a shortfall.
+    await screen.findByText("Let It Happen");
+    expect(screen.queryByText(/not in your library/i)).not.toBeInTheDocument();
+  });
+});

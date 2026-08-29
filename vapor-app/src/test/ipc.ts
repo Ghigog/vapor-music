@@ -75,6 +75,16 @@ export interface FakeOptions {
    */
   albums?: core.LibraryEntity[];
   artists?: core.LibraryEntity[];
+  /**
+   * The full tracklist of an opened album, by album title.
+   *
+   * Absent means the album was never matched to a release — the real backend
+   * answers an empty array for that, and the screen falls back to the plain
+   * table. Stated rather than derived from `rows`: which files fill which line
+   * of a release is `same_title`'s judgement, and a fake that re-decides it a
+   * second way is a fake that can disagree with the real one.
+   */
+  albumTracklists?: Record<string, core.AlbumTrack[]>;
   playlists?: core.Playlist[];
   /** Playlist folders. Not to be confused with `unreadableFolders` below. */
   folders?: core.Folder[];
@@ -419,6 +429,7 @@ export class FakeBackend {
   private rows: core.Row[];
   private albums: core.LibraryEntity[];
   private artists: core.LibraryEntity[];
+  private albumTracklists: Record<string, core.AlbumTrack[]>;
   private scanned: boolean;
   private playlists: core.Playlist[];
   private folders: core.Folder[];
@@ -556,6 +567,7 @@ export class FakeBackend {
       headphoneProfile: "",
       headphoneCalibrationEnabled: false,
       bpmOverrides: {},
+      trackOverrides: {},
       albumArt: {},
       preferLookedUpArt: false,
       hideDuplicates: false,
@@ -592,6 +604,7 @@ export class FakeBackend {
     const own = options.rows !== undefined;
     this.albums = options.albums ?? (own ? [] : DEFAULT_ALBUMS);
     this.artists = options.artists ?? (own ? [] : DEFAULT_ARTISTS);
+    this.albumTracklists = options.albumTracklists ?? {};
     // A connected library is one that has been scanned; a fresh one has not.
     this.scanned = connected;
     this.playlists = options.playlists ?? [];
@@ -861,6 +874,11 @@ export class FakeBackend {
         if (!this.scanned) return [];
         const view = (a.view ?? {}) as core.LibraryView;
         return view.groupBy === "artist" ? this.artists : this.albums;
+      }
+
+      case "album_tracklist": {
+        // Empty is the real backend's "never looked up", not an error.
+        return this.albumTracklists[a.album as string] ?? [];
       }
 
       case "home_shelves": {
@@ -1531,6 +1549,39 @@ export class FakeBackend {
         this.current = null;
         return null;
 
+      case "set_track_override": {
+        // Stored *and applied*, as the backend does. A correction that did not
+        // reach the rows would let a test pass against a screen that had
+        // quietly ignored the edit — the same trap `set_bpm_override` names.
+        const href = String(a.href ?? "");
+        const field = String(a.field ?? "");
+        const value = String(a.value ?? "").trim();
+        if (!["genre", "album", "artist"].includes(field)) {
+          throw new Error(
+            "Could not set " + field + ": it must be one of genre, album or artist.",
+          );
+        }
+        const all = { ...this.settings.trackOverrides };
+        const entry = { ...(all[href] ?? {}) };
+        if (value) {
+          (entry as Record<string, string>)[field] = value;
+        } else {
+          delete (entry as Record<string, string>)[field];
+        }
+        if (Object.keys(entry).length === 0) delete all[href];
+        else all[href] = entry;
+        this.settings = { ...this.settings, trackOverrides: all };
+
+        // And on the row, so the table and the details sheet agree. Narrowed
+        // rather than indexed by a string: `field` is validated above, but only
+        // a union tells the compiler that, and a `Row` has no index signature.
+        const on = field as "genre" | "album" | "artist";
+        this.rows = this.rows.map((r) =>
+          r.href === href ? { ...r, [on]: value || r[on] } : r,
+        );
+        return null;
+      }
+
       case "set_bpm_override": {
         // Stored *and applied*, as the backend does: a correction that did not
         // reach the rows would make the table look like it had ignored it.
@@ -1701,6 +1752,10 @@ export class FakeBackend {
       case "track_details": {
         const row = this.rows.find((r) => r.href === String(a.href ?? ""));
         if (!row) throw new Error("That track is not in the library.");
+        // Read back, not hardcoded. These say which fields the owner typed, and
+        // a fake that always answered "none" would let a test pass against a
+        // screen that never marked a correction or offered to undo one.
+        const fixed = this.settings.trackOverrides[row.href] ?? {};
         return {
           href: row.href,
           title: row.title,
@@ -1728,6 +1783,9 @@ export class FakeBackend {
           cover: this.covers ? A_SLEEVE : null,
           notes: null,
           tagged: false,
+          genreIsManual: fixed.genre !== undefined,
+          artistIsManual: fixed.artist !== undefined,
+          albumIsManual: fixed.album !== undefined,
         } satisfies core.TrackDetails;
       }
 

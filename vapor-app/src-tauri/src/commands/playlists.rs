@@ -194,7 +194,7 @@ pub fn reorder_playlist_track(
 ///
 /// Rows rather than hrefs: the screen shows title, artist, BPM and key like
 /// every other table, and rebuilding that on the frontend from a list of hrefs
-/// would be a second implementation of what `apply_tags`/`apply_analysis`
+/// would be a second implementation of what `apply_metadata`/`apply_analysis`
 /// already do.
 ///
 /// An href with no matching row is skipped rather than rendered blank — it
@@ -212,7 +212,7 @@ pub fn playlist_rows(id: String, state: State<'_, Shared>) -> Result<Vec<Row>> {
         .into_iter()
         .cloned()
         .map(|mut row| {
-            app.apply_tags(&mut row);
+            app.apply_metadata(&mut row);
             app.apply_analysis(&mut row);
             row
         })

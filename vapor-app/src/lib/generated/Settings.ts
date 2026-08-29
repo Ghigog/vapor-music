@@ -2,6 +2,7 @@
 import type { LocalFolder } from "./LocalFolder";
 import type { RemoteConfig } from "./RemoteConfig";
 import type { ThemeMode } from "./ThemeMode";
+import type { TrackOverride } from "./TrackOverride";
 
 /**
  * Every other struct that crosses the IPC boundary renames to camelCase, and
@@ -45,6 +46,21 @@ customBaseColor: string, customAccentColor: string, headphoneProfile: string, he
  * software conventionally has one.
  */
 bpmOverrides: { [key in string]: number }, 
+/**
+ * Corrections a person typed, keyed by href.
+ *
+ * The last word on what a track is. Everything else the app knows about a
+ * track's identity is derived — from the path, from the file's tags, from
+ * what a public service said — and every one of those can be wrong in a way
+ * only the owner can see. Deezer files an entire library's drum & bass
+ * under "Dance"; a compilation track carries the album it was originally
+ * released on; a folder is misnamed. This is how that gets fixed, and it is
+ * consulted before all three.
+ *
+ * Same shape and same reasoning as [`Self::bpm_overrides`], which exists
+ * because tempo detection is ~81% right and the residual needed a human.
+ */
+trackOverrides: { [key in string]: TrackOverride }, 
 /**
  * Album artwork chosen by hand, keyed by [`album_key`].
  *

@@ -852,6 +852,69 @@ describe("Liner Notes", () => {
     expect(screen.getByText("Aphex Twin")).toBeInTheDocument();
   });
 
+  /*
+   * The genre this library gets from Deezer is wrong for most of it.
+   *
+   * Measured: 488 of 534 looked-up tracks take their genre from Deezer, whose
+   * entire vocabulary here is ten words, and every drum & bass act in the
+   * library comes back "Dance". MusicBrainz fixes most of that automatically,
+   * but no derived source is right about everything, so there has to be a last
+   * word and it has to belong to the person who can hear the record.
+   */
+  it("lets a wrong genre be corrected by hand", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+    const genre = await screen.findByLabelText(/genre/i);
+    await user.clear(genre);
+    await user.type(genre, "drum and bass");
+    // Committed on blur, not per keystroke: each commit is a settings write and
+    // a library re-read, and doing that per letter would rebuild the index
+    // thirteen times for this one value.
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/genre/i)).toHaveValue("drum and bass");
+    });
+  });
+
+  /*
+   * And a correction is marked as one.
+   *
+   * A derived value invites a correction; a typed one offers to undo it. The
+   * screen cannot offer the right thing without knowing which it is holding.
+   */
+  it("marks a corrected field and offers to undo it", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+
+    // Nothing is corrected to begin with, so nothing offers to be undone.
+    await screen.findByLabelText(/genre/i);
+    expect(
+      screen.queryByRole("button", { name: /use what was found/i }),
+    ).not.toBeInTheDocument();
+
+    const genre = await screen.findByLabelText(/genre/i);
+    await user.clear(genre);
+    await user.type(genre, "neurofunk");
+    await user.tab();
+
+    // Now it says whose value it is, and how to go back.
+    const undo = await screen.findByRole("button", {
+      name: /use what was found/i,
+    });
+    expect(undo).toBeInTheDocument();
+
+    await user.click(undo);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /use what was found/i }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("goes back", async () => {
     useBackend();
     const user = userEvent.setup();

@@ -180,7 +180,7 @@
   margin: 0;
   display: flex;
   align-items: baseline;
-  gap: var(--sp-2, 8px);
+  gap: 8px;
 }
 
 /*
@@ -587,4 +587,96 @@
   .library__crumb {
     min-width: 0;
   }
+}
+
+/* ---- An opened album's tracklist ------------------------------------- */
+
+/*
+ * The record, not the files.
+ *
+ * An album the library holds one track of used to draw a one-row table, which
+ * reads as a complete album with one track on it. These rows show the whole
+ * release; the ones not held are greyed and carry no control.
+ */
+.tracklist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tracklist__gap {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.tracklist__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tracklist__row {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tracklist__no {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  text-align: right;
+  font-size: 12px;
+}
+
+.tracklist__title {
+  /* A real button for a held track: focusable, answers Enter and Space, and
+     announced as pressable without any code for it. */
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tracklist__title:hover {
+  text-decoration: underline;
+}
+
+/*
+ * Not held. Dimmed rather than struck through — the track is not wrong, it is
+ * simply not here — and not a disabled button, because there is no action to
+ * disable and a disabled control invites working out what would enable it.
+ */
+.tracklist__row--absent .tracklist__no,
+.tracklist__title--absent {
+  color: var(--ink-3);
+  opacity: 0.55;
+  cursor: default;
+}
+
+/*
+ * Visible to a screen reader, not to the eye.
+ *
+ * `display: none` would remove it from the accessibility tree as well, which
+ * would leave the greying as the only signal — and colour is not available to
+ * everyone.
+ */
+.tracklist__absent-note {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

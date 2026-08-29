@@ -24,4 +24,13 @@ notes: string | null,
  * True when any of this came from the file's tags rather than its path,
  * so the screen can stop claiming everything was derived from the name.
  */
-tagged: boolean, };
+tagged: boolean, 
+/**
+ * Which of these three the owner typed rather than the app deriving.
+ *
+ * The screen needs to distinguish "this is what we worked out" from "this
+ * is what you told us" — the first invites a correction, the second offers
+ * to undo one. Three flags rather than one, because a person who fixed a
+ * genre has not thereby vouched for the album.
+ */
+genreIsManual: boolean, artistIsManual: boolean, albumIsManual: boolean, };

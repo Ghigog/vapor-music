@@ -329,3 +329,83 @@
   font-weight: var(--fw-medium);
   color: var(--ink);
 }
+
+/* ---- Corrections ----------------------------------------------------- */
+
+/*
+ * The last word on what a track is.
+ *
+ * Everything else on this screen is derived — from the path, the file's tags,
+ * or a service — and each is wrong somewhere in every real library. These sit
+ * under the names because the moment a person notices a genre is wrong is the
+ * moment they are looking at it.
+ */
+.liner__fixes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.liner__fix {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.liner__fix-label {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--ink-3);
+}
+
+/*
+ * Marks a value the owner typed.
+ *
+ * Worth distinguishing from a derived one: a derived value invites a
+ * correction, and a typed one offers to undo it. Text rather than a colour
+ * alone, so it survives a reader who cannot see the colour.
+ */
+.liner__fix-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--fill-quiet);
+  color: var(--ink-2);
+}
+
+.liner__fix-input {
+  font: inherit;
+  color: inherit;
+  background: var(--fill-quiet);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+.liner__fix-input:hover {
+  border-color: var(--edge);
+}
+
+.liner__fix-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Sits under the field it undoes, in the value column. */
+.liner__fix-reset {
+  grid-column: 2;
+  justify-self: start;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--ink-3);
+  cursor: pointer;
+  text-decoration: underline;
+}

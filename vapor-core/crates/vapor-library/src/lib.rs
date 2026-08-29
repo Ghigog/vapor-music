@@ -26,14 +26,16 @@ pub mod webdav;
 
 pub use camelot::{harmonic_relation_cost, key_distance, CamelotKey, CLASH_COST};
 pub use genre::{
-    genre_distance, is_similar_genre, is_unknown_genre, octave_correct, octave_from_reference,
-    tempo_band,
+    genre_distance, is_known_genre, is_similar_genre, is_unknown_genre, octave_correct,
+    octave_from_reference, pick_genre_tag, tempo_band,
 };
 pub use group::{DynamicGroup, Entity, EntityType, Folder, FolderStore, GroupStore};
 pub use index::{
     filter, group_rows, matches_any_entity, matches_query, sort_rows, GroupBy, Row, SortKey, Source,
 };
-pub use naming::{clean_segment, parse_path, strip_track_number, TrackInfo};
+pub use naming::{
+    clean_segment, comparable_title, parse_path, same_title, strip_track_number, TrackInfo,
+};
 pub use pathfinder::{generate_mood_path, transition_duration, Curve};
 pub use playlist::{CoverSource, Playlist, PlaylistStore};
 pub use queue::{Queue, Repeat};

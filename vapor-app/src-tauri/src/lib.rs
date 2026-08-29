@@ -89,6 +89,15 @@ pub(crate) struct AppState {
     /// stranger said. Merging them would make the screen unable to tell a
     /// person which is which.
     pub(crate) looked: metadata::Cache,
+    /// The genre MusicBrainz's taggers agree an artist plays, by artist name.
+    ///
+    /// Keyed on the artist rather than the track because that is the question
+    /// asked: a genre belongs to who made the record far more than to the
+    /// individual recording, MusicBrainz's per-artist tags are far better
+    /// populated than its per-recording ones, and one request per artist is 92
+    /// for this library where one per track would be 563 — at their
+    /// one-per-second limit, ninety seconds against nine minutes.
+    pub(crate) artist_genres: std::collections::HashMap<String, String>,
     /// The releases those lookups landed on, by Deezer id.
     ///
     /// Normalised out of `looked` rather than stored per track: a fourteen-track
@@ -370,6 +379,7 @@ impl AppState {
         let pinned = quarantined!("pinned").unwrap_or_default();
         let looked = quarantined!("metadata").unwrap_or_default();
         let albums = quarantined!("albums").unwrap_or_default();
+        let artist_genres = quarantined!("artist_genres").unwrap_or_default();
         let trust = quarantined!("trust").unwrap_or_default();
         let tombstones = quarantined!("tombstones").unwrap_or_default();
         let digests = quarantined!("digests").unwrap_or_default();
@@ -426,6 +436,7 @@ impl AppState {
             pinned,
             looked,
             albums,
+            artist_genres,
             device_id,
             trust,
             pairing: None,
@@ -601,41 +612,111 @@ impl AppState {
     /// A manual BPM override wins over the detected value: it exists precisely
     /// because detection lands a metrical relative on roughly 10% of a real
     /// library, and a correction that the table ignored would be useless.
-    /// Fill a row's blanks from the file's own tags (TD-39).
+    /// Fill a row's blanks from everything that is not the path (TD-39).
     ///
-    /// Gaps only. A library filed as `Artist/Album/Track` is a statement about
-    /// how it should be organised, and a tag that disagrees is usually the tag
-    /// being wrong — a compilation track carrying its original album. So the
-    /// derived value wins wherever there is one.
-    pub(crate) fn apply_tags(&self, row: &mut Row) {
-        let Some(tags) = self.tags.get(&row.href) else {
+    /// Gaps only, and in order of how much the answer is worth trusting: the
+    /// path first — it is already in the row — then the file's own tags, then
+    /// what a public service said. A library filed as `Artist/Album/Track` is a
+    /// statement about how it should be organised, and a tag that disagrees is
+    /// usually the tag being wrong: a compilation track carrying its original
+    /// album. So the derived value wins wherever there is one, and a stranger's
+    /// answer is taken only where nothing local had anything to say.
+    ///
+    /// Was `apply_metadata`, when tags were the only thing it merged. Renamed
+    /// rather than joined by a second pass every caller has to remember: there
+    /// are six call sites, and one that forgot the second pass is exactly how
+    /// the Albums tab ends up disagreeing with Songs about what a track is on.
+    pub(crate) fn apply_metadata(&self, row: &mut Row) {
+        use vapor_library::index::Source;
+
+        /*
+         * A correction is the last word, so it is applied first.
+         *
+         * Marked `File` rather than a source of its own: from everything
+         * downstream's point of view this is now a known, trusted value that
+         * nothing else may overwrite, which is exactly what `File` means to the
+         * gates below. The provenance a person cares about — "did I set this" —
+         * is the presence of the override itself, which the details screen
+         * reads directly.
+         */
+        if let Some(fixed) = self.settings.track_override(&row.href) {
+            if let Some(album) = fixed.album.as_deref().filter(|a| !a.trim().is_empty()) {
+                row.album = album.to_string();
+                row.album_source = Source::File;
+            }
+            if let Some(artist) = fixed.artist.as_deref().filter(|a| !a.trim().is_empty()) {
+                row.artist = artist.to_string();
+                row.artist_source = Source::File;
+            }
+            if let Some(genre) = fixed.genre.as_deref().filter(|g| !g.trim().is_empty()) {
+                row.genre = genre.to_string();
+            }
+        }
+
+        if let Some(tags) = self.tags.get(&row.href) {
+            if row.artist_source == Source::Unknown {
+                if let Some(artist) = &tags.artist {
+                    row.artist = artist.clone();
+                    row.artist_source = Source::File;
+                }
+            }
+            if row.album_source == Source::Unknown {
+                if let Some(album) = &tags.album {
+                    row.album = album.clone();
+                    row.album_source = Source::File;
+                }
+            }
+            if row.genre.is_empty() {
+                if let Some(genre) = &tags.genre {
+                    row.genre = genre.clone();
+                }
+            }
+            if row.year == 0 {
+                if let Some(year) = tags.year {
+                    row.year = year;
+                }
+            }
+        }
+
+        /*
+         * The release a loose file came off.
+         *
+         * 97 of this library are single tracks in the root, downloaded one at a
+         * time: no album in the path, none in the tags. The identify pass has
+         * matched them to a release and written the id — `Machine Gun` is track
+         * three of *Split The Atom*, nineteen long — and until now that was
+         * recorded and never shown, because the Albums tab only lists rows
+         * whose album is `is_known()` and theirs stayed `Unknown`.
+         *
+         * Marked `Service`, not `File`. It is the weakest kind of known, and
+         * the app keeps measured, tagged and looked-up facts apart precisely so
+         * a person can be told which they are looking at.
+         */
+        if row.album_source != Source::Unknown {
+            return;
+        }
+        let Some(facts) = self
+            .looked
+            .get(&row.href)
+            .map(|l| l.deezer_album_id)
+            .filter(|id| *id != 0)
+            .and_then(|id| self.albums.get(&id))
+            .filter(|f| f.is_usable() && !f.title.trim().is_empty())
+        else {
             return;
         };
-        if row.artist_source == vapor_library::index::Source::Unknown {
-            if let Some(artist) = &tags.artist {
-                row.artist = artist.clone();
-                row.artist_source = vapor_library::index::Source::File;
-            }
-        }
-        if row.album_source == vapor_library::index::Source::Unknown {
-            if let Some(album) = &tags.album {
-                row.album = album.clone();
-                row.album_source = vapor_library::index::Source::File;
-            }
-        }
-        if row.genre.is_empty() {
-            if let Some(genre) = &tags.genre {
-                row.genre = genre.clone();
-            }
-        }
-        if row.year == 0 {
-            if let Some(year) = tags.year {
-                row.year = year;
-            }
+        row.album = facts.title.clone();
+        row.album_source = Source::Service;
+        // The artist only if that is blank too. A remix credited to one artist
+        // sitting on another's record is ordinary, and overwriting a name the
+        // path already gave would be the tag-disagrees case in reverse.
+        if row.artist_source == Source::Unknown && !facts.artist.trim().is_empty() {
+            row.artist = facts.artist.clone();
+            row.artist_source = Source::Service;
         }
     }
 
-    /// Call *after* `apply_tags`: the genre the tag supplies is part of what
+    /// Call *after* `apply_metadata`: the genre the tag supplies is part of what
     /// decides the tempo now, and a row whose genre has not been merged in yet
     /// would be judged on the scan's blank.
     pub(crate) fn apply_analysis(&self, row: &mut Row) {
@@ -685,6 +766,22 @@ impl AppState {
     /// back" case is handled once here rather than at each call site. An album
     /// with no id or no track count is not written: an entry that cannot say
     /// how long the record is would make every album holding it look complete.
+    /// Keep the genre a tag source gave for an artist.
+    ///
+    /// Nothing is written for an empty answer: "we asked and they had no
+    /// recognisable genre" and "we have not asked" behave identically here —
+    /// both fall through to the next source — and storing the blank would only
+    /// make a later re-run look like it had already succeeded.
+    fn remember_artist_genre(&mut self, artist: &str, genre: &str) {
+        let (artist, genre) = (artist.trim(), genre.trim());
+        if artist.is_empty() || genre.is_empty() {
+            return;
+        }
+        self.artist_genres
+            .insert(artist.to_string(), genre.to_string());
+        let _ = self.store.save("artist_genres", &self.artist_genres);
+    }
+
     fn remember_album(&mut self, facts: Option<metadata::AlbumFacts>) {
         let Some(facts) = facts.filter(|f| f.is_usable()) else {
             return;
@@ -1272,7 +1369,7 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
         .cloned()
         .collect();
     for row in rows.iter_mut() {
-        app.apply_tags(row);
+        app.apply_metadata(row);
         app.apply_analysis(row);
     }
     if let Some(album) = view.album.as_deref() {
@@ -1330,7 +1427,10 @@ enum By {
 ///
 /// `None` when nothing has been looked up, which is the ordinary state of a
 /// fresh library and must stay distinguishable from "looked up, found short".
-fn release_of<'a>(app: &'a AppState, tracks: &[&Row]) -> Option<&'a metadata::AlbumFacts> {
+pub(crate) fn release_of<'a>(
+    app: &'a AppState,
+    tracks: &[&Row],
+) -> Option<&'a metadata::AlbumFacts> {
     let mut votes: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for row in tracks {
         let id = app
@@ -1655,7 +1755,7 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
             .filter_map(|row| {
                 let analysis = app.analysis.get(&row.href)?;
                 let mut r = row.clone();
-                app.apply_tags(&mut r);
+                app.apply_metadata(&mut r);
                 Some((
                     r.href.clone(),
                     r.title.clone(),
@@ -1743,6 +1843,28 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
             let genre = sleeve.genre;
 
             /*
+             * The artist's genre, asked once per artist.
+             *
+             * Skipped entirely when this artist has already been asked, which
+             * is what keeps a 563-track pass down to 92 requests against a
+             * service that permits one a second. The check is a read of the
+             * cache under the lock rather than a set built up front, so an
+             * artist corrected or cleared mid-pass is still only asked once.
+             */
+            let ask_for = {
+                let app = shared.lock().ok();
+                match app {
+                    Some(app) => {
+                        let known = artist.trim().is_empty()
+                            || app.artist_genres.contains_key(artist.trim());
+                        (!known).then(|| artist.clone())
+                    }
+                    None => None,
+                }
+            };
+            let artist_genre = ask_for.map(|a| lookup.artist_genre(&a)).unwrap_or_default();
+
+            /*
              * A track with no album still came off a record.
              *
              * `lookup.album` searches by album name, so a file with none — 97
@@ -1794,6 +1916,7 @@ fn identify_library_in_background(app_handle: &tauri::AppHandle, state: &Shared)
                 let _ = app.save_looked();
                 let _ = app.save_settings();
                 app.remember_album(release);
+                app.remember_artist_genre(&artist, &artist_genre);
             }
 
             let _ = handle.emit(
@@ -3202,7 +3325,7 @@ fn tempo_in_force_for_row(
 ///
 /// Three sources, and the DJ used to see none of them. `app.rows` carries the
 /// genre the *scan* found, which is empty for every track in a folder-organised
-/// library — the tag is read later, and `apply_tags` merges it in only on the
+/// library — the tag is read later, and `apply_metadata` merges it in only on the
 /// way out to a screen. So the pool the DJ reasons over had an empty genre for
 /// all 563 tracks, `same_genre` answered "yes, similar" to every pair, and a
 /// genre was never once part of a decision.
@@ -3228,16 +3351,56 @@ fn genre_of(app: &AppState, href: &str) -> String {
 /// tags its own files keeps "Neurofunk"; one that does not gets Deezer's
 /// "Electronic" rather than nothing.
 fn genre_for_row(app: &AppState, row: &Row) -> String {
+    // A correction outranks everything, including the scan. It exists because
+    // every other source can be wrong in a way only the owner can see.
+    if let Some(fixed) = app
+        .settings
+        .track_override(&row.href)
+        .and_then(|o| o.genre.clone())
+    {
+        return fixed;
+    }
     if !row.genre.trim().is_empty() {
         return row.genre.clone();
     }
-    genre_from_tag_or_lookup(app, &row.href)
+    genre_from_tag_or_lookup_for(app, &row.href, &row.artist)
 }
 
 fn genre_from_tag_or_lookup(app: &AppState, href: &str) -> String {
+    // No row in hand, so no artist either — the artist-tag source is skipped
+    // rather than guessed at. Callers on this path are asking about an href
+    // that is not in the index, which is rare and already degraded.
+    genre_from_tag_or_lookup_for(app, href, "")
+}
+
+/// The sources below the row's own genre, in the order they are trusted.
+///
+/// A correction is handled by the caller; this is everything derived. The file's
+/// own tag first — AUD-24's rule, that what a person put in their own files
+/// beats what a stranger says about them — then the artist's tag cloud, then
+/// the per-album lookup.
+///
+/// MusicBrainz above Deezer is the point of the whole exercise. Deezer's
+/// vocabulary for this library is ten words, three of which arrive in Spanish,
+/// and it answers "Dance" for every drum & bass act in it — measured across 534
+/// looked-up tracks. MusicBrainz answers the same artists "drum and bass" and
+/// "neurofunk", which the taxonomy can actually measure distance between, so
+/// the DJ reads better input out of the same change. It is still below a file
+/// tag, because it is per *artist*: a specific track tagged "Liquid DNB" in its
+/// own file is a sharper statement than the artist's overall cloud.
+fn genre_from_tag_or_lookup_for(app: &AppState, href: &str, artist: &str) -> String {
     if let Some(tagged) = app.tags.get(href).and_then(|t| t.genre.clone()) {
         if !tagged.trim().is_empty() {
             return tagged;
+        }
+    }
+    if !artist.trim().is_empty() {
+        if let Some(g) = app
+            .artist_genres
+            .get(artist.trim())
+            .filter(|g| !g.trim().is_empty())
+        {
+            return g.clone();
         }
     }
     app.looked
@@ -4205,7 +4368,7 @@ fn now_playing(app: &AppState) -> media::NowPlaying {
         .and_then(|href| app.rows.iter().find(|r| &r.href == href))
         .cloned()
         .map(|mut row| {
-            app.apply_tags(&mut row);
+            app.apply_metadata(&mut row);
             row
         });
 
@@ -4494,7 +4657,7 @@ pub(crate) fn track_meta_pool(app: &AppState) -> std::collections::HashMap<Strin
 ///
 /// Taken from the file's own tags first, and only then from the row. That
 /// distinction is the whole of it: `Row::title` is derived from the path by
-/// `build_row` and `apply_tags` never overwrites it, so a second copy is titled
+/// `build_row` and `apply_metadata` never overwrites it, so a second copy is titled
 /// `Bocca di rosa (1)` — a different string, and so a different recording to
 /// any comparison of rows. The tag inside both files says the same thing, which
 /// is the question actually being asked.
@@ -4975,6 +5138,15 @@ struct TrackDetails {
     /// True when any of this came from the file's tags rather than its path,
     /// so the screen can stop claiming everything was derived from the name.
     tagged: bool,
+    /// Which of these three the owner typed rather than the app deriving.
+    ///
+    /// The screen needs to distinguish "this is what we worked out" from "this
+    /// is what you told us" — the first invites a correction, the second offers
+    /// to undo one. Three flags rather than one, because a person who fixed a
+    /// genre has not thereby vouched for the album.
+    genre_is_manual: bool,
+    artist_is_manual: bool,
+    album_is_manual: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -6346,6 +6518,8 @@ pub fn run() {
             commands::analysis::analyse_library,
             commands::analysis::cancel_analysis,
             commands::library::library_entities,
+            commands::library::album_tracklist,
+            commands::library::set_track_override,
             commands::library::home_shelves,
             commands::dj::mix_candidates,
             commands::dj::choose_next,
@@ -7413,6 +7587,115 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A loose file with no album still belongs to a record.
+    ///
+    /// 97 of this library are single tracks sitting in the root: no album in
+    /// the path, none in the tags. The identify pass has been matching them to
+    /// a release and writing the id for some time, and the Albums tab threw
+    /// every one of them away — it lists rows whose album `is_known()`, and
+    /// theirs stayed `Unknown`. The app knew `Machine Gun` was 1 of 19 on
+    /// *Split The Atom* and would not say so.
+    #[test]
+    fn a_loose_track_appears_under_the_album_the_lookup_found() {
+        let (mut app, dir) = app();
+        app.albums.insert(
+            1208375,
+            metadata::AlbumFacts {
+                id: 1208375,
+                title: "Split The Atom".to_string(),
+                artist: "Noisia".to_string(),
+                record_type: "album".to_string(),
+                nb_tracks: 19,
+                tracks: (0..19).map(|i| format!("t{i}")).collect(),
+            },
+        );
+
+        // Exactly the shape of the real thing: artist known from the filename,
+        // album blank and unknown, and a release id from the identify pass.
+        let mut r = row(
+            "/dav/Koofr/Music/03%20-%20Noisia%20-%20Machine%20Gun.m4a",
+            "Machine Gun",
+        );
+        r.artist = "Noisia".to_string();
+        r.artist_source = vapor_library::index::Source::File;
+        app.rows.push(r.clone());
+        app.looked
+            .entry(r.href.clone())
+            .or_default()
+            .deezer_album_id = 1208375;
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("album".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let got = library_entities_for(&app, &view);
+
+        assert_eq!(
+            got.len(),
+            1,
+            "the loose track produced no album tile at all: {got:?}"
+        );
+        assert_eq!(got[0].name, "Split The Atom");
+        assert_eq!(got[0].tracks, 1);
+        assert_eq!(got[0].total_tracks, 19);
+        assert!(got[0].incomplete, "1 of 19 is not a complete album");
+
+        // And the row itself now carries the album, marked as a stranger's
+        // answer rather than as something the file said.
+        let mut filled = r.clone();
+        app.apply_metadata(&mut filled);
+        assert_eq!(filled.album, "Split The Atom");
+        assert_eq!(
+            filled.album_source,
+            vapor_library::index::Source::Service,
+            "a looked-up album must not claim to have come from the file"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// What the path already said is never overwritten by a lookup.
+    ///
+    /// The whole metadata layer is ordered path, then tags, then strangers.
+    /// A service that could rename an album the folder structure already
+    /// stated would undo a deliberate filing decision on every scan.
+    #[test]
+    fn a_lookup_never_overrules_an_album_the_path_supplied() {
+        let (mut app, dir) = app();
+        app.albums.insert(
+            9,
+            metadata::AlbumFacts {
+                id: 9,
+                title: "Deezer's Idea".to_string(),
+                artist: "Deezer's Artist".to_string(),
+                record_type: "album".to_string(),
+                nb_tracks: 10,
+                tracks: vec!["a".to_string()],
+            },
+        );
+        let mut r = row("/Music/Real Artist/Real Album/01.mp3", "A Track");
+        r.album = "Real Album".to_string();
+        r.album_source = vapor_library::index::Source::Folder;
+        r.artist = "Real Artist".to_string();
+        r.artist_source = vapor_library::index::Source::Folder;
+        app.looked
+            .entry(r.href.clone())
+            .or_default()
+            .deezer_album_id = 9;
+
+        app.apply_metadata(&mut r);
+        assert_eq!(r.album, "Real Album", "the lookup overwrote the path");
+        assert_eq!(r.artist, "Real Artist");
+        assert_eq!(r.album_source, vapor_library::index::Source::Folder);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// And opening one narrows to exactly that genre.
     #[test]
     fn opening_a_genre_shows_only_its_tracks() {
@@ -8021,7 +8304,7 @@ mod tests {
 
     /// The tag is the recording; the filename is not.
     ///
-    /// `Row::title` comes from the path and `apply_tags` never overwrites it,
+    /// `Row::title` comes from the path and `apply_metadata` never overwrites it,
     /// so a second copy is titled `Bocca di rosa (1)` and compares as a
     /// different track. Both files carry the same tag, which is the question.
     #[test]

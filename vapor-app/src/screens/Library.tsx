@@ -16,7 +16,7 @@ import { useEntityDrag } from "../components/entityDrag";
 import { Home, forgetHomeShelves } from "./Home";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Songs } from "./Songs";
-import type { GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
+import type { AlbumTrack, GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
 
 /**
  * Tabs map onto the index's grouping, so the UI cannot invent a category.
@@ -472,19 +472,29 @@ export function Library({
               <AlbumArtwork album={opened.name} artist={opened.artist} lead={opened.lead} />
             )}
           </div>
-          <Songs
-            onOpen={onOpen}
-            query=""
-            filter={
-              opened.kind === "album"
-                ? { album: opened.name }
-                : opened.kind === "artist"
+          {opened.kind === "album" ? (
+            /* An album knows how long it is supposed to be, so it can show the
+               tracks it is missing. Everything else falls straight through to
+               the table — an artist has no length to fall short of. */
+            <AlbumTracks
+              album={opened.name}
+              lead={opened.lead}
+              onOpen={onOpen}
+              onError={setPlayError}
+            />
+          ) : (
+            <Songs
+              onOpen={onOpen}
+              query=""
+              filter={
+                opened.kind === "artist"
                   ? { artist: opened.name }
                   : { genre: opened.name }
-            }
-            // Playing from inside an opened record conducts within it.
-            scope={opened.name}
-          />
+              }
+              // Playing from inside an opened record conducts within it.
+              scope={opened.name}
+            />
+          )}
         </div>
       ) : tab === "home" ? (
         /* Typing on home is a search, not a filter of the shelves.
@@ -784,6 +794,113 @@ function AlbumArtwork({
  * rail, which is what a group is made of, or onto a playlist, which resolves
  * it to the tracks on it. See `useEntityDrag`.
  */
+/**
+ * An opened album, drawn as the record rather than as the files.
+ *
+ * The whole point is the gaps. A library holding 1 of 19 of *Split The Atom*
+ * used to draw a one-row table, which looks exactly like a complete album with
+ * one track on it — there was nothing on the screen to say the other eighteen
+ * existed. Now they are all there, and the ones not held are greyed and inert.
+ *
+ * Falls back to the ordinary table when the album was never matched to a
+ * release, which is every album until the identify pass has run. Inventing a
+ * tracklist from the files to hand would be the one list guaranteed to have no
+ * gaps in it.
+ */
+function AlbumTracks({
+  album,
+  lead,
+  onOpen,
+  onError,
+}: {
+  album: string;
+  lead: string;
+  onOpen?: ((href: string) => void) | undefined;
+  onError: (message: string) => void;
+}) {
+  const [tracks, setTracks] = useState<AlbumTrack[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTracks(null);
+    core
+      .albumTracklist(album, lead)
+      // An empty answer is "never looked up", which the render below reads as
+      // "fall back to the table" — the same branch a failure takes, because a
+      // person can do exactly the same thing about both.
+      .then((list) => !cancelled && setTracks(list))
+      .catch(() => !cancelled && setTracks([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [album, lead]);
+
+  if (tracks === null) return <p className="label">reading album</p>;
+  if (tracks.length === 0) {
+    return <Songs onOpen={onOpen} query="" filter={{ album }} scope={album} />;
+  }
+
+  const held = tracks.filter((t) => t.href);
+  const missing = tracks.length - held.length;
+
+  async function play(href: string) {
+    try {
+      // Only what is actually here goes in the queue, in album order. The
+      // missing rows are on the screen to be seen, not to be played past.
+      await core.playTracks(held.map((t) => t.href), href, album);
+    } catch (e: unknown) {
+      onError(messageOf(e));
+    }
+  }
+
+  return (
+    <div className="tracklist">
+      {missing > 0 && (
+        <p className="tracklist__gap label">
+          {held.length} of {tracks.length} tracks — {missing} not in your library
+        </p>
+      )}
+      <ol className="tracklist__list">
+        {tracks.map((track, i) => (
+          <li
+            /* Position is not unique: a held track the release does not list
+               comes back as 0, and there can be several. Index is stable here
+               because the list is replaced wholesale, never reordered. */
+            key={`${i}\u0000${track.title}`}
+            className={"tracklist__row" + (track.href ? "" : " tracklist__row--absent")}
+          >
+            <span className="tracklist__no">{track.position || "—"}</span>
+            {track.href ? (
+              <button
+                type="button"
+                className="tracklist__title"
+                onClick={() => void play(track.href)}
+              >
+                {track.title}
+              </button>
+            ) : (
+              /* Not a disabled button. There is no action here to disable —
+                 the track is not in the library — and a disabled control
+                 invites a person to work out what would enable it. A plain
+                 span with the reason attached says the true thing. */
+              <span className="tracklist__title tracklist__title--absent">
+                {track.title}
+                {/* Said in text, not conveyed by the grey alone. Colour is not
+                    available to everyone, and "not in your library" is the
+                    entire reason this row cannot be pressed. The class hides it
+                    from sight without hiding it from assistive tech —
+                    `display: none` would take it out of the accessibility tree
+                    too, which is the opposite of the point. */}
+                <span className="tracklist__absent-note"> — not in your library</span>
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function EntityCard({
   entity,
   kind,

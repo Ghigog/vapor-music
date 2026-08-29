@@ -23,6 +23,103 @@ import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Loading } from "../components/States";
 
+/**
+ * Correct one field of a track by hand.
+ *
+ * Everything the app knows about a track's identity is derived — from the path,
+ * from the file's tags, from what a service said — and each of those is wrong
+ * somewhere in every real library. Deezer files this owner's entire drum & bass
+ * collection under "Dance"; a compilation track carries the album it was first
+ * released on; a folder is misnamed. There has to be a last word, and it has to
+ * belong to the person who can actually hear the record.
+ *
+ * Committed on blur or Enter, not per keystroke — each commit is a settings
+ * write and a library re-read, and doing that on every letter would rebuild the
+ * index eleven times for "drum and bass". Escape abandons the edit.
+ */
+function Correction({
+  label,
+  field,
+  href,
+  value,
+  manual,
+  onSaved,
+}: {
+  label: string;
+  field: "genre" | "album" | "artist";
+  href: string;
+  value: string;
+  /** True when the current value is one the owner typed, not one we derived. */
+  manual: boolean;
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string | null>(null);
+
+  // The row underneath can change while this is open — a lookup lands, another
+  // screen corrects the same track — and the box should follow it unless it is
+  // being typed in. Keying on the committed value rather than tracking focus:
+  // a fresh `value` means something outside settled it.
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  async function commit(next: string) {
+    if (next.trim() === value.trim()) return;
+    try {
+      await core.setTrackOverride(href, field, next);
+      setError(null);
+      onSaved();
+    } catch (e: unknown) {
+      // Put the box back to the truth rather than leaving a value on screen
+      // that was not stored — a correction that looks saved and is not is
+      // worse than one that visibly failed.
+      setDraft(value);
+      setError(messageOf(e));
+    }
+  }
+
+  return (
+    <label className="liner__fix">
+      <span className="liner__fix-label label">
+        {label}
+        {manual && (
+          <span className="liner__fix-badge" title="You set this by hand">
+            yours
+          </span>
+        )}
+      </span>
+      <input
+        className="liner__fix-input"
+        type="text"
+        value={draft}
+        placeholder="—"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void commit(draft)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setDraft(value);
+          }
+        }}
+      />
+      {manual && (
+        <button
+          type="button"
+          className="liner__fix-reset"
+          onClick={() => void commit("")}
+        >
+          Use what was found
+        </button>
+      )}
+      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+    </label>
+  );
+}
+
 export function LinerNotes({
   href,
   onBack,
@@ -35,10 +132,22 @@ export function LinerNotes({
   const [looked, setLooked] = useState<core.LookedUp | null>(null);
   const [looking, setLooking] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
+  /**
+   * Bumped when a correction is stored, to re-read the sheet.
+   *
+   * A correction changes what the *derived* fields resolve to, not just the one
+   * that was typed: setting an artist can change the genre, because the genre
+   * falls back to the artist's tag cloud. So the answer is re-read rather than
+   * patched in place — the backend owns that resolution and this screen must
+   * not keep a second copy of the rules.
+   */
+  const [saved, setSaved] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setTrack(null);
+    // Not `setTrack(null)` on a re-read: blanking the sheet to a spinner every
+    // time a field is committed would make the screen flash on each edit. The
+    // first load still spins, because `track` starts null.
     setError(null);
     core
       .trackDetails(href)
@@ -51,7 +160,7 @@ export function LinerNotes({
     return () => {
       cancelled = true;
     };
-  }, [href]);
+  }, [href, saved]);
 
   // Read-only, and separate from the fetch: opening this screen must never be
   // the thing that sends a request.
@@ -167,6 +276,37 @@ export function LinerNotes({
               .filter(Boolean)
               .join(" · ")}
           </p>
+          {/* What the app thinks this is, and the chance to say otherwise.
+              Under the names rather than in a settings screen somewhere: the
+              moment a person notices a genre is wrong is the moment they are
+              looking at it. */}
+          <div className="liner__fixes">
+            <Correction
+              label="Artist"
+              field="artist"
+              href={href}
+              value={track.artist}
+              manual={track.artistIsManual}
+              onSaved={() => setSaved((n) => n + 1)}
+            />
+            <Correction
+              label="Album"
+              field="album"
+              href={href}
+              value={track.album}
+              manual={track.albumIsManual}
+              onSaved={() => setSaved((n) => n + 1)}
+            />
+            <Correction
+              label="Genre"
+              field="genre"
+              href={href}
+              value={track.genre}
+              manual={track.genreIsManual}
+              onSaved={() => setSaved((n) => n + 1)}
+            />
+          </div>
+
           <p className="liner__where">
             <span
               className={

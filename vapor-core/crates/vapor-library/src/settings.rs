@@ -212,6 +212,21 @@ pub struct Settings {
     #[serde(alias = "bpm_overrides")]
     pub bpm_overrides: std::collections::HashMap<String, f32>,
 
+    /// Corrections a person typed, keyed by href.
+    ///
+    /// The last word on what a track is. Everything else the app knows about a
+    /// track's identity is derived — from the path, from the file's tags, from
+    /// what a public service said — and every one of those can be wrong in a way
+    /// only the owner can see. Deezer files an entire library's drum & bass
+    /// under "Dance"; a compilation track carries the album it was originally
+    /// released on; a folder is misnamed. This is how that gets fixed, and it is
+    /// consulted before all three.
+    ///
+    /// Same shape and same reasoning as [`Self::bpm_overrides`], which exists
+    /// because tempo detection is ~81% right and the residual needed a human.
+    #[serde(default)]
+    pub track_overrides: std::collections::HashMap<String, TrackOverride>,
+
     /// Album artwork chosen by hand, keyed by [`album_key`].
     ///
     /// The value is the URL the picture was found at; the bytes live in the
@@ -365,6 +380,7 @@ impl Default for Settings {
             headphone_profile: String::new(),
             headphone_calibration_enabled: false,
             bpm_overrides: std::collections::HashMap::new(),
+            track_overrides: std::collections::HashMap::new(),
             hide_duplicates: false,
             album_art: std::collections::HashMap::new(),
             prefer_looked_up_art: false,
@@ -413,6 +429,38 @@ const KEY_SEP: char = '\u{1f}';
 ///
 /// Derived from the href rather than stored, so it survives a rescan: an href
 /// is what the server calls the file and does not change when tags do.
+/// What a person corrected by hand about one track.
+///
+/// Every field optional and independent: fixing a genre must not require
+/// restating the album, and a blank field means "no opinion, use what was
+/// derived" rather than "make it empty". Storing them together rather than as
+/// three maps keeps one entry per corrected track, so clearing a track's
+/// corrections is one removal and cannot half-succeed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TrackOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+}
+
+impl TrackOverride {
+    /// True when it corrects nothing, and so should not be stored at all.
+    pub fn is_empty(&self) -> bool {
+        self.genre.is_none() && self.album.is_none() && self.artist.is_none()
+    }
+}
+
+/// Longest correction accepted for any one field.
+///
+/// Not a guess about music: a guard on a value that is written to a config file
+/// and drawn in a fixed-width table cell. A pasted paragraph would be neither.
+const MAX_OVERRIDE_LEN: usize = 200;
+
 pub fn album_key(album: &str, href: &str) -> String {
     let folder = href.rsplit_once('/').map(|(f, _)| f).unwrap_or("");
     format!("{folder}{KEY_SEP}{}", album.trim())
@@ -443,6 +491,42 @@ impl Settings {
             return false;
         }
         self.bpm_overrides.insert(href.to_string(), bpm);
+        true
+    }
+
+    /// The corrections held for a track, if any.
+    pub fn track_override(&self, href: &str) -> Option<&TrackOverride> {
+        self.track_overrides.get(href)
+    }
+
+    /// Correct one field of one track. An empty value clears that field.
+    ///
+    /// `field` is `"genre"`, `"album"` or `"artist"`; anything else is refused
+    /// rather than silently ignored, so a typo in a caller shows up as a failed
+    /// command instead of a correction that never applies.
+    ///
+    /// Clearing is spelled as an empty string because that is what a person
+    /// does in the text box — emptying the field and committing it means "go
+    /// back to what you worked out", not "this track has no genre". An entry
+    /// left correcting nothing is removed outright, so a library that has been
+    /// corrected and un-corrected does not accumulate empty records.
+    pub fn set_track_override(&mut self, href: &str, field: &str, value: &str) -> bool {
+        let value = value.trim();
+        if value.chars().count() > MAX_OVERRIDE_LEN {
+            return false;
+        }
+        let set = (!value.is_empty()).then(|| value.to_string());
+
+        let entry = self.track_overrides.entry(href.to_string()).or_default();
+        match field {
+            "genre" => entry.genre = set,
+            "album" => entry.album = set,
+            "artist" => entry.artist = set,
+            _ => return false,
+        }
+        if entry.is_empty() {
+            self.track_overrides.remove(href);
+        }
         true
     }
 

@@ -89,6 +89,16 @@ const LRCLIB_GAP: Duration = Duration::from_millis(300);
 /// worth of files, so it is paced the same way.
 const ARTWORK_GAP: Duration = Duration::from_millis(200);
 
+/// MusicBrainz asks for **one request per second, and means it** — their docs
+/// say a client exceeding it will be blocked, and unlike a rate limit that
+/// answers 429 they enforce it at the edge. So this is a full second with a
+/// little headroom, not the 200ms the commercial APIs tolerate.
+///
+/// A full pass over this library is 92 artists, not 563 tracks: the genre being
+/// asked for is a property of the artist, so it is asked once per artist and
+/// cached. That is about a minute and a half, once, rather than nine minutes.
+const MUSICBRAINZ_GAP: Duration = Duration::from_millis(1100);
+
 /// How many times one request is sent before it is given up on.
 ///
 /// Four attempts with a doubling wait spends at most 3.5 s of backoff, which
@@ -360,6 +370,47 @@ pub fn track_facts_of(body: &str) -> Option<TrackFacts> {
         bpm: value.get("bpm").and_then(|b| b.as_f64()).unwrap_or(0.0) as f32,
         duration: value.get("duration").and_then(|d| d.as_u64()).unwrap_or(0) as u32,
     })
+}
+
+/// The tag cloud MusicBrainz holds for an artist, as `(name, count)`.
+///
+/// Returns everything, genre or not — `"seen live"` and `"female singer"` come
+/// back alongside `"drum and bass"`, and deciding which is which is
+/// [`vapor_library::pick_genre_tag`]'s job, not this one's. A parser that
+/// filtered would be a parser with an opinion, and the opinion belongs in the
+/// crate that owns the taxonomy.
+pub fn artist_tags_of(body: &str) -> Vec<(String, u32)> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    // `/ws/2/artist?query=` answers `{"artists":[...]}`; a direct
+    // `/ws/2/artist/{mbid}` answers the artist object itself. Accept both, so
+    // this keeps working if the caller ever holds an id.
+    let artist = value
+        .get("artists")
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.first())
+        .unwrap_or(&value);
+
+    artist
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|tags| {
+            tags.iter()
+                .filter_map(|t| {
+                    let name = t.get("name")?.as_str()?.trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    // A negative count is a tag the community voted *down*.
+                    // `as_i64` then clamp, rather than `as_u64` which would
+                    // read -3 as absent and let a rejected tag through at 0.
+                    let count = t.get("count").and_then(|c| c.as_i64()).unwrap_or(0);
+                    Some((name.to_string(), count.max(0) as u32))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The first hit of a track search, with the release it sits on.
@@ -727,6 +778,7 @@ fn image_mime(bytes: &[u8]) -> &'static str {
 enum Service {
     Deezer,
     Lrclib,
+    MusicBrainz,
     Artwork,
 }
 
@@ -745,6 +797,7 @@ impl Service {
         match host {
             "api.deezer.com" => Some(Service::Deezer),
             "lrclib.net" => Some(Service::Lrclib),
+            "musicbrainz.org" => Some(Service::MusicBrainz),
             // Every artwork host seen in a response so far, and the fallback
             // for anything else: an unrecognised host is paced, not exempt.
             _ => Some(Service::Artwork),
@@ -755,6 +808,7 @@ impl Service {
         match self {
             Service::Deezer => DEEZER_GAP,
             Service::Lrclib => LRCLIB_GAP,
+            Service::MusicBrainz => MUSICBRAINZ_GAP,
             Service::Artwork => ARTWORK_GAP,
         }
     }
@@ -771,6 +825,7 @@ impl Service {
 struct Pace {
     deezer: Mutex<Option<Instant>>,
     lrclib: Mutex<Option<Instant>>,
+    musicbrainz: Mutex<Option<Instant>>,
     artwork: Mutex<Option<Instant>>,
 }
 
@@ -779,6 +834,7 @@ impl Pace {
         match service {
             Service::Deezer => &self.deezer,
             Service::Lrclib => &self.lrclib,
+            Service::MusicBrainz => &self.musicbrainz,
             Service::Artwork => &self.artwork,
         }
     }
@@ -1019,6 +1075,46 @@ impl Lookup {
         let url = format!("https://api.deezer.com/search/track?q={}", encode(&query));
         let id = track_id_of(&self.get(&url)?)?;
         track_facts_of(&self.get(&format!("https://api.deezer.com/track/{id}"))?)
+    }
+
+    /// The genre MusicBrainz's taggers agree an artist plays.
+    ///
+    /// The reason this exists at all: Deezer's entire vocabulary for this
+    /// library is ten words, three of which arrive in Spanish, and every drum &
+    /// bass act in it comes back "Dance" — measured over 534 looked-up tracks.
+    /// MusicBrainz answers the same artists with "drum and bass", "neurofunk"
+    /// and "modern classical", which are names the taxonomy in `vapor_library`
+    /// already knows how to measure distance between, so the DJ gets sharper
+    /// input out of the same change.
+    ///
+    /// Per artist, not per track. A genre is a property of who made it far more
+    /// than of the individual recording, MusicBrainz's per-artist tags are much
+    /// better populated than its per-recording ones, and asking once per artist
+    /// turns a nine-minute pass into a ninety-second one at their one-per-second
+    /// limit.
+    ///
+    /// Empty when nothing recognisable came back — the caller then keeps
+    /// whatever coarser genre it already had, which is the safe way to fail.
+    pub fn artist_genre(&self, artist: &str) -> String {
+        if !is_searchable(artist) {
+            return String::new();
+        }
+        // `inc=tags` is not available on the search endpoint; the search
+        // response carries tags already, so one request does it.
+        let url = format!(
+            "https://musicbrainz.org/ws/2/artist?query={}&fmt=json&limit=1",
+            encode(&format!("artist:\"{artist}\""))
+        );
+        let Some(body) = self.get(&url) else {
+            return String::new();
+        };
+        let tags = artist_tags_of(&body);
+        // Borrowed pairs, because `pick_genre_tag` hands back one of the names
+        // it was given and the caller wants it owned.
+        let borrowed: Vec<(&str, u32)> = tags.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        vapor_library::pick_genre_tag(&borrowed)
+            .map(str::to_string)
+            .unwrap_or_default()
     }
 
     /// The release a loose track came off, found from the track alone.
@@ -1772,6 +1868,19 @@ mod tests {
             "the tracklist did not arrive in full"
         );
         assert_eq!(facts.record_type, "album");
+
+        // MusicBrainz, the second genre source and the reason it exists: Deezer
+        // answers "Dance" for every drum & bass act in this library, and its
+        // whole vocabulary here is ten words. If this ever comes back empty for
+        // an artist this heavily tagged, the tag shape changed and the granular
+        // genre has quietly stopped arriving — which would look, from the
+        // Genres tab, exactly like nothing being wrong.
+        let genre = lookup.artist_genre("Daft Punk");
+        println!("musicbrainz genre: {genre:?}");
+        assert!(
+            !genre.is_empty(),
+            "MusicBrainz named no recognisable genre for Daft Punk"
+        );
     }
 
     /// LRCLIB's field names and its timestamp precision, from a real body.

@@ -54,6 +54,7 @@ import type { DeviceKind } from "./generated/DeviceKind";
 import type { Exit } from "./generated/Exit";
 import type { Facet } from "./generated/Facet";
 import type { HomeShelves } from "./generated/HomeShelves";
+import type { AlbumTrack } from "./generated/AlbumTrack";
 import type { LibraryEntity } from "./generated/LibraryEntity";
 import type { LibraryPage } from "./generated/LibraryPage";
 import type { LibrarySection } from "./generated/LibrarySection";
@@ -114,6 +115,7 @@ export type {
   Exit,
   Facet,
   HomeShelves,
+  AlbumTrack,
   LibraryEntity,
   LibraryPage,
   LibrarySection,
@@ -259,6 +261,36 @@ export function libraryEntities(
   view: LibraryView = {},
 ): Promise<LibraryEntity[]> {
   return invoke<LibraryEntity[]>("library_entities", { view });
+}
+
+/**
+ * Correct what the app thinks a track is.
+ *
+ * `field` is "genre", "album" or "artist"; an empty `value` clears the
+ * correction and hands the field back to whatever the app derives from the
+ * path, the file's tags and the services. The correction outranks all three.
+ */
+export function setTrackOverride(
+  href: string,
+  field: "genre" | "album" | "artist",
+  value: string,
+): Promise<void> {
+  return invoke<void>("set_track_override", { href, field, value });
+}
+
+/**
+ * Every track on an opened album, including the ones not in the library.
+ *
+ * An empty array means the album was never matched to a release — the ordinary
+ * state before the identify pass has run — and the caller should fall back to
+ * the plain table of what it holds. `lead` disambiguates: two records can share
+ * a title, and the backend keys an album on its title *plus* its folder.
+ */
+export function albumTracklist(
+  album: string,
+  lead: string,
+): Promise<AlbumTrack[]> {
+  return invoke<AlbumTrack[]>("album_tracklist", { album, lead });
 }
 
 /**

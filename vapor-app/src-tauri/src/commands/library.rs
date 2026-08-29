@@ -166,6 +166,121 @@ pub fn library_entities(view: LibraryView, state: State<'_, Shared>) -> Result<V
     Ok(library_entities_for(&app, &view))
 }
 
+/// One line of an opened album: what the release has, and whether we hold it.
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AlbumTrack {
+    /// Position on the release, counting from 1.
+    ///
+    /// From the order the service listed them in — the embedded tracklist
+    /// carries no position field of its own, so array order is the only thing
+    /// there is to go on. Zero for a track the library holds that the release
+    /// does not list.
+    pub position: u32,
+    pub title: String,
+    /// The file, or empty when this track is missing from the library.
+    ///
+    /// Empty is the whole point of this command: a row that cannot be played
+    /// because it is not here, drawn so a person can see the shape of what
+    /// they are missing rather than a short list that looks complete.
+    pub href: String,
+}
+
+/// The full tracklist of an opened album, held and missing alike.
+///
+/// Returns nothing at all when the album was never matched to a release. That
+/// is the ordinary state of an un-identified library, and an empty answer is
+/// the signal for the screen to fall back to the plain table of what is there —
+/// far better than inventing a tracklist out of the files to hand, which is
+/// exactly the list that cannot show a gap.
+#[tauri::command]
+pub fn album_tracklist(
+    album: String,
+    lead: String,
+    state: State<'_, Shared>,
+) -> Result<Vec<AlbumTrack>> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(album_tracklist_for(&app, &album, &lead))
+}
+
+/// The body of [`album_tracklist`], reachable from a test.
+///
+/// A `#[tauri::command]` takes `State`, which cannot be built outside a running
+/// app, so logic left in a command body is logic no test can see — which is how
+/// the Genres tab once shipped grouping by album.
+pub(crate) fn album_tracklist_for(app: &AppState, album: &str, lead: &str) -> Vec<AlbumTrack> {
+    // The same members the album's tile was built from, keyed the same way —
+    // title *plus folder*, so two records sharing a name stay apart.
+    // Spelled out rather than `..Default::default()`: `ascending` defaults to
+    // *true* when deserialised and would be false from a derived `Default`, so
+    // a struct-update here would quietly disagree with every other caller.
+    let view = LibraryView {
+        query: String::new(),
+        sort_key: None,
+        ascending: true,
+        group_by: None,
+        genre: None,
+        album: Some(album.to_string()),
+        artist: None,
+    };
+    let rows = resolved_rows(app, &view);
+    let want = vapor_library::settings::album_key(album, lead);
+    let members: Vec<&Row> = rows
+        .iter()
+        .filter(|r| vapor_library::settings::album_key(&r.album, &r.href) == want)
+        .collect();
+
+    let Some(facts) = release_of(app, &members) else {
+        return Vec::new();
+    };
+
+    let mut used = vec![false; members.len()];
+    let mut out: Vec<AlbumTrack> = facts
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(i, title)| {
+            // First unused member whose title matches. "First unused" matters:
+            // a release that lists the same title twice — a reprise, an intro
+            // and its outro — would otherwise point both lines at one file and
+            // report the second as missing.
+            let found = members
+                .iter()
+                .enumerate()
+                .position(|(n, r)| !used[n] && vapor_library::same_title(&r.title, title));
+            let href = match found {
+                Some(n) => {
+                    used[n] = true;
+                    members[n].href.clone()
+                }
+                None => String::new(),
+            };
+            AlbumTrack {
+                position: i as u32 + 1,
+                title: title.clone(),
+                href,
+            }
+        })
+        .collect();
+
+    // Anything held that the release does not list, kept rather than hidden.
+    // A bonus track, a different edition, or simply a title the comparison
+    // could not match — all three are files that exist, and dropping them
+    // would make the opened album unable to play music that is right there.
+    for (n, row) in members.iter().enumerate() {
+        if !used[n] {
+            out.push(AlbumTrack {
+                position: 0,
+                title: row.title.clone(),
+                href: row.href.clone(),
+            });
+        }
+    }
+
+    out
+}
+
 #[tauri::command]
 pub fn duplicate_count(state: State<'_, Shared>) -> Result<usize> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
@@ -181,6 +296,14 @@ pub fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDeta
         .iter()
         .find(|r| r.href == href)
         .ok_or_else(|| Error("That track is not in the library.".to_string()))?;
+    // Resolved, not raw. This read the index row directly, so it showed the
+    // path's idea of a track — none of the file's tags, none of the looked-up
+    // album, and none of the owner's own corrections. The details sheet is the
+    // one screen whose whole job is to say what the app thinks a track is.
+    let mut row = row.clone();
+    app.apply_metadata(&mut row);
+    let row = &row;
+    let fixed = app.settings.track_override(&href);
     let analysis = app.analysis.get(&href);
     let manual = app.settings.bpm_override(&href);
     // What the rest of the app is using for this track. `bpm_is_manual` stays
@@ -203,7 +326,9 @@ pub fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDeta
             row.album.clone()
         },
         year: row.year,
-        genre: row.genre.clone(),
+        // Through the same chain the rest of the app reads, so the sheet cannot
+        // disagree with the Genres tab about what a track is.
+        genre: genre_for_row(&app, row),
         analysed: analysis.is_some(),
         bpm: in_force.or_else(|| analysis.map(|a| a.bpm)).unwrap_or(0.0),
         bpm_is_manual: manual.is_some(),
@@ -221,7 +346,37 @@ pub fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDeta
         cover: app.covers.get(&href),
         notes: app.tags.get(&href).and_then(|t| t.comment.clone()),
         tagged: app.tags.contains_key(&href),
+        genre_is_manual: fixed.is_some_and(|o| o.genre.is_some()),
+        artist_is_manual: fixed.is_some_and(|o| o.artist.is_some()),
+        album_is_manual: fixed.is_some_and(|o| o.album.is_some()),
     })
+}
+
+/// Correct what the app thinks a track is.
+///
+/// `field` is `"genre"`, `"album"` or `"artist"`; an empty `value` clears that
+/// correction and hands the field back to whatever the app derives. Refused
+/// rather than ignored for an unknown field, so a caller's typo surfaces as a
+/// failed command instead of an edit that silently never applies.
+///
+/// The library is re-read afterwards by the screen, not here: this writes one
+/// setting, and the rows every view is built from are derived on demand.
+#[tauri::command]
+pub fn set_track_override(
+    href: String,
+    field: String,
+    value: String,
+    state: State<'_, Shared>,
+) -> Result<()> {
+    let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
+    if !app.settings.set_track_override(&href, &field, &value) {
+        return Err(Error(format!(
+            "Could not set {field}: it must be one of genre, album or artist, \
+             and at most 200 characters."
+        )));
+    }
+    app.save_settings()?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -245,7 +400,7 @@ pub fn search(query: String, state: State<'_, Shared>) -> Result<SearchResults> 
         .into_iter()
         .cloned()
         .map(|mut row| {
-            app.apply_tags(&mut row);
+            app.apply_metadata(&mut row);
             app.apply_analysis(&mut row);
             row
         })
@@ -728,5 +883,150 @@ mod tests {
         );
 
         assert!(after * 20 < before, "the point of the exercise");
+    }
+
+    /// An opened album shows the whole record, not just the files to hand.
+    ///
+    /// The thing a short list cannot do is show a gap. Holding 2 of 14 and
+    /// drawing two rows looks like a complete album with two tracks on it; the
+    /// point of this is that the other twelve are visible and greyed.
+    #[test]
+    fn an_opened_album_lists_the_tracks_it_is_missing() {
+        let (mut app, dir) = app();
+        app.albums.insert(
+            302127,
+            metadata::AlbumFacts {
+                id: 302127,
+                title: "Discovery".to_string(),
+                artist: "Daft Punk".to_string(),
+                record_type: "album".to_string(),
+                nb_tracks: 4,
+                tracks: vec![
+                    "One More Time".to_string(),
+                    "Aerodynamic".to_string(),
+                    "Digital Love".to_string(),
+                    "Harder, Better, Faster, Stronger".to_string(),
+                ],
+            },
+        );
+
+        // Two of the four, and each written the way a filename writes it —
+        // one with a bracketed aside, one with the commas dropped.
+        for (href, title) in [
+            ("/Music/Daft Punk/Discovery/01.mp3", "One More Time"),
+            (
+                "/Music/Daft Punk/Discovery/04.mp3",
+                "Harder Better Faster Stronger (Remaster)",
+            ),
+        ] {
+            let mut r = Row {
+                href: href.to_string(),
+                title: title.to_string(),
+                album: "Discovery".to_string(),
+                album_source: vapor_library::index::Source::Folder,
+                ..Default::default()
+            };
+            r.artist = "Daft Punk".to_string();
+            r.artist_source = vapor_library::index::Source::Folder;
+            app.rows.push(r);
+            app.looked
+                .entry(href.to_string())
+                .or_default()
+                .deezer_album_id = 302127;
+        }
+
+        let got = album_tracklist_for(&app, "Discovery", "/Music/Daft Punk/Discovery/01.mp3");
+
+        assert_eq!(got.len(), 4, "the whole record, not just what is held");
+        let titles: Vec<&str> = got.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec![
+                "One More Time",
+                "Aerodynamic",
+                "Digital Love",
+                "Harder, Better, Faster, Stronger"
+            ],
+            "album order, from the order the service listed them in"
+        );
+
+        // Held: matched despite the punctuation and the bracketed aside.
+        assert_eq!(got[0].href, "/Music/Daft Punk/Discovery/01.mp3");
+        assert_eq!(got[3].href, "/Music/Daft Punk/Discovery/04.mp3");
+        // Missing: an empty href is what the screen greys out.
+        assert!(got[1].href.is_empty(), "Aerodynamic is not in the library");
+        assert!(got[2].href.is_empty(), "Digital Love is not in the library");
+        assert_eq!(got[0].position, 1);
+        assert_eq!(got[3].position, 4);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A release that lists one title twice does not point both lines at one
+    /// file. An intro and its reprise are two tracks; matching greedily would
+    /// claim the second was missing while showing the first twice.
+    #[test]
+    fn a_repeated_title_consumes_two_files_not_one() {
+        let (mut app, dir) = app();
+        app.albums.insert(
+            5,
+            metadata::AlbumFacts {
+                id: 5,
+                title: "Doubled".to_string(),
+                artist: "An Artist".to_string(),
+                record_type: "album".to_string(),
+                nb_tracks: 2,
+                tracks: vec!["Theme".to_string(), "Theme".to_string()],
+            },
+        );
+        for href in ["/Music/A/Doubled/01.mp3", "/Music/A/Doubled/02.mp3"] {
+            let mut r = Row {
+                href: href.to_string(),
+                title: "Theme".to_string(),
+                album: "Doubled".to_string(),
+                album_source: vapor_library::index::Source::Folder,
+                ..Default::default()
+            };
+            r.artist = "An Artist".to_string();
+            r.artist_source = vapor_library::index::Source::Folder;
+            app.rows.push(r);
+            app.looked
+                .entry(href.to_string())
+                .or_default()
+                .deezer_album_id = 5;
+        }
+
+        let got = album_tracklist_for(&app, "Doubled", "/Music/A/Doubled/01.mp3");
+        assert_eq!(got.len(), 2);
+        assert!(!got[0].href.is_empty());
+        assert!(
+            !got[1].href.is_empty(),
+            "the second Theme was reported missing while the first was used twice"
+        );
+        assert_ne!(got[0].href, got[1].href, "one file filled both lines");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An un-identified album returns nothing, so the screen can fall back to
+    /// the plain table rather than draw a tracklist invented from the files —
+    /// which is exactly the list that cannot show a gap.
+    #[test]
+    fn an_album_that_was_never_looked_up_yields_no_tracklist() {
+        let (mut app, dir) = app();
+        let mut r = Row {
+            href: "/Music/A/B/01.mp3".to_string(),
+            title: "A Track".to_string(),
+            album: "B".to_string(),
+            album_source: vapor_library::index::Source::Folder,
+            ..Default::default()
+        };
+        r.artist = "A".to_string();
+        r.artist_source = vapor_library::index::Source::Folder;
+        app.rows.push(r);
+
+        assert!(album_tracklist_for(&app, "B", "/Music/A/B/01.mp3").is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
