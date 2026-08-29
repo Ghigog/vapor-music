@@ -535,9 +535,12 @@ pub fn album_id_of(body: &str) -> Option<u64> {
 /// to AUD-24 needs a source with a deeper taxonomy, which is AUD-18's decision
 /// and not made here.
 ///
-/// Joined rather than returned as a `Vec` because `Row::genre` is one `String`
-/// end to end — index, filter, sort, group, the genre tiles and the smart
-/// group rules all key on it. Widening that type is its own change.
+/// Joined rather than returned as a `Vec` because this is a *parser* and the
+/// document it reads names its genres in one place. `Row` holds a list since
+/// 2026-08-29 and `vapor_library::split_genres` is what turns one into the
+/// other — at the boundary, once, rather than in every parser that produces a
+/// genre. The paragraph that used to be here said widening `Row` was its own
+/// change; it was, and it has been done.
 pub fn genre_of(body: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return String::new();

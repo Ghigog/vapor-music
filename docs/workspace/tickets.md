@@ -3643,7 +3643,7 @@ Deezer **album** response. Two problems in one line:
   to Electronic because that is the only shelf Deezer has.
 
 `Row::genre` is also a single `String`, so even a richer source has nowhere to
-put a second genre today.
+put a second genre today. **Fixed 2026-08-29** — see the close below.
 
 **Stated preference: more granular and more specific, not less.**
 
@@ -3668,9 +3668,11 @@ file first, then a service); and the Genres tab groups on the list rather than
 on one string. `Source` already distinguishes file, folder, service and
 unknown, so provenance has somewhere to go.
 
-**Waiting for:** A decision on the source, and on whether one track may appear
-under several genres — which is the thing that makes granularity useful and is
-a real change to how the tab reads.
+**Both open questions are answered.** The source is Last.fm and MusicBrainz
+beside Deezer (AUD-18, decided 2026-08-29). And **yes, one track may appear
+under several genres**: `Row::genres` is a list, a row contributes one tile per
+genre it names, and opening a tile or a smart group matches by membership rather
+than by equality against a joined label.
 
 **Closed:** Every genre the Deezer **album** response names is kept and read a
 segment at a time, rather than `genres.data[0]`, and `genre.rs` gained

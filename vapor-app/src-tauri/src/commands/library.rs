@@ -203,7 +203,7 @@ pub fn track_details(href: String, state: State<'_, Shared>) -> Result<TrackDeta
             row.album.clone()
         },
         year: row.year,
-        genre: row.genre.clone(),
+        genre: row.genre_label(),
         analysed: analysis.is_some(),
         bpm: in_force.or_else(|| analysis.map(|a| a.bpm)).unwrap_or(0.0),
         bpm_is_manual: manual.is_some(),
@@ -470,7 +470,7 @@ mod tests {
                     album,
                     artist_source: vapor_library::index::Source::File,
                     album_source: vapor_library::index::Source::Folder,
-                    genre: GENRES[i % GENRES.len()].to_string(),
+                    genres: vec![GENRES[i % GENRES.len()].to_string()],
                     bpm: 60.0 + (i % 120) as f32,
                     key: KEYS[i % KEYS.len()].to_string(),
                     year: 1998 + (i % 28) as u32,

@@ -261,7 +261,7 @@ fn row(href: &str, title: &str, artist: &str, album: &str) -> Row {
         album: album.to_string(),
         artist_source: vapor_library::index::Source::File,
         album_source: vapor_library::index::Source::File,
-        genre: "Ambient".to_string(),
+        genres: vec!["Ambient".to_string()],
         bpm: 0.0,
         key: String::new(),
         year: 2015,
@@ -300,7 +300,7 @@ fn assert_row_keys(row: &serde_json::Value) {
         "album",
         "artistSource",
         "albumSource",
-        "genre",
+        "genres",
         "bpm",
         "key",
         "year",
@@ -311,6 +311,20 @@ fn assert_row_keys(row: &serde_json::Value) {
     assert!(
         row.get("artist_source").is_none() && row.get("manual_pos").is_none(),
         "snake_case leaked onto the wire: {row}"
+    );
+    // `genres` is a list on the wire, not the joined string it was until
+    // 2026-08-29. The frontend reads this key directly, so the shape is the
+    // contract and not an implementation detail — a regression to a string
+    // would typecheck on the Rust side and break every genre tile.
+    assert!(
+        row.get("genres").is_some_and(|g| g.is_array()),
+        "genres must reach the frontend as an array: {row}"
+    );
+    // The old key is gone rather than kept beside it. Two spellings of one
+    // field is how a frontend ends up reading whichever it saw first.
+    assert!(
+        row.get("genre").is_none(),
+        "the pre-list `genre` key is still on the wire: {row}"
     );
 }
 

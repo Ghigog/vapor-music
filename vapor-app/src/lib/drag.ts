@@ -277,7 +277,14 @@ async function tracksFor(payload: DragPayload): Promise<string[]> {
   const rows = sections.flatMap((s) => s.rows);
   // A genre has no exact filter, so it is matched here rather than trusting a
   // text search that would also return a track whose title contains the word.
+  // Membership, not equality: a row carries every genre it is filed under, so
+  // dragging the Jazz tile has to reach a track that is Liquid Funk *and* Jazz.
+  // Case-insensitively, because the three sources that fill this field disagree
+  // about casing — Deezer title-cases, Last.fm lower-cases, a file tag is
+  // whatever somebody typed.
   const matching =
-    payload.kind === "genre" ? rows.filter((r) => r.genre === name) : rows;
+    payload.kind === "genre"
+      ? rows.filter((r) => r.genres.some((g) => g.toLowerCase() === name.toLowerCase()))
+      : rows;
   return matching.map((r) => r.href);
 }

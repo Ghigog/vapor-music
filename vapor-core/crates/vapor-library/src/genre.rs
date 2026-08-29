@@ -145,6 +145,26 @@ fn normalise(genre: &str) -> String {
         .join(" ")
 }
 
+/// Split a genre field into the genres it names.
+///
+/// One place, because three parts of this crate were already splitting the same
+/// field with their own separator lists and a fourth was about to. `tempo_band`
+/// has read `/`-separated genres a segment at a time since AUD-24, the index
+/// now stores a list, and the two have to agree on what a separator is or a
+/// track gains a genre on one screen and loses it on another.
+///
+/// Empty segments are dropped and whitespace is trimmed, so `"Electronic / "`
+/// is one genre and `""` is none. Order is kept: the first genre named is the
+/// one a caller that can only show one should show.
+pub fn split_genres(field: &str) -> Vec<String> {
+    field
+        .split(['/', ',', ';', '|'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The tempo band a genre is played at, if this crate knows one.
 ///
 /// Matched on the most specific name first, then on any parent in the taxonomy,
@@ -158,7 +178,7 @@ fn normalise(genre: &str) -> String {
 /// interesting ones; and because the segments of a real tag are near enough
 /// always the same music described at two levels of detail.
 pub fn tempo_band(genre: &str) -> Option<(f32, f32)> {
-    genre.split(['/', ',', ';', '|']).find_map(band_of_one)
+    split_genres(genre).iter().find_map(|g| band_of_one(g))
 }
 
 /// [`tempo_band`] for a name already known to hold a single genre.

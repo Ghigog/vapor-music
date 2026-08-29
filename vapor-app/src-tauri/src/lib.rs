@@ -623,9 +623,11 @@ impl AppState {
                 row.album_source = vapor_library::index::Source::File;
             }
         }
-        if row.genre.is_empty() {
+        if row.genres.is_empty() {
             if let Some(genre) = &tags.genre {
-                row.genre = genre.clone();
+                // A file's own tag is one text field and taggers put several
+                // genres in it, so it is split rather than stored whole.
+                row.genres = vapor_library::split_genres(genre);
             }
         }
         if row.year == 0 {
@@ -1282,10 +1284,19 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
         rows.retain(|r| r.artist == artist && r.artist_source.is_known());
     }
     if let Some(genre) = view.genre.as_deref() {
-        // Exact, like the other two: a genre tile means that genre, not every
-        // genre whose name contains it — "House" would otherwise drag in
-        // "Deep House" and "Progressive House".
-        rows.retain(|r| genre_of(app, &r.href) == genre);
+        // Exact *per genre*, like the other two: a genre tile means that genre,
+        // not every genre whose name contains it — "House" would otherwise drag
+        // in "Deep House" and "Progressive House". What is no longer exact is
+        // the whole field, because the field is now a list: opening Jazz has to
+        // reach a track filed under Liquid Funk *and* Jazz, which an equality
+        // against the joined label misses. Case-insensitive because the three
+        // sources that fill this field disagree about casing.
+        let wanted = genre.trim();
+        rows.retain(|r| {
+            vapor_library::split_genres(&genre_of(app, &r.href))
+                .iter()
+                .any(|g| g.eq_ignore_ascii_case(wanted))
+        });
     }
     // Last, so the count a person sees is of what they asked for. A view, not a
     // deletion: the files are untouched and still there to tidy by hand.
@@ -1368,37 +1379,45 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
         std::collections::HashMap::new();
 
     for row in &rows {
-        let (name, known) = match by {
-            By::Artist => (row.artist.clone(), row.artist_source.is_known()),
-            By::Album => (row.album.clone(), row.album_source.is_known()),
+        // A row contributes *one* artist and *one* album tile, and as many
+        // genre tiles as it has genres. That is the whole reason the field is a
+        // list: before this, a track filed under "Liquid Funk / Jazz" built a
+        // third tile named after the pair, sitting beside the two real ones and
+        // holding the tracks that should have been in both.
+        let names: Vec<String> = match by {
+            By::Artist if row.artist_source.is_known() => vec![row.artist.clone()],
+            By::Album if row.album_source.is_known() => vec![row.album.clone()],
             // A genre comes from the tags or from a lookup, and "unknown" is
-            // simply an empty string — there is no `Source` to consult.
-            By::Genre => {
-                let g = genre_of(app, &row.href);
-                let known = !g.trim().is_empty();
-                (g, known)
+            // simply an empty list — there is no `Source` to consult. Split
+            // rather than read off `row.genres`, because the effective genre of
+            // a row can come from the tag store or the lookup cache, neither of
+            // which is on the row.
+            By::Genre => vapor_library::split_genres(&genre_of(app, &row.href)),
+            _ => Vec::new(),
+        };
+
+        for name in names {
+            if name.is_empty() {
+                continue;
             }
-        };
-        if !known || name.is_empty() {
-            continue;
+            // Grouped by identity, displayed by name — and for an album those are
+            // not the same thing. Keying on the title alone merges two different
+            // records that share one, which every library eventually has: two
+            // *Greatest Hits* became one tile, with one cover and one artwork
+            // override between them. `album_key` adds the folder, which also keeps
+            // two albums that happen to share a directory apart, and still holds a
+            // various-artists compilation together.
+            let key = match by {
+                // A genre is its own identity, like an artist: two tracks
+                // tagged "House" are the same genre wherever they sit on disk.
+                By::Artist | By::Genre => name.clone(),
+                By::Album => vapor_library::settings::album_key(&name, &row.href),
+            };
+            if !members.contains_key(&key) {
+                order.push(key.clone());
+            }
+            members.entry(key).or_default().push(row);
         }
-        // Grouped by identity, displayed by name — and for an album those are
-        // not the same thing. Keying on the title alone merges two different
-        // records that share one, which every library eventually has: two
-        // *Greatest Hits* became one tile, with one cover and one artwork
-        // override between them. `album_key` adds the folder, which also keeps
-        // two albums that happen to share a directory apart, and still holds a
-        // various-artists compilation together.
-        let key = match by {
-            // A genre is its own identity, like an artist: two tracks tagged
-            // "House" are the same genre wherever they sit on disk.
-            By::Artist | By::Genre => name.clone(),
-            By::Album => vapor_library::settings::album_key(&name, &row.href),
-        };
-        if !members.contains_key(&key) {
-            order.push(key.clone());
-        }
-        members.entry(key).or_default().push(row);
     }
 
     let mut entities: Vec<LibraryEntity> = order
@@ -2530,7 +2549,12 @@ pub(crate) fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGrou
             group.entities.iter().any(|e| match e.entity_type {
                 EntityType::Artist => row.artist == e.value,
                 EntityType::Album => row.album == e.value,
-                EntityType::Genre => genre_of(app, &row.href) == e.value,
+                // Membership rather than equality, and case-insensitive: a
+                // group naming Jazz has to catch a track that is Liquid Funk
+                // and Jazz, and the sources disagree about casing.
+                EntityType::Genre => vapor_library::split_genres(&genre_of(app, &row.href))
+                    .iter()
+                    .any(|g| g.eq_ignore_ascii_case(e.value.trim())),
             })
         })
         .cloned()
@@ -3283,8 +3307,13 @@ fn genre_of(app: &AppState, href: &str) -> String {
 /// tags its own files keeps "Neurofunk"; one that does not gets Deezer's
 /// "Electronic" rather than nothing.
 fn genre_for_row(app: &AppState, row: &Row) -> String {
-    if !row.genre.trim().is_empty() {
-        return row.genre.clone();
+    // The joined label, not the list. Everything downstream of this — the DJ's
+    // `TrackMeta`, `tempo_band`, `genre_distance`, the details panel — reads one
+    // string and splits it where it needs segments, which is the shape they
+    // were already in before `Row` held a list. Widening those too would be a
+    // second change wearing this one's clothes.
+    if !row.genres.is_empty() {
+        return row.genre_label();
     }
     genre_from_tag_or_lookup(app, &row.href)
 }
@@ -5340,7 +5369,7 @@ fn build_row(href: &str, base_folder: &str) -> Row {
         } else {
             vapor_library::index::Source::File
         },
-        genre: String::new(),
+        genres: Vec::new(),
         bpm: 0.0,
         key: String::new(),
         year: info.year.unwrap_or(0),
@@ -6731,7 +6760,7 @@ mod tests {
             album: String::new(),
             artist_source: vapor_library::index::Source::Unknown,
             album_source: vapor_library::index::Source::Unknown,
-            genre: String::new(),
+            genres: Vec::new(),
             bpm: 0.0,
             key: String::new(),
             year: 0,
@@ -7205,7 +7234,7 @@ mod tests {
         ] {
             let mut r = row(href, href);
             r.title = title.to_string();
-            r.genre = genre.to_string();
+            r.genres = vapor_library::split_genres(genre);
             app.rows.push(r);
         }
 
@@ -7478,7 +7507,7 @@ mod tests {
             ("/c.mp3", "House"),
         ] {
             let mut r = row(href, href);
-            r.genre = genre.to_string();
+            r.genres = vapor_library::split_genres(genre);
             app.rows.push(r);
         }
 
@@ -7496,6 +7525,67 @@ mod tests {
 
         // Exact, not a substring: "Deep House" is a different genre.
         assert_eq!(hrefs, vec!["/a.mp3", "/c.mp3"], "got {hrefs:?}");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A track filed under two genres is on both shelves, and there is no
+    /// third shelf named after the pair.
+    ///
+    /// The outcome the list was widened for. While `Row::genre` was one string,
+    /// "Liquid Funk / Jazz" was a genre in its own right: it built its own tile,
+    /// sorted between the real ones, and held the tracks that belonged in both.
+    #[test]
+    fn a_track_with_two_genres_appears_under_each_of_them() {
+        let (mut app, dir) = app();
+        for (href, genre) in [
+            ("/a.mp3", "Liquid Funk / Jazz"),
+            ("/b.mp3", "Liquid Funk"),
+            ("/c.mp3", "Jazz"),
+        ] {
+            let mut r = row(href, href);
+            r.genres = vapor_library::split_genres(genre);
+            app.rows.push(r);
+        }
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("genre".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let tiles = library_entities_for(&app, &view);
+        let mut names: Vec<&str> = tiles.iter().map(|t| t.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["Jazz", "Liquid Funk"],
+            "a tile per genre, and no tile named after the combination"
+        );
+
+        // And each shelf holds the track that names it, the shared one included.
+        for (genre, expected) in [
+            ("Liquid Funk", vec!["/a.mp3", "/b.mp3"]),
+            ("Jazz", vec!["/a.mp3", "/c.mp3"]),
+        ] {
+            let opened = LibraryView {
+                query: String::new(),
+                sort_key: None,
+                ascending: true,
+                group_by: None,
+                genre: Some(genre.to_string()),
+                album: None,
+                artist: None,
+            };
+            let hrefs: Vec<String> = resolved_rows(&app, &opened)
+                .iter()
+                .map(|r| r.href.clone())
+                .collect();
+            assert_eq!(hrefs, expected, "opening {genre}");
+        }
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -7702,7 +7792,7 @@ mod tests {
     fn the_scanned_genre_outranks_a_looked_up_one() {
         let (mut app, dir) = app();
         let mut r = row("/a.mp3", "A");
-        r.genre = "Techno".to_string();
+        r.genres = vapor_library::split_genres("Techno");
         app.rows.push(r);
         app.looked.insert(
             "/a.mp3".to_string(),
@@ -7734,7 +7824,7 @@ mod tests {
         ];
         for (href, genre) in tracks {
             let mut r = row(href, href);
-            r.genre = genre.to_string();
+            r.genres = vapor_library::split_genres(genre);
             app.rows.push(r);
             // Identical in every way the cost model can see except genre.
             app.analysis
@@ -7763,7 +7853,7 @@ mod tests {
             ("/far.mp3", "Folk", 129.0),
         ] {
             let mut r = row(href, href);
-            r.genre = genre.to_string();
+            r.genres = vapor_library::split_genres(genre);
             app.rows.push(r);
             app.analysis
                 .insert(href.to_string(), analysed_track(bpm, "8A", 0.6));
@@ -8408,7 +8498,7 @@ mod tests {
 
         for (href, genre) in [("/dnb.mp3", "Drum & Bass"), ("/hiphop.mp3", "Hip Hop")] {
             let mut r = row(href, href);
-            r.genre = genre.to_string();
+            r.genres = vapor_library::split_genres(genre);
             app.rows.push(r);
             // What analysis actually produced for both.
             app.analysis
@@ -8477,7 +8567,7 @@ mod tests {
     fn a_hand_corrected_tempo_beats_the_genre_guess() {
         let (mut app, dir) = app();
         let mut r = row("/dnb.mp3", "d");
-        r.genre = "Drum & Bass".to_string();
+        r.genres = vapor_library::split_genres("Drum & Bass");
         app.rows.push(r);
         app.analysis
             .insert("/dnb.mp3".to_string(), analysed_track(87.0, "4A", 0.7));
@@ -8500,7 +8590,7 @@ mod tests {
     fn a_half_read_dnb_track_reports_one_tempo_everywhere() {
         let (mut app, dir) = app();
         let mut r = row("/dnb.mp3", "d");
-        r.genre = "DnB".to_string();
+        r.genres = vapor_library::split_genres("DnB");
         app.rows.push(r.clone());
         app.analysis
             .insert("/dnb.mp3".to_string(), analysed_at(87.0, 240.0));
@@ -8549,7 +8639,7 @@ mod tests {
         let (mut app, dir) = app();
         for (href, genre) in [("/dnb.mp3", "Drum & Bass"), ("/hop.mp3", "Hip Hop")] {
             let mut r = row(href, "t");
-            r.genre = genre.to_string();
+            r.genres = vapor_library::split_genres(genre);
             app.rows.push(r);
             app.analysis
                 .insert(href.to_string(), analysed_at(87.0, 240.0));
