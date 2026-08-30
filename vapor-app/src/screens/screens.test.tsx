@@ -1438,28 +1438,28 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
       title: "Here",
       bpm: 120,
       key: "8A",
-      genre: "Electronic",
+      genres: ["Electronic"],
     }),
     makeRow({
       href: "/near.m4a",
       title: "Near",
       bpm: 122,
       key: "9A",
-      genre: "Electronic",
+      genres: ["Electronic"],
     }),
     makeRow({
       href: "/lift.m4a",
       title: "Lift",
       bpm: 140,
       key: "10A",
-      genre: "Electronic",
+      genres: ["Electronic"],
     }),
     makeRow({
       href: "/away.m4a",
       title: "Away",
       bpm: 121,
       key: "3B",
-      genre: "Jazz",
+      genres: ["Jazz"],
     }),
   ];
 

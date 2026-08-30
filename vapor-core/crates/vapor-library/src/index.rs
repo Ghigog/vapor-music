@@ -69,8 +69,14 @@ pub struct Row {
     pub artist_source: Source,
     #[serde(alias = "album_source")]
     pub album_source: Source,
-    /// Empty when unknown.
-    pub genre: String,
+    /// Every genre this track is filed under, most specific first. Empty when
+    /// unknown.
+    ///
+    /// A list since 2026-08-29. It was one `String`, and a track that is
+    /// genuinely both Liquid Funk and Jazz had nowhere to put the second — the
+    /// granular sources added in the same week routinely name several.
+    #[serde(alias = "genre", default, deserialize_with = "genres_field")]
+    pub genres: Vec<String>,
     /// 0.0 when unknown.
     pub bpm: f32,
     /// Camelot key, empty when unknown.
@@ -79,6 +85,71 @@ pub struct Row {
     /// Position in a manually ordered playlist.
     #[serde(alias = "manual_pos")]
     pub manual_pos: usize,
+}
+
+/// Read `genres` from every shape this field has ever been written in.
+///
+/// Three of them, and all three are on disk in somebody's library right now:
+///
+/// * `"genres": ["Liquid Funk", "Jazz"]` — what is written from now on.
+/// * `"genre": "Electronic"` — the original, a single genre as a string.
+/// * `"genre": "Electronic / Dance"` — the same field after AUD-24 taught the
+///   Deezer parser to keep every genre an album names, joined with `/`.
+///
+/// The third is why this cannot be a plain `#[serde(alias)]` on a `Vec<String>`:
+/// a joined string is not a JSON array, and serde would fail the whole `Row`
+/// rather than the field — which for a library index means the file will not
+/// load and every folder, manual ordering and correction in it is gone. The
+/// splitting is [`crate::genre::split_genres`], so a value that arrives joined
+/// becomes the same list it would have been had it been written as one.
+///
+/// `null` and a missing field both read as no genres, which is what `default`
+/// is for. Nothing here can fail, deliberately: this runs against files written
+/// by builds that no longer exist, and refusing to load a library is a far
+/// worse outcome than dropping a genre.
+fn genres_field<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+        Nothing,
+    }
+
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(joined) => crate::genre::split_genres(&joined),
+        // Split on the way in as well: a list is not a promise that nobody put
+        // a joined string inside it, and `["Electronic / Dance"]` is a shape a
+        // hand-edited file can hold.
+        OneOrMany::Many(list) => list
+            .iter()
+            .flat_map(|g| crate::genre::split_genres(g))
+            .collect(),
+        OneOrMany::Nothing => Vec::new(),
+    })
+}
+
+impl Row {
+    /// The genres as one string, for a caller that can only show one thing.
+    ///
+    /// Joined the way this field was stored before it was a list, so a table
+    /// cell, a sort key and a search haystack all read exactly as they did.
+    pub fn genre_label(&self) -> String {
+        self.genres.join(" / ")
+    }
+
+    /// Whether this row is filed under `genre`, case-insensitively.
+    ///
+    /// Case-insensitive because the sources disagree and always have: Deezer
+    /// title-cases, Last.fm lower-cases, and a file's own tag is whatever
+    /// somebody typed. An exact comparison here builds two tiles for one genre.
+    pub fn has_genre(&self, genre: &str) -> bool {
+        let wanted = genre.trim();
+        self.genres.iter().any(|g| g.eq_ignore_ascii_case(wanted))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +183,7 @@ pub fn matches_query(row: &Row, query: &str) -> bool {
     row.title.to_lowercase().contains(&q)
         || row.artist.to_lowercase().contains(&q)
         || row.album.to_lowercase().contains(&q)
-        || row.genre.to_lowercase().contains(&q)
+        || row.genres.iter().any(|g| g.to_lowercase().contains(&q))
 }
 
 /// Does this row belong to the given entity?
@@ -124,7 +195,7 @@ pub fn matches_entity(row: &Row, entity: &Entity) -> bool {
     match entity.entity_type {
         EntityType::Artist => row.artist_source.is_known() && row.artist == entity.value,
         EntityType::Album => row.album_source.is_known() && row.album == entity.value,
-        EntityType::Genre => !row.genre.is_empty() && row.genre == entity.value,
+        EntityType::Genre => row.has_genre(&entity.value),
     }
 }
 
@@ -195,12 +266,16 @@ pub fn sort_rows(rows: &mut [Row], key: SortKey, ascending: bool) {
                 a.album.to_lowercase().cmp(&b.album.to_lowercase())
             }
             SortKey::Genre => {
-                match (!a.genre.is_empty(), !b.genre.is_empty()) {
+                // Ungenred rows sink, whatever the direction — the same rule as
+                // before, now asked of the list rather than the string.
+                match (!a.genres.is_empty(), !b.genres.is_empty()) {
                     (true, false) => return Ordering::Less,
                     (false, true) => return Ordering::Greater,
                     _ => {}
                 }
-                a.genre.to_lowercase().cmp(&b.genre.to_lowercase())
+                a.genre_label()
+                    .to_lowercase()
+                    .cmp(&b.genre_label().to_lowercase())
             }
             SortKey::Title => title_of(a).cmp(&title_of(b)),
         };
@@ -235,7 +310,13 @@ pub fn group_rows(rows: &[Row], by: GroupBy) -> Vec<(String, Vec<&Row>)> {
         let header = match by {
             GroupBy::Artist if row.artist_source.is_known() => row.artist.clone(),
             GroupBy::Album if row.album_source.is_known() => row.album.clone(),
-            GroupBy::Genre if !row.genre.is_empty() => row.genre.clone(),
+            // The *first* genre, not the joined label: grouping on the label
+            // would make "Liquid Funk / Jazz" its own heading beside "Liquid
+            // Funk", which is the fragmentation a list exists to end. A row
+            // belongs under one heading here; the Genres *tab* is the surface
+            // that shows a track under each of its genres, and that is
+            // `matches_entity`.
+            GroupBy::Genre if !row.genres.is_empty() => row.genres[0].clone(),
             GroupBy::None => unreachable!("handled above"),
             _ => UNKNOWN_HEADER.to_string(),
         };
@@ -271,7 +352,7 @@ mod tests {
             } else {
                 Source::Cache
             },
-            genre: genre.into(),
+            genres: crate::genre::split_genres(genre),
             bpm,
             key: key.into(),
             ..Default::default()
@@ -414,5 +495,105 @@ mod tests {
         }
         sort_rows(&mut rows, SortKey::Order, true);
         assert_eq!(rows[0].title, "Delta");
+    }
+
+    /// Every shape this field has been written in, read back. A library index
+    /// is the file that holds somebody's folders, manual ordering and hand
+    /// corrections, so a `Row` that refuses to deserialize does not lose a
+    /// genre — it loses all of that.
+    #[test]
+    fn a_genre_written_in_any_past_shape_still_loads() {
+        // The rest of a real row, so the only thing under test is the genre.
+        let read = |field: &str| -> Vec<String> {
+            let json = format!(
+                r#"{{"href":"h","title":"t","artist":"a","album":"al",
+                     "artistSource":"file","albumSource":"file",{field}
+                     "bpm":174.0,"key":"8A","year":2010,"manualPos":0}}"#
+            );
+            serde_json::from_str::<Row>(&json)
+                .unwrap_or_else(|e| panic!("{field} did not load: {e}"))
+                .genres
+        };
+
+        // What is written from now on.
+        assert_eq!(
+            read(r#""genres":["Liquid Funk","Jazz"],"#),
+            ["Liquid Funk", "Jazz"]
+        );
+        // The original: one genre, as a string.
+        assert_eq!(read(r#""genre":"Electronic","#), ["Electronic"]);
+        // The same field after AUD-24 taught the Deezer parser to keep every
+        // genre an album names. This is the shape a plain serde alias fails on.
+        assert_eq!(
+            read(r#""genre":"Electronic / Dance","#),
+            ["Electronic", "Dance"]
+        );
+        // A joined string that somehow got inside a list.
+        assert_eq!(
+            read(r#""genres":["Electronic / Dance"],"#),
+            ["Electronic", "Dance"]
+        );
+        // Absent, null, and empty are all "no genre" and none of them is an
+        // error — these files are written by builds that no longer exist.
+        assert!(read("").is_empty());
+        assert!(read(r#""genre":null,"#).is_empty());
+        assert!(read(r#""genre":"","#).is_empty());
+        assert!(read(r#""genres":[],"#).is_empty());
+    }
+
+    /// The round trip a library does on every save and load.
+    #[test]
+    fn genres_survive_being_written_and_read_back() {
+        let before = row("t", "a", "al", "Liquid Funk / Jazz", 174.0, "8A");
+        let json = serde_json::to_string(&before).expect("serialises");
+        assert!(
+            json.contains(r#""genres":["Liquid Funk","Jazz"]"#),
+            "{json}"
+        );
+        let after: Row = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(after.genres, before.genres);
+    }
+
+    /// A track under several genres appears under each of them, which is the
+    /// whole point of the list — and the tile is found case-insensitively,
+    /// because the three sources disagree about casing and always have.
+    #[test]
+    fn a_track_belongs_to_every_genre_it_names() {
+        let under = |r: &Row, name: &str| {
+            matches_entity(
+                r,
+                &Entity {
+                    entity_type: EntityType::Genre,
+                    value: name.to_string(),
+                },
+            )
+        };
+        let r = row("t", "a", "al", "Liquid Funk / Jazz", 174.0, "8A");
+        assert!(under(&r, "Liquid Funk"));
+        assert!(
+            under(&r, "Jazz"),
+            "the second genre had nowhere to go before this"
+        );
+        assert!(
+            under(&r, "liquid funk"),
+            "Last.fm lower-cases what Deezer title-cases"
+        );
+        assert!(!under(&r, "Techno"));
+        // An ungenred row belongs to no tile, rather than to an empty one.
+        let bare = row("t", "a", "al", "", 0.0, "");
+        assert!(!under(&bare, ""));
+    }
+
+    /// Grouping keys on the first genre, not the joined label: a heading per
+    /// combination is the fragmentation the list exists to end.
+    #[test]
+    fn grouping_puts_a_multi_genre_row_under_one_heading() {
+        let rows = vec![
+            row("a", "x", "al", "Liquid Funk / Jazz", 174.0, "8A"),
+            row("b", "y", "al", "Liquid Funk", 174.0, "8A"),
+        ];
+        let groups = group_rows(&rows, GroupBy::Genre);
+        let headings: Vec<&str> = groups.iter().map(|g| g.0.as_str()).collect();
+        assert_eq!(headings, ["Liquid Funk"], "{headings:?}");
     }
 }

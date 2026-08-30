@@ -2363,7 +2363,7 @@ changes the shade advances by itself. Both are real, neither is this crash, and
 the first theory of this bug blamed them — wrongly, for the third time this
 week that a coherent story lost to a stack trace.
 
-### AND-6 : the Windows shell job has been red since 2026-08-24 (open)
+### AND-6 : the Windows shell job was red from 2026-08-24 to 2026-08-27 (open, not failing)
 
 `shell (windows-latest)` in `app.yml` dies at `cargo test` with
 `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) before any test runs. Every push to
@@ -2408,7 +2408,25 @@ No fix attempted until that comes back. AND-5 cost five tags to a cause that
 was reasoned from a build artifact instead of measured, and this is the same
 trap with the same shape.
 
-**The shipped Windows app is a separate question.** The binary that fails is
+**It stopped on 2026-08-27, and nothing in this repository fixed it.** The
+diagnostic above landed in `a640028`; the very next run on `main` — 181, the
+same commit — passed `shell (windows-latest)` green, and 182, 183 and 184 have
+passed it since. The diagnostic never fired, because the job it was written to
+explain did not fail again. So the step that would name the cause has never
+run, and the cause is still unnamed.
+
+That is evidence for the runner-image hypothesis and against everything else:
+no commit in the window touched Rust, `build.rs`, `Cargo.toml` or a dependency,
+and none touched them on the way out either. Run 181's `Check` step took
+11m52s — a cold cache, which is the relink the hypothesis predicted.
+
+**Left open on purpose.** A fault that left without being understood can come
+back the same way, and the only thing that changed is somebody else's image.
+The diagnostic stays. Close this when the Windows build has been launched and
+its folder picker opened, which is the check below and is what would prove the
+shipped app was never affected.
+
+**The shipped Windows app is a separate question.** The binary that failed is
 the lib unit-test harness. `vapor-app.exe` gets the same manifest by the same
 route, so it is probably fine — but "probably" is what AND-5 was made of, and
 nobody has launched the Windows build. Do that before `v2.0.0`, and open the
@@ -3411,8 +3429,51 @@ no `User-Agent` naming a contact.
 An analysis pass over a whole library is a lot of requests. `docs/RELEASE.md` §3
 already lists reviewing the rate limits and terms as outstanding.
 
-**Waiting for:** Deezer or MusicBrainz. That is a decision, not work, and it is
-Dylan's — see `docs/workspace/release-epic.md`.
+**Decided 2026-08-29: both, and Last.fm as well — added beside Deezer rather
+than replacing it.** Dylan's question was not the compliance one this ticket was
+filed for; it was "all I want is for tracks to come with metadata that contain
+their genre", after measuring that **about half his library carries a usable
+genre in its own file tags.** The other half was getting one of Deezer's ~25
+words, which is AUD-24's complaint and is what made this a decision worth
+making rather than a risk worth recording.
+
+The compliance half of this ticket is unchanged and still argues for the move:
+Deezer is called unregistered against an API that documents no quota. What
+changed is that the granular sources are now asked **first**, so Deezer's
+answer is only kept when it says something the others do not.
+
+### Last.fm is built but not switched on — parked 2026-08-29
+
+**Dylan's call: ship with MusicBrainz only and see whether it is enough.** The
+Last.fm path is written, tested and inert; it needs an API key and nothing else,
+and without one the code takes the MusicBrainz branch silently. Registering a
+key is a five-minute job that can be done at any point, so doing it *before*
+there is evidence it is needed would be buying a second network dependency, a
+build-time secret and a repository secret against a problem nobody has confirmed
+still exists.
+
+**The trigger to unpark it is Dylan raising genre granularity again.** If he
+says the genres still read too coarse — everything landing on "Electronic",
+Nils Frahm and Eptic on one shelf, the original AUD-24 complaint — then the next
+suggestion is the Last.fm key, not another pass at the ranking rules. Do not
+re-derive this from scratch; the analysis is above and the code is waiting.
+
+**Say what it costs when suggesting it**, because it is not free:
+
+* An account at `last.fm/api/account/create`. The **API key** only — the shared
+  secret is for scrobbling and user sessions, which this app does not do.
+* `VAPOR_LASTFM_API_KEY` exported locally, and the same as a repository secret
+  passed at build time by `release.yml` — `option_env!` bakes it in, because a
+  double-clicked app gets no shell environment.
+* One more stranger in `PRIVACY.md` and `RELEASE.md` §3. Those already list it,
+  so the documents are correct either way.
+
+**What would settle it with a number rather than an impression:** after an
+Identify pass, count how many rows still resolve to a genre in
+`metadata::UMBRELLA_GENRES`. That is the measurement AUD-24 never had, and it
+turns "still too coarse" into a proportion. Neither service has been contacted
+from any container this was built in, so that count is also the first real
+evidence that any of this works.
 
 **Half done:** The calls are identified and paced, which is worth having
 whichever way the decision goes. Every request carries a `User-Agent` naming
@@ -3421,8 +3482,17 @@ words and a URL satisfies it, so nothing here invents a contact address, and
 the same header is what MusicBrainz asks for should the lookups move. One line
 to change if a mailbox is wanted instead.
 
-Three clocks: 200 ms Deezer, 300 ms LRCLIB (the middle of the band they name
-for scanning a library), 200 ms for the artwork CDN. Separate so a slow answer
+Five clocks now: 200 ms Deezer, 300 ms LRCLIB (the middle of the band they name
+for scanning a library), 200 ms for the artwork CDN, **1100 ms MusicBrainz** and
+**250 ms Last.fm**.
+
+MusicBrainz's is the one that shaped the design. One request per second is a
+published rule rather than a convention, and asking per track would put a
+563-track pass at nineteen minutes on that clock alone. So the genre question is
+asked **once per artist** and cached for the pass — which is also how Spotify
+models genre, and cuts this library to a couple of hundred requests. 1100 ms
+rather than 1000 because the gap is measured from when the last request was
+sent, and aiming exactly at a limit spends half your attempts past it. Separate so a slow answer
 from one service cannot spend the other's budget, shared across threads so two
 lookups queue rather than each keeping its own polite gap. Four attempts with a
 doubling wait, at most 3.5 s.
@@ -3511,7 +3581,7 @@ still carries the old public key, the private half of it is still the
 `.COMPROMISED-2026-08-22` file, and the first signed build is still where that
 bites.
 
-### AUD-22 : nothing has been released, and the pipeline is unexercised (open)
+### AUD-22 : nothing has been released, and the pipeline is unexercised (done 2026-08-25, ten runs by 2026-08-28)
 
 `release.yml` exists and its logic is verified as far as it can be locally — the
 version check runs against the real files, the YAML parses, and a local
@@ -3531,6 +3601,19 @@ record: **no document anywhere names a feature set for v1.** `DECISIONS.md` §3
 picks a distribution channel for it, §2 defers a question to v1.1, and
 `RELEASE.md` costs it. Donation and onboarding are the first two things anybody
 has said are in it.
+
+**Closed.** Both of those were answered on 2026-08-24 — the keys and the signed
+builds are pipeline steps 1 and 2 and were wired that day, and v1 is "whatever
+exists on 2026-08-24", which includes donation and not onboarding. The pipeline
+has run **eleven times** since, publishing `v2.0.0-rc.1` through `rc.10` on
+macOS, Windows, Linux and Android with signed bundles, an APK, `SHA256SUMS` and
+an updater manifest. `rc.10` published green on 2026-08-28.
+
+What the ticket wanted was the measurement, and it got one: five of those runs
+failed, each on something only executing the file could have shown — two dead
+action SHAs, a signing key that was a shell prompt, an Android job that did not
+exist, and a macOS override present in one workflow and not the other. All are
+recorded above and in `release-epic.md`.
 
 ### AUD-23 : the app has no front door (redefined 2026-08-23 — it is onboarding, not marketing)
 
@@ -3593,7 +3676,7 @@ Deezer **album** response. Two problems in one line:
   to Electronic because that is the only shelf Deezer has.
 
 `Row::genre` is also a single `String`, so even a richer source has nowhere to
-put a second genre today.
+put a second genre today. **Fixed 2026-08-29** — see the close below.
 
 **Stated preference: more granular and more specific, not less.**
 
@@ -3618,11 +3701,25 @@ file first, then a service); and the Genres tab groups on the list rather than
 on one string. `Source` already distinguishes file, folder, service and
 unknown, so provenance has somewhere to go.
 
-**Waiting for:** A decision on the source, and on whether one track may appear
-under several genres — which is the thing that makes granularity useful and is
-a real change to how the tab reads.
+**Both open questions are answered.** The source is Last.fm and MusicBrainz
+beside Deezer (AUD-18, decided 2026-08-29). And **yes, one track may appear
+under several genres**: `Row::genres` is a list, a row contributes one tile per
+genre it names, and opening a tile or a smart group matches by membership rather
+than by equality against a joined label.
 
-**Closed:** Genre aliases landed in `vapor-library/src/genre.rs` with Last.fm alongside Deezer, so the Electronic bucket resolves to the specific label rather than the coarse one. Merged in `df747d2`.
+**Closed:** Every genre the Deezer **album** response names is kept and read a
+segment at a time, rather than `genres.data[0]`, and `genre.rs` gained
+`normalise()` plus a `TEMPO_BANDS` table keyed on the spellings taggers
+actually write. Merged in `df747d2`.
+
+**No second service landed, and an earlier version of this line said one did.**
+It read "with Last.fm alongside Deezer", which is wrong twice: nothing in the
+tree calls Last.fm, and `genre.rs` has no network code at all — the aliases are
+a compiled-in table. `df747d2`'s own message says it in as many words: "no new
+service was added — that is AUD-18's decision, not this task's." Corrected
+2026-08-29 after the claim was read back as fact and sent a session looking for
+a MusicBrainz integration that does not exist. The paragraph 25 lines above,
+"there is no last.fm or MusicBrainz work anywhere", was right all along.
 
 ### AUD-25 : drag and drop is broken, and the fix is sitting on a branch (done 2026-08-23)
 

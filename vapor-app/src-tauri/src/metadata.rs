@@ -89,15 +89,74 @@ const LRCLIB_GAP: Duration = Duration::from_millis(300);
 /// worth of files, so it is paced the same way.
 const ARTWORK_GAP: Duration = Duration::from_millis(200);
 
-/// MusicBrainz asks for **one request per second, and means it** — their docs
-/// say a client exceeding it will be blocked, and unlike a rate limit that
-/// answers 429 they enforce it at the edge. So this is a full second with a
-/// little headroom, not the 200ms the commercial APIs tolerate.
+/// MusicBrainz publishes a hard rule rather than a convention: **at most one
+/// request per second**, averaged, or the address is blocked.
+///
+/// > "You must not make more than one request per second on average"
+/// > <https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting>
+///
+/// 1100 ms rather than 1000 because the gap is measured from the moment the
+/// last request was *sent*, and a clock that aims exactly at the limit spends
+/// half its attempts on the wrong side of it. The extra tenth costs a
+/// two-hundred-artist pass twenty seconds and is the difference between being
+/// paced and being blocked.
 ///
 /// A full pass over this library is 92 artists, not 563 tracks: the genre being
 /// asked for is a property of the artist, so it is asked once per artist and
 /// cached. That is about a minute and a half, once, rather than nine minutes.
 const MUSICBRAINZ_GAP: Duration = Duration::from_millis(1100);
+
+/// Last.fm's documented limit is 5 requests per second per key, and they ask
+/// clients not to sustain it. 250 ms is 4 a second.
+const LASTFM_GAP: Duration = Duration::from_millis(250);
+
+/// Where the Last.fm key is read from, when there is one.
+///
+/// **Not a user secret, and not in the keyring.** A Last.fm API key identifies
+/// the *application*, not the person — every desktop client ships one, and it
+/// unlocks nothing but the public read API. It is out of the repository all the
+/// same, because a key committed to a public tree is a key that gets scraped
+/// and rate-limited by strangers, and rotating it would mean shipping a build.
+///
+/// An environment variable rather than a setting, deliberately: adding it to
+/// `Settings` puts it in the sync document, which copies it to every paired
+/// device and into the "Your Data" export. Unset is a supported state and the
+/// common one — MusicBrainz needs no key and answers the same question, so the
+/// lookups degrade rather than stop. See [`Lookup::artist_genre`].
+const LASTFM_KEY_ENV: &str = "VAPOR_LASTFM_API_KEY";
+
+/// The Last.fm key, from the build or from the environment.
+///
+/// **Both, and the environment wins.** Reading only the environment was wrong
+/// and shipped that way for one commit: a desktop app is launched from Finder,
+/// Explorer or an Android launcher, none of which pass a shell's exported
+/// variables, so a released build would have found nothing and silently used
+/// MusicBrainz for ever. `option_env!` reads the variable **at compile time**
+/// and bakes it into the binary, which is how the release workflow puts a
+/// repository secret into a shipped app.
+///
+/// The runtime variable is kept on top of it so a key can be tried, rotated or
+/// removed without a rebuild — a five-minute loop instead of a twenty-minute
+/// one, which matters because the only way to know this works is to run it.
+///
+/// Absent from both is a supported state and returns `None`. It is not an error
+/// and nothing reports it: an install with no key is the ordinary case — and
+/// **as of 2026-08-29 it is the only case**, because no key has been registered.
+///
+/// That is a decision rather than an omission (AUD-18, "Last.fm is built but not
+/// switched on"): MusicBrainz needs no key and answers the same question, so
+/// this ships inert until there is evidence it is needed. **If genres are ever
+/// reported as still too coarse, registering a key is the next lever to pull
+/// and it is a five-minute job** — read AUD-18 before reaching for the ranking
+/// rules in [`best_genre`], which is the more tempting and less likely fix.
+fn lastfm_key() -> Option<String> {
+    let from_env = std::env::var(LASTFM_KEY_ENV).ok();
+    let key = from_env
+        .as_deref()
+        .or(option_env!("VAPOR_LASTFM_API_KEY"))?
+        .trim();
+    (!key.is_empty()).then(|| key.to_string())
+}
 
 /// How many times one request is sent before it is given up on.
 ///
@@ -372,46 +431,6 @@ pub fn track_facts_of(body: &str) -> Option<TrackFacts> {
     })
 }
 
-/// The tag cloud MusicBrainz holds for an artist, as `(name, count)`.
-///
-/// Returns everything, genre or not — `"seen live"` and `"female singer"` come
-/// back alongside `"drum and bass"`, and deciding which is which is
-/// [`vapor_library::pick_genre_tag`]'s job, not this one's. A parser that
-/// filtered would be a parser with an opinion, and the opinion belongs in the
-/// crate that owns the taxonomy.
-pub fn artist_tags_of(body: &str) -> Vec<(String, u32)> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
-        return Vec::new();
-    };
-    // `/ws/2/artist?query=` answers `{"artists":[...]}`; a direct
-    // `/ws/2/artist/{mbid}` answers the artist object itself. Accept both, so
-    // this keeps working if the caller ever holds an id.
-    let artist = value
-        .get("artists")
-        .and_then(|a| a.as_array())
-        .and_then(|a| a.first())
-        .unwrap_or(&value);
-
-    artist
-        .get("tags")
-        .and_then(|t| t.as_array())
-        .map(|tags| {
-            tags.iter()
-                .filter_map(|t| {
-                    let name = t.get("name")?.as_str()?.trim();
-                    if name.is_empty() {
-                        return None;
-                    }
-                    // A negative count is a tag the community voted *down*.
-                    // `as_i64` then clamp, rather than `as_u64` which would
-                    // read -3 as absent and let a rejected tag through at 0.
-                    let count = t.get("count").and_then(|c| c.as_i64()).unwrap_or(0);
-                    Some((name.to_string(), count.max(0) as u32))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// The first hit of a track search, with the release it sits on.
 ///
@@ -529,9 +548,12 @@ pub fn album_id_of(body: &str) -> Option<u64> {
 /// to AUD-24 needs a source with a deeper taxonomy, which is AUD-18's decision
 /// and not made here.
 ///
-/// Joined rather than returned as a `Vec` because `Row::genre` is one `String`
-/// end to end — index, filter, sort, group, the genre tiles and the smart
-/// group rules all key on it. Widening that type is its own change.
+/// Joined rather than returned as a `Vec` because this is a *parser* and the
+/// document it reads names its genres in one place. `Row` holds a list since
+/// 2026-08-29 and `vapor_library::split_genres` is what turns one into the
+/// other — at the boundary, once, rather than in every parser that produces a
+/// genre. The paragraph that used to be here said widening `Row` was its own
+/// change; it was, and it has been done.
 pub fn genre_of(body: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return String::new();
@@ -559,6 +581,352 @@ pub fn genre_of(body: &str) -> String {
         }
     }
     kept.join(" / ")
+}
+
+/// One tag from a community tag source, with the weight that source gave it.
+///
+/// `count` means different things on the two services and is never compared
+/// across them: Last.fm's is a 0–100 relative weight against the artist's top
+/// tag, MusicBrainz's is a raw number of people who applied it, usually in the
+/// single digits. Both are only ever used to order one service's own list, so
+/// the scales never have to be reconciled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RankedTag {
+    pub name: String,
+    pub count: u32,
+}
+
+/// Tags that are not genres, and are common enough to be worth naming.
+///
+/// This list is short on purpose. The mechanical rules in
+/// [`is_plausible_genre_tag`] — length, digits, decades — throw out most of the
+/// noise, and a blocklist that tries to enumerate human tagging habits is a
+/// list nobody can finish. These are the ones that survive those rules and
+/// appear near the top of real artist tag lists, where they would otherwise be
+/// picked as the answer.
+const NOT_GENRES: &[&str] = &[
+    "seen live",
+    "favourites",
+    "favorites",
+    "favourite",
+    "favorite",
+    "awesome",
+    "beautiful",
+    "love",
+    "loved",
+    "love at first listen",
+    "best",
+    "cool",
+    "good",
+    "great",
+    "amazing",
+    "epic",
+    "chill",
+    "chillout",
+    "sexy",
+    "party",
+    "summer",
+    "male vocalists",
+    "female vocalists",
+    "male vocalist",
+    "female vocalist",
+    "singer songwriter",
+    "under 2000 listeners",
+    "spotify",
+    "vinyl",
+    "albums i own",
+    "want to see live",
+    "my music",
+    "check out",
+    "usa",
+    "uk",
+    "british",
+    "american",
+    "german",
+    "french",
+    "japanese",
+    "swedish",
+    "australian",
+    "canadian",
+    "dutch",
+    "italian",
+    "spanish",
+    "norwegian",
+    "finnish",
+    "russian",
+    "brazilian",
+    "irish",
+    "scottish",
+    "polish",
+    "danish",
+    "belgian",
+    "icelandic",
+];
+
+/// Genres so broad that answering with one is the same as not answering.
+///
+/// This is the list AUD-24 is about. Deezer's whole taxonomy is roughly these
+/// twenty-five words, and "Electronic" is the top Last.fm tag for most of the
+/// artists in this library — true, popular, and worth nothing to somebody
+/// trying to tell Nils Frahm from Eptic. A tag from this list is only ever
+/// used when the artist has nothing else.
+///
+/// Umbrellas, not junk: [`NOT_GENRES`] holds things that are not genres at all,
+/// and these are genres that are merely too big.
+const UMBRELLA_GENRES: &[&str] = &[
+    "electronic",
+    "electronica",
+    "electro",
+    "dance",
+    "dance and electronica",
+    "music",
+    "alternative",
+    "indie",
+    "world",
+    "world music",
+    "misc",
+    "other",
+    "various",
+    "instrumental",
+];
+
+/// Genres with a digit in them. There are not many, and the rule that keeps
+/// decades and chart positions out would otherwise eat every one.
+const GENRES_WITH_DIGITS: &[&str] = &["2 step", "2step", "8 bit", "8-bit", "8bit", "4x4"];
+
+/// Whether a community tag could be a genre at all.
+///
+/// Mechanical, and deliberately blind to what the genre *is* — vouching for a
+/// name is [`vapor_library::is_known_genre`]'s job, and this runs first to keep
+/// obvious rubbish out of its way. Four rules, each earning its place against
+/// real Last.fm data:
+///
+/// * **Too long.** Above 30 characters a tag is a sentence: "music to listen to
+///   while doing nothing at all" is a real tag on a real artist.
+/// * **Digits.** "00s", "1990s", "top 100", "2005" — decades and chart
+///   positions are the single largest class of non-genre tag. Any digit
+///   anywhere disqualifies, because "top 100" is as much a chart position as
+///   "100" is; the handful of genuine genres with a digit in them are named in
+///   [`GENRES_WITH_DIGITS`] rather than described by a rule.
+/// * **Too short.** One and two characters are initials and typos.
+/// * **Named.** [`NOT_GENRES`], for what gets through the above.
+pub fn is_plausible_genre_tag(tag: &str) -> bool {
+    let t = tag.trim();
+    if t.len() < 3 || t.len() > 30 {
+        return false;
+    }
+    let lowered = t.to_ascii_lowercase();
+    if t.contains(|c: char| c.is_ascii_digit()) && !GENRES_WITH_DIGITS.contains(&lowered.as_str()) {
+        return false;
+    }
+    if NOT_GENRES.contains(&lowered.as_str()) {
+        return false;
+    }
+    !is_unknown_genre(t)
+}
+
+/// Order a service's tags best-first, dropping the ones that are not genres.
+///
+/// Stable within a count so a tie reads the way the service returned it, and
+/// deduplicated case-insensitively because both services will hand back
+/// "Techno" and "techno" as separate tags on the same artist.
+pub fn rank_tags(tags: Vec<RankedTag>) -> Vec<RankedTag> {
+    let mut kept: Vec<RankedTag> = Vec::new();
+    for tag in tags.into_iter().filter(|t| is_plausible_genre_tag(&t.name)) {
+        let name = tag.name.trim().to_string();
+        if kept.iter().any(|k| k.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        kept.push(RankedTag { name, ..tag });
+    }
+    kept.sort_by_key(|t| std::cmp::Reverse(t.count));
+    kept
+}
+
+/// Whether a genre says nothing more than "music", one segment at a time.
+///
+/// **Segmented, because the field it is asked about is joined.** [`genre_of`]
+/// returns every genre a Deezer album names as a `/`-separated string, so the
+/// value reaching this is routinely "Electronic / Dance" — and an exact match
+/// against the list would call that specific, keep it, and quietly discard the
+/// granular artist answer it was supposed to lose to. `tempo_band` splits the
+/// same field on the same separators for the same reason.
+///
+/// Every segment has to be an umbrella. "Electronic / Neurofunk" is not one,
+/// because a reader learns something from it.
+pub fn is_umbrella_genre(genre: &str) -> bool {
+    let mut segments = genre
+        .split(['/', ',', ';', '|'])
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .peekable();
+    segments.peek().is_some() && segments.all(|s| UMBRELLA_GENRES.contains(&s.as_str()))
+}
+
+/// The one genre to file a track under, from a service's ranked tags.
+///
+/// **The most popular tag that is not an umbrella**, and the rule is that short
+/// because the two alternatives were tried and are worse.
+///
+/// *Taking the top tag* reproduces Deezer through a different pipe: "electronic"
+/// is the top Last.fm tag for most of this library, which is the exact answer
+/// AUD-24 exists to escape.
+///
+/// *Preferring a tag this app's own tables vouch for* — `TEMPO_BANDS` and the
+/// taxonomy graph — sounds better and measurably is not. Those tables are the
+/// electronic-heavy ones AUD-24 is a complaint about: they know "ambient" and
+/// do not know "IDM", so vouching files Aphex Twin under Ambient over a tag
+/// with half again the weight. A table that cannot describe the library cannot
+/// referee it either, and the popularity order already carries the judgement of
+/// far more listeners than the table carries.
+///
+/// So the umbrella list does the only filtering, and it is a list of about a
+/// dozen words rather than a taxonomy. When every tag is an umbrella the top
+/// one is still returned: "Electronic" is a worse answer than "Neurofunk" and a
+/// better answer than nothing, which is what the field holds today.
+pub fn best_genre(tags: &[RankedTag]) -> String {
+    tags.iter()
+        .find(|t| !is_umbrella_genre(&t.name))
+        .or_else(|| tags.first())
+        .map(|t| title_case_genre(&t.name))
+        .unwrap_or_default()
+}
+
+/// Acronyms and stylings that a word-by-word title case would ruin.
+const GENRE_STYLINGS: &[(&str, &str)] = &[
+    ("dnb", "DnB"),
+    ("d&b", "D&B"),
+    ("uk garage", "UK Garage"),
+    ("uk hardcore", "UK Hardcore"),
+    ("edm", "EDM"),
+    ("idm", "IDM"),
+    ("r&b", "R&B"),
+    ("rnb", "R&B"),
+    ("ebm", "EBM"),
+    ("psy trance", "Psytrance"),
+    ("dub techno", "Dub Techno"),
+    ("lo fi", "Lo-Fi"),
+    ("lofi", "Lo-Fi"),
+    ("nu jazz", "Nu Jazz"),
+    ("trip hop", "Trip Hop"),
+    ("hip hop", "Hip Hop"),
+    ("hiphop", "Hip Hop"),
+];
+
+/// Put a tag into the casing the rest of the library uses.
+///
+/// Not cosmetic. `EntityType::Genre` matches a row to a genre tile by **exact
+/// string equality**, so "electronic" from Last.fm and "Electronic" from Deezer
+/// would build two tiles for one genre and split the tracks between them. Deezer
+/// returns Title Case and is the incumbent, so everything is brought to that.
+pub fn title_case_genre(tag: &str) -> String {
+    let lowered = tag.trim().to_ascii_lowercase();
+    if let Some((_, styled)) = GENRE_STYLINGS.iter().find(|(k, _)| *k == lowered) {
+        return (*styled).to_string();
+    }
+    lowered
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Read a Last.fm `artist.getTopTags` response.
+///
+/// Shape: `{"toptags":{"tag":[{"name":"electronic","count":100}, …]}}`. An
+/// error comes back as `{"error":6,"message":"The artist you supplied could not
+/// be found"}` with a 200 status, which parses to no `toptags` and therefore to
+/// an empty list — the same outcome as an artist with no tags, which is the
+/// right one: both mean "this service has nothing to say".
+pub fn lastfm_tags_of(body: &str) -> Vec<RankedTag> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let Some(tags) = value
+        .get("toptags")
+        .and_then(|t| t.get("tag"))
+        .and_then(|t| t.as_array())
+    else {
+        return Vec::new();
+    };
+    rank_tags(
+        tags.iter()
+            .filter_map(|t| {
+                Some(RankedTag {
+                    name: t.get("name")?.as_str()?.to_string(),
+                    // Documented as an integer and delivered as one, but a
+                    // string here would silently zero every weight and reverse
+                    // nothing — so both are read.
+                    count: t
+                        .get("count")
+                        .and_then(|c| {
+                            c.as_u64()
+                                .or_else(|| c.as_str().and_then(|s| s.parse().ok()))
+                        })
+                        .unwrap_or(0) as u32,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The MBID of the best artist match in a MusicBrainz search response.
+///
+/// Shape: `{"artists":[{"id":"uuid","score":100,"name":"…"}]}`. **Guarded by
+/// score**, which is the same guard `album_of_track` puts on a Deezer track
+/// hit and for the same reason: MusicBrainz always answers, and a search for a
+/// misspelt or obscure artist returns whatever was least unlike it. A weak
+/// match would attach one artist's genres to another's records, which is worse
+/// than no genre at all — a wrong answer that looks like a right one.
+pub fn musicbrainz_artist_id_of(body: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let first = value.get("artists")?.as_array()?.first()?;
+    let score = first.get("score").and_then(|s| s.as_u64()).unwrap_or(0);
+    if score < 90 {
+        return None;
+    }
+    Some(first.get("id")?.as_str()?.to_string())
+}
+
+/// Read the genres and tags off a MusicBrainz artist response.
+///
+/// Both lists, `genres` first. MusicBrainz curates `genres` from its own
+/// controlled vocabulary and leaves `tags` open, so the first is cleaner and
+/// the second is deeper; taking both in that order gets the curated answer when
+/// there is one and the crowd's when there is not. `rank_tags` sorts by count
+/// afterwards, and a curated genre with one vote can lose to a tag with nine —
+/// which is correct, because a single-vote genre is one person's opinion either
+/// way.
+pub fn musicbrainz_tags_of(body: &str) -> Vec<RankedTag> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let read = |key: &str| -> Vec<RankedTag> {
+        value
+            .get(key)
+            .and_then(|g| g.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|t| {
+                        Some(RankedTag {
+                            name: t.get("name")?.as_str()?.to_string(),
+                            count: t.get("count").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut all = read("genres");
+    all.extend(read("tags"));
+    rank_tags(all)
 }
 
 /// What a Deezer **album** response says an album is made of.
@@ -780,6 +1148,7 @@ enum Service {
     Lrclib,
     MusicBrainz,
     Artwork,
+    LastFm,
 }
 
 impl Service {
@@ -798,6 +1167,7 @@ impl Service {
             "api.deezer.com" => Some(Service::Deezer),
             "lrclib.net" => Some(Service::Lrclib),
             "musicbrainz.org" => Some(Service::MusicBrainz),
+            "ws.audioscrobbler.com" => Some(Service::LastFm),
             // Every artwork host seen in a response so far, and the fallback
             // for anything else: an unrecognised host is paced, not exempt.
             _ => Some(Service::Artwork),
@@ -810,6 +1180,7 @@ impl Service {
             Service::Lrclib => LRCLIB_GAP,
             Service::MusicBrainz => MUSICBRAINZ_GAP,
             Service::Artwork => ARTWORK_GAP,
+            Service::LastFm => LASTFM_GAP,
         }
     }
 }
@@ -827,6 +1198,7 @@ struct Pace {
     lrclib: Mutex<Option<Instant>>,
     musicbrainz: Mutex<Option<Instant>>,
     artwork: Mutex<Option<Instant>>,
+    lastfm: Mutex<Option<Instant>>,
 }
 
 impl Pace {
@@ -836,6 +1208,7 @@ impl Pace {
             Service::Lrclib => &self.lrclib,
             Service::MusicBrainz => &self.musicbrainz,
             Service::Artwork => &self.artwork,
+            Service::LastFm => &self.lastfm,
         }
     }
 
@@ -1077,46 +1450,6 @@ impl Lookup {
         track_facts_of(&self.get(&format!("https://api.deezer.com/track/{id}"))?)
     }
 
-    /// The genre MusicBrainz's taggers agree an artist plays.
-    ///
-    /// The reason this exists at all: Deezer's entire vocabulary for this
-    /// library is ten words, three of which arrive in Spanish, and every drum &
-    /// bass act in it comes back "Dance" — measured over 534 looked-up tracks.
-    /// MusicBrainz answers the same artists with "drum and bass", "neurofunk"
-    /// and "modern classical", which are names the taxonomy in `vapor_library`
-    /// already knows how to measure distance between, so the DJ gets sharper
-    /// input out of the same change.
-    ///
-    /// Per artist, not per track. A genre is a property of who made it far more
-    /// than of the individual recording, MusicBrainz's per-artist tags are much
-    /// better populated than its per-recording ones, and asking once per artist
-    /// turns a nine-minute pass into a ninety-second one at their one-per-second
-    /// limit.
-    ///
-    /// Empty when nothing recognisable came back — the caller then keeps
-    /// whatever coarser genre it already had, which is the safe way to fail.
-    pub fn artist_genre(&self, artist: &str) -> String {
-        if !is_searchable(artist) {
-            return String::new();
-        }
-        // `inc=tags` is not available on the search endpoint; the search
-        // response carries tags already, so one request does it.
-        let url = format!(
-            "https://musicbrainz.org/ws/2/artist?query={}&fmt=json&limit=1",
-            encode(&format!("artist:\"{artist}\""))
-        );
-        let Some(body) = self.get(&url) else {
-            return String::new();
-        };
-        let tags = artist_tags_of(&body);
-        // Borrowed pairs, because `pick_genre_tag` hands back one of the names
-        // it was given and the caller wants it owned.
-        let borrowed: Vec<(&str, u32)> = tags.iter().map(|(n, c)| (n.as_str(), *c)).collect();
-        vapor_library::pick_genre_tag(&borrowed)
-            .map(str::to_string)
-            .unwrap_or_default()
-    }
-
     /// The release a loose track came off, found from the track alone.
     ///
     /// [`Self::album`] cannot help here: it searches by album name, and these
@@ -1194,6 +1527,77 @@ impl Lookup {
         Found::default()
     }
 
+    /// A granular genre for one artist, or empty when nobody has one.
+    ///
+    /// **Per artist, not per track**, which is the shape Spotify uses and the
+    /// reason this is affordable at all: a 563-track library is a couple of
+    /// hundred artists, so the pass makes hundreds of requests rather than
+    /// thousands, and MusicBrainz's one-per-second rule stops being the thing
+    /// that decides how long a scan takes. The cost is that a genre-hopping
+    /// artist gets one label for everything they made — accepted, because the
+    /// file's own tag still outranks this and a well-tagged record is unaffected.
+    ///
+    /// Last.fm first when a key is configured, MusicBrainz otherwise or when
+    /// Last.fm has nothing. That order is about depth rather than quality:
+    /// Last.fm's tags are the closest public thing to the granularity people
+    /// recognise from Spotify, because they are what listeners actually call an
+    /// artist, and MusicBrainz's curated genres are cleaner but shallower.
+    /// Neither is asked for a track — this is the artist question only.
+    ///
+    /// **Works with no key.** MusicBrainz needs none and the `User-Agent` it
+    /// asks for is already sent, so an install that never sets
+    /// `VAPOR_LASTFM_API_KEY` still gets a deeper answer than Deezer's
+    /// twenty-five buckets. The key is an upgrade, not a dependency.
+    ///
+    /// The measurement this rests on: Deezer's entire vocabulary for this
+    /// library is ten words, three of which arrive in Spanish, and every drum &
+    /// bass act in it comes back "Dance" — over 534 looked-up tracks. Both
+    /// services here answer those same artists with "drum and bass",
+    /// "neurofunk" and "modern classical", which are names the taxonomy in
+    /// `vapor_library` already knows how to measure distance between.
+    pub fn artist_genre(&self, artist: &str) -> String {
+        if !is_searchable(artist) {
+            return String::new();
+        }
+        let from_lastfm = self.lastfm_artist_tags(artist);
+        if !from_lastfm.is_empty() {
+            return best_genre(&from_lastfm);
+        }
+        best_genre(&self.musicbrainz_artist_tags(artist))
+    }
+
+    /// Last.fm's view of what an artist is, or nothing without a key.
+    fn lastfm_artist_tags(&self, artist: &str) -> Vec<RankedTag> {
+        let Some(key) = lastfm_key() else {
+            return Vec::new();
+        };
+        // `autocorrect=1` is Last.fm's own spelling fix — "Aphex twin" and
+        // "aphex twin" both resolve — and costs nothing.
+        let url = format!(
+            "https://ws.audioscrobbler.com/2.0/?method=artist.gettoptags&artist={}&api_key={}&autocorrect=1&format=json",
+            encode(artist),
+            encode(&key)
+        );
+        self.get(&url)
+            .map(|b| lastfm_tags_of(&b))
+            .unwrap_or_default()
+    }
+
+    /// MusicBrainz's view of the same question. Two requests: find, then read.
+    fn musicbrainz_artist_tags(&self, artist: &str) -> Vec<RankedTag> {
+        let find = format!(
+            "https://musicbrainz.org/ws/2/artist?query=artist:{}&fmt=json&limit=1",
+            encode(artist)
+        );
+        let Some(id) = self.get(&find).and_then(|b| musicbrainz_artist_id_of(&b)) else {
+            return Vec::new();
+        };
+        let read = format!("https://musicbrainz.org/ws/2/artist/{id}?inc=genres+tags&fmt=json");
+        self.get(&read)
+            .map(|b| musicbrainz_tags_of(&b))
+            .unwrap_or_default()
+    }
+
     /// Fetch an image and keep it, returning where it was kept.
     ///
     /// Already downloaded means already done — the file *is* the cache, which
@@ -1249,6 +1653,261 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    // -----------------------------------------------------------------------
+    // Artist genre, from the community tag sources (AUD-18, AUD-24)
+    // -----------------------------------------------------------------------
+
+    /// Aphex Twin's Last.fm top tags, trimmed to the head of the list.
+    ///
+    /// **Written from the documented response shape, not captured from a live
+    /// call** — the container this landed in cannot reach either service, so
+    /// nothing here has been checked against the wire. That is the exact
+    /// footing `genre_of` was on when it spent months parsing a document it was
+    /// never handed, and it is why the first thing to do with this feature is
+    /// run one lookup against the real services and read what comes back. The
+    /// tag names and their order are real; the JSON around them is from the
+    /// docs.
+    const LASTFM_APHEX: &str = r#"{"toptags":{"tag":[
+        {"name":"electronic","url":"…","count":100},
+        {"name":"IDM","url":"…","count":93},
+        {"name":"ambient","url":"…","count":61},
+        {"name":"seen live","url":"…","count":40},
+        {"name":"experimental","url":"…","count":38},
+        {"name":"90s","url":"…","count":12}
+    ],"@attr":{"artist":"Aphex Twin"}}}"#;
+
+    /// What Last.fm returns for an artist it does not have — a 200, and an
+    /// error object where the tags should be.
+    const LASTFM_MISS: &str =
+        r#"{"error":6,"message":"The artist you supplied could not be found"}"#;
+
+    const MUSICBRAINZ_SEARCH: &str = r#"{"created":"2026-08-29T00:00:00.000Z","count":2,"artists":[
+        {"id":"f22942a1-6f70-4f48-866e-238cb2308fbd","score":100,"name":"Noisia"},
+        {"id":"aaaaaaaa-0000-0000-0000-000000000000","score":54,"name":"Noise"}
+    ]}"#;
+
+    const MUSICBRAINZ_ARTIST: &str = r#"{"id":"f22942a1-6f70-4f48-866e-238cb2308fbd",
+        "name":"Noisia",
+        "genres":[{"name":"drum and bass","count":4},{"name":"neurofunk","count":2}],
+        "tags":[{"name":"electronic","count":6},{"name":"dutch","count":1}]}"#;
+
+    #[test]
+    fn a_lastfm_response_is_read_in_weight_order() {
+        let tags = lastfm_tags_of(LASTFM_APHEX);
+        let names: Vec<&str> = tags.iter().map(|t| t.name.as_str()).collect();
+        // "seen live" and "90s" are gone; the rest keep their order.
+        assert_eq!(
+            names,
+            vec!["electronic", "IDM", "ambient", "experimental"],
+            "{tags:?}"
+        );
+    }
+
+    /// The judgement the whole feature turns on. "electronic" is the most
+    /// popular tag and is exactly what Deezer already answers; IDM is what a
+    /// person would call this record, and it wins by being the most popular tag
+    /// that is not an umbrella.
+    #[test]
+    fn the_top_tag_that_is_not_an_umbrella_is_the_answer() {
+        assert_eq!(best_genre(&lastfm_tags_of(LASTFM_APHEX)), "IDM");
+    }
+
+    /// The joined case, which is what Deezer actually returns. An exact match
+    /// against the umbrella list calls "Electronic / Dance" specific, keeps it,
+    /// and throws away the granular answer it exists to lose to.
+    #[test]
+    fn a_joined_genre_is_an_umbrella_only_when_every_part_is() {
+        assert!(is_umbrella_genre("Electronic"));
+        assert!(is_umbrella_genre("Electronic / Dance"));
+        assert!(is_umbrella_genre("electronic/dance/alternative"));
+        // One informative segment is enough to make the whole thing worth
+        // keeping.
+        assert!(!is_umbrella_genre("Electronic / Neurofunk"));
+        assert!(!is_umbrella_genre("Drum & Bass"));
+        // Nothing at all is not an umbrella; it is nothing, and the caller
+        // tests for empty separately.
+        assert!(!is_umbrella_genre(""));
+        assert!(!is_umbrella_genre("   /  "));
+    }
+
+    /// An artist tagged only in broad strokes still gets an answer. Worse than
+    /// a specific one, better than the empty string the field holds today.
+    #[test]
+    fn an_umbrella_is_returned_when_it_is_all_there_is() {
+        let tags = rank_tags(vec![
+            RankedTag {
+                name: "electronic".into(),
+                count: 100,
+            },
+            RankedTag {
+                name: "dance".into(),
+                count: 40,
+            },
+        ]);
+        assert_eq!(best_genre(&tags), "Electronic");
+    }
+
+    /// The rule this replaced, kept as a test because it is the mistake worth
+    /// not making twice: the app's own tables know "ambient" and not "IDM", so
+    /// refereeing by them files Aphex Twin under the wrong one of its own tags.
+    #[test]
+    fn the_answer_is_not_refereed_by_this_app_s_electronic_heavy_tables() {
+        let tags = lastfm_tags_of(LASTFM_APHEX);
+        assert!(
+            tags.iter().any(|t| t.name.eq_ignore_ascii_case("ambient")),
+            "the fixture must still contain the tag this is about"
+        );
+        assert_ne!(best_genre(&tags), "Ambient");
+    }
+
+    /// Last.fm's miss shape is a 200 with an error body, and must read as
+    /// "nothing to say" rather than as a parse failure worth retrying.
+    #[test]
+    fn a_lastfm_miss_is_no_tags_rather_than_an_error() {
+        assert!(lastfm_tags_of(LASTFM_MISS).is_empty());
+        assert!(lastfm_tags_of("not json at all").is_empty());
+        assert_eq!(best_genre(&lastfm_tags_of(LASTFM_MISS)), "");
+    }
+
+    #[test]
+    fn a_musicbrainz_search_keeps_only_a_confident_match() {
+        assert_eq!(
+            musicbrainz_artist_id_of(MUSICBRAINZ_SEARCH).as_deref(),
+            Some("f22942a1-6f70-4f48-866e-238cb2308fbd")
+        );
+        // The same document with the weak hit first: a search that found
+        // something unlike what was asked for must not answer at all.
+        let weak = MUSICBRAINZ_SEARCH.replace("\"score\":100", "\"score\":54");
+        assert_eq!(musicbrainz_artist_id_of(&weak), None);
+        assert_eq!(musicbrainz_artist_id_of("{\"artists\":[]}"), None);
+    }
+
+    /// Genres and tags are both read, and the count decides between them.
+    #[test]
+    fn musicbrainz_reads_curated_genres_and_open_tags_together() {
+        let tags = musicbrainz_tags_of(MUSICBRAINZ_ARTIST);
+        let names: Vec<&str> = tags.iter().map(|t| t.name.as_str()).collect();
+        // "dutch" is a nationality, which is the other class of tag that
+        // passes every mechanical rule and is never a genre.
+        assert_eq!(names, vec!["electronic", "drum and bass", "neurofunk"]);
+        assert_eq!(best_genre(&tags), "Drum And Bass");
+    }
+
+    /// Every one of these is a real tag that appears above a genuine genre on
+    /// some artist's list, and each would be picked as the answer without a
+    /// rule to stop it.
+    #[test]
+    fn tags_that_are_not_genres_are_refused() {
+        for tag in [
+            "seen live",
+            "favourites",
+            "00s",
+            "1990s",
+            "2005",
+            "top 100",
+            "male vocalists",
+            "under 2000 listeners",
+            "uk",
+            "british",
+            "music to listen to while doing nothing at all",
+            "dutch",
+            "xx",
+            "",
+            "   ",
+            "unknown",
+        ] {
+            assert!(!is_plausible_genre_tag(tag), "{tag:?} was let through");
+        }
+    }
+
+    /// The mirror of the above: the rules must not eat the thing they exist to
+    /// let through. "2 step" is the one genre with a leading digit.
+    #[test]
+    fn real_genres_survive_the_rules() {
+        for tag in [
+            "drum and bass",
+            "neurofunk",
+            "vaporwave",
+            "hyperpop",
+            "IDM",
+            "2 step",
+            "trip hop",
+        ] {
+            assert!(is_plausible_genre_tag(tag), "{tag:?} was refused");
+        }
+    }
+
+    /// Nothing in this app's tables knows either of these, and that is not a
+    /// reason to refuse them — it is how anything younger than the tables gets
+    /// in at all.
+    #[test]
+    fn a_genre_the_app_has_never_heard_of_is_still_an_answer() {
+        let tags = rank_tags(vec![
+            RankedTag {
+                name: "vaporwave".into(),
+                count: 90,
+            },
+            RankedTag {
+                name: "hauntology".into(),
+                count: 20,
+            },
+        ]);
+        assert_eq!(best_genre(&tags), "Vaporwave");
+    }
+
+    /// `EntityType::Genre` matches a row to a tile by exact string equality, so
+    /// two spellings of one genre build two tiles and split the tracks.
+    #[test]
+    fn casing_is_brought_to_the_one_the_library_already_uses() {
+        assert_eq!(title_case_genre("electronic"), "Electronic");
+        assert_eq!(title_case_genre("drum and bass"), "Drum And Bass");
+        assert_eq!(title_case_genre("dnb"), "DnB");
+        assert_eq!(title_case_genre("uk garage"), "UK Garage");
+        assert_eq!(title_case_genre("HIP HOP"), "Hip Hop");
+        assert_eq!(title_case_genre("  techno  "), "Techno");
+    }
+
+    /// Both services hand back the same name in two casings on one artist.
+    #[test]
+    fn one_genre_in_two_casings_is_one_tag() {
+        let tags = rank_tags(vec![
+            RankedTag {
+                name: "Techno".into(),
+                count: 100,
+            },
+            RankedTag {
+                name: "techno".into(),
+                count: 80,
+            },
+        ]);
+        assert_eq!(tags.len(), 1, "{tags:?}");
+    }
+
+    /// The two services are paced apart, and MusicBrainz's rule is a rule
+    /// rather than a convention: exceeding one request a second blocks the
+    /// address. Asserted so a tidy-up cannot make the gaps uniform.
+    #[test]
+    fn each_service_is_paced_on_its_own_documented_limit() {
+        assert!(
+            MUSICBRAINZ_GAP >= Duration::from_secs(1),
+            "MusicBrainz requires at most one request per second"
+        );
+        assert_eq!(
+            Service::of("https://musicbrainz.org/ws/2/artist?query=x"),
+            Some(Service::MusicBrainz)
+        );
+        assert_eq!(
+            Service::of("https://ws.audioscrobbler.com/2.0/?method=artist.gettoptags"),
+            Some(Service::LastFm)
+        );
+        // Host, not substring: an artwork URL that mentions a service in its
+        // path is still artwork.
+        assert_eq!(
+            Service::of("https://cdn-images.dzcdn.net/images/artist/musicbrainz.org/500x500.jpg"),
+            Some(Service::Artwork)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Manners (AUD-18)
     // -----------------------------------------------------------------------

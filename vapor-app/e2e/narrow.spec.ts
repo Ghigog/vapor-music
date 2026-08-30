@@ -321,7 +321,7 @@ test.describe("Playlists and groups open from the bar", () => {
     await menu.getByRole("button", { name: /new group/i }).click();
 
     await expect(page.getByRole("button", { name: /^new group$/i })).toBeVisible();
-    await expect(page.getByText(/drag an artist, album or genre onto it/i)).toBeVisible();
+    await expect(page.getByText(/onto this group in the bar at the bottom/i)).toBeVisible();
   });
 
   test("an existing group lists the tracks it resolves to", async ({ page }) => {

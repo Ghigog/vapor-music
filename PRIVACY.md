@@ -18,6 +18,7 @@ is checkable against the source, and the last section says how to check.
 | Playing, analysing, mixing, playlists, tags, the DJ | Nothing | — | Always on, always silent |
 | Update check (desktop builds) | An HTTPS request for a release file | GitHub | **Yes**, at every launch. No switch |
 | Lyrics and artwork lookup | Artist, album and track names | LRCLIB, Deezer | **No** |
+| Genre lookup | An artist name, once per artist | MusicBrainz, Last.fm | **No** |
 | Your own cloud library | Your username, your password, your music | **The server you chose.** Never the developer | **No** — nothing until you configure a server |
 | Sync over Wi-Fi | A device name and a per-install id | Everything on your local network | **No** |
 
@@ -72,6 +73,8 @@ no artist is searched on the title alone.
 |---|---|
 | `lrclib.net` | `/api/get?artist_name=…&track_name=…` — the words to a track |
 | `api.deezer.com` | `/search/artist`, `/search/track`, `/track/{id}`, `/search/album`, `/album/{id}` — a portrait, a sleeve, a genre, and a published tempo |
+| `musicbrainz.org` | `/ws/2/artist` — an artist name, to get back the genres and tags people have filed that artist under. Nothing else is sent, and it is asked once per artist rather than once per track |
+| `ws.audioscrobbler.com` | `/2.0/?method=artist.gettoptags` — the same question, and only when the build carries a Last.fm key. Without one this host is never contacted |
 | `cdn-images.dzcdn.net` | The image files those searches point at |
 
 Requests time out after 8 seconds and are abandoned.
@@ -224,7 +227,8 @@ The repository is public. These are the searches behind the claims above:
 
 - **Every host the app can contact:** `grep -rn "https\?://" --include='*.rs'
   vapor-app/src-tauri/src`. The only hosts actually requested are
-  `lrclib.net`, `api.deezer.com`, `cdn-images.dzcdn.net` and the WebDAV address
+  `lrclib.net`, `api.deezer.com`, `cdn-images.dzcdn.net`, `musicbrainz.org`,
+  `ws.audioscrobbler.com` and the WebDAV address
   you typed. That search also returns two strings that are not requests, and
   they are named here so the list can be checked without a puzzle:
   `github.com` appears inside the `User-Agent` the app sends, and

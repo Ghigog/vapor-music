@@ -64,7 +64,7 @@ test.describe("A first run", () => {
 
     await page.getByLabel("Server address", { exact: true }).fill("https://app.koofr.net");
     await page.getByLabel("Username", { exact: true }).fill("someone@example.com");
-    await page.getByLabel("Password", { exact: true }).fill("an-app-password");
+    await page.getByLabel("App password", { exact: true }).fill("an-app-password");
     await page.getByLabel("Folder", { exact: true }).fill("/dav/Koofr/Music");
 
     // Scan applies the form first, so this is one press rather than two.
@@ -136,8 +136,13 @@ test.describe("Building a playlist", () => {
     await expect(page.getByRole("button", { name: /late night/i })).toContainText("2");
 
     await page.getByRole("button", { name: /late night/i }).click();
-    // Scoped to the screen: the transport has a Play button too.
-    await page.getByRole("main").getByRole("button", { name: /^play$/i }).click();
+    // Pressing a row is how a playlist plays. POL-6 took the screen's own Play
+    // button off — a playlist and a group are one feature, and a group never
+    // had one — so this is the gesture, not a shortcut for it.
+    // Anchored: the row's own control is named by its title and artist, and
+    // the move/liner-notes/remove buttons beside it are all named after the
+    // track too.
+    await page.getByRole("main").getByRole("button", { name: /^windowlicker aphex twin$/i }).click();
     await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible();
   });
 

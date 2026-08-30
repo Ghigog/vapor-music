@@ -6,9 +6,14 @@ import type { Source } from "./Source";
  */
 export type Row = { href: string, title: string, artist: string, album: string, artistSource: Source, albumSource: Source, 
 /**
- * Empty when unknown.
+ * Every genre this track is filed under, most specific first. Empty when
+ * unknown.
+ *
+ * A list since 2026-08-29. It was one `String`, and a track that is
+ * genuinely both Liquid Funk and Jazz had nowhere to put the second — the
+ * granular sources added in the same week routinely name several.
  */
-genre: string, 
+genres: Array<string>, 
 /**
  * 0.0 when unknown.
  */

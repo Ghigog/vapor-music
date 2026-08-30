@@ -160,7 +160,7 @@ export function makeRow(over: Partial<core.Row> = {}): core.Row {
     album: "An Album",
     artistSource: "folder",
     albumSource: "folder",
-    genre: "Electronic",
+    genres: ["Electronic"],
     bpm: 128,
     key: "8A",
     year: 2020,
@@ -1575,10 +1575,31 @@ export class FakeBackend {
         // And on the row, so the table and the details sheet agree. Narrowed
         // rather than indexed by a string: `field` is validated above, but only
         // a union tells the compiler that, and a `Row` has no index signature.
-        const on = field as "genre" | "album" | "artist";
-        this.rows = this.rows.map((r) =>
-          r.href === href ? { ...r, [on]: value || r[on] } : r,
-        );
+        //
+        // `genre` is split off from the other two because a `Row` holds a list
+        // of genres and this call carries one string. Split on the separators
+        // the backend's `split_genres` uses, so a correction typed as
+        // "House / Techno" answers here the way it answers there.
+        if (field === "genre") {
+          this.rows = this.rows.map((r) =>
+            r.href === href
+              ? {
+                  ...r,
+                  genres: value
+                    ? value
+                        .split(/[/,;|]/)
+                        .map((g) => g.trim())
+                        .filter(Boolean)
+                    : r.genres,
+                }
+              : r,
+          );
+        } else {
+          const on = field as "album" | "artist";
+          this.rows = this.rows.map((r) =>
+            r.href === href ? { ...r, [on]: value || r[on] } : r,
+          );
+        }
         return null;
       }
 
@@ -1762,7 +1783,7 @@ export class FakeBackend {
           artist: row.artist,
           album: row.album,
           year: row.year,
-          genre: row.genre,
+          genre: row.genres.join(" / "),
           analysed: row.bpm > 0,
           bpm: row.bpm,
           bpmIsManual: false,

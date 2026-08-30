@@ -350,6 +350,64 @@ fn normalise(genre: &str) -> String {
         .join(" ")
 }
 
+/// Split a genre field into the genres it names.
+///
+/// One place, because three parts of this crate were already splitting the same
+/// field with their own separator lists and a fourth was about to. `tempo_band`
+/// has read `/`-separated genres a segment at a time since AUD-24, the index
+/// now stores a list, and the two have to agree on what a separator is or a
+/// track gains a genre on one screen and loses it on another.
+///
+/// Empty segments are dropped and whitespace is trimmed, so `"Electronic / "`
+/// is one genre and `""` is none. Order is kept: the first genre named is the
+/// one a caller that can only show one should show.
+pub fn split_genres(field: &str) -> Vec<String> {
+    field
+        .split(['/', ',', ';', '|'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// [`split_genres`], with the placeholders dropped.
+///
+/// One call rather than two because the order is load-bearing: `"N/A"` is a
+/// placeholder whose slash is a separator, so a caller that split first and
+/// filtered afterwards is left holding `"N"` and `"A"` — two genres, neither of
+/// them recognisable as a placeholder any more, out of a field that named none.
+/// The whole field is tested first, then each segment, because `"House / N/A"`
+/// needs both passes.
+///
+/// This is what a raw tag field should go through on its way to becoming a
+/// list. [`split_genres`] stays the plain splitter for callers that already
+/// know their input is real.
+pub fn split_real_genres(field: &str) -> Vec<String> {
+    if is_unknown_genre(field) {
+        return Vec::new();
+    }
+    let segments = split_genres(field);
+    let mut kept = Vec::with_capacity(segments.len());
+    let mut i = 0;
+    while i < segments.len() {
+        // "N/A" is the one placeholder whose own text contains a separator, so
+        // `split_genres` has already cut it in half before anything can
+        // recognise it. Two adjacent segments that rejoin into a placeholder
+        // were one, and both go — testing the segments singly leaves "N" and
+        // "A", which are not placeholders to anything downstream.
+        if i + 1 < segments.len() && is_unknown_genre(&format!("{}/{}", segments[i], segments[i + 1]))
+        {
+            i += 2;
+            continue;
+        }
+        if !is_unknown_genre(&segments[i]) {
+            kept.push(segments[i].clone());
+        }
+        i += 1;
+    }
+    kept
+}
+
 /// The tempo band a genre is played at, if this crate knows one.
 ///
 /// Matched on the most specific name first, then on any parent in the taxonomy,
@@ -363,7 +421,7 @@ fn normalise(genre: &str) -> String {
 /// interesting ones; and because the segments of a real tag are near enough
 /// always the same music described at two levels of detail.
 pub fn tempo_band(genre: &str) -> Option<(f32, f32)> {
-    genre.split(['/', ',', ';', '|']).find_map(band_of_one)
+    split_genres(genre).iter().find_map(|g| band_of_one(g))
 }
 
 /// [`tempo_band`] for a name already known to hold a single genre.
@@ -806,6 +864,22 @@ pub fn is_unknown_genre(g: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case the splitter alone gets wrong: a placeholder with a separator
+    /// in it. "N/A" must name no genres rather than two.
+    #[test]
+    fn a_placeholder_with_a_slash_in_it_names_no_genres() {
+        assert_eq!(split_genres("N/A"), vec!["N", "A"], "the plain splitter");
+        assert!(split_real_genres("N/A").is_empty());
+        assert!(split_real_genres("unknown").is_empty());
+        assert!(split_real_genres("").is_empty());
+        assert_eq!(split_real_genres("House / N/A"), vec!["House"]);
+        assert_eq!(
+            split_real_genres("Liquid Funk / Jazz"),
+            vec!["Liquid Funk", "Jazz"],
+            "real genres are untouched"
+        );
+    }
 
     /// Ported from `test_genre_taxonomy_cost`.
     #[test]

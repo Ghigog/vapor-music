@@ -625,7 +625,7 @@ mod tests {
                     album,
                     artist_source: vapor_library::index::Source::File,
                     album_source: vapor_library::index::Source::Folder,
-                    genre: GENRES[i % GENRES.len()].to_string(),
+                    genres: vec![GENRES[i % GENRES.len()].to_string()],
                     bpm: 60.0 + (i % 120) as f32,
                     key: KEYS[i % KEYS.len()].to_string(),
                     year: 1998 + (i % 28) as u32,

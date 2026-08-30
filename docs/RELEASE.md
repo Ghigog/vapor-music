@@ -304,18 +304,31 @@ it — which covers the icons and carries the MPL notice for Symphonia too.
 
 ## 3. Third-party services
 
-The app talks to **three** strangers. Two are off by default; the third is not,
-and this section said there were two until 2026-08-23, when the AUD-16 privacy
-pass counted them against the code.
+The app talks to **five** strangers. Four are off by default; the fifth is not.
+This section said there were two until 2026-08-23, when the AUD-16 privacy pass
+counted them against the code, and three until 2026-08-29, when AUD-18's
+decision added the two genre sources.
 
 * **LRCLIB** — lyrics. Reached from Liner Notes and now Now Playing.
   Off by default.
 * **Deezer** — artist images and album art. Off by default.
+* **MusicBrainz** — a genre, asked once per *artist* rather than per track.
+  Off by default, on the same setting as the two above. Needs no key and is
+  asked at most once a second, which is the limit they publish.
+* **Last.fm** — the same question, asked first when the build has a key in
+  `VAPOR_LASTFM_API_KEY` and skipped entirely when it does not. The key
+  identifies the application, not the listener, and is deliberately not stored
+  in `Settings` — that would copy it into the sync document and the data export.
 * **GitHub** — the updater. **On, on every desktop launch, with no setting to
   turn it off.** `lib.rs` spawns the check in `setup` without consulting
   anything, fetches `releases/latest/download/latest.json`, and silently
   downloads and installs a signed newer release to run from the next launch.
   Android has no updater at all.
+
+The two genre sources are sent an artist name and nothing else — no path, no
+identifier, no track. Asking per artist rather than per track is a privacy
+consequence as much as a pacing one: it is a couple of hundred names for a
+563-track library rather than one request per file.
 
 The third one is defensible and should stay — it is how a build in a stranger's
 hands ever gets patched, and the endpoint and public key are compiled in, so it
