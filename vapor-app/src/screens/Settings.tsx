@@ -301,6 +301,17 @@ export function Settings() {
   /** Whether a pass has been seen running since Analyse was pressed. */
   const [started, setStarted] = useState(false);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
+  /**
+   * The metadata pass, which reports on a channel of its own.
+   *
+   * Nothing listened to it. The backend has emitted `identify-progress` per
+   * track since the pass existed, `core.ts` says to watch it, and no screen
+   * ever did — so a pass that runs for twenty minutes over a real library did
+   * so with nothing on screen to say it had started, finished, or failed.
+   * Pressing the button and watching nothing happen is indistinguishable from
+   * a button that does nothing.
+   */
+  const [identify, setIdentify] = useState<core.IdentifyProgress | null>(null);
 
   /** Whether the keychain holds a password for the username in the box.
    *
@@ -415,6 +426,23 @@ export function Settings() {
       void unlisten.then((f) => f());
     };
   }, [refresh]);
+
+  // Same shape as the analysis listener above, on the pass's own channel.
+  // `finished` is the backend's own terminal flag rather than `done >= total`:
+  // a pass that stops early — a dead connection, a lookup that could not start
+  // — still sends one, and comparing counts would leave the row saying it was
+  // working for as long as the app stayed open.
+  useEffect(() => {
+    const unlisten = listen<core.IdentifyProgress>("identify-progress", (e) => {
+      setIdentify(e.payload);
+      if (e.payload.finished) {
+        setBusy("idle");
+      }
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
 
   /*
    * A pass that is no longer running gives the buttons back.
@@ -590,8 +618,9 @@ export function Settings() {
    */
   async function refreshMetadata() {
     await run("refreshing", "analysis", core.identifyLibrary, () => {});
-    // The pass runs on a background thread and reports through the same
-    // progress channel as analysis, so the meter picks it up from here.
+    // It reports on `identify-progress`, which is its own channel and not the
+    // one the analysis meter reads — see the listener above. `refresh` is still
+    // worth doing, for the counts the row shows when nothing is running.
     await refresh();
   }
 
@@ -794,9 +823,14 @@ export function Settings() {
               ? `${(progress?.done ?? status.analysed).toLocaleString()} of ${(
                   progress?.total ?? status.total
                 ).toLocaleString()} — ${status.current || "working…"}`
-              : status
-                ? `${status.analysed.toLocaleString()} of ${status.total.toLocaleString()} done`
-                : ""
+              : // The metadata pass, while it runs. Second rather than first
+                // because analysis is the longer and more disruptive of the
+                // two, and the row can only say one thing at a time.
+                identify && !identify.finished
+                ? `Refreshing metadata — ${identify.done.toLocaleString()} of ${identify.total.toLocaleString()}`
+                : status
+                  ? `${status.analysed.toLocaleString()} of ${status.total.toLocaleString()} done`
+                  : ""
           }
           footer={
             failures.length > 0 && (

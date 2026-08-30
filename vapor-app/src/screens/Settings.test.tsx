@@ -16,10 +16,10 @@
  * something meaningless, which is the opposite of what a test is for.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings";
-import { useBackend } from "../test/setup";
+import { emitEvent, useBackend } from "../test/setup";
 
 /** The remote card, so a query cannot accidentally match another card. */
 function remoteCard() {
@@ -808,6 +808,82 @@ describe("Settings — the shape of the screen", () => {
     // And emphatically not the expensive one: re-measuring 823 tracks to learn
     // what a web service calls them is the wrong lever entirely.
     expect(backend.called("analyse_library")).toBe(false);
+  });
+
+  /*
+   * A pass nobody can see is indistinguishable from a button that does nothing.
+   *
+   * The backend has emitted `identify-progress` per track since the pass
+   * existed, and `core.ts` even says to watch it — no screen ever did. So a
+   * twenty-minute pass over a real library ran with nothing on screen to say it
+   * had started, and the only way to find out was to read the JSON on disk.
+   */
+  it("says the metadata pass is running while it runs", async () => {
+    useBackend({ connected: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /^refresh metadata$/i }),
+    );
+
+    act(() => {
+      emitEvent("identify-progress", {
+        done: 41,
+        total: 823,
+        title: "Space Time",
+        corrected: 3,
+        genres: 12,
+        finished: false,
+      });
+    });
+
+    expect(await screen.findByText(/refreshing metadata/i)).toBeInTheDocument();
+    expect(screen.getByText(/41 of 823/)).toBeInTheDocument();
+  });
+
+  /*
+   * And stops saying so on the pass's own terminal flag, not on the counts.
+   *
+   * A pass that ends early — a dead connection, a lookup that could not start —
+   * still sends one, where `done >= total` would never be true and the row
+   * would claim to be working for as long as the app stayed open.
+   */
+  it("stops reporting when the pass says it has finished", async () => {
+    useBackend({ connected: true });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /^refresh metadata$/i }),
+    );
+    act(() => {
+      emitEvent("identify-progress", {
+        done: 41,
+        total: 823,
+        title: "",
+        corrected: 0,
+        genres: 0,
+        finished: false,
+      });
+    });
+    await screen.findByText(/refreshing metadata/i);
+
+    // Short of the total, which is what a pass that gave up looks like.
+    act(() => {
+      emitEvent("identify-progress", {
+        done: 41,
+        total: 823,
+        title: "",
+        corrected: 3,
+        genres: 12,
+        finished: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/refreshing metadata/i)).not.toBeInTheDocument();
+    });
   });
 
   it("keeps Analyse in the same group as the other library rows", async () => {
