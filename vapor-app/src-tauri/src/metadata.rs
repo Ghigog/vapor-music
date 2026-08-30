@@ -734,7 +734,7 @@ pub fn rank_tags(tags: Vec<RankedTag>) -> Vec<RankedTag> {
         }
         kept.push(RankedTag { name, ..tag });
     }
-    kept.sort_by(|a, b| b.count.cmp(&a.count));
+    kept.sort_by_key(|t| std::cmp::Reverse(t.count));
     kept
 }
 
