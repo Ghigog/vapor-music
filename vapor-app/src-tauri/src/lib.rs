@@ -1390,7 +1390,7 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
         // sources that fill this field disagree about casing.
         let wanted = genre.trim();
         rows.retain(|r| {
-            vapor_library::split_genres(&genre_of(app, &r.href))
+            vapor_library::split_real_genres(&genre_of(app, &r.href))
                 .iter()
                 .any(|g| g.eq_ignore_ascii_case(wanted))
         });
@@ -2687,7 +2687,7 @@ pub(crate) fn tracks_in_group(app: &AppState, group: &vapor_library::DynamicGrou
                 // Membership rather than equality, and case-insensitive: a
                 // group naming Jazz has to catch a track that is Liquid Funk
                 // and Jazz, and the sources disagree about casing.
-                EntityType::Genre => vapor_library::split_genres(&genre_of(app, &row.href))
+                EntityType::Genre => vapor_library::split_real_genres(&genre_of(app, &row.href))
                     .iter()
                     .any(|g| g.eq_ignore_ascii_case(e.value.trim())),
             })
