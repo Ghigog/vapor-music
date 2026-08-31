@@ -430,9 +430,7 @@ export function LinerNotes({
             )}
             <p className="liner__note">
               From LRCLIB, not from this file or this device.
-              {looked.lyrics.synced
-                ? " Timed to the recording by whoever transcribed them, so the alignment is theirs, not ours."
-                : " No timed version was available, so these are the words without the timings."}
+              {looked.lyrics.synced ? "" : " Not timed."}
             </p>
           </>
         ) : looked?.attempted ? (

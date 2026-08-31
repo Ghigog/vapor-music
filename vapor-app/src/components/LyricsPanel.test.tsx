@@ -94,6 +94,6 @@ describe("LyricsPanel", () => {
       expect(screen.getByText("just the words")).toBeInTheDocument(),
     );
     expect(document.querySelector(".lyrics__line--now")).toBeNull();
-    expect(screen.getByText(/without the timings/i)).toBeInTheDocument();
+    expect(screen.getByText(/not timed/i)).toBeInTheDocument();
   });
 });

@@ -1105,7 +1105,7 @@ describe("Liner Notes", () => {
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
       expect(await screen.findByText("Just the words")).toBeInTheDocument();
-      expect(screen.getByText(/without the timings/i)).toBeInTheDocument();
+      expect(screen.getByText(/not timed/i)).toBeInTheDocument();
     });
   });
 });
