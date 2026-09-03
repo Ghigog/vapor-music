@@ -431,7 +431,6 @@ pub fn track_facts_of(body: &str) -> Option<TrackFacts> {
     })
 }
 
-
 /// The first hit of a track search, with the release it sits on.
 ///
 /// The search response was being read for one field — the track id — and thrown

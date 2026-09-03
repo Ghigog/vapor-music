@@ -395,7 +395,8 @@ pub fn split_real_genres(field: &str) -> Vec<String> {
         // recognise it. Two adjacent segments that rejoin into a placeholder
         // were one, and both go — testing the segments singly leaves "N" and
         // "A", which are not placeholders to anything downstream.
-        if i + 1 < segments.len() && is_unknown_genre(&format!("{}/{}", segments[i], segments[i + 1]))
+        if i + 1 < segments.len()
+            && is_unknown_genre(&format!("{}/{}", segments[i], segments[i + 1]))
         {
             i += 2;
             continue;
