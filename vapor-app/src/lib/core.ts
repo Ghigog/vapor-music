@@ -593,6 +593,21 @@ export function duplicateCount(): Promise<number> {
   return invoke<number>("duplicate_count");
 }
 
+/**
+ * How many tracks the index has been caught describing wrongly.
+ *
+ * Zero is the ordinary answer. Anything else was found by trying to play a
+ * track and being told there is no file at that path — the library was written
+ * before something moved, and only a scan can say what is there now. It is what
+ * puts the "!" on Settings and the line under Analyse.
+ *
+ * Read once on mount; the `library-stale` event carries the number after that,
+ * and a scan sends a zero.
+ */
+export function missingFileCount(): Promise<number> {
+  return invoke<number>("missing_file_count");
+}
+
 export function dynamicGroups(): Promise<DynamicGroup[]> {
   return invoke<DynamicGroup[]>("dynamic_groups");
 }

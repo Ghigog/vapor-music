@@ -210,6 +210,15 @@ pub struct Fetcher {
     client: reqwest::blocking::Client,
 }
 
+/// What the server says when the library index points at a path it does not
+/// have, in the exact words the rest of the app matches on.
+///
+/// A constant rather than a literal repeated in three files. The playback path
+/// has to recognise this one refusal — it is the only one that means "rescan",
+/// as the comment on [`refusal`] has said since it was written — and a phrase
+/// it recognises by spelling is a phrase that must be spelled in one place.
+pub const MISSING_FILE: &str = "no file at this path on the server";
+
 /// What a refusal from the server means, in words that name the fix.
 ///
 /// The status on its own is true and useless. "server returned 404" reaches a
@@ -219,7 +228,7 @@ pub struct Fetcher {
 /// credential, and no number of further passes will supply it.
 fn refusal(status: reqwest::StatusCode) -> String {
     match status {
-        reqwest::StatusCode::NOT_FOUND => "no file at this path on the server".to_string(),
+        reqwest::StatusCode::NOT_FOUND => MISSING_FILE.to_string(),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
             "the server refused the request — check the library username and password".to_string()
         }

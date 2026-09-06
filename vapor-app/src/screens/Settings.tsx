@@ -298,6 +298,15 @@ export function Settings() {
   const [failures, setFailures] = useState<core.AnalysisFailure[]>([]);
   /** Whether the list of them is open. */
   const [showFailures, setShowFailures] = useState(false);
+  /**
+   * How many tracks the index has been caught describing wrongly.
+   *
+   * Not a failure of analysis, which is what the line under it counts. This is
+   * the library disagreeing with the server: a track was played and the file
+   * was not at the path the index has for it, so something moved after the last
+   * scan and the row has to say a scan is owed.
+   */
+  const [stale, setStale] = useState(0);
   /** Whether a pass has been seen running since Analyse was pressed. */
   const [started, setStarted] = useState(false);
   const [progress, setProgress] = useState<core.AnalysisProgress | null>(null);
@@ -399,6 +408,26 @@ export function Settings() {
       .catch((e: unknown) => setError({ card: "remote", text: messageOf(e) }));
     void refresh();
   }, [refresh, checkStored]);
+
+  /*
+   * The same number the "!" on the Settings button is drawn from, so the mark
+   * and the sentence explaining it can never disagree. Read on mount and then
+   * followed, because a scan sends a nought and the row has to stop asking.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void core
+      .missingFileCount()
+      .then((n) => {
+        if (!cancelled) setStale(n);
+      })
+      .catch(() => {});
+    const unlisten = listen<number>("library-stale", (e) => setStale(e.payload));
+    return () => {
+      cancelled = true;
+      void unlisten.then((f) => f());
+    };
+  }, []);
 
   /*
    * Progress arrives per track rather than being polled: the pass is minutes
@@ -596,7 +625,32 @@ export function Settings() {
 
   async function analyse() {
     setProgress(null);
-    await run("analysing", "analysis", core.analyseLibrary, () => {});
+    await run(
+      "analysing",
+      "analysis",
+      async () => {
+        /*
+         * A library known to be out of date is scanned before it is measured.
+         *
+         * Analysis works from the index, so running it against one that points
+         * at files which have moved spends the whole pass rediscovering, track
+         * by track, the thing the row is already saying. A scan is what learns
+         * where the music actually is — and it starts an analysis pass itself
+         * when it finishes, so this is the same button doing the same job in
+         * the right order, not a second one.
+         *
+         * The screens that cached rows have to forget them, exactly as pressing
+         * Scan on the server card does.
+         */
+        if (stale > 0) {
+          window.dispatchEvent(new Event("vapor:library-changed"));
+          await core.scanLibrary();
+          return;
+        }
+        await core.analyseLibrary();
+      },
+      () => {},
+    );
     // Read the status straight back.
     //
     // The backend marks the pass running *before* it spawns the thread, so this
@@ -812,8 +866,19 @@ export function Settings() {
         */}
         <SettingRow
           title="Analyse"
-          // The sentence, which never changes.
-          subtitle="Let Vibe DJ find tempo, key and cue points, and more"
+          // The sentence, which changes for exactly one reason.
+          //
+          // Ordinarily this says what analysis is for. When the library has
+          // been caught describing a file that is not there — the player tried
+          // to play one and the server said there is nothing at that path — it
+          // says so instead, because that is the more useful sentence and this
+          // row is where the button that fixes it lives. See `analyse`, which
+          // scans first while this is showing.
+          subtitle={
+            stale > 0
+              ? "Updates on the server; please re-run"
+              : "Let Vibe DJ find tempo, key and cue points, and more"
+          }
           // The count, which changes every few seconds. Welded onto the end of
           // the sentence above it ran past the width of the row and ellipsised,
           // so the number — the only part worth watching — was the part that

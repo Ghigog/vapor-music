@@ -444,6 +444,9 @@ export class FakeBackend {
   private pinned = new Set<string>();
   /** Startup damage sentences the backend would report. Empty by default. */
   private damaged: string[] = [];
+  /** How many tracks the index has been caught describing wrongly. Zero is a
+   *  library that agrees with what is on the server. */
+  missingFiles = 0;
   /** Covers chosen by hand, keyed as the backend keys them. */
   private albumArt: Record<string, string> = {};
   /** What a search would find, by album title. Anything absent finds nothing. */
@@ -837,6 +840,8 @@ export class FakeBackend {
           );
         }
         this.scanned = true;
+        // A rebuilt index answers every complaint the old one earned.
+        this.missingFiles = 0;
         // Scanning starts an analysis pass, without being asked. The real
         // shell spawns one at the end of `scan_library`; here it completes at
         // once, which is the part the screens can observe — that a scanned
@@ -1285,6 +1290,11 @@ export class FakeBackend {
         }
         return removed;
       }
+
+      case "missing_file_count":
+        // State and an answer. A test that wants the stale badge sets
+        // `missingFiles` on the harness; nothing here decides when it is set.
+        return this.missingFiles;
 
       case "duplicate_count": {
         // Keyed on title and artist, not on the filename — a second copy is

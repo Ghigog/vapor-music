@@ -575,6 +575,65 @@ describe("the analyse row", () => {
 });
 
 /**
+ * A library that has moved under the app.
+ *
+ * The player found a track the index lists and the server had no file at that
+ * path — the folder was renamed, the album tidied — so the index is describing
+ * something that is not there. Analysis cannot discover that; only a scan can,
+ * and this row is where the button that runs one lives.
+ */
+describe("the analyse row, when the library has moved", () => {
+  it("asks for a re-run instead of explaining what analysis is for", async () => {
+    const backend = useBackend();
+    render(<Settings />);
+    await screen.findByText(/let vibe dj find tempo/i);
+
+    act(() => emitEvent("library-stale", 3));
+
+    expect(
+      await screen.findByText(/updates on the server; please re-run/i),
+    ).toBeInTheDocument();
+    expect(backend).toBeDefined();
+  });
+
+  it("scans before it measures, because the index is what is wrong", async () => {
+    const backend = useBackend({ connected: true, withPassword: true });
+    render(<Settings />);
+    await screen.findByText(/let vibe dj find tempo/i);
+
+    act(() => emitEvent("library-stale", 3));
+    await screen.findByText(/updates on the server; please re-run/i);
+
+    await userEvent.click(screen.getByRole("button", { name: "Analyse" }));
+
+    // The scan is the point: measuring an index that points at files which have
+    // moved spends the whole pass rediscovering what the row already said.
+    await waitFor(() => {
+      expect(backend.called("scan_library")).toBe(true);
+    });
+  });
+
+  it("stops asking once a scan has answered", async () => {
+    useBackend();
+    render(<Settings />);
+    await screen.findByText(/let vibe dj find tempo/i);
+
+    act(() => emitEvent("library-stale", 3));
+    await screen.findByText(/updates on the server; please re-run/i);
+
+    // What `scan_library` sends when it has rebuilt the index.
+    act(() => emitEvent("library-stale", 0));
+
+    expect(
+      await screen.findByText(/let vibe dj find tempo/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/updates on the server; please re-run/i),
+    ).not.toBeInTheDocument();
+  });
+});
+
+/**
  * There is no telemetry and no crash reporting, both on purpose. That makes a
  * person reading a version back the only way a report ever names a build, so
  * the stamp has to actually be on screen — and it is exactly the kind of

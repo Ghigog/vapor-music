@@ -12,6 +12,7 @@
  * consistency.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { VaporMark } from "./components/VaporMark";
 import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
@@ -171,6 +172,17 @@ export function App() {
     null,
   );
   const [playlistItems, setPlaylistItems] = useState<TabMenuItem[]>([]);
+  /**
+   * How many tracks the library has been caught describing wrongly.
+   *
+   * Nought is the ordinary answer. Anything else means a track was played and
+   * the file was not at the path the index has for it — something moved on the
+   * server — and the only thing that can put it right is a scan. Held up here
+   * rather than in Settings because the point of it is to be visible from
+   * anywhere: the mark goes on the Settings button, which is on every screen,
+   * and Settings is where the answer is.
+   */
+  const [staleTracks, setStaleTracks] = useState(0);
   const [groupItems, setGroupItems] = useState<TabMenuItem[]>([]);
   /**
    * Whether the DJ is conducting the queue.
@@ -265,6 +277,32 @@ export function App() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  /*
+   * The mark on Settings, and what keeps it current.
+   *
+   * Read once, because a session that started after the discovery would
+   * otherwise show nothing until the next moved file; then kept by the event,
+   * which carries the count and sends a nought when a scan clears it. The first
+   * read is allowed to fail silently — at boot the backend may not have
+   * registered its state yet, and the event will say so soon enough either way.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void core
+      .missingFileCount()
+      .then((n) => {
+        if (!cancelled) setStaleTracks(n);
+      })
+      .catch(() => {});
+    const unlisten = listen<number>("library-stale", (e) => {
+      setStaleTracks(e.payload);
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
@@ -594,12 +632,32 @@ export function App() {
         */}
         <button
           className="shell__settings"
-          aria-label="Settings"
-          title="Settings"
+          /*
+            The mark says something, so it says it in words too.
+
+            A "!" that only exists as a dot is a thing a screen reader cannot
+            report and a person cannot act on. The label carries the reason and
+            the count; the dot is how it is noticed.
+          */
+          aria-label={
+            staleTracks > 0
+              ? `Settings — your library has moved files, ${staleTracks.toLocaleString()} so far`
+              : "Settings"
+          }
+          title={
+            staleTracks > 0
+              ? "Your library has moved files. Re-scan in Settings."
+              : "Settings"
+          }
           aria-current={screen === "settings" ? "page" : undefined}
           onClick={() => go("settings")}
         >
           <span className="icon icon--settings" aria-hidden="true" />
+          {staleTracks > 0 && (
+            <span className="shell__settings-flag" aria-hidden="true">
+              !
+            </span>
+          )}
         </button>
 
         {/* The same destinations as the sidebar, for the widths that hide it.

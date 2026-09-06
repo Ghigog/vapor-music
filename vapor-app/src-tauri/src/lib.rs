@@ -338,6 +338,33 @@ pub(crate) struct AppState {
     /// settings the moment it is made, so the worst a lost queue costs is a
     /// grid that stays stale until something else re-tracks it.
     pub(crate) pending_retrack: Vec<String>,
+
+    /// Tracks the index still lists that are no longer at the path it has for
+    /// them, found by trying to play one.
+    ///
+    /// The library was right when it was written and something moved the files
+    /// afterwards — renamed a folder on the NAS, tidied an album, unplugged a
+    /// drive. Only a scan can tell what the truth is now, so this is the
+    /// evidence that one is owed: it is what puts the "!" on Settings, and a
+    /// scan clears it.
+    ///
+    /// A set, so the same track failing twice is one problem rather than two.
+    /// Not persisted — it is a claim about what is on a server right now, and a
+    /// stale one read from disk at launch would ask for a scan nobody needs.
+    pub(crate) missing_files: std::collections::BTreeSet<String>,
+    /// How many of those the supervisor has already announced to the screen.
+    ///
+    /// The same arrangement as `pending_retrack` and for the same reason: the
+    /// discovery happens on a load thread with no `AppHandle`, and the
+    /// supervisor holds one and already runs on a timer.
+    pub(crate) missing_announced: usize,
+
+    /// Tracks skipped in a row because their files were missing.
+    ///
+    /// Bounded by [`MAX_MISSING_SKIPS`]. One moved album should be stepped
+    /// over; a server that has gone away entirely answers 404 for everything,
+    /// and walking a whole queue to prove it is neither useful nor quiet.
+    pub(crate) missing_skips: u32,
 }
 
 impl AppState {
@@ -486,6 +513,9 @@ impl AppState {
             next_stream: None,
             drift: None,
             pending_retrack: Vec::new(),
+            missing_files: std::collections::BTreeSet::new(),
+            missing_announced: 0,
+            missing_skips: 0,
         }
     }
 
@@ -3191,6 +3221,28 @@ fn stream_from_server(
     )
 }
 
+/// How many missing files in a row the queue will step over before it stops.
+///
+/// Generous, because the case this is for is a folder that was renamed and took
+/// a whole album with it, and stopping in the middle of one is the failure this
+/// exists to prevent. Bounded, because a server that has gone away answers the
+/// same way for every track in the library, and a queue that silently walks
+/// eight hundred of them to arrive at silence has told the person nothing.
+const MAX_MISSING_SKIPS: u32 = 25;
+
+/// Whether a failed load means the file is not where the index says it is.
+///
+/// Named, rather than a `matches!` inline at the one call site, because it is a
+/// judgement about what a sentence means and those are worth testing. The two
+/// refusals that matter read almost the same to a person and want opposite
+/// things done: a path the server no longer has is stepped over and asks for a
+/// scan; a credential it would not accept is stopped on, because the next track
+/// will be refused in exactly the same way and skipping the library one song at
+/// a time is not a recovery.
+pub(crate) fn file_is_gone(reason: &str) -> bool {
+    reason.contains(webdav::MISSING_FILE)
+}
+
 pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     // A new track is a new listen to earn. Whatever the previous one had
     // accrued is dropped rather than banked: it did not reach `CREDIT_AFTER`,
@@ -3269,8 +3321,21 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
          */
         let outcome = match cache.get(&href) {
             Some(path) => decoder::Streamer::start(&path, rate, 0),
+            // A local track with no file behind it is the same fact the server
+            // reports as a 404, and it has to say so in the same words —
+            // otherwise it falls through to `stream_from_server`, which on a
+            // library that has no server at all answers with a complaint about
+            // a missing address. "Set up a server" is the wrong thing to tell
+            // someone whose only mistake was moving a folder.
+            None if local::is_local(&href) => Err(webdav::MISSING_FILE.to_string()),
             None => stream_from_server(&remote, &cache, &href, rate, 0),
         };
+
+        // Whether this failed because the file is not where the library says it
+        // is, as opposed to any of the other ways a load can go wrong. It is the
+        // one failure the queue steps over rather than stopping on, and the one
+        // that means the index is out of date.
+        let gone = matches!(&outcome, Err(e) if file_is_gone(e));
 
         let Ok(mut app) = shared.lock() else {
             return;
@@ -3288,6 +3353,11 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
                 // A refused load means the audio thread has stopped servicing
                 // its queue, which is a dead device rather than a busy one.
                 // Saying so beats a transport that reads "playing" in silence.
+                // A track that plays ends the streak. Without this, one moved
+                // album early in a long set would leave the counter high enough
+                // that a second, unrelated one an hour later hit the ceiling
+                // immediately and stopped the music.
+                app.missing_skips = 0;
                 if link.load(TrackSource::Stream(streamer.window()), true) {
                     // Held so the decoder keeps running and, more importantly,
                     // so it is stopped when this track is replaced. Dropping
@@ -3310,6 +3380,84 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
                 app.failures
                     .insert(href.clone(), "decodes to no audio".to_string());
                 let _ = app.save_failures();
+            }
+            Err(_) if gone => {
+                // The library is describing a file that is not there any more.
+                // Two things follow, and neither of them is stopping.
+                //
+                // The set carries on. A track that has moved is not a reason to
+                // end a DJ session — the person is listening to a room, not to
+                // this record, and silence twenty minutes in because one album
+                // got tidied on the NAS is the worst answer available. So the
+                // queue advances and the next track starts, exactly as it would
+                // have when this one ended.
+                //
+                // And the index is now known to be wrong, which only a scan can
+                // put right. Remembered here; announced by the supervisor,
+                // which has the `AppHandle` this thread does not.
+                app.missing_files.insert(href.clone());
+
+                let name = app
+                    .rows
+                    .iter()
+                    .find(|r| r.href == href)
+                    .map(|r| r.title.clone())
+                    .unwrap_or_else(|| href.clone());
+
+                if app.missing_skips >= MAX_MISSING_SKIPS {
+                    // Everything is failing this way, which is a server that
+                    // has gone away rather than a file that moved. Walking the
+                    // rest of the queue to discover that again is noise.
+                    app.playing = None;
+                    app.playback_error = Some(format!(
+                        "Stopped after {MAX_MISSING_SKIPS} tracks in a row were \
+                         not where your library says they are. Re-scan your \
+                         library in Settings."
+                    ));
+                    return;
+                }
+                app.missing_skips += 1;
+
+                /*
+                 * Where the next track comes from, in the order the ending of
+                 * an ordinary track would ask.
+                 *
+                 * The queue first. If it has run out, the DJ is asked to extend
+                 * the set exactly as the supervisor does when a track finishes
+                 * — which is the case that matters most here, because a Vibe DJ
+                 * session started from one track has a queue one long, and
+                 * "skip to the next one" would otherwise mean "stop".
+                 *
+                 * `extend_set` plans from `app.playing`, so it is still the
+                 * track that failed at this point. That is the right seed: the
+                 * file has gone but its tempo, key and energy are all still on
+                 * file, and they are what the next track should follow.
+                 */
+                let next = match app.queue.next(None).map(str::to_string) {
+                    Some(next) => Some(next),
+                    None if extend_set(&mut app) => app.queue.next(None).map(str::to_string),
+                    None => None,
+                };
+                app.playing = None;
+
+                match next {
+                    Some(next) => {
+                        begin_playback(&shared, &mut app, next);
+                        // After the call, not before: `begin_playback` clears
+                        // the error as it starts a track, so a note set first
+                        // would be wiped by the very thing it is explaining.
+                        app.playback_error = Some(format!(
+                            "Skipped “{name}” — it is not where your \
+                             library says it is."
+                        ));
+                    }
+                    None => {
+                        app.playback_error = Some(format!(
+                            "“{name}” is not where your library says it is, and \
+                             there is nothing after it. Re-scan your library in Settings."
+                        ));
+                    }
+                }
             }
             Err(e) => {
                 app.playback_error = Some(e);
@@ -4201,6 +4349,29 @@ fn spawn_supervisor(app_handle: tauri::AppHandle, shared: Shared, controls: Arc<
                     let corrected = std::mem::take(&mut app.pending_retrack);
                     drop(app);
                     retrack_grids(&app_handle, &shared, corrected);
+                    continue;
+                }
+
+                /*
+                 * Files the index has lost track of, announced.
+                 *
+                 * Here for the same reason as the block above: a load that
+                 * fails runs on a `spawn_blocking` thread with no `AppHandle`,
+                 * so it leaves the fact in `missing_files` and this loop — which
+                 * holds one — tells the screen. Counted rather than drained,
+                 * because the set is the answer to "how out of date is the
+                 * index" and a scan is the only thing entitled to clear it.
+                 *
+                 * The lock is released before the emit, and the tick ends
+                 * there, exactly as the retrack drain above does: nothing that
+                 * reaches out of this thread should do so holding the one mutex
+                 * every command needs. One tick is not a delay anybody hears.
+                 */
+                if app.missing_files.len() != app.missing_announced {
+                    app.missing_announced = app.missing_files.len();
+                    let count = app.missing_announced;
+                    drop(app);
+                    let _ = app_handle.emit("library-stale", count);
                     continue;
                 }
 
@@ -6582,6 +6753,7 @@ pub fn run() {
             commands::playlists::playlist_folders,
             commands::playlists::create_folder,
             commands::library::duplicate_count,
+            commands::library::missing_file_count,
             commands::lookup::lookup_counts,
             commands::downloads::downloaded_tracks,
             commands::downloads::download_collection,
@@ -7064,6 +7236,56 @@ mod tests {
         let grid = beat_grid(&a, None);
         assert_eq!(grid.bpm, 128.0);
         assert_eq!(grid.beats, a.beats, "the tracked grid was discarded");
+    }
+
+    /// The two refusals that read alike and mean opposite things.
+    ///
+    /// This is the whole of what decides whether the queue steps over a track
+    /// or stops on it, so it is pinned against the words `webdav::refusal`
+    /// actually produces rather than against a phrase invented here — including
+    /// the wrapped form, since a failure can reach this with a prefix on it.
+    #[test]
+    fn only_a_path_the_server_has_lost_is_stepped_over() {
+        assert!(file_is_gone(webdav::MISSING_FILE));
+        assert!(file_is_gone(&format!("/a/b.mp3: {}", webdav::MISSING_FILE)));
+
+        assert!(
+            !file_is_gone(
+                "the server refused the request — check the library username and password"
+            ),
+            "a credential failure would skip the whole library one track at a time"
+        );
+        assert!(!file_is_gone("server returned 500 Internal Server Error"));
+        assert!(!file_is_gone("That track contains no playable audio."));
+    }
+
+    /// A local file that has been moved reports the same fact as a server 404.
+    ///
+    /// Pinned because the branch that says so is easy to lose: without it the
+    /// load falls through to `stream_from_server`, and on a library with no
+    /// server configured that answers by complaining about a missing address —
+    /// telling someone who moved a folder to go and set up a NAS.
+    #[test]
+    fn a_moved_local_file_is_the_same_fact_as_a_missing_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "vapor-moved-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let root = dir.join("music");
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        let href = local::href("folder-1", "Album/Gone.mp3");
+        assert!(local::is_local(&href), "not recognised as a local track");
+
+        let roots = std::collections::HashMap::from([("folder-1".to_string(), root)]);
+        let cache = cache::Cache::new(dir.join("audio"), 1 << 20, roots);
+        assert!(
+            cache.get(&href).is_none(),
+            "a file that is not on disk resolved anyway"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The core of the correction: a grid tracked at the rejected tempo is not
