@@ -115,6 +115,13 @@ export interface FakeOptions {
   /** Playlists already in the shared document on the server (SYNC-006). */
   sharedDocument?: core.Playlist[];
   /**
+   * How many arrivals the merge had to rename because a record here
+   * already had the name. An answer rather than a rule: which name wins
+   * and how it is numbered is decided in `vapor_library::sync` and tested
+   * there, and this is how a screen test reaches the sentence about it.
+   */
+  renamedOnSync?: number;
+  /**
    * Folders the scan cannot read and walks past (TD-49). The real backend
    * counts them and reports them; this is how a test reaches that sentence.
    */
@@ -477,6 +484,7 @@ export class FakeBackend {
   private syncing: core.SyncProgress | null = null;
   /** The shared document on the fake server, or null when there is none. */
   private sharedDocument: core.Playlist[] | null;
+  private renamedOnSync: number;
 
   private syncView(): core.SyncView {
     if (!this.settings.syncEnabled) {
@@ -585,6 +593,7 @@ export class FakeBackend {
     this.peers = options.peers ?? [];
     this.trusted = options.trustedPeers ?? [];
     this.sharedDocument = options.sharedDocument ?? null;
+    this.renamedOnSync = options.renamedOnSync ?? 0;
     this.keychainSilentlyFails = options.keychainSilentlyFails ?? false;
     // A store that never keeps anything cannot already be holding something.
     // Seeding a password here made `keychainSilentlyFails` unobservable: the
@@ -1227,9 +1236,13 @@ export class FakeBackend {
           playlistsAdded: added,
           playlistsExtended: 0,
           foldersAdded: 0,
+          groupsAdded: 0,
+          groupsExtended: 0,
           temposAdded: 0,
           playlistsDeleted: 0,
           foldersDeleted: 0,
+          groupsDeleted: 0,
+          renamed: this.renamedOnSync,
           created,
         } satisfies core.SharedSyncResult;
       }

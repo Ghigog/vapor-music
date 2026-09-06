@@ -3,11 +3,23 @@
 /**
  * What a round trip to the server changed.
  */
-export type SharedSyncResult = { playlistsAdded: number, playlistsExtended: number, foldersAdded: number, temposAdded: number, 
+export type SharedSyncResult = { playlistsAdded: number, playlistsExtended: number, foldersAdded: number, 
+/**
+ * Groups that arrived whole, and groups already here that gained
+ * entities. The merge has reported both since AUD-11; this struct did
+ * not carry them, so a group crossing between devices happened silently
+ * and the panel said "Up to date" while a rail full of new groups
+ * appeared behind it.
+ */
+groupsAdded: number, groupsExtended: number, temposAdded: number, 
 /**
  * Removed here because another device removed them (TD-57).
  */
-playlistsDeleted: number, foldersDeleted: number, 
+playlistsDeleted: number, foldersDeleted: number, groupsDeleted: number, 
+/**
+ * Given a `(1)` because a different record here already had the name.
+ */
+renamed: number, 
 /**
  * True when there was no document there and this device wrote the first.
  */

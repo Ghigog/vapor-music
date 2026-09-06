@@ -802,6 +802,95 @@ fn keep_earliest(map: &mut std::collections::HashMap<String, Millis>, id: String
         .or_insert(at);
 }
 
+/// Names already spoken for on this device, so an arriving record that wants
+/// one of them can be given a name of its own instead.
+///
+/// Ids are what the merge matches on, and two devices that each made a
+/// playlist called "Chill" without ever having met made two different ids. So
+/// both survive the merge — correctly, they are two different playlists — and
+/// without this they both arrive on screen called "Chill", which reads as a
+/// bug whatever the ids say.
+///
+/// **The arrival is the one renamed, never what is already here.** A person
+/// syncing a device should not find the playlist they use every day suddenly
+/// called something else; that is the same rule the tempo arm follows, where
+/// the correction typed on this machine wins on this machine. The cost is that
+/// two devices disagree about which of the pair is "Chill" and which is
+/// "Chill (1)" — each keeps its own as the unsuffixed one. That is a real
+/// difference and it is the right way round: the alternative is picking a
+/// winner by id or by clock, which renames somebody's playlist under them to
+/// settle a tie neither device cares about.
+///
+/// It is stable rather than merely convergent. Renaming happens only when an
+/// id first arrives, so a second merge of the same document finds the id
+/// known, touches no name, and reports nothing.
+struct TakenNames(std::collections::HashSet<String>);
+
+impl TakenNames {
+    fn of<'a>(names: impl Iterator<Item = &'a str>) -> Self {
+        TakenNames(names.map(folded).collect())
+    }
+
+    /// `wanted` if it is free here, otherwise the first of `Name (1)`,
+    /// `Name (2)`, … that is. Either way the answer is spoken for afterwards,
+    /// so two arrivals with the same name do not both get it.
+    fn claim(&mut self, wanted: &str) -> String {
+        if self.0.insert(folded(wanted)) {
+            return wanted.to_string();
+        }
+        let base = base_name(wanted);
+        let mut n = 1u32;
+        loop {
+            // Terminates: the candidates are distinct for distinct `n` and the
+            // set is finite, so one of them is free.
+            let candidate = format!("{base} ({n})");
+            if self.0.insert(folded(&candidate)) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+}
+
+/// How two names are compared for the purpose of "already taken".
+///
+/// Trimmed and lowercased, because "chill" and "Chill " sitting next to each
+/// other in a list are a duplicate to the person reading it, whatever a byte
+/// comparison says. This decides only whether to suffix; nothing is ever
+/// stored folded.
+fn folded(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// `"Chill (1)"` → `"Chill"`, so a third device's "Chill" becomes
+/// `"Chill (2)"` rather than `"Chill (1) (1)"`.
+///
+/// Only reached when the name has already collided, so a playlist genuinely
+/// called "Best of 2020 (1)" keeps that name unless something else here is
+/// called the same thing — at which point it becomes "Best of 2020 (2)", which
+/// is the readable answer anyway.
+fn base_name(name: &str) -> &str {
+    // Trailing space goes in every branch, including the ones that find no
+    // number to strip: a name stored as "chill " would otherwise be suffixed
+    // into "chill  (1)", and the double space is nobody's intent.
+    let name = name.trim_end();
+    let Some(inner) = name.strip_suffix(')') else {
+        return name;
+    };
+    let Some(open) = inner.rfind('(') else {
+        return name;
+    };
+    let digits = &inner[open + 1..];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return name;
+    }
+    match inner[..open].trim_end() {
+        // The whole name was "(1)". It has no base to number from.
+        "" => name,
+        base => base,
+    }
+}
+
 /// What a merge changed, for the screen to report.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MergeReport {
@@ -819,6 +908,11 @@ pub struct MergeReport {
     pub groups_deleted: usize,
     /// Taken out of a playlist here because another device took them out.
     pub tracks_removed: usize,
+    /// Arrivals given a `(1)` because a different record here already had
+    /// the name. Counted across playlists, folders and groups together —
+    /// what the person reading it needs to know is that some of the names
+    /// on screen are not the ones the other device used.
+    pub renamed: usize,
 }
 
 impl MergeReport {
@@ -839,6 +933,16 @@ impl MergeReport {
 /// synced most recently is right", which loses work silently. Additive merge
 /// cannot lose anything, converges in one pass, and is the same answer
 /// whichever order two devices sync in.
+///
+/// ## Names, which additive merge alone gets wrong
+///
+/// Matching on id is right — two devices that independently made a playlist
+/// called "Chill" made two playlists, not one, and merging them into a single
+/// list would lose whichever tracks were only in the other. But it leaves two
+/// rows on screen with the same name and nothing to tell them apart, which is
+/// indistinguishable from a duplication bug. So an arriving record whose name
+/// is already spoken for here is suffixed — "Chill (1)" — and only the arrival
+/// is ever renamed. See [`TakenNames`] for why that way round.
 ///
 /// ## Deletions, which are the exception (TD-57)
 ///
@@ -948,16 +1052,23 @@ pub fn merge_shared(
         }
     }
 
+    // Built here rather than earlier: the deletions above have just freed
+    // whatever names they were holding, and an arrival should be allowed to
+    // take one of those rather than be suffixed around a record that is gone.
+    let mut folder_names = TakenNames::of(folders.all().iter().map(|f| f.name.as_str()));
+    let mut group_names = TakenNames::of(groups.all().iter().map(|g| g.name.as_str()));
+    let mut playlist_names = TakenNames::of(playlists.all().iter().map(|p| p.name.as_str()));
+
     for folder in &remote.folders {
         if deleted.folder_deleted(&folder.id) {
             continue;
         }
         if folders.get(&folder.id).is_none() {
-            folders.create(
-                folder.id.clone(),
-                folder.name.clone(),
-                folder.parent_id.clone(),
-            );
+            let name = folder_names.claim(&folder.name);
+            if name != folder.name {
+                report.renamed += 1;
+            }
+            folders.create(folder.id.clone(), name, folder.parent_id.clone());
             report.folders_added += 1;
         }
     }
@@ -973,7 +1084,11 @@ pub fn merge_shared(
         }
         let known = groups.get(&incoming.id).is_some();
         if !known {
-            groups.create(incoming.id.clone(), incoming.name.clone());
+            let name = group_names.claim(&incoming.name);
+            if name != incoming.name {
+                report.renamed += 1;
+            }
+            groups.create(incoming.id.clone(), name);
             report.groups_added += 1;
         }
         let mut landed = 0;
@@ -995,11 +1110,11 @@ pub fn merge_shared(
         }
         match playlists.get(&incoming.id) {
             None => {
-                playlists.create_in_folder(
-                    incoming.id.clone(),
-                    incoming.name.clone(),
-                    incoming.folder_id.clone(),
-                );
+                let name = playlist_names.claim(&incoming.name);
+                if name != incoming.name {
+                    report.renamed += 1;
+                }
+                playlists.create_in_folder(incoming.id.clone(), name, incoming.folder_id.clone());
                 let added = playlists.add_tracks(&incoming.id, &wanted_tracks(deleted, incoming));
                 let _ = added;
                 report.playlists_added += 1;
@@ -2179,6 +2294,383 @@ mod tests {
         assert!(parsed.bpm_overrides.is_empty());
         assert!(parsed.groups.is_empty());
         assert!(parsed.deleted.groups.is_empty());
+    }
+
+    // --- Names that collide across devices ---------------------------------
+
+    /// Two devices that never met each made a playlist called "Chill". Both
+    /// are real and both must survive, but arriving under the same name is
+    /// indistinguishable on screen from having merged badly.
+    #[test]
+    fn an_arriving_playlist_whose_name_is_taken_gets_a_number() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        playlists.add_tracks("mine", &["/here.m4a".to_string()]);
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("theirs", "Chill", vec!["/there.m4a"])]);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.playlists_added, 1);
+        assert_eq!(report.renamed, 1);
+        assert_eq!(
+            playlists.get("mine").expect("untouched").name,
+            "Chill",
+            "the playlist already on this device keeps its name"
+        );
+        assert_eq!(playlists.get("theirs").expect("arrived").name, "Chill (1)");
+        // Renamed, not merged: the tracks stay in their own lists.
+        assert_eq!(playlists.get("mine").expect("here").tracks.len(), 1);
+        assert_eq!(playlists.get("theirs").expect("here").tracks.len(), 1);
+    }
+
+    /// The renaming must not happen again on every sync, or the name creeps up
+    /// a number each time the app is opened.
+    #[test]
+    fn a_renamed_arrival_is_not_renamed_again_on_the_next_merge() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+        let remote = shared_with(vec![("theirs", "Chill", vec!["/a.m4a"])]);
+
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+        let again = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(
+            playlists.get("theirs").expect("still here").name,
+            "Chill (1)"
+        );
+        assert_eq!(playlists.all().len(), 2);
+    }
+
+    /// A third device's copy numbers on from the base rather than stacking
+    /// another bracket onto a name that already has one.
+    #[test]
+    fn a_third_copy_of_the_name_counts_on() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        playlists.create("second", "Chill (1)");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("third", "Chill", vec![])]);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(playlists.get("third").expect("arrived").name, "Chill (2)");
+    }
+
+    /// A document carrying a name that is already suffixed, arriving somewhere
+    /// that has one too. "Chill (1) (1)" would be the naive answer.
+    #[test]
+    fn an_arriving_name_that_is_already_numbered_renumbers_from_its_base() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill (1)");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("theirs", "Chill (1)", vec![])]);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(playlists.get("theirs").expect("arrived").name, "Chill (2)");
+    }
+
+    /// Two devices' worth of arrivals in one document must not both claim the
+    /// same free name.
+    #[test]
+    fn two_arrivals_sharing_a_name_do_not_both_take_it() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("a", "Chill", vec![]), ("b", "Chill", vec![])]);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.renamed, 2);
+        let mut names: Vec<&str> = playlists.all().iter().map(|p| p.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Chill", "Chill (1)", "Chill (2)"]);
+    }
+
+    /// Case and stray spacing are a duplicate to the person reading the list,
+    /// whatever a byte comparison says.
+    #[test]
+    fn a_name_that_differs_only_in_case_still_counts_as_taken() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("theirs", "chill ", vec![])]);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(
+            playlists.get("theirs").expect("arrived").name,
+            "chill (1)",
+            "suffixed, but otherwise spelled the way its own device spelled it"
+        );
+    }
+
+    /// A name only one device uses is left exactly as it was written.
+    #[test]
+    fn a_name_nobody_else_is_using_is_untouched() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("theirs", "Late Night", vec![])]);
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.renamed, 0);
+        assert_eq!(playlists.get("theirs").expect("arrived").name, "Late Night");
+    }
+
+    /// Groups collide the same way playlists do, and were the other half of
+    /// what was asked for.
+    #[test]
+    fn an_arriving_group_whose_name_is_taken_gets_a_number() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        groups.create("mine", "Braindance");
+        groups.add_entity("mine", EntityType::Artist, "Autechre");
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.groups.push(group(
+            "theirs",
+            "Braindance",
+            vec![(EntityType::Artist, "Aphex Twin")],
+        ));
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.groups_added, 1);
+        assert_eq!(report.renamed, 1);
+        assert_eq!(groups.get("mine").expect("untouched").name, "Braindance");
+        let landed = groups.get("theirs").expect("arrived");
+        assert_eq!(landed.name, "Braindance (1)");
+        assert_eq!(
+            landed.entities.len(),
+            1,
+            "sets stay separate, as the ids do"
+        );
+    }
+
+    /// A group both devices already know is untouched — the entity union is
+    /// the whole of that case, and renaming it would be renaming what is here.
+    #[test]
+    fn a_group_both_devices_know_keeps_the_name_this_device_gave_it() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        groups.create("g1", "Braindance");
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote
+            .groups
+            .push(group("g1", "IDM", vec![(EntityType::Artist, "Aphex Twin")]));
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.renamed, 0);
+        assert_eq!(report.groups_extended, 1);
+        assert_eq!(groups.get("g1").expect("here").name, "Braindance");
+    }
+
+    #[test]
+    fn an_arriving_folder_whose_name_is_taken_gets_a_number() {
+        let mut playlists = PlaylistStore::new();
+        let mut folders = FolderStore::new();
+        folders.create("mine", "Sets", "");
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![]);
+        remote.folders.push(crate::group::Folder {
+            id: "theirs".into(),
+            name: "Sets".into(),
+            parent_id: String::new(),
+        });
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.folders_added, 1);
+        assert_eq!(report.renamed, 1);
+        assert_eq!(folders.get("theirs").expect("arrived").name, "Sets (1)");
+    }
+
+    /// A deletion frees the name it was holding, so an arrival takes it rather
+    /// than being suffixed around a playlist that is no longer there.
+    #[test]
+    fn a_name_freed_by_a_deletion_is_available_to_an_arrival() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("gone", "Chill");
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let mut remote = shared_with(vec![("theirs", "Chill", vec![])]);
+        remote.deleted.record_playlist("gone", 5);
+
+        let report = merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(report.playlists_deleted, 1);
+        assert_eq!(report.renamed, 0);
+        assert_eq!(playlists.get("theirs").expect("arrived").name, "Chill");
+    }
+
+    /// The names are only a display concern, so a group whose *name* is taken
+    /// still merges by id — arriving entities land in the group that shares
+    /// the id, never in the one that shares the name.
+    #[test]
+    fn a_shared_name_never_makes_two_records_merge() {
+        let mut playlists = PlaylistStore::new();
+        playlists.create("mine", "Chill");
+        playlists.add_tracks("mine", &["/mine.m4a".to_string()]);
+        let mut folders = FolderStore::new();
+        let mut groups = GroupStore::new();
+        let mut overrides = std::collections::HashMap::new();
+        let mut deleted = Tombstones::new();
+
+        let remote = shared_with(vec![("theirs", "Chill", vec!["/theirs.m4a"])]);
+        merge_shared(
+            &mut playlists,
+            &mut folders,
+            &mut groups,
+            &mut overrides,
+            &mut deleted,
+            &remote,
+        );
+
+        assert_eq!(playlists.get("mine").expect("here").tracks, ["/mine.m4a"]);
+        assert_eq!(
+            playlists.get("theirs").expect("here").tracks,
+            ["/theirs.m4a"]
+        );
+    }
+
+    #[test]
+    fn a_base_name_is_only_stripped_when_the_brackets_hold_a_number() {
+        assert_eq!(base_name("Chill (1)"), "Chill");
+        assert_eq!(base_name("Chill (12)"), "Chill");
+        assert_eq!(base_name("Chill"), "Chill");
+        assert_eq!(base_name("Chill (Live)"), "Chill (Live)");
+        assert_eq!(base_name("Chill ()"), "Chill ()");
+        assert_eq!(base_name("(1)"), "(1)", "no base to number from");
+        assert_eq!(base_name(""), "");
+        assert_eq!(
+            base_name("Chill "),
+            "Chill",
+            "no double space when suffixed"
+        );
     }
 
     // --- Transfer ----------------------------------------------------------

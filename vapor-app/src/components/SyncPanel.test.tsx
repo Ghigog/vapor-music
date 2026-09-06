@@ -258,6 +258,34 @@ describe("Sync panel", () => {
     });
 
     /**
+     * A playlist made on both devices before they ever met arrives under a
+     * name this one is already using, and the merge numbers it. The person is
+     * about to see a "Chill (1)" they did not type, so the line has to say so
+     * — an unexplained rename reads as the sync having damaged something.
+     */
+    it("says when an arrival had to be renamed", async () => {
+      useBackend({
+        syncEnabled: true,
+        playlists: [],
+        renamedOnSync: 1,
+        sharedDocument: [
+          {
+            id: "p9",
+            name: "Chill",
+            customCoverPath: "",
+            tracks: [],
+            folderId: "",
+          },
+        ],
+      });
+      render(<SyncPanel />);
+
+      expect(
+        await screen.findByText(/name already in use here and was numbered/i),
+      ).toBeInTheDocument();
+    });
+
+    /**
      * Nothing-to-do is a real outcome and has to read as one. Reporting only
      * the changes makes it indistinguishable from a failure that did not
      * throw.

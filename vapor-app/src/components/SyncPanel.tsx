@@ -126,6 +126,10 @@ export function SyncPanel() {
         r.playlistsExtended && `${r.playlistsExtended} gained tracks`,
         r.foldersAdded &&
           `${r.foldersAdded} folder${r.foldersAdded === 1 ? "" : "s"} arrived`,
+        r.groupsAdded &&
+          `${r.groupsAdded} group${r.groupsAdded === 1 ? "" : "s"} arrived`,
+        r.groupsExtended &&
+          `${r.groupsExtended} group${r.groupsExtended === 1 ? "" : "s"} gained artists or albums`,
         r.temposAdded &&
           `${r.temposAdded} tempo correction${r.temposAdded === 1 ? "" : "s"} arrived`,
         // Reported in the same breath as the arrivals, and deliberately not
@@ -136,6 +140,14 @@ export function SyncPanel() {
           `${r.playlistsDeleted} playlist${r.playlistsDeleted === 1 ? " was" : "s were"} deleted elsewhere and removed here`,
         r.foldersDeleted &&
           `${r.foldersDeleted} folder${r.foldersDeleted === 1 ? " was" : "s were"} deleted elsewhere and removed here`,
+        r.groupsDeleted &&
+          `${r.groupsDeleted} group${r.groupsDeleted === 1 ? " was" : "s were"} deleted elsewhere and removed here`,
+        // Said plainly, for the same reason the deletions are. Somebody who
+        // made a playlist called "Chill" on both devices is about to see a
+        // "Chill (1)" they did not name, and a rename nobody accounts for
+        // reads as the sync having damaged something.
+        r.renamed &&
+          `${r.renamed} arrived with a name already in use here and ${r.renamed === 1 ? "was" : "were"} numbered`,
       ].filter(Boolean);
 
       // Four outcomes, and three of them look identical if only the changes

@@ -379,9 +379,13 @@ pub fn sync_shared_document(
         result.playlists_added = report.playlists_added;
         result.playlists_extended = report.playlists_extended;
         result.folders_added = report.folders_added;
+        result.groups_added = report.groups_added;
+        result.groups_extended = report.groups_extended;
         result.tempos_added = report.tempos_added;
         result.playlists_deleted = report.playlists_deleted;
         result.folders_deleted = report.folders_deleted;
+        result.groups_deleted = report.groups_deleted;
+        result.renamed = report.renamed;
 
         if !report.is_empty() {
             app.save_playlists()?;

@@ -2531,10 +2531,20 @@ struct SharedSyncResult {
     playlists_added: usize,
     playlists_extended: usize,
     folders_added: usize,
+    /// Groups that arrived whole, and groups already here that gained
+    /// entities. The merge has reported both since AUD-11; this struct did
+    /// not carry them, so a group crossing between devices happened silently
+    /// and the panel said "Up to date" while a rail full of new groups
+    /// appeared behind it.
+    groups_added: usize,
+    groups_extended: usize,
     tempos_added: usize,
     /// Removed here because another device removed them (TD-57).
     playlists_deleted: usize,
     folders_deleted: usize,
+    groups_deleted: usize,
+    /// Given a `(1)` because a different record here already had the name.
+    renamed: usize,
     /// True when there was no document there and this device wrote the first.
     created: bool,
 }
