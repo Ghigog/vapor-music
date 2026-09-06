@@ -42,8 +42,18 @@
   font-size: var(--fs-label);
 }
 
-/* While something is being carried, nothing else should be selecting text or
-   deciding it is being scrolled. */
+/*
+ * While something is being carried, nothing else should be selecting text or
+ * deciding it is being scrolled.
+ *
+ * This does not keep the drag alive, and reading it as though it does is the
+ * mistake that hid the touch bug for so long: `touch-action` is read when a
+ * pointer goes down and is fixed for that whole gesture, so a rule that only
+ * matches once the preview exists arrives after the drag has begun. It governs
+ * pointers that come down *during* a drag — a second finger — and nothing else.
+ * The gesture that is already under way is held open by the `touchmove` block
+ * in `lib/longPress.ts`.
+ */
 body:has(.draglayer) {
   -webkit-user-select: none;
   user-select: none;
