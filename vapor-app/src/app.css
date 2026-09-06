@@ -662,6 +662,33 @@
   outline-offset: 2px;
 }
 
+/* The library has moved under the app and only a scan can say what to.
+ *
+ * On the button rather than beside it: this is the one control that is on every
+ * screen, and the answer is behind it. Small, because it is a notice and not an
+ * alarm — the sentence that explains it is under Analyse, which is where the
+ * button goes. */
+.shell__settings-flag {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  /* `--page`, not white: it is the ground the button sits on in both themes,
+     so the ring reads as a gap and the glyph clears `--danger` either way —
+     #eceef1 on #b3261e in Daylight, #1c1712 on #e39086 in Lamplight. There is
+     no `--on-danger`, and inventing a colour here is what tokens.css forbids. */
+  border: 1px solid var(--page);
+  background: var(--danger);
+  color: var(--page);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 /* Nothing renders under the bubble. The screens whose own controls live in the
    same corner reserve its width rather than letting it sit on top of them. */
 .data__head,

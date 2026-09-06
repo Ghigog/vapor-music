@@ -16,7 +16,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import * as drag from "./lib/drag";
-import { useBackend } from "./test/setup";
+import { emitEvent, useBackend } from "./test/setup";
 
 describe("App — startup damage", () => {
   it("says nothing on a normal launch", async () => {
@@ -210,5 +210,53 @@ describe("App — dragging at the playlists tab", () => {
     }
 
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+/**
+ * The mark that says the library has moved under the app.
+ *
+ * The Settings button is the only control on every screen, and Settings is
+ * where the scan that fixes it lives, so that is where the notice goes. It has
+ * to say so in words as well as in a dot: a red circle is not something a
+ * screen reader can report or a person can act on.
+ */
+describe("App — a library that has moved", () => {
+  it("says nothing while the library agrees with the server", async () => {
+    useBackend();
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: "Settings" }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks Settings, in words, once a file is not where it should be", async () => {
+    useBackend();
+    render(<App />);
+    await screen.findByRole("button", { name: "Settings" });
+
+    act(() => emitEvent("library-stale", 2));
+
+    const button = await screen.findByRole("button", {
+      name: /your library has moved files, 2 so far/i,
+    });
+    expect(button.textContent).toContain("!");
+  });
+
+  it("takes the mark down when a scan answers", async () => {
+    useBackend();
+    render(<App />);
+    await screen.findByRole("button", { name: "Settings" });
+
+    act(() => emitEvent("library-stale", 2));
+    await screen.findByRole("button", { name: /has moved files/i });
+
+    // What `scan_library` sends once it has rebuilt the index.
+    act(() => emitEvent("library-stale", 0));
+
+    expect(
+      await screen.findByRole("button", { name: "Settings" }),
+    ).toBeInTheDocument();
   });
 });

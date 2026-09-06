@@ -281,6 +281,21 @@ pub(crate) fn album_tracklist_for(app: &AppState, album: &str, lead: &str) -> Ve
     out
 }
 
+/// How many tracks the index has been caught describing wrongly.
+///
+/// Zero is the ordinary answer and means the library agrees with what is on the
+/// server. Anything else was found by trying to play a track and being told
+/// there is no file there — the index was written before something moved — and
+/// it is what puts the "!" on Settings and the line under Analyse.
+///
+/// Read on mount, then kept current by the `library-stale` event, which is
+/// emitted whenever the number changes.
+#[tauri::command]
+pub fn missing_file_count(state: State<'_, Shared>) -> Result<usize> {
+    let app = state.lock().map_err(|e| Error(e.to_string()))?;
+    Ok(app.missing_files.len())
+}
+
 #[tauri::command]
 pub fn duplicate_count(state: State<'_, Shared>) -> Result<usize> {
     let app = state.lock().map_err(|e| Error(e.to_string()))?;
@@ -546,6 +561,17 @@ pub async fn scan_library(
         let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
         app.rows = rows;
 
+        // The index has just been rebuilt from what is actually there, so every
+        // complaint against the old one is answered — including the ones that
+        // are still true, which the new rows now describe correctly or do not
+        // contain at all. Cleared here rather than decremented as tracks are
+        // re-found: a scan is the whole answer, and half of one is a badge that
+        // never quite goes away. `missing_announced` goes with it so the
+        // supervisor's next tick tells the screen the "!" is gone.
+        app.missing_files.clear();
+        app.missing_announced = 0;
+        app.missing_skips = 0;
+
         // Saved here rather than at exit: a scan is the only thing that
         // changes the index, and writing it now means a crash mid-analysis
         // still leaves a library to come back to.
@@ -570,6 +596,14 @@ pub async fn scan_library(
     // `pending` skips everything already done, so a rescan of a known library
     // costs nothing. The lock is released above first: `start_analysis` takes
     // it, and this mutex is not reentrant.
+    // Said here rather than left to the supervisor, which only speaks when the
+    // count changes and has just been told it is zero for the second time. The
+    // "!" was put up by an event and comes down by one.
+    {
+        use tauri::Emitter as _;
+        let _ = app_handle.emit("library-stale", 0usize);
+    }
+
     let shared: Shared = Arc::clone(&state);
     start_analysis(&app_handle, &shared)?;
 
