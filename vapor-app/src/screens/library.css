@@ -105,9 +105,18 @@
   flex-wrap: nowrap;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  /* The pills carry a focus ring and a shadow; a scroller clipped to their
-     exact height would shave both. */
-  padding: 2px 0 4px;
+  /*
+   * The pills carry a focus ring and a shadow; a scroller clipped to their
+   * exact height would shave both. Setting `overflow-x` here computes
+   * `overflow-y` to `auto` too (CSS Overflow §3), which is not `visible` —
+   * so this padding is the only thing standing between the shadow and a
+   * hard clip. `--shadow-sm` reaches about 8px below the pill (2px offset
+   * + 6px blur) and `:focus-visible` reaches 4px on every side (2px
+   * outline + 2px offset); 2px/4px was short of both, and the clipped edge
+   * sat right against the row below it, reading as that row cutting into
+   * the tabs.
+   */
+  padding: 4px 0 10px;
   scrollbar-width: none;
 }
 
