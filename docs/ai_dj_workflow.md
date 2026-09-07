@@ -116,34 +116,69 @@ and the next.
 ## 7. Conduct a set
 
 The three exits decide **which record comes next**. This decides **where the
-whole evening is going**, and the DJ plans the running order in advance to get
-there.
+whole evening is going**.
 
 Four shapes, chosen on the Vibe screen. The drawing on each button is the shape
 it makes.
 
-- **Build Vibe** — starts where you are and climbs, getting louder and faster
-  across the set.
-- **Chill Down** — the opposite. Winds down from where you are.
-- **Wave** — up, back through the middle, down, and home again.
+- **Build Vibe** — starts where you are and climbs, ending up at the loudest and
+  fastest end of what you own, then holding there.
+- **Chill Down** — the opposite. Winds down to the quietest end and stays.
+- **Wave** — up, back through the middle, down, and round again, about ten
+  records to the cycle.
 - **Hold Steady** — stays at the level you are at. Only the quality of the blends
   decides the order.
 
-**The two work together.** The shape owns the destination; the exits own the next
-step. The DJ plans ten records ahead along the shape you chose, and the Follow
-card is the first of them.
+**A shape aims at your library, not at a fixed distance.** A Build climbs to the
+top of what is actually in front of it — the loudest and fastest tenth of the
+records in whatever you are playing from — rather than a set amount above where
+it started. Start on something ambient and it has a long way to travel; start on
+something already loud and it has a short way. This is why the same button does
+something different depending on where you press it.
 
-If you overrule one step by hand, the rest is planned again from your choice
-along the same shape — so the set still arrives where it was going. Being
-two-thirds of the way through a Build keeps you two-thirds of the way through a
-Build. The route changes; the arc does not.
+**The set has no end.** The DJ keeps ten records lined up in front of you and
+decides one more each time one is played, so the list never runs out and never
+stops to plan a new batch. That is why the queue shows no total and no running
+time: there is always more, and the last row fades off the bottom to say so.
 
-Choosing a different shape does the same thing to everything ahead of you. What
-was queued was a route to the old destination, so it is thrown away and worked
-out again.
+**The two work together.** The shape owns the direction; the exits own the next
+step. The Follow card is whatever the shape asks for next.
+
+If you overrule one step by hand, everything after it is worked out again from
+your choice, along the same shape and starting over from where you put it.
+
+Choosing a different shape does the same to everything ahead of you. What was
+queued was a route somewhere else, so it slides away and a new set steps in
+behind it, one record at a time as each is decided.
 
 There is no button to press to start any of this. The DJ keeps the set going
 whether or not you are looking at the screen.
+
+---
+
+## 8. What the DJ knows about a record
+
+Four things, and they do different jobs.
+
+**Speed and key** decide whether two records can be blended, and which of the six
+blends suits them.
+
+**Loudness** is what the shapes climb and descend. It is measured from the
+recording itself rather than guessed at.
+
+**Genre**, where the app knows it, does two things. It tells the app which speed
+a record is really at — a drum & bass track can be read as either 87 or 174 and
+only the genre settles it — and it places the record on a ladder running from
+ambient at the bottom, through folk, soul and hip hop, up through house and rock
+to drum & bass and metal at the top. A Build climbs that ladder as well as the
+loudness, which is what stops a quietly-mastered rock record reading as calmer
+than a loudly-mastered ambient one. Most libraries carry no genre tags at all,
+and there the loudness carries the shape on its own.
+
+**Who made it.** The DJ will not play several records from one album back to
+back. Without this it happily does: two tracks off the same record share a key,
+a speed and a mastering level, so on a library with no genre tags the cheapest
+next record is nearly always the next track of the one playing.
 
 **Records the app has not examined yet cannot be placed**, because it does not
 know their speed or key. They are added at the end, and the screen says how many

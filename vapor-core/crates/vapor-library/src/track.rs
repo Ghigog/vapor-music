@@ -59,6 +59,20 @@ pub struct TrackMeta {
     pub energy_level: f32,
     #[serde(default)]
     pub genre: String,
+    /// The artist, as the index resolved it. Empty when unknown.
+    ///
+    /// Here because the planner has to be able to tell one record from
+    /// another, and on a folder-organised library it is the only field that
+    /// can: 488 of 534 tracks carry no genre tag, so `genre_distance` returns
+    /// the same `UNKNOWN_COST` for every pair and cannot discriminate at all.
+    /// With key, tempo and loudness the only live signals, the cheapest
+    /// neighbour of a track is reliably another track off the same record —
+    /// which is how a Vibe set became twelve songs from one album.
+    #[serde(default)]
+    pub artist: String,
+    /// The album, likewise. Empty when unknown.
+    #[serde(default)]
+    pub album: String,
 }
 
 fn half() -> f32 {
@@ -85,6 +99,32 @@ impl TrackMeta {
             &self.intro_key
         } else {
             &self.musical_key
+        }
+    }
+
+    /// Intensity as the *curve* reads it, which is not how the mixer reads it.
+    ///
+    /// The two questions differ and were being answered by one number.
+    /// [`transition_cost`] asks "will these two blend", and for that the
+    /// measured loudness is exactly right — a quiet record dropped into a loud
+    /// one is a gain jump whatever genre either is. A curve asks "is this set
+    /// getting more intense", and for that loudness alone is misleading: it is
+    /// a fact about mastering, so a 2015 ambient reissue outranks a 1973 rock
+    /// record and a Build steered by it calls that a step up.
+    ///
+    /// So the curve reads a blend, weighted toward the measurement because the
+    /// measurement is of this actual recording and the genre score is of a
+    /// shelf it sits on. A third is enough to order ambient below folk below
+    /// rock below metal, and not enough to override a track that plainly is
+    /// not what its tag says.
+    ///
+    /// Untagged — which is most of a folder-organised library — this is the
+    /// measurement unchanged, so nothing regresses where there is no genre to
+    /// read.
+    pub fn curve_energy(&self) -> f32 {
+        match crate::genre::genre_intensity(&self.genre) {
+            Some(g) => (self.energy_level * 0.67 + g * 0.33).clamp(0.0, 1.0),
+            None => self.energy_level,
         }
     }
 }

@@ -19,4 +19,20 @@ outroKey: string,
 /**
  * Key of the intro, when segmented analysis produced one.
  */
-introKey: string, energyLevel: number, genre: string, };
+introKey: string, energyLevel: number, genre: string, 
+/**
+ * The artist, as the index resolved it. Empty when unknown.
+ *
+ * Here because the planner has to be able to tell one record from
+ * another, and on a folder-organised library it is the only field that
+ * can: 488 of 534 tracks carry no genre tag, so `genre_distance` returns
+ * the same `UNKNOWN_COST` for every pair and cannot discriminate at all.
+ * With key, tempo and loudness the only live signals, the cheapest
+ * neighbour of a track is reliably another track off the same record —
+ * which is how a Vibe set became twelve songs from one album.
+ */
+artist: string, 
+/**
+ * The album, likewise. Empty when unknown.
+ */
+album: string, };

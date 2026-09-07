@@ -304,6 +304,32 @@ pub(crate) struct AppState {
     /// and the honest readout is a hue that flattens rather than one that goes
     /// on promising a climb.
     pub(crate) curve_start: f32,
+    /// The track the curve was chosen on.
+    ///
+    /// A set has no end, so a curve cannot be "this batch, stretched across
+    /// ten". It is a shape measured from the moment it was picked, and this is
+    /// that moment: the step a queue position sits at is its distance from
+    /// here (see [`curve_step_at`]). Without it every top-up restarted the
+    /// shape from the track playing, which is why a Build was really a run of
+    /// small builds and never arrived anywhere.
+    pub(crate) curve_origin: Option<String>,
+    /// How far the curve can travel, measured off the pool it was planned in.
+    ///
+    /// Stored rather than recomputed because `playback_state` reports the
+    /// curve's position on every poll and building the pool to find out would
+    /// be a full pass over the library once a second.
+    pub(crate) curve_span: vapor_library::Span,
+    /// The `(curve_plan, queue length)` at which the DJ last found nothing left
+    /// to add.
+    ///
+    /// A guard on a hot loop, not a cache of the answer. The set is topped up
+    /// toward a lookahead now rather than only when the queue runs out, so a
+    /// pool smaller than the lookahead — a five-track album, a narrow scope —
+    /// leaves `extend_set` permanently short and it would rebuild the whole
+    /// pool on every supervisor tick, four times a second, under the state
+    /// lock. Keyed on the plan generation as well as the length so trimming the
+    /// tail and refilling it to the same depth still re-asks the question.
+    pub(crate) set_exhausted: Option<(u64, usize)>,
     /// True while a track is being fetched and decoded, which can take seconds
     /// on a cold cache. The UI has to be able to say so.
     pub(crate) loading: bool,
@@ -479,6 +505,9 @@ impl AppState {
             generation: 0,
             curve_plan: 0,
             curve_start: 0.5,
+            curve_origin: None,
+            curve_span: vapor_library::Span::default(),
+            set_exhausted: None,
             loading: false,
             playback_error: None,
             armed_next: None,
@@ -3676,73 +3705,146 @@ fn dj_pick(app: &AppState) -> Option<String> {
     best.map(|(_, href)| href.to_string())
 }
 
-/// How far ahead the set is planned.
+/// How far ahead the set is kept planned.
 ///
-/// The planner searches ten; queueing all of them is what makes the screen able
-/// to say what is coming rather than only what is next. Short enough that
-/// choosing a different exit re-plans something recent rather than discarding
-/// half an hour of decisions.
+/// Ten, the same ten the screen shows, but the meaning has changed: this is a
+/// *lookahead*, not a batch. The DJ used to plan ten, queue them, play all
+/// ten, and only then plan ten more; now one track is decided at a time and
+/// the queue is topped back up to ten after each one is consumed, so the set
+/// is always ten deep and only ever one decision old.
+///
+/// The difference is what a person sees. Deciding ten at once meant a press of
+/// a curve paid for an A* over the whole library before anything appeared —
+/// seconds, with the state lock held for part of it — and nine of those ten
+/// decisions were thrown away the moment anybody changed their mind, which is
+/// what the curve buttons are for.
 pub(crate) const PLAN_AHEAD: usize = 10;
 
-/// Keep the set going: append the DJ's pick when nothing follows the current
-/// track.
+/// How many tracks into the curve the queue position `index` sits.
+///
+/// Measured from [`AppState::curve_origin`] rather than counted, because a
+/// counter would have to be kept in step with a queue that can be reordered,
+/// have entries removed, and be jumped into from the middle. The queue holds
+/// its own history, so the distance is always readable off it.
+pub(crate) fn curve_step_at(app: &AppState, index: usize) -> usize {
+    let origin = app
+        .curve_origin
+        .as_ref()
+        .and_then(|href| app.queue.tracks().iter().position(|t| t == href))
+        // No origin recorded, or it has been removed from the queue: count
+        // from the playhead, so the curve restarts rather than reporting a
+        // step it cannot justify.
+        .unwrap_or_else(|| app.queue.current_index().unwrap_or(0));
+    index.saturating_sub(origin)
+}
+
+/// The set so far as of queue position `index`, most recent first.
+///
+/// All of it, not a window. The variety term only reads the first few, but
+/// `next_track` reads the rest to avoid offering something the set already
+/// holds — and `Queue::append` refuses a duplicate outright, so a shorter
+/// history would mean steps that decide on a track and then cannot queue it.
+fn recent_before(app: &AppState, index: usize) -> Vec<String> {
+    app.queue.tracks().iter().take(index).rev().cloned().collect()
+}
+
+/// Decide one more track and append it. Returns whether the queue grew.
+///
+/// The pool is passed in rather than built here: a caller topping the set back
+/// up to [`PLAN_AHEAD`] calls this ten times, and building the pool is a pass
+/// over the whole library.
+fn append_one(app: &mut AppState, pool: &std::collections::HashMap<String, TrackMeta>) -> bool {
+    let Some(last) = app.queue.tracks().last().cloned() else {
+        return false;
+    };
+    let index = app.queue.tracks().len();
+    // The curve is measured from where it was chosen, not from the end of the
+    // queue: planning the tenth track ahead still asks "what should the set be
+    // doing ten tracks after the button was pressed".
+    let origin = app.curve_origin.clone().unwrap_or_else(|| last.clone());
+    let Some(next) = vapor_library::next_track(
+        pool,
+        &last,
+        &origin,
+        &recent_before(app, index),
+        vapor_library::Curve::parse(&app.settings.curve),
+        curve_step_at(app, index),
+        &app.curve_span,
+        app.settings.vibe_limit,
+        &skip_penalties(app),
+    ) else {
+        return false;
+    };
+    app.queue.append(&next)
+}
+
+/// Keep the set going: top the queue back up toward [`PLAN_AHEAD`].
 ///
 /// This is what makes the Vibe DJ a DJ rather than a screen of suggestions.
-/// Until now nothing ever added to the queue — `mix_candidates` displayed
-/// choices and `plan_mix` read `peek_next`, so a queue of one had nothing to
-/// mix into, repeat-all wrapped it onto itself, and the same track played
-/// forever while the screen said "0 to come".
+/// Until 2026-08-17 nothing ever added to the queue — `mix_candidates`
+/// displayed choices and `plan_mix` read `peek_next`, so a queue of one had
+/// nothing to mix into, repeat-all wrapped it onto itself, and the same track
+/// played forever while the screen said "0 to come".
+///
+/// One track per call, deliberately. This runs on the supervisor tick with the
+/// state lock held, and the old version planned ten at once with an A* over
+/// the whole library — so the tick that happened to be the one where the queue
+/// ran dry stalled every poll behind it. A single step is one pass over the
+/// pool, and the next tick takes the next one, so the queue refills over a
+/// second or so with the screen live throughout.
 ///
 /// Returns whether the queue grew, so the caller can tell the UI.
-fn extend_set(app: &mut AppState) -> bool {
+pub(crate) fn extend_set(app: &mut AppState) -> bool {
     if !app.settings.dj_mode {
         return false;
     }
-    // `has_more` rather than `peek_next().is_some()`, and the difference is the
-    // whole of a set: under repeat-all `peek_next` wraps to the beginning, so at
-    // the end of a queue it answers with a track that has already played. Read
-    // that way the DJ is told the set is fine and stops extending it.
-    if app.queue.has_more() {
+    // How many tracks stand between the playhead and the end of the queue.
+    //
+    // Counted rather than asked of `has_more`, because the question changed:
+    // the set is topped up continuously now rather than only when it runs out.
+    // `has_more` is still the right question for whether the music is about to
+    // stop, and it is wrong for this one — under repeat-all it wraps to the
+    // beginning and answers with a track that has already played.
+    let played = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
+    let queued = app.queue.tracks().len();
+    let ahead = queued.saturating_sub(played);
+    if ahead >= PLAN_AHEAD {
+        return false;
+    }
+    // Asked and answered: there was nothing left to add at this depth, and
+    // nothing has changed since. See `AppState::set_exhausted`.
+    if app.set_exhausted == Some((app.curve_plan, queued)) {
         return false;
     }
 
-    // Plan the set, rather than picking one track at a time.
-    //
-    // `dj_pick` below only knows which single transition is cheapest; it has no
-    // idea where the set is going. The planner does — A* over transition cost
-    // *plus* how far each step sits from where the curve wants energy and tempo
-    // to be by then. Until now it only ran from a button nobody was told to
-    // press, so a set that was supposed to arc somewhere just wandered.
     let Some(current) = app.playing.clone() else {
+        app.set_exhausted = Some((app.curve_plan, queued));
         return false;
     };
     let pool = track_meta_pool(app);
-    if pool.contains_key(&current) {
-        let planned = vapor_library::generate_mood_path(
-            &pool,
-            &current,
-            vapor_library::Curve::parse(&app.settings.curve),
-            app.settings.vibe_limit,
-            &skip_penalties(app),
-        );
-        // Skip the head: `generate_mood_path` starts from the track playing.
-        let added = planned
-            .iter()
-            .skip(1)
-            .take(PLAN_AHEAD)
-            .filter(|href| app.queue.append(href))
-            .count();
-        if added > 0 {
-            return true;
-        }
+    // A curve with nowhere recorded to have started from is one the DJ has
+    // been left to run on its own — first play of a session, or a queue
+    // entered from a list. It starts here.
+    if app.curve_origin.is_none() {
+        app.curve_origin = Some(current.clone());
+        app.curve_start = pool.get(&current).map_or(0.5, TrackMeta::curve_energy);
+        app.curve_span = vapor_library::Span::of(&pool);
+    }
+    if pool.contains_key(&current) && append_one(app, &pool) {
+        return true;
     }
 
     // Nothing to plan from — an unanalysed library, or a pool too small to
     // search. One cheap transition still beats the music stopping.
-    let Some(pick) = dj_pick(app) else {
-        return false;
-    };
-    app.queue.append(&pick)
+    //
+    // `dj_pick` builds the pool a second time, which is why it is behind the
+    // step chooser rather than beside it: this is the path taken when there is
+    // nothing to choose, and it should cost the most rather than run first.
+    let grew = dj_pick(app).is_some_and(|pick| app.queue.append(&pick));
+    if !grew {
+        app.set_exhausted = Some((app.curve_plan, queued));
+    }
+    grew
 }
 
 /// Decide whether the next track can be mixed into rather than merely followed.
@@ -4754,6 +4856,22 @@ pub(crate) fn track_meta_pool(app: &AppState) -> std::collections::HashMap<Strin
                     // Not `row.genre`: that is only what the *scan* found, and
                     // in a folder-organised library it is empty for everything.
                     genre,
+                    // What tells one record from another when the genre cannot
+                    // — which on this library is 488 tracks out of 534. Only a
+                    // source the app trusts: an artist guessed from a path is
+                    // shared by everything in a folder, so believing it would
+                    // make the variety term refuse to play two tracks that have
+                    // nothing to do with each other.
+                    artist: if row.artist_source == vapor_library::index::Source::Unknown {
+                        String::new()
+                    } else {
+                        row.artist.trim().to_lowercase()
+                    },
+                    album: if row.album_source.is_known() {
+                        row.album.trim().to_lowercase()
+                    } else {
+                        String::new()
+                    },
                 },
             ))
         })
@@ -8008,7 +8126,11 @@ mod tests {
         let (mut app, dir) = conducting();
         assert!(app.scope.is_none());
 
-        assert!(extend_set(&mut app), "the DJ added nothing");
+        // Several passes: the DJ decides one track per call now, so one call
+        // proves only that it decided *something*.
+        for _ in 0..4 {
+            extend_set(&mut app);
+        }
         assert!(
             app.queue
                 .tracks()
@@ -8028,17 +8150,96 @@ mod tests {
         assert_eq!(app.queue.tracks().len(), 1);
 
         assert!(extend_set(&mut app), "the DJ added nothing");
-
-        // The planner fills the set rather than adding one track at a time —
-        // it used to append exactly one, which is why the queue read "0 to
-        // come" the moment that track started.
-        assert!(
-            app.queue.tracks().len() > 2,
-            "only {} queued; the planner did not run",
-            app.queue.tracks().len()
-        );
         let next = app.queue.peek_next(None).expect("something to come");
         assert_ne!(next, "/a.mp3", "the DJ queued the track already playing");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// One track per call, and it is the caller that decides how many to ask
+    /// for.
+    ///
+    /// It used to plan ten at a time: an A* over the whole library, seconds of
+    /// work, on whichever supervisor tick happened to find the queue empty —
+    /// with the state lock held for all of it, so every poll stalled behind it
+    /// and the screen froze rather than merely the control. A step is one pass
+    /// over the pool, and the lock is released between them.
+    #[test]
+    fn the_dj_decides_one_track_at_a_time() {
+        let (mut app, dir) = conducting();
+        let before = app.queue.tracks().len();
+
+        assert!(extend_set(&mut app));
+        assert_eq!(
+            app.queue.tracks().len(),
+            before + 1,
+            "a single pass planned more than one track"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And the set is kept a lookahead deep rather than refilled from empty.
+    ///
+    /// The old rule was "add ten when the queue runs out", so the screen showed
+    /// a count that fell to zero and jumped back to ten. The queue is topped up
+    /// continuously now, which is what lets it be drawn as a set with no end.
+    #[test]
+    fn the_dj_keeps_a_lookahead_in_front_of_the_playhead() {
+        let (mut app, dir) = conducting();
+        // A library deeper than the lookahead, or "ten ahead" is a promise the
+        // pool cannot keep and the test would be measuring the fixture.
+        for i in 0..20 {
+            let href = format!("/fill{i:02}.mp3");
+            app.rows.push(row(&href, &href));
+            app.analysis.insert(
+                href,
+                analysed_track(100.0 + i as f32, "8A", 0.3 + i as f32 * 0.02),
+            );
+        }
+
+        // As many passes as the supervisor would make over a few seconds.
+        for _ in 0..PLAN_AHEAD * 2 {
+            extend_set(&mut app);
+        }
+
+        let played = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
+        let ahead = app.queue.tracks().len() - played;
+        assert_eq!(
+            ahead, PLAN_AHEAD,
+            "the set is {ahead} deep, not {PLAN_AHEAD}: {:?}",
+            app.queue.tracks()
+        );
+
+        // And it stops there rather than planning the whole library.
+        assert!(!extend_set(&mut app), "the DJ overfilled the set");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A pool smaller than the lookahead is asked once, not four times a
+    /// second.
+    ///
+    /// The set is topped up toward ten now rather than only when the queue runs
+    /// out, so a five-track album leaves `extend_set` permanently short of its
+    /// target — and without this it would rebuild the whole pool on every
+    /// supervisor tick, under the state lock, forever. Falsifiable: remove the
+    /// `set_exhausted` guard and the second call plans again.
+    #[test]
+    fn a_set_with_nothing_left_to_add_is_asked_once() {
+        let (mut app, dir) = conducting();
+
+        // Four tracks, so the lookahead can never be filled.
+        while extend_set(&mut app) {}
+        assert!(app.set_exhausted.is_some(), "the DJ did not record giving up");
+
+        let before = app.queue.tracks().len();
+        assert!(!extend_set(&mut app));
+        assert_eq!(app.queue.tracks().len(), before);
+
+        // Choosing a curve is a new question, and gets a fresh answer.
+        app.curve_plan = app.curve_plan.wrapping_add(1);
+        assert_ne!(app.set_exhausted, Some((app.curve_plan, before)));
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -8082,18 +8283,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A queue someone built themselves is not interfered with while it still
-    /// has somewhere to go.
+    /// A queue someone built themselves keeps its own order. The DJ plans
+    /// *past* the end of it and never into the middle.
+    ///
+    /// This used to read "the DJ leaves it alone while it still has somewhere
+    /// to go", enforced by only extending an empty queue. That rule went with
+    /// the lookahead — the set is topped up continuously now, so something is
+    /// always queued behind what you chose — and the guarantee people actually
+    /// wanted survives it: press play on a record and you hear that record, in
+    /// its order, all of it, before anything the DJ chose.
     #[test]
-    fn the_dj_leaves_a_queue_that_already_has_a_next_track_alone() {
+    fn the_dj_plans_past_a_hand_built_queue_rather_than_into_it() {
         let (mut app, dir) = conducting();
-        app.queue
-            .set_tracks(vec!["/a.mp3".to_string(), "/d.mp3".to_string()], None);
+        app.queue.set_tracks(
+            vec![
+                "/a.mp3".to_string(),
+                "/d.mp3".to_string(),
+                "/b.mp3".to_string(),
+            ],
+            None,
+        );
         app.playing = Some("/a.mp3".to_string());
 
-        assert!(!extend_set(&mut app));
-        assert_eq!(app.queue.tracks().len(), 2);
-        assert_eq!(app.queue.peek_next(None), Some("/d.mp3"));
+        for _ in 0..4 {
+            extend_set(&mut app);
+        }
+
+        assert_eq!(
+            &app.queue.tracks()[..3],
+            &["/a.mp3".to_string(), "/d.mp3".to_string(), "/b.mp3".to_string()],
+            "the DJ reordered a queue somebody built"
+        );
+        assert!(
+            app.queue.tracks().len() > 3,
+            "the DJ queued nothing behind it"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -8855,18 +9079,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// The planner fills the set, not one track at a time.
-    #[test]
-    fn the_set_is_planned_several_tracks_ahead() {
-        let (mut app, dir) = conducting();
-        extend_set(&mut app);
-        assert!(
-            app.queue.tracks().len() > 2,
-            "only {} queued — the planner did not run",
-            app.queue.tracks().len()
-        );
-        let _ = std::fs::remove_dir_all(dir);
-    }
+    /* This is where `the_set_is_planned_several_tracks_ahead` was. It asserted
+     * that one pass of `extend_set` queued more than one track, which is the
+     * behaviour that was reported as the app freezing: ten tracks decided at
+     * once, by an A* over the whole library, with the state lock held. The two
+     * tests it became are `the_dj_decides_one_track_at_a_time` and
+     * `the_dj_keeps_a_lookahead_in_front_of_the_playhead` — one pass decides
+     * one track, and the passes keep the set ten deep, which is what the old
+     * test was really reaching for. */
 
     /// The symptom, end to end: a drum & bass track must not be called a
     /// match for chill hip hop.
@@ -9508,6 +9728,8 @@ mod tests {
             outro_key: key.to_string(),
             energy_level: energy,
             genre: String::new(),
+            artist: String::new(),
+            album: String::new(),
         }
     }
 

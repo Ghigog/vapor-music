@@ -20,7 +20,7 @@
  * loud ballad and a quiet banger apart, which loudness alone could not.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { VaporMark } from "../components/VaporMark";
 import * as core from "../lib/core";
@@ -89,8 +89,20 @@ export function Vibe({
   const [beat, setBeat] = useState<{ period: number; at: number } | null>(null);
   const [blend, setBlend] = useState<core.BlendPreview | null>(null);
   const [curve, setCurve] = useState<core.Curve>("build");
-  /** True while the planner is re-running, which is a visible pause. */
+  /**
+   * True while the set is being re-decided.
+   *
+   * Held on a timer rather than on an `await`, because the press no longer
+   * waits for anything: `set_curve` saves the choice and returns, and the ten
+   * tracks behind it are decided one at a time and announced one at a time. So
+   * awaiting the call cleared this within a frame and the mark flashed rather
+   * than showing the state — while the thing it describes was still happening.
+   *
+   * The timer is restarted by every announcement, so this stays true for as
+   * long as the set is still arriving and goes quiet shortly after it stops.
+   */
   const [planning, setPlanning] = useState(false);
+  const settle = useRef<number | undefined>(undefined);
   /** The three ways out of the playing track (docs/ai_dj_workflow.md §2–§4). */
   const [candidates, setCandidates] = useState<core.MixCandidate[]>([]);
   const [helping, setHelping] = useState(false);
@@ -117,6 +129,17 @@ export function Vibe({
     if (c.status === "fulfilled") setCandidates(c.value);
   }, []);
 
+  /** Keep "thinking" alive while the set is still arriving. See `planning`. */
+  const stillPlanning = useCallback(() => {
+    setPlanning(true);
+    window.clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => {
+      settle.current = undefined;
+      setPlanning(false);
+    }, 700);
+  }, []);
+  useEffect(() => () => window.clearTimeout(settle.current), []);
+
   // Read once, for the curve.
   useEffect(() => {
     core
@@ -133,12 +156,20 @@ export function Vibe({
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), 1000);
-    const unlisten = listen("playback-changed", () => void refresh());
+    const unlisten = listen("playback-changed", () => {
+      // Each announcement is one more track decided, so each one is evidence
+      // the planner is still working.
+      // A live timer *is* the planning window, so it doubles as the test for
+      // whether this announcement belongs to one. A track simply ending
+      // announces too, and that is not the planner thinking.
+      if (settle.current !== undefined) stillPlanning();
+      void refresh();
+    });
     return () => {
       clearInterval(timer);
       void unlisten.then((f) => f());
     };
-  }, [refresh]);
+  }, [refresh, stillPlanning]);
 
   /**
    * Choose where the set is going.
@@ -151,20 +182,21 @@ export function Vibe({
    */
   async function choose(next: core.Curve) {
     setCurve(next);
-    setPlanning(true);
+    stillPlanning();
     setError(null);
     try {
-      // Returns as soon as the choice is saved; the route is planned in the
-      // background and announced with `playback-changed`, which `refresh` is
-      // already listening for. Awaiting the plan here is what made the press
-      // take five seconds to land.
+      // Returns as soon as the choice is saved; the set is decided in the
+      // background, a track at a time, each one announced with
+      // `playback-changed` — which `refresh` is already listening for, and
+      // which keeps `planning` alive. Awaiting the whole plan here is what made
+      // the press take five seconds to land.
       await core.setCurve(next);
       await refresh();
     } catch (e: unknown) {
       setError(messageOf(e));
       // The press did not take, so the row should not go on claiming it did.
       setCurve(curve);
-    } finally {
+      window.clearTimeout(settle.current);
       setPlanning(false);
     }
   }

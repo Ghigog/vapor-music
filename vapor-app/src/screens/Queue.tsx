@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
 import { upNextOf } from "../lib/queue";
+import { useStaging, STAGGER_MS } from "../lib/staging";
 import { useThumb } from "../lib/artwork";
 import { Empty } from "../components/States";
 
@@ -75,6 +76,16 @@ export function Queue({
   const currentHref = view?.entries.find((e) => e.current)?.href ?? "";
   const cover = useThumb(currentHref);
 
+  /*
+   * What is still to come, and how each row got there.
+   *
+   * Above the early returns because hooks have to be, and because a queue that
+   * empties is exactly when rows are leaving — returning before the hook ran
+   * would drop them without an animation, which is the case it exists for.
+   */
+  const upNext = view ? upNextOf(view).entries : [];
+  const rows = useStaging(upNext, (e) => e.href);
+
   async function move(from: number, to: number) {
     if (from === to) return;
     // Optimistic: the drop should land where it was dropped, not a round trip
@@ -110,7 +121,6 @@ export function Queue({
   }
 
   const current = view.entries.find((e) => e.current);
-  const { first: firstUpNext, entries: upNext } = upNextOf(view);
 
   return (
     <div className="queue">
@@ -118,14 +128,20 @@ export function Queue({
         <div className="queue__head-row">
           <div>
             <h1 className="queue__title">Up next</h1>
+            {/* No count and no running time.
+                It read "10 to come · 52 min", and both numbers were fiction of
+                a kind: the set does not end, so what they measured was how far
+                ahead the planner happened to have decided — an implementation
+                detail, dressed as a fact about the music, that fell as the
+                queue drained and jumped back up when it refilled. What is true
+                is that there is always more, and the list says so by running
+                off the bottom of itself rather than by claiming a total. */}
             <p className="queue__sub label">
               {conducted === undefined
                 ? ""
                 : conducted
-                  ? "conducted by Vibe · "
-                  : "standard shuffle · "}
-              {upNext.length} to come
-              {view.remainingSecs > 0 && ` · ${minutes(view.remainingSecs)}`}
+                  ? "conducted by Vibe"
+                  : "standard shuffle"}
             </p>
           </div>
           <div className="queue__modes">
@@ -184,19 +200,43 @@ export function Queue({
 
       <h2 className="label queue__heading">up next</h2>
 
-      <ul className="queue__list">
-        {upNext.map((entry, offset) => {
-          const index = firstUpNext + offset;
+      {/* `queue__list--endless` fades the last row out downward, which is the
+          only thing on the screen that says the set does not end. It replaces
+          a subtitle that counted the tracks the planner had got around to
+          deciding — see the header. */}
+      <ul className="queue__list queue__list--endless">
+        {rows.map(({ item: entry, id, leaving, entering, rank }) => {
+          /* Looked up rather than counted off the rendered position.
+             A row still fading out is drawn but is no longer in the queue, so
+             every row under it sits one place lower on screen than it does in
+             `view.entries` — and the reorder and remove buttons address the
+             backend's index. Counting would move the wrong track for as long as
+             an animation was running. */
+          const index = view.entries.findIndex((e) => e.href === entry.href);
           return (
             <li
-              key={entry.href}
+              key={id}
               className={
                 "queue__item" +
+                (entering ? " queue__item--in" : "") +
+                (leaving ? " queue__item--out" : "") +
                 (dragging === index ? " queue__item--dragging" : "") +
                 (over === index && dragging !== null && dragging !== index
                   ? " queue__item--over"
                   : "")
               }
+              /* The stagger. Each row waits its turn by its place in the group
+                 that arrived or left with it, so a re-planned tail leaves as a
+                 staircase rather than as a block. */
+              style={
+                entering || leaving
+                  ? { animationDelay: `${rank * STAGGER_MS}ms` }
+                  : undefined
+              }
+              /* A row on its way out is a picture of something that is no
+                 longer in the queue. Dragging it, or pressing it, would address
+                 a position that has moved. */
+              inert={leaving || undefined}
               draggable
               onDragStart={(e) => {
                 setDragging(index);
@@ -296,9 +336,3 @@ export function Queue({
   );
 }
 
-/** "47 min", or "1 h 12 min" once that stops being readable. */
-function minutes(seconds: number): string {
-  const total = Math.round(seconds / 60);
-  if (total < 60) return `${total} min`;
-  return `${Math.floor(total / 60)} h ${total % 60} min`;
-}

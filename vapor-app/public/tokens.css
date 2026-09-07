@@ -237,6 +237,14 @@
   --dur-base: 220ms;
   --dur-slow: 420ms;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* How long a queue row takes to step in from the left, or to slide out to
+     the right when the set is re-planned. `--queue-leave` is duplicated in
+     `LEAVE_MS` in `src/lib/staging.ts`, which is what holds a departed row on
+     screen long enough to finish: shorten one and the row vanishes mid-slide,
+     lengthen one and it sits still at the end of its animation. */
+  --queue-enter: 300ms;
+  --queue-leave: 320ms;
 }
 
 /**

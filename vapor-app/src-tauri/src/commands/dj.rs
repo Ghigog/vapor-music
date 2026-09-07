@@ -43,67 +43,68 @@ pub fn set_curve(
         // route would be paying that cost twice for one press.
         let pool = track_meta_pool(&app);
         // Where this route starts from, kept so the curve can be evaluated
-        // later — see `AppState::curve_start`.
+        // later — see `AppState::curve_start` and `AppState::curve_origin`.
+        // The curve is measured from *this* press, so the shape is continuous
+        // however many times the tail is topped up afterwards.
+        app.curve_span = vapor_library::Span::of(&pool);
         if let Some(playing) = app.playing.clone() {
-            app.curve_start = pool.get(&playing).map_or(0.5, |t| t.energy_level);
+            app.curve_start = pool.get(&playing).map_or(0.5, TrackMeta::curve_energy);
+            app.curve_origin = Some(playing);
         }
-        let plan = app
-            .playing
-            .clone()
-            .filter(|_| app.settings.dj_mode)
-            .map(|current| {
-                (
-                    current,
-                    pool,
-                    skip_penalties(&app),
-                    vapor_library::Curve::parse(&app.settings.curve),
-                    app.settings.vibe_limit,
-                )
-            });
+        let plan = app.playing.is_some() && app.settings.dj_mode;
         (app.settings.clone(), app.curve_plan, plan)
     };
 
-    // The search runs off the command thread, and off the lock.
+    // The set is refilled off the command thread, and off the lock.
     //
-    // It used to run right here: an A* over the whole library, seconds of work,
-    // with the state lock held for all of it. So the press did not return until
-    // the set had been re-planned — the button appeared dead for five seconds
-    // and then caught up — and every poll that wanted the same lock stalled
-    // behind it, which is why the screen froze rather than just the control.
-    // The setting itself is saved above and returned at once; the route
-    // arrives when it arrives, and says so with an event.
-    if let Some((current, pool, penalties, chosen, limit)) = plan {
+    // It used to run right here: an A* over the whole library for ten tracks,
+    // seconds of work, with the state lock held for all of it. So the press did
+    // not return until the set had been re-planned — the button appeared dead
+    // for five seconds and then caught up — and every poll that wanted the same
+    // lock stalled behind it, which is why the screen froze rather than just the
+    // control.
+    //
+    // Now it is ten separate decisions, each taking and releasing the lock, each
+    // announced. The screen sees the tail empty and then refill a track at a
+    // time, which is what it should look like: a DJ deciding, not a batch job
+    // finishing.
+    if plan {
         let shared: Shared = Arc::clone(&state);
         tauri::async_runtime::spawn_blocking(move || {
-            use tauri::Emitter as _;
-            if !pool.contains_key(&current) {
-                return;
-            }
-            let planned =
-                vapor_library::generate_mood_path(&pool, &current, chosen, limit, &penalties);
-
-            let Ok(mut app) = shared.lock() else {
-                return;
-            };
-            // A newer press is already on its way somewhere else.
-            if app.curve_plan != generation {
-                return;
-            }
-            // Skip the head: `generate_mood_path` starts from the track playing.
-            let added = planned
-                .iter()
-                .skip(1)
-                .take(PLAN_AHEAD)
-                .filter(|href| app.queue.append(href))
-                .count();
-            drop(app);
-            if added > 0 {
-                let _ = app_handle.emit("playback-changed", ());
-            }
+            refill_set(&shared, &app_handle, generation);
         });
     }
 
     Ok(settings)
+}
+
+/// Top the set back up to [`PLAN_AHEAD`], one track at a time, announcing each.
+///
+/// `generation` is the value of `AppState::curve_plan` this refill was started
+/// for; a newer press bumps it and this stands down mid-way rather than filling
+/// a queue that is already heading somewhere else.
+///
+/// The lock is taken and released once per track on purpose. Holding it for the
+/// whole refill would be the old freeze in a new shape — the screen polls
+/// `playback_state` and `queue_view` on a timer and both want this lock, so a
+/// refill that holds it for a second is a second of frozen UI.
+fn refill_set(shared: &Shared, app_handle: &tauri::AppHandle, generation: u64) {
+    use tauri::Emitter as _;
+    for _ in 0..PLAN_AHEAD {
+        let Ok(mut app) = shared.lock() else {
+            return;
+        };
+        // A newer press is already on its way somewhere else.
+        if app.curve_plan != generation {
+            return;
+        }
+        let grew = extend_set(&mut app);
+        drop(app);
+        if !grew {
+            return;
+        }
+        let _ = app_handle.emit("playback-changed", ());
+    }
 }
 
 /// Turn the DJ on or off.
@@ -220,7 +221,7 @@ pub fn choose_next(
     app_handle: tauri::AppHandle,
     state: State<'_, Shared>,
 ) -> Result<()> {
-    let (generation, plan) = {
+    let generation = {
         let mut app = state.lock().map_err(|e| Error(e.to_string()))?;
 
         if !app.queue.set_next(&href) {
@@ -241,72 +242,44 @@ pub fn choose_next(
             app.armed_next = None;
         }
 
+        app.settings.curve = vapor_library::Curve::parse(&curve).as_str().to_string();
         app.curve_plan = app.curve_plan.wrapping_add(1);
+
+        // Everything after the chosen track was a route somewhere else.
+        let chosen = app
+            .queue
+            .tracks()
+            .iter()
+            .position(|t| *t == href)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if chosen > 0 {
+            let head: Vec<String> = app.queue.tracks().iter().take(chosen).cloned().collect();
+            let playing = app.playing.clone();
+            app.queue.set_tracks(head, playing.as_deref());
+        }
 
         let pool = track_meta_pool(&app);
         // The tail is re-planned from the chosen track, so that track is what
         // the curve is now relative to.
+        app.curve_span = vapor_library::Span::of(&pool);
         if let Some(t) = pool.get(&href) {
-            app.curve_start = t.energy_level;
+            app.curve_start = t.curve_energy();
+            app.curve_origin = Some(href.clone());
         }
-        // Unanalysed: it can still play next, there is simply nothing to plan
-        // a route from.
-        let plan = pool
-            .contains_key(&href)
-            .then(|| (pool, skip_penalties(&app), app.settings.vibe_limit));
-        (app.curve_plan, plan)
+        app.curve_plan
     };
 
-    // The exit takes effect above; the route behind it is planned off the lock.
-    //
-    // Same reason as `set_curve`: `generate_mood_path` is an A* over the whole
-    // library and it used to run with the state lock held, so pressing Stay or
-    // Switch did nothing visible for several seconds. The queue's next track is
-    // already set by the time this returns — which is the part the press was
-    // actually asking for.
-    let Some((pool, penalties, limit)) = plan else {
-        return Ok(());
-    };
+    // The exit takes effect above; the route behind it is filled in off the
+    // lock, a track at a time. Same reason as `set_curve`: the queue's next
+    // track is already set by the time this returns, which is the part the
+    // press was actually asking for.
     let shared: Shared = Arc::clone(&state);
+    let handle = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter as _;
-        let tail = vapor_library::generate_mood_path(
-            &pool,
-            &href,
-            Curve::parse(&curve),
-            limit,
-            &penalties,
-        );
-
-        let Ok(mut app) = shared.lock() else {
-            return;
-        };
-        // Something else has been chosen since; this route starts in the wrong
-        // place.
-        if app.curve_plan != generation {
-            return;
-        }
-
-        // Everything up to and including the track playing is history and stays
-        // put; the tail is what the DJ is still free to arrange.
-        let played: Vec<String> = app
-            .queue
-            .tracks()
-            .iter()
-            .take(app.queue.current_index().unwrap_or(0) + 1)
-            .cloned()
-            .collect();
-        let mut next: Vec<String> = played;
-        for h in tail {
-            if !next.contains(&h) {
-                next.push(h);
-            }
-        }
-        let current = app.queue.current().map(str::to_string);
-        app.queue.set_tracks(next, current.as_deref());
-        drop(app);
-        let _ = app_handle.emit("playback-changed", ());
+        refill_set(&shared, &handle, generation);
     });
+    let _ = tauri::Emitter::emit(&app_handle, "playback-changed", ());
     Ok(())
 }
 
