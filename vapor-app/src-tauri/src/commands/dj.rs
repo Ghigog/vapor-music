@@ -88,7 +88,7 @@ pub fn set_curve(
 /// whole refill would be the old freeze in a new shape — the screen polls
 /// `playback_state` and `queue_view` on a timer and both want this lock, so a
 /// refill that holds it for a second is a second of frozen UI.
-fn refill_set(shared: &Shared, app_handle: &tauri::AppHandle, generation: u64) {
+pub(crate) fn refill_set(shared: &Shared, app_handle: &tauri::AppHandle, generation: u64) {
     use tauri::Emitter as _;
     for _ in 0..PLAN_AHEAD {
         let Ok(mut app) = shared.lock() else {
