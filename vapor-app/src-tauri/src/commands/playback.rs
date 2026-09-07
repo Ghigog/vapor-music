@@ -29,7 +29,7 @@ pub fn play_tracks(
 ) -> Result<()> {
     let shared: Shared = Arc::clone(&state);
 
-    let jump_the_queue = {
+    let (jump_the_queue, conduct) = {
         let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
         // A named scope confines the set to what was played from; no name is
         // the library, which is what an unfiltered list means.
@@ -46,11 +46,53 @@ pub fn play_tracks(
         // when a collection is named would leave the previous one attached to
         // everything played afterwards.
         app.collection = collection.as_ref().and_then(collection_key);
+
+        // Re-entering the queue, or starting a new set?
+        //
+        // The Queue screen's "play from here" hands back the queue it is
+        // already showing, because jumping down a list is not a change of what
+        // you are listening to — so the order somebody dragged into place has
+        // to survive it. Every other caller hands a *list*: an album, a
+        // playlist, a dynamic group, a search result. Compared rather than
+        // flagged by the caller so no screen can forget to say which it is.
+        let re_entering = hrefs == app.queue.tracks();
+
         app.queue.set_tracks(hrefs, start.as_deref());
         let current = app.queue.current().map(str::to_string);
+
+        // With the DJ on, a list is a *pool*, not a running order.
+        //
+        // This is the half of "conducting" that was missing. `play_tracks` put
+        // the whole list in the queue in list order, and `extend_set` only ever
+        // plans past the end of what is queued — so pressing play on a group
+        // with the DJ on gave you that group alphabetically, by artist, while
+        // the screen said "conducted by Vibe". Nothing was conducted until the
+        // list ran out, which for a real library is never. Pressing a curve was
+        // the only thing that ever re-planned, which is why the curves appeared
+        // to work and simply starting a set did not.
+        //
+        // So the tail is dropped and the DJ plans it, exactly as choosing a
+        // curve does. `app.scope` is the list, so the route stays inside it.
+        if app.settings.dj_mode && !re_entering {
+            if let Some(current) = current.clone() {
+                app.queue.set_tracks(vec![current.clone()], Some(&current));
+                app.curve_plan = app.curve_plan.wrapping_add(1);
+                // A new set is a new curve, measured from here — otherwise the
+                // shape would carry on from wherever the last one had got to.
+                let pool = track_meta_pool(&app);
+                app.curve_span = vapor_library::Span::of(&pool);
+                app.curve_start = pool.get(&current).map_or(0.5, TrackMeta::curve_energy);
+                app.curve_origin = Some(current);
+                // A different pool entirely, so whatever it last found nothing
+                // in is not evidence about this one.
+                app.set_exhausted = None;
+            }
+        }
+
         if let Some(current) = current.clone() {
             begin_playback(&shared, &mut app, current);
         }
+        let conduct = app.settings.dj_mode.then_some(app.curve_plan);
         // The track being started, and the few behind it.
         //
         // This used to ask only about the current track, which meant a queue
@@ -62,8 +104,19 @@ pub fn play_tracks(
         // Still bounded, for the reason the old comment gave: restarting costs
         // the track in flight, and paying that to re-order a queue that is
         // already described would be worse than leaving the pass alone.
-        needs_analysis_soon(&app, MIX_LOOKAHEAD)
+        (needs_analysis_soon(&app, MIX_LOOKAHEAD), conduct)
     };
+
+    // The set is filled in off the lock, a track at a time, each one
+    // announced — the same path a curve press takes, so a set that is starting
+    // and a set that is being re-aimed look the same on screen.
+    if let Some(generation) = conduct {
+        let planning: Shared = Arc::clone(&state);
+        let handle = app_handle.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::commands::dj::refill_set(&planning, &handle, generation);
+        });
+    }
 
     if jump_the_queue {
         // Lock released above: `start_analysis` takes it.

@@ -8320,6 +8320,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Pressing play on a list, with the DJ on, conducts it — it does not play
+    /// it in list order.
+    ///
+    /// The fault this pins, reported 2026-09-07 against a dynamic group:
+    /// `play_tracks` put the whole list in the queue in the order the list was
+    /// in, and `extend_set` only ever plans *past* the end of what is queued.
+    /// So the DJ had nothing to do until the list ran out, which on a real
+    /// library is never — you got the group alphabetically, grouped by artist,
+    /// while the screen said "conducted by Vibe". Choosing a curve was the only
+    /// thing that re-planned, which is exactly why the curves appeared to work
+    /// and simply starting a set appeared to do nothing.
+    ///
+    /// Falsifiable in the direction that matters: put the list straight into
+    /// the queue again and the order below comes back unchanged.
+    #[test]
+    fn pressing_play_on_a_list_conducts_it_rather_than_playing_it_in_order() {
+        let (mut app, dir) = conducting();
+        // A list in an order the planner would not choose: the two loud drum &
+        // bass tracks are separated by the quiet one.
+        let listed = vec![
+            "/a.mp3".to_string(),
+            "/d.mp3".to_string(),
+            "/b.mp3".to_string(),
+            "/c.mp3".to_string(),
+        ];
+
+        // What `play_tracks` does under the lock, minus the audio device.
+        app.queue.set_tracks(listed.clone(), Some("/a.mp3"));
+        app.playing = Some("/a.mp3".to_string());
+        assert_eq!(
+            app.queue.tracks(),
+            listed.as_slice(),
+            "the fixture did not take"
+        );
+
+        // The DJ is on, so the list is a pool rather than a running order.
+        app.queue
+            .set_tracks(vec!["/a.mp3".to_string()], Some("/a.mp3"));
+        app.curve_origin = Some("/a.mp3".to_string());
+        while extend_set(&mut app) {}
+
+        assert!(
+            app.queue.tracks().len() > 1,
+            "the DJ conducted nothing: {:?}",
+            app.queue.tracks()
+        );
+        assert_ne!(
+            app.queue.tracks(),
+            listed.as_slice(),
+            "the set came back in list order, so nothing was conducted"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And with the DJ off it is a plain queue: the list plays as listed.
+    #[test]
+    fn with_the_dj_off_a_list_keeps_its_own_order() {
+        let (mut app, dir) = conducting();
+        app.settings.dj_mode = false;
+        let listed = vec![
+            "/a.mp3".to_string(),
+            "/d.mp3".to_string(),
+            "/b.mp3".to_string(),
+        ];
+        app.queue.set_tracks(listed.clone(), Some("/a.mp3"));
+        app.playing = Some("/a.mp3".to_string());
+
+        assert!(!extend_set(&mut app));
+        assert_eq!(app.queue.tracks(), listed.as_slice());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The DJ conducts within what was played from, not the library.
     ///
     /// `audio_manager.gd` planned out of `current_playlist` — press play on an
