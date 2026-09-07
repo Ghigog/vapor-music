@@ -3745,7 +3745,13 @@ pub(crate) fn curve_step_at(app: &AppState, index: usize) -> usize {
 /// holds — and `Queue::append` refuses a duplicate outright, so a shorter
 /// history would mean steps that decide on a track and then cannot queue it.
 fn recent_before(app: &AppState, index: usize) -> Vec<String> {
-    app.queue.tracks().iter().take(index).rev().cloned().collect()
+    app.queue
+        .tracks()
+        .iter()
+        .take(index)
+        .rev()
+        .cloned()
+        .collect()
 }
 
 /// Decide one more track and append it. Returns whether the queue grew.
@@ -8206,7 +8212,8 @@ mod tests {
         let played = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
         let ahead = app.queue.tracks().len() - played;
         assert_eq!(
-            ahead, PLAN_AHEAD,
+            ahead,
+            PLAN_AHEAD,
             "the set is {ahead} deep, not {PLAN_AHEAD}: {:?}",
             app.queue.tracks()
         );
@@ -8231,7 +8238,10 @@ mod tests {
 
         // Four tracks, so the lookahead can never be filled.
         while extend_set(&mut app) {}
-        assert!(app.set_exhausted.is_some(), "the DJ did not record giving up");
+        assert!(
+            app.set_exhausted.is_some(),
+            "the DJ did not record giving up"
+        );
 
         let before = app.queue.tracks().len();
         assert!(!extend_set(&mut app));
@@ -8311,7 +8321,11 @@ mod tests {
 
         assert_eq!(
             &app.queue.tracks()[..3],
-            &["/a.mp3".to_string(), "/d.mp3".to_string(), "/b.mp3".to_string()],
+            &[
+                "/a.mp3".to_string(),
+                "/d.mp3".to_string(),
+                "/b.mp3".to_string()
+            ],
             "the DJ reordered a queue somebody built"
         );
         assert!(

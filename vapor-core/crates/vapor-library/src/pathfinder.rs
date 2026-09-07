@@ -140,7 +140,11 @@ impl Span {
         // `curve_energy`, not `energy_level`: the span is what the curve
         // travels, so it has to be measured in the units the curve reads.
         let mut energies: Vec<f32> = tracks.values().map(TrackMeta::curve_energy).collect();
-        let mut tempi: Vec<f32> = tracks.values().map(|t| t.bpm).filter(|b| *b > 0.0).collect();
+        let mut tempi: Vec<f32> = tracks
+            .values()
+            .map(|t| t.bpm)
+            .filter(|b| *b > 0.0)
+            .collect();
         if tempi.len() < 8 {
             tempi = vec![Span::default().bpm_floor, Span::default().bpm_ceiling];
         }
@@ -779,7 +783,10 @@ mod tests {
         let top = Curve::Build.target_energy(0.3, CURVE_STEPS, &s);
         for step in CURVE_STEPS..CURVE_STEPS * 4 {
             let e = Curve::Build.target_energy(0.3, step, &s);
-            assert!((e - top).abs() < 1e-5, "a build wandered at step {step}: {e}");
+            assert!(
+                (e - top).abs() < 1e-5,
+                "a build wandered at step {step}: {e}"
+            );
         }
         // And a wave keeps breathing rather than settling.
         let a = Curve::Wave.target_energy(0.5, 2, &s);
@@ -1005,7 +1012,10 @@ mod tests {
         let path = walk(Curve::Build, "calm/a", 12);
         let mut seen = std::collections::HashSet::new();
         for href in &path {
-            assert!(seen.insert(href.clone()), "{href} came round twice: {path:?}");
+            assert!(
+                seen.insert(href.clone()),
+                "{href} came round twice: {path:?}"
+            );
         }
     }
 
@@ -1017,7 +1027,14 @@ mod tests {
         let recent: Vec<String> = tracks.keys().cloned().collect();
         assert_eq!(
             next_track(
-                &tracks, "mid/a", "mid/a", &recent, Curve::Build, 1, &span, 0.5,
+                &tracks,
+                "mid/a",
+                "mid/a",
+                &recent,
+                Curve::Build,
+                1,
+                &span,
+                0.5,
                 &HashMap::new()
             ),
             None
@@ -1031,7 +1048,15 @@ mod tests {
         let span = Span::of(&tracks);
         assert_eq!(
             next_track(
-                &tracks, "nope", "nope", &[], Curve::Build, 1, &span, 0.5, &HashMap::new()
+                &tracks,
+                "nope",
+                "nope",
+                &[],
+                Curve::Build,
+                1,
+                &span,
+                0.5,
+                &HashMap::new()
             ),
             None
         );
@@ -1045,16 +1070,36 @@ mod tests {
         let empty = HashMap::new();
         let recent = vec!["calm/a".to_string()];
         let first = next_track(
-            &tracks, "calm/a", "calm/a", &recent, Curve::Flat, 1, &span, 0.5, &empty,
+            &tracks,
+            "calm/a",
+            "calm/a",
+            &recent,
+            Curve::Flat,
+            1,
+            &span,
+            0.5,
+            &empty,
         )
         .expect("a pool this size always has a next track");
 
         let mut history = HashMap::new();
         history.insert(("calm/a".to_string(), first.clone()), 500.0);
         let second = next_track(
-            &tracks, "calm/a", "calm/a", &recent, Curve::Flat, 1, &span, 0.5, &history,
+            &tracks,
+            "calm/a",
+            "calm/a",
+            &recent,
+            Curve::Flat,
+            1,
+            &span,
+            0.5,
+            &history,
         );
-        assert_ne!(second, Some(first), "a heavily penalised pair was still chosen");
+        assert_ne!(
+            second,
+            Some(first),
+            "a heavily penalised pair was still chosen"
+        );
     }
 
     /// The genre ordering has to place the shelves in the order a listener

@@ -786,10 +786,7 @@ fn scored(node: &str) -> Option<f32> {
         ("gabber", 1.0),
         ("breakcore", 0.95),
     ];
-    INTENSITY
-        .iter()
-        .find(|(k, _)| *k == node)
-        .map(|(_, v)| *v)
+    INTENSITY.iter().find(|(k, _)| *k == node).map(|(_, v)| *v)
 }
 
 /// Loose similarity check used to bucket "interesting" versus "creative"
