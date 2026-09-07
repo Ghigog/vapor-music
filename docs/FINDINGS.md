@@ -635,3 +635,111 @@ matters. The step is still there, still `if: failure()`.
 
 **Result:** 284 tests pass on `windows-latest`, and `installers
 (windows-latest)` produces an NSIS installer for the first time.
+
+---
+
+## The Vibe DJ's four curves were one curve
+
+Reported 2026-09-07 with five screenshots: Wave, Build, Chill and Hold all
+returned very nearly the same set, the tempo wandered rather than following any
+shape, and one of them was twelve consecutive tracks from a single Keem the
+Cipher album. Two separate faults, both measurable, neither a near miss.
+
+### The curve was outbid by one to two orders of magnitude
+
+`generate_mood_path` scored each candidate on `transition_cost` plus a
+`curve_cost` for how far it sat from where the curve wanted the set to be. The
+weights, ported unexamined from `dj_pathfinder.gd`, were `WEIGHT_CURVE_ENERGY
+= 8.0` and `WEIGHT_CURVE_BPM = 0.3`.
+
+A Build asked for +0.4 of energy across ten tracks. That is 0.044 a step.
+
+| what | cost |
+|---|---|
+| ignoring one step of the curve | `0.044 × 8` = **0.35** |
+| taking it (`WEIGHT_ENERGY` in the transition) | `0.044 × 6` = 0.26 |
+| **net pull toward the curve, per step** | **0.09** |
+| one key mode-shift (8A → 8B) | `1.0 × 2.5` = 2.5 |
+| one genre clash | `5.0 × 3.0` = 15 |
+| one key clash | `8.0 × 2.5` = 20 |
+
+So the planner optimised transition cost and paid the curve's fine without
+noticing. The whole curve budget over ten tracks was smaller than a single bad
+key change. Reproduced before any fix, on a 43-track synthetic library, from
+the same start track:
+
+    Build   72 → 68 → 70 → 75 → 74 → 81 → 62 → 62 → 67 → 74 BPM
+    Chill   72 → 70 → 68 → 63 → 61 → 61 → 60 → 75 → 67 → 66 BPM
+    Flat    72 → 66 → 67 → 68 → 70 → 75 → 63 → 61 → 60 → 61 BPM
+
+Build's energy target at step 9 was 0.70. It delivered 0.22.
+
+Three things were wrong with the shape itself, under that:
+
+* **±15 BPM is not a journey.** From 72 BPM a Build ended at 87. The report
+  asked for ambient through folk and rock to metal, which is 70 to 170.
+* **`start ± 0.4` fails at both ends.** Start at 0.30 and the drum & bass at
+  0.92 is never a target; start at 0.85 and the target saturates at 1.0, so the
+  term goes constant and offers no gradient to climb at all. The span is read
+  off the pool's 10th and 90th percentiles now, so a Build aims at the top of
+  what is actually in front of it.
+* **The curve restarted every ten tracks.** `target_energy(index, total)`
+  assumed a finite set planned in one go, and each batch re-seeded from the
+  track playing — so a Build was nine small builds. It counts steps from where
+  the curve was chosen now, and is defined past its own span: Build holds the
+  ceiling, Chill the floor, Wave keeps its period.
+
+At `WEIGHT_CURVE_ENERGY = 45.0`, plus a `WEIGHT_BACKTRACK = 60.0` charge on the
+component of a step that points the wrong way, the same pool gives:
+
+    Build   72 → 80 → 88 → 90 → 95 → 126 → 130 → 135 → 172 BPM
+    Chill   72 → 66 → 67 → 75 → 60 → 68 → 70 → 62 → 61 → 61 BPM
+
+### Nothing in the model could tell two records apart
+
+**488 of 534 tracks in the reporting library carry no genre tag**, and a further
+15 say "Unknown genre" — so `genre_distance` returned `UNKNOWN_COST` for every
+pair and contributed a constant, which cannot discriminate. With key, tempo and
+mastering loudness the only live signals, the cheapest neighbour of a track is
+reliably the next track of the same album: same key family, same tempo, same
+master. Twelve in a row is not a coincidence, it is the cost model's optimum.
+
+`TrackMeta` carries `artist` and `album` now, from sources the index trusts
+(a path-derived artist is shared by a whole folder and is not used), and a step
+that repeats either inside the last six is charged — 60 for an album, 25 for an
+artist, decaying quadratically. Sized deliberately between "worse than a key
+clash plus a genre clash" (35) and "cheaper than a step against the curve", in
+that order: leaving the record has to beat staying on it, and must not beat
+staying on the curve. At 95/55 it did beat the curve, and a Build would abandon
+a climb to avoid a second techno record.
+
+### Genre now says which way is up, not only how far apart
+
+`genre_intensity` places a genre on a 0–1 ladder — drone 0.05, ambient 0.08,
+folk 0.25, hip hop 0.48, house 0.62, rock 0.62, drum & bass 0.85, metal 0.90,
+gabber 1.0 — inheriting from the taxonomy's neighbours for names it does not
+list. `TrackMeta::curve_energy` blends it two-to-one with the measured
+loudness, and only the curve reads that blend; `transition_cost` still reads
+the measurement, because whether two records blend is a question about gain and
+not about what shelf they sit on.
+
+The blend exists because loudness is a fact about *mastering*: a 2015 ambient
+reissue at −9 LUFS outranks a 1973 rock record at −14, and a Build steered by
+loudness alone calls that a step up. Untagged, `curve_energy` is the
+measurement unchanged, so nothing moves where there is no genre to read.
+
+### Ten decided at once became one decided at a time
+
+The DJ planned ten, queued them, played all ten, then planned ten more. That
+was an A* over the whole library on whichever supervisor tick found the queue
+empty, with the state lock held throughout — which is the freeze that was
+reported, and why the screen stalled rather than only the control. Nine of the
+ten decisions were also thrown away whenever anybody pressed a different curve,
+which is what the curve buttons are for.
+
+`next_track` is one pass over the pool. The queue is kept ten deep and topped
+up one track at a time, each append announced, the lock taken and released
+between them. The screen's "10 to come · 52 min" went with it: both numbers
+measured how far ahead the planner had got rather than anything about the
+music, and fell and rose as the queue drained and refilled. The last row fades
+off the bottom instead.

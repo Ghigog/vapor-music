@@ -25,7 +25,7 @@ import { LinerNotes } from "./LinerNotes";
 import { YourData } from "./YourData";
 import { Onboarding } from "./Onboarding";
 import { Transport } from "../components/Transport";
-import { useBackend } from "../test/setup";
+import { emitEvent, useBackend } from "../test/setup";
 import { makePage, makeRow } from "../test/ipc";
 import type * as core from "../lib/core";
 
@@ -455,6 +455,57 @@ describe("Queue", () => {
     expect(up.length).toBeGreaterThan(0);
     await user.click(up[up.length - 1]!);
     await waitFor(() => expect(backend.called("move_in_queue")).toBe(true));
+  });
+
+  /**
+   * The set does not end, so the screen must not claim a total.
+   *
+   * It said "10 to come · 52 min", and both numbers described how far ahead the
+   * planner had got rather than anything about the music: they fell as the
+   * queue drained and jumped back when it refilled. Falsifiable in the
+   * direction that matters — put the count back and this fails.
+   */
+  it("does not claim a total for a set that has none", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    render(<Queue onOpen={() => {}} conducted />);
+
+    await screen.findByText("Xtal");
+    expect(screen.queryByText(/to come/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\d+\s*(min|h)\b/i)).not.toBeInTheDocument();
+    // What it does say is who is choosing, which is the useful half.
+    expect(screen.getByText(/conducted by vibe/i)).toBeInTheDocument();
+  });
+
+  /**
+   * A row the planner has taken away stays on screen for its animation.
+   *
+   * Without this the whole tail of a re-planned set is simply gone between two
+   * renders, which is what made pressing a curve read as a glitch rather than
+   * as a decision. See `lib/staging.ts`.
+   */
+  it("holds a removed row on screen while it slides away", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    render(<Queue onOpen={() => {}} />);
+    await screen.findByText("Xtal");
+
+    await backend.invoke("remove_from_queue", {
+      href: "/dav/Koofr/Music/xtal.m4a",
+    });
+    emitEvent("playback-changed", null);
+
+    // Still drawn, and marked as leaving rather than merely present.
+    await waitFor(() =>
+      expect(document.querySelector(".queue__item--out")).not.toBeNull(),
+    );
+    expect(screen.getByText("Xtal")).toBeInTheDocument();
   });
 });
 

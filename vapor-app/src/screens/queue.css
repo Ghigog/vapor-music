@@ -249,3 +249,95 @@
   height: 100%;
   object-fit: cover;
 }
+
+/* ---------------------------------------------------------------------------
+   A set that arrives, and one that does not end
+   ---------------------------------------------------------------------------
+
+   Pressing a curve re-plans everything after the track playing. That used to
+   be one render: ten rows replaced by ten others, after a pause with no sign
+   that anything was happening. The rows now leave to the right in order and
+   the new ones step in from the left as the planner decides them, one at a
+   time, so the wait is the animation rather than a stall before it.
+
+   The two directions are deliberate and opposite: out is the old set being
+   pushed aside, in is the new one being dealt. Same direction for both would
+   read as the list scrolling. */
+
+.queue__list {
+  /* Leaving rows are drawn translated past the right edge on their way out. */
+  overflow-x: hidden;
+}
+
+.queue__item--in {
+  animation: queue-in var(--queue-enter) var(--ease) backwards;
+}
+
+.queue__item--out {
+  animation: queue-out var(--queue-leave) var(--ease) forwards;
+  /* Left in the flow on purpose. Taking it out would close the gap under it
+     the instant it started moving, so the rows below would jump while the one
+     leaving was still on screen — the list settles once, after the row has
+     gone, rather than twice. */
+  pointer-events: none;
+}
+
+@keyframes queue-in {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes queue-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(36px);
+  }
+}
+
+/* The set does not end, and this is the only thing that says so.
+   The last row fades out downward, as if it carried on past the edge of what
+   is drawn. It replaces a subtitle that counted the tracks — a number that
+   described the planner's lookahead rather than the music, and fell and rose
+   as the queue drained and refilled. */
+.queue__list--endless > .queue__item:last-child {
+  /* `currentColor` rather than a colour: a mask reads alpha and ignores hue,
+     so naming one would be a colour literal that draws nothing — and the token
+     rule would be right to object to it. */
+  -webkit-mask-image: linear-gradient(to bottom, currentColor 20%, transparent 100%);
+  mask-image: linear-gradient(to bottom, currentColor 20%, transparent 100%);
+}
+
+/* A row still animating in must not also be faded off the bottom: the two
+   masks read as a row that arrived broken. */
+.queue__list--endless > .queue__item--in:last-child {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue__item--in,
+  .queue__item--out {
+    /* The order still matters — a row arriving is news — so the fade is kept
+       and only the travel is dropped. */
+    animation-name: queue-fade;
+  }
+
+  @keyframes queue-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

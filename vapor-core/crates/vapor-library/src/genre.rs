@@ -653,6 +653,142 @@ pub fn genre_distance(a: &str, b: &str) -> f32 {
     UNRELATED_COST
 }
 
+/// Roughly how hard a genre goes, 0–1, or `None` for a name the taxonomy does
+/// not recognise.
+///
+/// # Why a curve needs this and loudness cannot supply it
+///
+/// [`crate::intensity_from_lufs`] measures how loud a record was *mastered*,
+/// which is the right question for whether two tracks will blend and the wrong
+/// one for whether a set is getting more intense. A 2015 ambient reissue
+/// mastered at −9 LUFS reads louder than a 1973 rock record at −14, and a
+/// Build steered by loudness alone will happily call that a step up.
+///
+/// The journey people actually mean by "more energy" — ambient, then folk,
+/// then rock, then metal; or house, then dubstep, then drum & bass — is a
+/// journey through *kinds* of music, and the taxonomy already knows the kinds.
+/// This is the only thing missing: an ordering over them.
+///
+/// The numbers are a listener's ranking, not a measurement, and they are used
+/// as a third of the answer rather than all of it (see
+/// [`crate::TrackMeta::curve_energy`]) precisely because they are coarse. A
+/// quiet Metallica track is still filed under metal, and the loudness term is
+/// what stops the curve treating it as a peak.
+///
+/// A genre with no entry of its own inherits from its nearest scored
+/// neighbours in the taxonomy, so the table lists shelves rather than every
+/// leaf — "black metal" is not here and does not need to be.
+pub fn genre_intensity(genre: &str) -> Option<f32> {
+    if is_unknown_genre(genre) {
+        return None;
+    }
+    let node = find_node(&genre.trim().to_lowercase())?;
+    if let Some(v) = scored(node) {
+        return Some(v);
+    }
+
+    // Nearest scored neighbours, averaged. Breadth-first so "shoegaze" is
+    // answered by "alternative rock" rather than by whatever the walk reached
+    // first, and stopped at the first ring that scores anything — beyond that
+    // the taxonomy's cross-family edges make everything reachable and the
+    // answer would be the mean of the whole tree.
+    let g = graph();
+    let mut ring: Vec<&String> = vec![node];
+    let mut seen: HashSet<&String> = HashSet::from([node]);
+    for _ in 0..FAMILY_DISTANCE as usize + 1 {
+        let mut next: Vec<&String> = Vec::new();
+        for n in ring {
+            for edge in g.get(n).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if let Some((k, _)) = g.get_key_value(edge) {
+                    if seen.insert(k) {
+                        next.push(k);
+                    }
+                }
+            }
+        }
+        let found: Vec<f32> = next.iter().filter_map(|n| scored(n)).collect();
+        if !found.is_empty() {
+            return Some(found.iter().sum::<f32>() / found.len() as f32);
+        }
+        if next.is_empty() {
+            break;
+        }
+        ring = next;
+    }
+    None
+}
+
+/// The table itself. Keys are taxonomy node names, lower-cased as [`graph`]
+/// stores them.
+fn scored(node: &str) -> Option<f32> {
+    const INTENSITY: &[(&str, f32)] = &[
+        // ---- the quiet end -------------------------------------------
+        ("drone", 0.05),
+        ("ambient", 0.08),
+        ("dark ambient", 0.15),
+        ("modern classical", 0.12),
+        ("classical", 0.15),
+        ("minimalism", 0.10),
+        ("soundtrack", 0.18),
+        ("chillout", 0.20),
+        ("bossa nova", 0.22),
+        ("folk", 0.25),
+        ("singer-songwriter", 0.22),
+        ("jazz", 0.30),
+        ("smooth jazz", 0.22),
+        ("downtempo", 0.28),
+        ("trip hop", 0.32),
+        ("lo-fi hip hop", 0.25),
+        ("vaporwave", 0.20),
+        // ---- song and groove -----------------------------------------
+        ("soul", 0.38),
+        ("r&b", 0.38),
+        ("pop", 0.42),
+        ("dream pop", 0.28),
+        ("shoegaze", 0.45),
+        ("reggae", 0.38),
+        ("dub", 0.35),
+        ("country", 0.35),
+        ("blues", 0.38),
+        ("hip hop", 0.48),
+        ("boom bap", 0.45),
+        ("funk", 0.50),
+        ("disco", 0.55),
+        ("electronica", 0.45),
+        ("synthwave", 0.48),
+        ("idm", 0.45),
+        // ---- the floor -----------------------------------------------
+        ("garage", 0.58),
+        ("house", 0.62),
+        ("deep house", 0.55),
+        ("tech house", 0.68),
+        ("rock", 0.62),
+        ("indie rock", 0.55),
+        ("post-rock", 0.50),
+        ("classic rock", 0.60),
+        ("trap", 0.62),
+        ("breakbeat", 0.68),
+        ("club music", 0.68),
+        ("bass music", 0.70),
+        ("techno", 0.75),
+        ("trance", 0.72),
+        ("industrial", 0.72),
+        ("dubstep", 0.80),
+        ("drum & bass", 0.85),
+        ("jungle", 0.85),
+        ("hard rock", 0.78),
+        ("punk", 0.82),
+        ("hardcore punk", 0.92),
+        ("metal", 0.90),
+        ("brostep", 0.90),
+        ("neurofunk", 0.92),
+        ("hardstyle", 0.95),
+        ("gabber", 1.0),
+        ("breakcore", 0.95),
+    ];
+    INTENSITY.iter().find(|(k, _)| *k == node).map(|(_, v)| *v)
+}
+
 /// Loose similarity check used to bucket "interesting" versus "creative"
 /// candidates. Deliberately more permissive than [`genre_distance`].
 pub fn is_similar_genre(a: &str, b: &str) -> bool {

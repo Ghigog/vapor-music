@@ -140,10 +140,16 @@ pub fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
             (
                 index as u32,
                 total as u32,
+                // How far along the curve the set actually is, counted from
+                // where the curve was chosen rather than divided into the
+                // queue's length. A set has no end now — the queue is topped up
+                // a track at a time and never runs out — so "index of total"
+                // was a fraction of a number that only ever grows, and the mark
+                // read as barely moving however long the set ran.
                 vapor_library::Curve::parse(&app.settings.curve).target_energy(
                     app.curve_start,
-                    index,
-                    total,
+                    crate::curve_step_at(&app, index),
+                    &app.curve_span,
                 ),
             )
         } else {
