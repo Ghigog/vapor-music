@@ -4,7 +4,14 @@ import type { Exit } from "./Exit";
 /**
  * One option for what plays next.
  */
-export type MixCandidate = { href: string, title: string, artist: string, bpm: number, key: string, 
+export type MixCandidate = { href: string, title: string, artist: string, 
+/**
+ * What the app thinks this is, empty when it has no answer.
+ *
+ * On the card because the card is a claim about where the set goes next,
+ * and genre is the term in that decision a person can check by eye.
+ */
+genre: string, bpm: number, key: string, 
 /**
  * "stay" | "follow" | "switch".
  */

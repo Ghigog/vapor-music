@@ -26,6 +26,7 @@ import { listen } from "@tauri-apps/api/event";
 import { VaporMark, type MarkState } from "../components/VaporMark";
 import * as core from "../lib/core";
 import { useThumb } from "../lib/artwork";
+import { artistWithGenre } from "../lib/genre";
 import { LyricsPanel } from "../components/LyricsPanel";
 
 const POLL_MS = 250;
@@ -102,7 +103,10 @@ export function NowPlaying() {
           <h1 className="np__title" title={title}>
             {state.loading ? "Loading…" : title || "—"}
           </h1>
-          <p className="np__artist">{artist || "—"}</p>
+          {/* Genre beside the artist, not among the analysis figures:
+              it is resolved per artist far more often than per track,
+              so that is where a wrong one is recognisable. */}
+          <p className="np__artist">{artistWithGenre(artist, state.genre)}</p>
           <p className="np__source">
             <span className="np__dot" aria-hidden="true" />
             <span className="label">on this device</span>
@@ -212,11 +216,21 @@ export function NowPlaying() {
           <span className="np__next-title">
             {state.nextTitle || "Nothing queued"}
           </span>
-          {/* Artist and album, on one line and only where they are known —
-              a dash for each would be two dashes under every title. */}
-          {(state.nextArtist || state.nextAlbum) && (
+          {/* Artist, genre and album on one line.
+              Artist and album still appear only where they are known — a dash
+              for each would be two dashes under every title. Genre is stated
+              either way, and that is the difference: it is here to answer
+              whether the app knows what the next record is, and a blank would
+              read as "yes". Keyed on there being a next track at all, so
+              "Nothing queued" does not grow a genre of its own. */}
+          {state.nextTitle && (
             <span className="np__next-sub">
-              {[state.nextArtist, state.nextAlbum].filter(Boolean).join(" · ")}
+              {[
+                artistWithGenre(state.nextArtist, state.nextGenre),
+                state.nextAlbum,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </span>
           )}
         </div>

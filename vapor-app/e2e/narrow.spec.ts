@@ -525,7 +525,11 @@ test.describe("Duplicate tracks", () => {
     album: "Volume 1",
     artistSource: "tag" as const,
     albumSource: "tag" as const,
-    genre: "canzone",
+    // A list, as `Row` has held since genres became plural. Written `genre`
+    // here until 2026-09-08, which type-checked only because `boot` takes
+    // `Record<string, unknown>` and the shape goes through `JSON.stringify`.
+    // Nothing read it, so nothing complained.
+    genres: ["canzone"],
     bpm: 121 + i * 0,
     key: "6A",
     year: 1967,
@@ -621,7 +625,7 @@ test.describe("The Vibe screen at 412px", () => {
         album: "A Record",
         artistSource: "tag",
         albumSource: "tag",
-        genre,
+        genres: [genre],
         bpm,
         key,
         year: 2020,

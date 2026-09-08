@@ -120,7 +120,8 @@ describe("Library", () => {
 
     await waitFor(() => {
       const view = backend.lastArgs("library_view")?.view as
-        { album?: string } | undefined;
+        | { album?: string }
+        | undefined;
       expect(view?.album).toBe("Windowlicker EP");
     });
 
@@ -439,6 +440,59 @@ describe("Queue", () => {
 
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
     expect(screen.getByText("Xtal")).toBeInTheDocument();
+  });
+
+  /*
+   * Genre on the row, beside the artist.
+   *
+   * Asked for on 2026-09-08, and the reason is a diagnosis rather than a
+   * decoration: a folk record turned up in the middle of a dubstep set, and
+   * from the queue there was no way to tell whether the app had that track's
+   * genre wrong or had never had one. Those are different faults — a
+   * correction, or a lookup that never ran — and the row could not tell them
+   * apart because it named only the artist.
+   */
+  it("names the genre beside the artist on each queued row", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    render(<Queue onOpen={() => {}} />);
+
+    await screen.findByText("Xtal");
+    expect(
+      screen.getAllByText("Aphex Twin - Electronic").length,
+    ).toBeGreaterThan(0);
+  });
+
+  /*
+   * And says so when there is no genre, rather than printing the artist alone.
+   *
+   * The absent case is the one worth seeing: a row that quietly dropped the
+   * second half would look exactly like a row whose genre was known, which is
+   * the ambiguity this whole change removes.
+   */
+  it("says a queued track's genre is unknown when the app has none", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({
+          href: "/folk.m4a",
+          title: "It's Only Life, That's All",
+          artist: "Willie Wright",
+          genres: [],
+        }),
+      ],
+    });
+    await backend.invoke("play_tracks", {
+      hrefs: ["/folk.m4a"],
+      start: "/folk.m4a",
+    });
+    render(<Queue onOpen={() => {}} />);
+
+    expect(
+      (await screen.findAllByText("Willie Wright - unknown genre")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("reorders with the buttons", async () => {
@@ -831,6 +885,105 @@ describe("Now Playing", () => {
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
   });
 
+  /*
+   * And on the up-next line, which is the one place genre is stated even when
+   * the fields beside it are not.
+   *
+   * Artist and album are dropped from that line when unknown — a dash for each
+   * would be two dashes under every title — but genre is there to answer
+   * whether the app knows what the next record is, and a blank would read as
+   * "yes". Keyed on there being a next track, so "Nothing queued" does not
+   * grow a genre of its own.
+   */
+  it("names the next track's genre too", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText(/Aphex Twin - Electronic · Selected Ambient/),
+    ).toBeInTheDocument();
+  });
+
+  it("says the next track's genre is unknown when the app has none", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({ href: "/a.m4a", title: "A", artist: "Someone" }),
+        makeRow({
+          href: "/folk.m4a",
+          title: "It's Only Life, That's All",
+          artist: "Willie Wright",
+          album: "",
+          genres: [],
+        }),
+      ],
+    });
+    await backend.invoke("play_tracks", {
+      hrefs: ["/a.m4a", "/folk.m4a"],
+      start: "/a.m4a",
+    });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText("Willie Wright - unknown genre"),
+    ).toBeInTheDocument();
+  });
+
+  /*
+   * Nothing queued stays nothing queued: the line is keyed on a next track, so
+   * an empty up-next slot does not sprout "— - unknown genre" underneath it.
+   */
+  it("does not put a genre under an empty up-next slot", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    render(<NowPlaying />);
+
+    await screen.findByText("Nothing queued");
+    expect(screen.queryByText(/unknown genre/)).not.toBeInTheDocument();
+  });
+
+  /*
+   * Genre beside the artist, on the screen a person is actually looking at.
+   *
+   * Beside the artist rather than among the tempo and key figures: genre is
+   * resolved per artist far more often than per track, so that is where a
+   * reader looks for it and where a wrong one is recognisable.
+   */
+  it("names the genre beside the artist", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText("Aphex Twin - Electronic"),
+    ).toBeInTheDocument();
+  });
+
+  it("says the genre is unknown when the app has none", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({
+          href: "/folk.m4a",
+          title: "Jackie's Song",
+          artist: "Willie Wright",
+          genres: [],
+        }),
+      ],
+    });
+    await backend.invoke("play_tracks", {
+      hrefs: ["/folk.m4a"],
+      start: "/folk.m4a",
+    });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText("Willie Wright - unknown genre"),
+    ).toBeInTheDocument();
+  });
+
   /**
    * This screen has its own transport, separate from the one in the shell, and
    * nothing here had ever pressed it. A second set of controls is a second
@@ -894,6 +1047,37 @@ describe("Now Playing", () => {
   });
 });
 
+/**
+ * Empty a box and type into it, without assuming the emptying has landed.
+ *
+ * `clear` then `type` reads as one action and is not: the delete and the first
+ * keystroke are two events, and `type` reads the box's *current* value to build
+ * the next one. If React has not yet flushed the empty state to the DOM when
+ * the first character arrives, that character is appended to the old value
+ * instead of replacing it, and the box ends up holding both.
+ *
+ * That is what turned the genre box into "Electronicdrum and bass" and failed
+ * the App workflow on main (run 205, 2026-09-07). It never reproduced locally —
+ * 17 clean runs of the suite — because the window only opens when the runner is
+ * loaded enough to defer the flush past the next event. Waiting for the box to
+ * actually read empty closes it, rather than hoping the two events stay in
+ * order.
+ *
+ * Worth knowing beyond these two tests: the same `clear`-then-`type` pair is
+ * used in Settings, Playlist and SmartGroup, and is latent there for the same
+ * reason. Left alone here — those tests are not failing and are not this
+ * change's to rewrite.
+ */
+async function clearedThen(
+  user: ReturnType<typeof userEvent.setup>,
+  box: HTMLElement,
+  text: string,
+) {
+  await user.clear(box);
+  await waitFor(() => expect(box).toHaveValue(""));
+  await user.type(box, text);
+}
+
 describe("Liner Notes", () => {
   it("shows what is known about a track", async () => {
     useBackend();
@@ -918,8 +1102,7 @@ describe("Liner Notes", () => {
     render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
 
     const genre = await screen.findByLabelText(/genre/i);
-    await user.clear(genre);
-    await user.type(genre, "drum and bass");
+    await clearedThen(user, genre, "drum and bass");
     // Committed on blur, not per keystroke: each commit is a settings write and
     // a library re-read, and doing that per letter would rebuild the index
     // thirteen times for this one value.
@@ -948,8 +1131,7 @@ describe("Liner Notes", () => {
     ).not.toBeInTheDocument();
 
     const genre = await screen.findByLabelText(/genre/i);
-    await user.clear(genre);
-    await user.type(genre, "neurofunk");
+    await clearedThen(user, genre, "neurofunk");
     await user.tab();
 
     // Now it says whose value it is, and how to go back.
@@ -1350,6 +1532,7 @@ describe("Transport", () => {
       href: "/slow.m4a",
       title: "",
       artist: "",
+      genre: "",
       status: "idle",
       loading: true,
       position: 0,
@@ -1368,6 +1551,7 @@ describe("Transport", () => {
       waveform: [],
       nextTitle: "",
       nextArtist: "",
+      nextGenre: "",
       nextAlbum: "",
       nextHref: "",
       cover: null,
@@ -1537,6 +1721,7 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
       href,
       title: row.title,
       artist: row.artist,
+      genre: row.genres.join(" / "),
       bpm: row.bpm,
       key: row.key,
       exit,
@@ -1563,6 +1748,37 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
     backend.answers("mix_candidates", CARDS);
     return backend;
   }
+
+  /*
+   * Genre on the card, beside the artist.
+   *
+   * A card is a claim about where the set goes next, and genre is the one term
+   * in that decision a person can check by eye. Without it the three cards
+   * offered three names and no way to see why any of them had been chosen —
+   * which is how a folk record on a dubstep set reads as arbitrary rather than
+   * as a genre the app never had.
+   */
+  it("names the genre beside the artist on each exit card", async () => {
+    await playing();
+    render(<Vibe />);
+
+    await screen.findByText("STAY");
+    expect(
+      screen.getAllByText("An Artist - Electronic").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("says an exit card's genre is unknown when the app has none", async () => {
+    const backend = await playing();
+    backend.answers("mix_candidates", [
+      { ...CARDS[0]!, artist: "Willie Wright", genre: "" },
+    ]);
+    render(<Vibe />);
+
+    expect(
+      await screen.findByText("Willie Wright - unknown genre"),
+    ).toBeInTheDocument();
+  });
 
   it("offers one way out of each kind", async () => {
     await playing();

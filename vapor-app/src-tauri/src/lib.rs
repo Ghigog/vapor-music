@@ -2934,6 +2934,12 @@ pub(crate) struct PlaybackState {
     /// playing without the UI holding its own copy of the table.
     title: String,
     artist: String,
+    /// What the app thinks this is, empty when it has no answer.
+    ///
+    /// Next to the artist rather than among the analysis figures: genre is
+    /// resolved per artist far more often than per track, so that is where a
+    /// reader expects to find it and where a wrong one is recognisable.
+    genre: String,
     status: audio::Status,
     /// Fetching and decoding, which on a cold cache is seconds. Distinct from
     /// playing so the UI can say "loading" rather than showing a stalled
@@ -2991,6 +2997,14 @@ pub(crate) struct PlaybackState {
     /// What plays after this, so Now Playing can say so without a second call.
     next_title: String,
     next_artist: String,
+    /// What the app thinks the next track is, empty when it has no answer.
+    ///
+    /// The up-next line hides an unknown artist and an unknown album rather
+    /// than drawing a dash for each. Genre is the exception, and deliberately:
+    /// the screen carries it to answer "does the app know what this is", and a
+    /// blank there would read as "yes" — which is the ambiguity the genre
+    /// labels exist to remove.
+    next_genre: String,
     next_album: String,
     /// The next track's href, so the screen can ask for its artwork the same
     /// way a row does — through `track_thumb`, which is sized for a tile.
@@ -3655,6 +3669,37 @@ fn genre_for_row(app: &AppState, row: &Row) -> String {
         return row.genre_label();
     }
     genre_from_tag_or_lookup_for(app, &row.href, &row.artist)
+}
+
+/// The genre to put on a screen, or empty when the app does not have one.
+///
+/// [`genre_for_row`]'s answer with placeholders flattened away. The genre shown
+/// on the exit cards, the queue rows and Now Playing exists to answer one
+/// question — *what does the app think this is* — asked on 2026-09-08 after a
+/// folk record turned up in the middle of a dubstep set and the screen gave no
+/// way to tell whether the genre was wrong or simply absent.
+///
+/// Flattened, because a screen that printed "Other" would name a genre the
+/// planner does not have. `genre_distance` scores every placeholder as
+/// `UNKNOWN_COST`, so "Other" and "" are the same input to the thing being
+/// diagnosed, and a screen that distinguished them would be reporting on
+/// something other than the decision it is being read to explain.
+///
+/// Takes the row rather than an href, and there is deliberately no href-taking
+/// twin: every caller has the row already, and the one that would not — a queue
+/// row — is drawn once per track over what is routinely the whole library, so
+/// an `app.rows` scan per call is the quadratic the note above `genre_for_row`
+/// exists to prevent.
+pub(crate) fn shown_genre_for_row(app: &AppState, row: &Row) -> String {
+    without_placeholder(genre_for_row(app, row))
+}
+
+fn without_placeholder(genre: String) -> String {
+    if vapor_library::is_unknown_genre(&genre) {
+        String::new()
+    } else {
+        genre
+    }
 }
 
 fn genre_from_tag_or_lookup(app: &AppState, href: &str) -> String {
@@ -4796,6 +4841,12 @@ struct QueueEntry {
     // the current track, and fetches it by href with `track_cover`.
     title: String,
     artist: String,
+    /// What the app thinks this is, empty when it has no answer.
+    ///
+    /// Beside the artist because genre travels with the artist far more often
+    /// than with the track, and because a row that names both is the only way
+    /// to see, from the queue, why a record was placed where it was.
+    genre: String,
     bpm: f32,
     key: String,
     /// True for the track currently playing.
@@ -4840,6 +4891,9 @@ pub(crate) fn queue_view_for(app: &AppState) -> QueueView {
                     .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
                     .map(|r| r.artist.clone())
                     .unwrap_or_default(),
+                // `_for_row`, not `shown_genre`: a queue is routinely the whole
+                // library and the row is already in hand.
+                genre: row.map(|r| shown_genre_for_row(app, r)).unwrap_or_default(),
                 bpm: tempo_in_force(app, href, analysis)
                     .or_else(|| analysis.map(|a| a.bpm))
                     .unwrap_or(0.0),
@@ -5196,6 +5250,11 @@ pub(crate) struct MixCandidate {
     href: String,
     title: String,
     artist: String,
+    /// What the app thinks this is, empty when it has no answer.
+    ///
+    /// On the card because the card is a claim about where the set goes next,
+    /// and genre is the term in that decision a person can check by eye.
+    genre: String,
     #[serde(serialize_with = "finite")]
     bpm: f32,
     key: String,
@@ -5448,6 +5507,7 @@ fn card_for(
             .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
             .map(|r| r.artist.clone())
             .unwrap_or_default(),
+        genre: row.map(|r| shown_genre_for_row(app, r)).unwrap_or_default(),
         bpm: to.bpm,
         key: to.musical_key.clone(),
         exit,
@@ -8732,6 +8792,49 @@ mod tests {
             .into(),
         );
         assert_eq!(genre_of(&app, "/a.mp3"), "Drum & Bass");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A placeholder is not a genre, and the screens must not print one.
+    ///
+    /// The exit cards, the queue rows and Now Playing carry a genre so a
+    /// person can tell "the app has this wrong" from "the app has nothing" —
+    /// which is the question a folk record in a dubstep set raised on
+    /// 2026-09-08. A file tagged "Other" is the second case: `genre_distance`
+    /// scores it as `UNKNOWN_COST`, exactly as it scores an empty string, so a
+    /// screen that printed "Other" would name a genre the planner does not
+    /// have and answer the question wrongly.
+    #[test]
+    fn a_placeholder_is_shown_as_no_genre_at_all() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/a.mp3", "A"));
+        let r = app.rows[0].clone();
+        app.tags.insert(
+            "/a.mp3".to_string(),
+            tags::Tags {
+                genre: Some("Other".to_string()),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        assert_eq!(
+            shown_genre_for_row(&app, &r),
+            "",
+            "a placeholder reached the screen as if it were a genre"
+        );
+
+        // And a real one still arrives intact.
+        app.tags.insert(
+            "/a.mp3".to_string(),
+            tags::Tags {
+                genre: Some("Neurofunk".to_string()),
+                ..Default::default()
+            }
+            .into(),
+        );
+        assert_eq!(shown_genre_for_row(&app, &r), "Neurofunk");
 
         let _ = std::fs::remove_dir_all(dir);
     }
