@@ -2997,6 +2997,14 @@ pub(crate) struct PlaybackState {
     /// What plays after this, so Now Playing can say so without a second call.
     next_title: String,
     next_artist: String,
+    /// What the app thinks the next track is, empty when it has no answer.
+    ///
+    /// The up-next line hides an unknown artist and an unknown album rather
+    /// than drawing a dash for each. Genre is the exception, and deliberately:
+    /// the screen carries it to answer "does the app know what this is", and a
+    /// blank there would read as "yes" — which is the ambiguity the genre
+    /// labels exist to remove.
+    next_genre: String,
     next_album: String,
     /// The next track's href, so the screen can ask for its artwork the same
     /// way a row does — through `track_thumb`, which is sized for a tile.

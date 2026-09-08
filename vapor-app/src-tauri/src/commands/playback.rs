@@ -245,6 +245,9 @@ pub fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
             .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
             .map(|r| r.artist.clone())
             .unwrap_or_default(),
+        next_genre: next
+            .map(|r| crate::shown_genre_for_row(&app, r))
+            .unwrap_or_default(),
         next_album: next
             .filter(|r| r.album_source.is_known())
             .map(|r| r.album.clone())

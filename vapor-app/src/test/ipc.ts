@@ -1689,6 +1689,7 @@ export class FakeBackend {
           waveform: [],
           nextTitle: nextRow?.title ?? "",
           nextArtist: nextRow?.artist ?? "",
+          nextGenre: nextRow?.genres.join(" / ") ?? "",
           nextAlbum: nextRow?.album ?? "",
           nextHref: nextRow?.href ?? "",
           cover: null,

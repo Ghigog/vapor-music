@@ -886,6 +886,66 @@ describe("Now Playing", () => {
   });
 
   /*
+   * And on the up-next line, which is the one place genre is stated even when
+   * the fields beside it are not.
+   *
+   * Artist and album are dropped from that line when unknown — a dash for each
+   * would be two dashes under every title — but genre is there to answer
+   * whether the app knows what the next record is, and a blank would read as
+   * "yes". Keyed on there being a next track, so "Nothing queued" does not
+   * grow a genre of its own.
+   */
+  it("names the next track's genre too", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText(/Aphex Twin - Electronic · Selected Ambient/),
+    ).toBeInTheDocument();
+  });
+
+  it("says the next track's genre is unknown when the app has none", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({ href: "/a.m4a", title: "A", artist: "Someone" }),
+        makeRow({
+          href: "/folk.m4a",
+          title: "It's Only Life, That's All",
+          artist: "Willie Wright",
+          album: "",
+          genres: [],
+        }),
+      ],
+    });
+    await backend.invoke("play_tracks", {
+      hrefs: ["/a.m4a", "/folk.m4a"],
+      start: "/a.m4a",
+    });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText("Willie Wright - unknown genre"),
+    ).toBeInTheDocument();
+  });
+
+  /*
+   * Nothing queued stays nothing queued: the line is keyed on a next track, so
+   * an empty up-next slot does not sprout "— - unknown genre" underneath it.
+   */
+  it("does not put a genre under an empty up-next slot", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    render(<NowPlaying />);
+
+    await screen.findByText("Nothing queued");
+    expect(screen.queryByText(/unknown genre/)).not.toBeInTheDocument();
+  });
+
+  /*
    * Genre beside the artist, on the screen a person is actually looking at.
    *
    * Beside the artist rather than among the tempo and key figures: genre is
@@ -1491,6 +1551,7 @@ describe("Transport", () => {
       waveform: [],
       nextTitle: "",
       nextArtist: "",
+      nextGenre: "",
       nextAlbum: "",
       nextHref: "",
       cover: null,
