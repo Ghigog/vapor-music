@@ -7,7 +7,15 @@
  * stays free of presentation — which means the shell is where an href becomes
  * something a person can read.
  */
-export type QueueEntry = { href: string, title: string, artist: string, bpm: number, key: string, 
+export type QueueEntry = { href: string, title: string, artist: string, 
+/**
+ * What the app thinks this is, empty when it has no answer.
+ *
+ * Beside the artist because genre travels with the artist far more often
+ * than with the track, and because a row that names both is the only way
+ * to see, from the queue, why a record was placed where it was.
+ */
+genre: string, bpm: number, key: string, 
 /**
  * True for the track currently playing.
  */

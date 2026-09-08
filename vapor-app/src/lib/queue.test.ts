@@ -4,7 +4,7 @@ import { upNextOf } from "./queue";
 import type { QueueEntry, QueueView } from "./core";
 
 function entry(href: string, current: boolean): QueueEntry {
-  return { href, title: href, artist: "", bpm: 0, key: "", current };
+  return { href, title: href, artist: "", genre: "", bpm: 0, key: "", current };
 }
 
 function view(hrefs: string[], current: number | null): QueueView {

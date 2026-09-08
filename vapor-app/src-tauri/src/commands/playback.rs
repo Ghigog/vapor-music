@@ -221,6 +221,9 @@ pub fn playback_state(state: State<'_, Shared>) -> Result<PlaybackState> {
             .filter(|r| r.artist_source != vapor_library::index::Source::Unknown)
             .map(|r| r.artist.clone())
             .unwrap_or_default(),
+        genre: row
+            .map(|r| crate::shown_genre_for_row(&app, r))
+            .unwrap_or_default(),
         status: snapshot.map_or(audio::Status::Idle, |s| s.status),
         loading: app.loading,
         position: snapshot.map_or(0.0, |s| s.position),

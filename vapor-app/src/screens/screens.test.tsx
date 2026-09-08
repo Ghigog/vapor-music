@@ -442,6 +442,59 @@ describe("Queue", () => {
     expect(screen.getByText("Xtal")).toBeInTheDocument();
   });
 
+  /*
+   * Genre on the row, beside the artist.
+   *
+   * Asked for on 2026-09-08, and the reason is a diagnosis rather than a
+   * decoration: a folk record turned up in the middle of a dubstep set, and
+   * from the queue there was no way to tell whether the app had that track's
+   * genre wrong or had never had one. Those are different faults — a
+   * correction, or a lookup that never ran — and the row could not tell them
+   * apart because it named only the artist.
+   */
+  it("names the genre beside the artist on each queued row", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", {
+      hrefs: [A_TRACK, "/dav/Koofr/Music/xtal.m4a"],
+      start: A_TRACK,
+    });
+    render(<Queue onOpen={() => {}} />);
+
+    await screen.findByText("Xtal");
+    expect(
+      screen.getAllByText("Aphex Twin - Electronic").length,
+    ).toBeGreaterThan(0);
+  });
+
+  /*
+   * And says so when there is no genre, rather than printing the artist alone.
+   *
+   * The absent case is the one worth seeing: a row that quietly dropped the
+   * second half would look exactly like a row whose genre was known, which is
+   * the ambiguity this whole change removes.
+   */
+  it("says a queued track's genre is unknown when the app has none", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({
+          href: "/folk.m4a",
+          title: "It's Only Life, That's All",
+          artist: "Willie Wright",
+          genres: [],
+        }),
+      ],
+    });
+    await backend.invoke("play_tracks", {
+      hrefs: ["/folk.m4a"],
+      start: "/folk.m4a",
+    });
+    render(<Queue onOpen={() => {}} />);
+
+    expect(
+      (await screen.findAllByText("Willie Wright - unknown genre")).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("reorders with the buttons", async () => {
     const backend = useBackend();
     await backend.invoke("play_tracks", {
@@ -830,6 +883,45 @@ describe("Now Playing", () => {
     render(<NowPlaying />);
 
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
+  });
+
+  /*
+   * Genre beside the artist, on the screen a person is actually looking at.
+   *
+   * Beside the artist rather than among the tempo and key figures: genre is
+   * resolved per artist far more often than per track, so that is where a
+   * reader looks for it and where a wrong one is recognisable.
+   */
+  it("names the genre beside the artist", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText("Aphex Twin - Electronic"),
+    ).toBeInTheDocument();
+  });
+
+  it("says the genre is unknown when the app has none", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({
+          href: "/folk.m4a",
+          title: "Jackie's Song",
+          artist: "Willie Wright",
+          genres: [],
+        }),
+      ],
+    });
+    await backend.invoke("play_tracks", {
+      hrefs: ["/folk.m4a"],
+      start: "/folk.m4a",
+    });
+    render(<NowPlaying />);
+
+    expect(
+      await screen.findByText("Willie Wright - unknown genre"),
+    ).toBeInTheDocument();
   });
 
   /**
@@ -1380,6 +1472,7 @@ describe("Transport", () => {
       href: "/slow.m4a",
       title: "",
       artist: "",
+      genre: "",
       status: "idle",
       loading: true,
       position: 0,
@@ -1567,6 +1660,7 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
       href,
       title: row.title,
       artist: row.artist,
+      genre: row.genres.join(" / "),
       bpm: row.bpm,
       key: row.key,
       exit,
@@ -1593,6 +1687,37 @@ describe("Vibe DJ — Stay, Follow and Switch", () => {
     backend.answers("mix_candidates", CARDS);
     return backend;
   }
+
+  /*
+   * Genre on the card, beside the artist.
+   *
+   * A card is a claim about where the set goes next, and genre is the one term
+   * in that decision a person can check by eye. Without it the three cards
+   * offered three names and no way to see why any of them had been chosen —
+   * which is how a folk record on a dubstep set reads as arbitrary rather than
+   * as a genre the app never had.
+   */
+  it("names the genre beside the artist on each exit card", async () => {
+    await playing();
+    render(<Vibe />);
+
+    await screen.findByText("STAY");
+    expect(
+      screen.getAllByText("An Artist - Electronic").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("says an exit card's genre is unknown when the app has none", async () => {
+    const backend = await playing();
+    backend.answers("mix_candidates", [
+      { ...CARDS[0]!, artist: "Willie Wright", genre: "" },
+    ]);
+    render(<Vibe />);
+
+    expect(
+      await screen.findByText("Willie Wright - unknown genre"),
+    ).toBeInTheDocument();
+  });
 
   it("offers one way out of each kind", async () => {
     await playing();

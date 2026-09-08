@@ -26,6 +26,7 @@ import { listen } from "@tauri-apps/api/event";
 import { VaporMark, type MarkState } from "../components/VaporMark";
 import * as core from "../lib/core";
 import { useThumb } from "../lib/artwork";
+import { artistWithGenre } from "../lib/genre";
 import { LyricsPanel } from "../components/LyricsPanel";
 
 const POLL_MS = 250;
@@ -102,7 +103,10 @@ export function NowPlaying() {
           <h1 className="np__title" title={title}>
             {state.loading ? "Loading…" : title || "—"}
           </h1>
-          <p className="np__artist">{artist || "—"}</p>
+          {/* Genre beside the artist, not among the analysis figures:
+              it is resolved per artist far more often than per track,
+              so that is where a wrong one is recognisable. */}
+          <p className="np__artist">{artistWithGenre(artist, state.genre)}</p>
           <p className="np__source">
             <span className="np__dot" aria-hidden="true" />
             <span className="label">on this device</span>

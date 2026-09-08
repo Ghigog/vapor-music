@@ -24,6 +24,7 @@ import * as core from "../lib/core";
 import { upNextOf } from "../lib/queue";
 import { useStaging, STAGGER_MS } from "../lib/staging";
 import { useThumb } from "../lib/artwork";
+import { artistWithGenre } from "../lib/genre";
 import { Empty } from "../components/States";
 
 export function Queue({
@@ -193,7 +194,9 @@ export function Queue({
           <span className="queue__now-text">
             <span className="label">now playing</span>
             <span className="queue__now-title">{current.title}</span>
-            <span className="queue__now-artist">{current.artist || "—"}</span>
+            <span className="queue__now-artist">
+              {artistWithGenre(current.artist, current.genre)}
+            </span>
           </span>
         </section>
       )}
@@ -292,7 +295,7 @@ export function Queue({
                 <span className="queue__row-text">
                   <span className="queue__row-title">{entry.title}</span>
                   <span className="queue__row-artist">
-                    {entry.artist || "—"}
+                    {artistWithGenre(entry.artist, entry.genre)}
                   </span>
                 </span>
                 <span className="queue__row-facts numeric">

@@ -6,7 +6,15 @@ export type PlaybackState = { href: string | null,
  * Resolved from the library rows, so the transport can name what is
  * playing without the UI holding its own copy of the table.
  */
-title: string, artist: string, status: Status, 
+title: string, artist: string, 
+/**
+ * What the app thinks this is, empty when it has no answer.
+ *
+ * Next to the artist rather than among the analysis figures: genre is
+ * resolved per artist far more often than per track, so that is where a
+ * reader expects to find it and where a wrong one is recognisable.
+ */
+genre: string, status: Status, 
 /**
  * Fetching and decoding, which on a cold cache is seconds. Distinct from
  * playing so the UI can say "loading" rather than showing a stalled

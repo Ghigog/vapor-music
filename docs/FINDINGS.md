@@ -810,3 +810,61 @@ against it here read identical boards under both curves before this was found.
 `analysed_intensity` varies the loudness, and `a_library_with_range` builds a
 pool spanning 0.2–0.8 intensity and 84–168 BPM inside one harmonic
 neighbourhood — the key term will otherwise decide every question on its own.
+
+---
+
+## A folk record in the middle of a dubstep set, and no way to ask why
+
+Reported 2026-09-08, on a set that ran Infected Mushroom → Willie Wright →
+Excision: "I think the BPM is similar, so maybe the system made the match on
+this data. But this is precisely why we had the genre fix. Then I thought: how
+do we find out what genre the app *thinks* this is? Or maybe the genre is
+missing? The problem is I don't know, because the genre doesn't show here."
+
+The last sentence is the finding. The screens carried title, artist, tempo and
+key, and no genre anywhere — so the two explanations for a bad placement were
+indistinguishable from the outside.
+
+### The arithmetic, read off the constants
+
+`step_score` in `pathfinder.rs` is `transition_cost + curve_cost +
+backtrack_cost + variety_cost`, and genre enters only through the first:
+
+| term | weight | worst case | product |
+|---|---|---|---|
+| genre, both sides known and unrelated | `WEIGHT_GENRE` 3.0 | `UNRELATED_COST` 5.0 | **15.0** |
+| genre, either side unknown | `WEIGHT_GENRE` 3.0 | `UNKNOWN_COST` 2.5 | **7.5** |
+| curve energy error | `WEIGHT_CURVE_ENERGY` 45.0 | 1.0 | up to 45.0 |
+
+Two consequences, both of which fit the reported set.
+
+**An untagged track is half the price of a correctly tagged one.** A folk record
+the app knows is folk costs 15.0 to put after dubstep. The same record with no
+genre costs 7.5. `UNKNOWN_COST` sits below `UNRELATED_COST` deliberately — the
+note on the constant argues, correctly, that a part-identified library must not
+have the planner avoid everything it has not identified yet — but the effect
+downstream is that the least-known records are the cheapest to reach for.
+
+**And the curve outbids the genre either way.** `curve_cost` is 45.0 × the
+energy error, so a track 0.33 off the curve's target already costs as much as a
+complete genre clash. On a Chill stepping down out of 139 BPM dubstep, a quiet
+folk record sits almost exactly where the curve is pointing, and every
+remaining dubstep track pays a large curve cost. 15.0 is affordable against
+that; 7.5 is barely noticed.
+
+### What is not established here
+
+Which of the two applied to that set. That needs to know whether Willie Wright
+carries a genre in this library, and the app had no way to say — which is the
+whole complaint. So the fix is the instrument rather than a re-weighting: the
+exit cards, the queue rows and Now Playing name the genre beside the artist,
+and say `unknown genre` when there is none.
+
+Placeholders are flattened on the way out (`shown_genre_for_row`). A file
+tagged "Other" scores as `UNKNOWN_COST`, exactly as an empty string does, so a
+screen that printed "Other" would name a genre the planner does not have and
+answer the question wrongly.
+
+Whether the weights are right is a separate question, deliberately not answered
+here. It should be asked against a library whose genres can now be read off the
+screen rather than guessed at.

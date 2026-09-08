@@ -27,6 +27,7 @@ import * as core from "../lib/core";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Empty } from "../components/States";
 import { Queue } from "./Queue";
+import { artistWithGenre } from "../lib/genre";
 import { HelpModal } from "../components/HelpModal";
 // The spec, verbatim — the same document the Godot help modal rendered from
 // res://docs/ai_dj_workflow.md. Imported rather than retyped so it cannot drift.
@@ -366,7 +367,9 @@ export function Vibe({
                       <span className="vibe__exit-word">{c.label}</span>
                     </span>
                     <span className="vibe__exit-title">{c.title}</span>
-                    <span className="vibe__exit-artist">{c.artist || "—"}</span>
+                    <span className="vibe__exit-artist">
+                      {artistWithGenre(c.artist, c.genre)}
+                    </span>
                     {/* One mono line: tempo, key, and the mix that gets you
                         there. */}
                     <span className="vibe__exit-facts numeric">
