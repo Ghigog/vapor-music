@@ -90,8 +90,11 @@ const COLUMNS: readonly Column[] = [
   { id: "title", label: "Title", cell: 3 },
   { id: "artist", label: "Artist", cell: 3 },
   { id: "album", label: "Album", cell: 4 },
-  { id: "bpm", label: "BPM", cell: 5, numeric: true },
-  { id: "key", label: "Key", cell: 6, numeric: true },
+  // Beside the album rather than out by the numbers: it is a name, and the
+  // mono columns to its right are measurements.
+  { id: "genre", label: "Genre", cell: 5 },
+  { id: "bpm", label: "BPM", cell: 6, numeric: true },
+  { id: "key", label: "Key", cell: 7, numeric: true },
 ];
 
 type Load =
@@ -920,6 +923,10 @@ function SongRow({
   const cover = useThumb(row.href);
   const artist = row.artistSource === "unknown" ? "—" : row.artist;
   const album = row.albumSource === "unknown" ? "—" : row.album;
+  // `genres` is a list because a track can be filed under several; the shell
+  // resolves it (correction, file tag, artist cloud, lookup) before the row
+  // gets here, so an empty list means the app genuinely has no genre.
+  const genre = row.genres.join(" / ") || "—";
   /*
    * Tempo and key for the narrow layout, which has no columns for them.
    *
@@ -952,6 +959,15 @@ function SongRow({
       </div>
       <span className="songrow__album" title={album}>
         {album}
+      </span>
+      {/* A dash, not "unknown genre".
+          The exit cards and the queue rows spell it out because there they are
+          one line of prose under a title; a table column has a heading saying
+          what it is, and the dash is what this table already uses for an
+          unknown album, artist and key. Saying it in words down a column of
+          806 rows would shout. */}
+      <span className="songrow__genre" title={genre}>
+        {genre}
       </span>
       {onOpen && (
         <button

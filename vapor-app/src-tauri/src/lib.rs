@@ -794,6 +794,37 @@ impl AppState {
         }
     }
 
+    /// Put the genre the rest of the app resolves onto the row itself.
+    ///
+    /// Call *after* `apply_metadata`, which merges a correction and the file's
+    /// own tag. This is the two sources below those — the artist's tag cloud
+    /// and the per-album lookup — neither of which is on the row.
+    ///
+    /// # Why the row did not already carry it
+    ///
+    /// Nothing needed it. The Genres tab sidesteps the field entirely and says
+    /// so where it does: "the effective genre of a row can come from the tag
+    /// store or the lookup cache, neither of which is on the row". Every other
+    /// reader went through `genre_of` for the same reason.
+    ///
+    /// The Songs table now has a genre column, and a column reading the raw
+    /// field would have disagreed with the tab about the same track — 488 of
+    /// 534 tracks in this library carry no file tag, so the raw field is empty
+    /// for nearly all of them while the tab shows a genre. Two places naming
+    /// one track's genre differently is worse than not showing it.
+    ///
+    /// Sorting gets the same repair for free: `library_page` sorts after
+    /// `resolved_rows`, and `SortKey::Genre` sinks rows with an empty list, so
+    /// ordering by genre used to sink almost the whole library.
+    ///
+    /// Idempotent, and only ever fills a gap: `genre_for_row` prefers
+    /// `row.genres` whenever it has any.
+    pub(crate) fn apply_genre(&self, row: &mut Row) {
+        if row.genres.is_empty() {
+            row.genres = vapor_library::split_real_genres(&genre_for_row(self, row));
+        }
+    }
+
     /// Persist playlists. Called after every mutation, which is why the write
     /// has to be atomic.
     pub(crate) fn save_playlists(&self) -> Result<()> {
@@ -1432,6 +1463,7 @@ fn resolved_rows(app: &AppState, view: &LibraryView) -> Vec<Row> {
     for row in rows.iter_mut() {
         app.apply_metadata(row);
         app.apply_analysis(row);
+        app.apply_genre(row);
     }
     if let Some(album) = view.album.as_deref() {
         rows.retain(|r| r.album == album && r.album_source.is_known());
@@ -8855,6 +8887,51 @@ mod tests {
         );
 
         assert_eq!(genre_of(&app, "/a.mp3"), "House");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And the row handed to the Songs table carries it.
+    ///
+    /// The Genres tab has always sidestepped `row.genres` and asked `genre_of`
+    /// instead, because the effective genre can come from the tag store or the
+    /// lookup cache and neither is on the row. A genre *column* reading the raw
+    /// field would therefore have disagreed with the tab about the same track,
+    /// on nearly every track: 488 of 534 here carry no file tag.
+    ///
+    /// So `resolved_rows` fills it, and this is the assertion that it does.
+    #[test]
+    fn a_row_on_its_way_to_the_table_carries_its_looked_up_genre() {
+        let (mut app, dir) = app();
+        app.rows.push(row("/a.mp3", "A"));
+        assert!(
+            app.rows[0].genres.is_empty(),
+            "the scan found no genre, which is the case under test"
+        );
+        app.looked.insert(
+            "/a.mp3".to_string(),
+            metadata::Looked {
+                genre: "House".to_string(),
+                attempted: true,
+                ..Default::default()
+            },
+        );
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: None,
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let rows = resolved_rows(&app, &view);
+        assert_eq!(
+            rows.first().map(|r| r.genres.clone()),
+            Some(vec!["House".to_string()]),
+            "the table would have shown a dash where the Genres tab shows House"
+        );
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

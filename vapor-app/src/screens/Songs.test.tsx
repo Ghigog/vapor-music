@@ -155,6 +155,77 @@ describe("Songs — showing the library", () => {
   });
 });
 
+describe("Songs — the genre column", () => {
+  /*
+   * Asked for on 2026-09-08, alongside the genre labels on the DJ screens, and
+   * for the same reason: a genre you cannot see is one you cannot tell apart
+   * from a genre the app never had.
+   */
+  it("shows each track's genre", async () => {
+    useBackend();
+    render(<Songs />);
+
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    expect(
+      document.querySelectorAll(".songrow__genre").length,
+    ).toBeGreaterThan(0);
+    expect(within(rows()[0]!).getByText("Electronic")).toBeInTheDocument();
+  });
+
+  /*
+   * A dash, not "unknown genre".
+   *
+   * The exit cards and the queue rows spell it out, because there it is a line
+   * of prose under a title. A column has a heading saying what it is, and this
+   * table already renders an unknown album, artist and key as a dash — 806
+   * rows each saying "unknown genre" would shout.
+   */
+  it("renders a missing genre as a dash, like the other unknowns", async () => {
+    useBackend({
+      rows: [makeRow({ href: "/none.mp3", title: "Ungenred", genres: [] })],
+    });
+    render(<Songs />);
+
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    expect(document.querySelector(".songrow__genre")?.textContent).toBe("—");
+  });
+
+  /* A track filed under several is filed under several. */
+  it("names every genre a track carries", async () => {
+    useBackend({
+      rows: [
+        makeRow({
+          href: "/two.mp3",
+          title: "Both",
+          genres: ["Liquid DNB", "Jazz"],
+        }),
+      ],
+    });
+    render(<Songs />);
+
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    expect(
+      within(rows()[0]!).getByText("Liquid DNB / Jazz"),
+    ).toBeInTheDocument();
+  });
+
+  it("sorts by genre from the header", async () => {
+    const backend = useBackend();
+    const user = userEvent.setup();
+    render(<Songs />);
+
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("button", { name: /genre/i }));
+
+    await waitFor(() => {
+      const view = backend.lastArgs("library_view")?.view as
+        | { sortKey?: string }
+        | undefined;
+      expect(view?.sortKey).toBe("genre");
+    });
+  });
+});
+
 describe("Songs — playing", () => {
   it("double-clicking a row plays from it, keeping the rest of the order", async () => {
     const backend = useBackend();
