@@ -442,6 +442,24 @@ export function App() {
     setLiner({ href, from: screen });
   }
 
+  /**
+   * Leave Liner Notes for the artist, album or genre it names.
+   *
+   * The drill-down it opens into lives inside Library, not beside `liner`, so
+   * getting there means clearing every other drill-down and landing on the
+   * matching tab — the same move `go` makes for a nav press, but keeping the
+   * entity to open rather than starting empty.
+   */
+  function openEntity(entity: Opened) {
+    setLiner(null);
+    setPlaylist(null);
+    setGroup(null);
+    setMenu(null);
+    setLibraryTab(entity.kind);
+    setOpened(entity);
+    setScreen("library");
+  }
+
   function openPlaylist(id: string) {
     setLiner(null);
     setGroup(null);
@@ -575,6 +593,7 @@ export function App() {
                 setScreen(liner.from);
                 setLiner(null);
               }}
+              onOpenEntity={openEntity}
             />
           ) : playlist ? (
             <Playlist

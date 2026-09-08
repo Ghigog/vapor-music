@@ -1081,35 +1081,32 @@ async function clearedThen(
 describe("Liner Notes", () => {
   it("shows what is known about a track", async () => {
     useBackend();
-    render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+    render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
     expect(screen.getByText("Aphex Twin")).toBeInTheDocument();
   });
 
   /*
-   * The genre this library gets from Deezer is wrong for most of it.
-   *
-   * Measured: 488 of 534 looked-up tracks take their genre from Deezer, whose
-   * entire vocabulary here is ten words, and every drum & bass act in the
-   * library comes back "Dance". MusicBrainz fixes most of that automatically,
-   * but no derived source is right about everything, so there has to be a last
-   * word and it has to belong to the person who can hear the record.
+   * The artist or album this library gets from a folder name or a file's tags
+   * is wrong sometimes, and no derived source is right about everything, so
+   * there has to be a last word and it has to belong to the person who can
+   * hear the record. Genre no longer works this way here — see below.
    */
-  it("lets a wrong genre be corrected by hand", async () => {
+  it("lets a wrong artist be corrected by hand", async () => {
     useBackend();
     const user = userEvent.setup();
-    render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+    render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
-    const genre = await screen.findByLabelText(/genre/i);
-    await clearedThen(user, genre, "drum and bass");
+    const artist = await screen.findByLabelText(/artist/i);
+    await clearedThen(user, artist, "Boards of Canada");
     // Committed on blur, not per keystroke: each commit is a settings write and
     // a library re-read, and doing that per letter would rebuild the index
-    // thirteen times for this one value.
+    // sixteen times for this one value.
     await user.tab();
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/genre/i)).toHaveValue("drum and bass");
+      expect(screen.getByLabelText(/artist/i)).toHaveValue("Boards of Canada");
     });
   });
 
@@ -1122,16 +1119,16 @@ describe("Liner Notes", () => {
   it("marks a corrected field and offers to undo it", async () => {
     useBackend();
     const user = userEvent.setup();
-    render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+    render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
     // Nothing is corrected to begin with, so nothing offers to be undone.
-    await screen.findByLabelText(/genre/i);
+    await screen.findByLabelText(/artist/i);
     expect(
       screen.queryByRole("button", { name: /use what was found/i }),
     ).not.toBeInTheDocument();
 
-    const genre = await screen.findByLabelText(/genre/i);
-    await clearedThen(user, genre, "neurofunk");
+    const artist = await screen.findByLabelText(/artist/i);
+    await clearedThen(user, artist, "Boards of Canada");
     await user.tab();
 
     // Now it says whose value it is, and how to go back.
@@ -1148,6 +1145,87 @@ describe("Liner Notes", () => {
     });
   });
 
+  /*
+   * Genre used to be corrected the same way, here, and no longer is: a wrong
+   * genre is fixed on the artist, not the track, so this screen only shows it.
+   */
+  it("does not offer to correct genre on this screen", async () => {
+    useBackend();
+    render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
+
+    await screen.findByText("Windowlicker");
+    expect(screen.queryByLabelText(/genre/i)).not.toBeInTheDocument();
+  });
+
+  /*
+   * Artist, album and genre each point somewhere instead: the artist and
+   * album names open their own view in the library, and genre opens the
+   * artist view too, since that is where fixing it now happens.
+   */
+  it("opens the artist view from the artist name", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    const opened: unknown[] = [];
+    render(
+      <LinerNotes
+        href={A_TRACK}
+        onBack={() => {}}
+        onOpenEntity={(e) => opened.push(e)}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Aphex Twin" }));
+
+    expect(opened).toEqual([
+      { kind: "artist", name: "Aphex Twin", lead: A_TRACK, artist: "" },
+    ]);
+  });
+
+  it("opens the album view from the album name", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    const opened: unknown[] = [];
+    render(
+      <LinerNotes
+        href={A_TRACK}
+        onBack={() => {}}
+        onOpenEntity={(e) => opened.push(e)}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Windowlicker EP" }),
+    );
+
+    expect(opened).toEqual([
+      {
+        kind: "album",
+        name: "Windowlicker EP",
+        lead: A_TRACK,
+        artist: "Aphex Twin",
+      },
+    ]);
+  });
+
+  it("opens the artist view from the genre", async () => {
+    useBackend();
+    const user = userEvent.setup();
+    const opened: unknown[] = [];
+    render(
+      <LinerNotes
+        href={A_TRACK}
+        onBack={() => {}}
+        onOpenEntity={(e) => opened.push(e)}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Electronic" }));
+
+    expect(opened).toEqual([
+      { kind: "artist", name: "Aphex Twin", lead: A_TRACK, artist: "" },
+    ]);
+  });
+
   it("goes back", async () => {
     useBackend();
     const user = userEvent.setup();
@@ -1158,6 +1236,7 @@ describe("Liner Notes", () => {
         onBack={() => {
           back = true;
         }}
+        onOpenEntity={() => {}}
       />,
     );
 
@@ -1168,7 +1247,11 @@ describe("Liner Notes", () => {
   it("says an unanalysed track is unanalysed rather than showing zeroes", async () => {
     useBackend();
     render(
-      <LinerNotes href="/dav/Koofr/Music/unanalysed.mp3" onBack={() => {}} />,
+      <LinerNotes
+        href="/dav/Koofr/Music/unanalysed.mp3"
+        onBack={() => {}}
+        onOpenEntity={() => {}}
+      />,
     );
 
     await screen.findByText("Not Yet Analysed");
@@ -1179,7 +1262,9 @@ describe("Liner Notes", () => {
   it("reports a track it cannot describe", async () => {
     const backend = useBackend();
     backend.fail("track_details", "That track is not in the library.");
-    render(<LinerNotes href="/gone.m4a" onBack={() => {}} />);
+    render(
+      <LinerNotes href="/gone.m4a" onBack={() => {}} onOpenEntity={() => {}} />,
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /not in the library/i,
@@ -1206,7 +1291,7 @@ describe("Liner Notes", () => {
 
     it("does not look anything up merely because the screen was opened", async () => {
       const backend = useBackend({ metadataLookup: true });
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await screen.findByText("Windowlicker");
       expect(backend.called("look_up_track")).toBe(false);
@@ -1224,7 +1309,7 @@ describe("Liner Notes", () => {
      */
     it("says lookups are off, and offers no way to trip one by accident", async () => {
       const backend = useBackend();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       const lyrics = (await screen.findByText(/^lyrics$/i)).closest("section");
       expect(lyrics).toHaveTextContent(/off/i);
@@ -1238,7 +1323,7 @@ describe("Liner Notes", () => {
     it("looks a track up when asked, and shows the words with their timings", async () => {
       useBackend({ metadataLookup: true, lyrics: { [A_TRACK]: WORDS } });
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
@@ -1251,7 +1336,7 @@ describe("Liner Notes", () => {
     it("names where the words came from", async () => {
       useBackend({ metadataLookup: true, lyrics: { [A_TRACK]: WORDS } });
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
@@ -1265,7 +1350,7 @@ describe("Liner Notes", () => {
     it("says so when the service has no words for a track", async () => {
       useBackend({ metadataLookup: true });
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
@@ -1281,7 +1366,7 @@ describe("Liner Notes", () => {
         "Looking up lyrics and artwork is switched off.",
       );
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
@@ -1302,7 +1387,7 @@ describe("Liner Notes", () => {
         lyrics: { [A_TRACK]: WORDS },
       });
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
@@ -1317,7 +1402,7 @@ describe("Liner Notes", () => {
         lyrics: { [A_TRACK]: WORDS },
       });
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
       await screen.findByText("The first line");
@@ -1333,7 +1418,7 @@ describe("Liner Notes", () => {
         },
       });
       const user = userEvent.setup();
-      render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
+      render(<LinerNotes href={A_TRACK} onBack={() => {}} onOpenEntity={() => {}} />);
 
       await user.click(await screen.findByRole("button", { name: /look up/i }));
 
