@@ -69,7 +69,8 @@
 .songs__cols,
 .songrow {
   display: grid;
-  grid-template-columns: 22px 48px minmax(0, 2.2fr) minmax(0, 1.6fr) 56px 52px;
+  grid-template-columns:
+    22px 48px minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 1fr) 56px 52px;
   align-items: center;
   gap: 13px;
   padding: 0 12px;
@@ -217,7 +218,8 @@
 
 .songrow__title,
 .songrow__artist,
-.songrow__album {
+.songrow__album,
+.songrow__genre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -234,7 +236,8 @@
   color: var(--ink-soft);
 }
 
-.songrow__album {
+.songrow__album,
+.songrow__genre {
   font-size: var(--fs-sm);
   color: var(--ink-3);
   min-width: 0;
@@ -537,13 +540,15 @@
      put the grids back out of step. Keyed by the same numbers as COLUMNS. */
   .songs__cell[data-cell="4"],
   .songs__cell[data-cell="5"],
-  .songs__cell[data-cell="6"] {
+  .songs__cell[data-cell="6"],
+  .songs__cell[data-cell="7"] {
     display: none;
   }
 
-  /* The row's children are auto-placed, so removing these three is enough for
+  /* The row's children are auto-placed, so removing these four is enough for
      the remaining three to land in 1, 2 and 3. */
   .songrow__album,
+  .songrow__genre,
   .songrow__bpm,
   .songrow__key {
     display: none;
