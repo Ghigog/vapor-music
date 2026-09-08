@@ -743,3 +743,70 @@ between them. The screen's "10 to come · 52 min" went with it: both numbers
 measured how far ahead the planner had got rather than anything about the
 music, and fell and rose as the queue drained and refilled. The last row fades
 off the bottom instead.
+
+---
+
+## The three exit cards were not plugged into the curve
+
+Reported 2026-09-08, after the curve work landed: "the three choices at the top
+never seem to change when i update the flow. Regardless of the flow state, it
+was always lisa hannigan, fabrizio de andre, and vanilla."
+
+Two faults, and the first is visible by reading:
+
+**Stay and Switch had never heard of `Curve`.** Stay minimised
+`|Δintensity| * 100 + kind_distance + candidate_cost(Stay)`; Switch maximised
+`kind_distance` among tracks `exit_between` called a departure. Neither
+expression mentions `Curve`, `Span`, or the step the set has reached — so both
+returned the same record whichever shape the set was following, by
+construction.
+
+**And `Offered` was keyed on the playing track alone**, so even a card that did
+consult the curve could not have refreshed when one was pressed. The board is
+held so it does not move under a press (2026-08-20), and that hold outlived the
+thing it was holding against.
+
+### The shape of the fix, which is a merge rather than a repair
+
+The curve buttons and the exit cards answer the same question — where does this
+set go next — so they are now the same computation. Each card is the track
+`vapor_library::next_track` would choose under a given curve, from here:
+
+| card | curve | step |
+|---|---|---|
+| Follow | the one the set is on | where the set has actually reached |
+| Stay | `Flat` | one, from the track playing |
+| Switch | the further of `Build` and `Chill` | one, from the track playing |
+
+Follow *continues* a curve and so is read at its real step; Stay and Switch
+*start* one, and `set_curve` re-seeds a curve from the playing track — so
+asking them at the current step would put a different record on the card from
+the one the button produces. `FROM_HERE = 1` is that correspondence, and
+`the_stay_card_is_what_hold_steady_would_play_next` is the test of it.
+
+The exception, which is unavoidable: each exit is excluded from the ones asked
+after it so that three cards are three records. When a curve's first choice is
+already the Follow card — Stay, while the set is on Hold Steady — the card
+shows that curve's second choice. Two cards naming one record is worse.
+
+### A superseded rule, inverted on purpose
+
+`stay_prefers_the_artist_already_playing_when_genre_is_unknown` asserted that
+Stay reaches for the label-mate, because with 488 of 534 tracks untagged the
+artist was the only signal of "the same vibe". That rule cannot survive the
+variety term added the day before — preferring the same artist is precisely
+what produced a set of twelve tracks from one album. Stay holds the *level*
+now, and the vibe is held by the curve rather than by a name. The test is
+inverted and says why.
+
+### A fixture that could not have caught it
+
+`analysed_track` pins `lufs: -9.0` for every track it builds, and since
+2026-08-17 the curve reads `intensity_from_lufs(lufs)` rather than the `energy`
+field it takes. So a pool built from it is uniform in the one dimension the
+four curves are drawn in, whatever `energy` was passed, and any test asking
+whether Build and Chill differ passes for the wrong reason. Two tests written
+against it here read identical boards under both curves before this was found.
+`analysed_intensity` varies the loudness, and `a_library_with_range` builds a
+pool spanning 0.2–0.8 intensity and 84–168 BPM inside one harmonic
+neighbourhood — the key term will otherwise decide every question on its own.

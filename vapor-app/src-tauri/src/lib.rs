@@ -2888,6 +2888,14 @@ pub(crate) fn needs_analysis_soon(app: &AppState, lookahead: usize) -> bool {
 struct Offered {
     /// The track that was playing when these were chosen.
     playing: String,
+    /// The plan generation they were chosen under.
+    ///
+    /// Keyed on this as well as on the track, because the three exits are
+    /// answers about the curve and the curve can change while a track plays.
+    /// Held on `playing` alone, they could not: pressing Build, Chill, Wave or
+    /// Hold left the same three records on screen, which is what made the cards
+    /// look unplugged from the set they are supposed to steer.
+    plan: u64,
     /// Href and exit per card, in the order the screen lays them out.
     cards: Vec<(String, Exit)>,
 }
@@ -3705,27 +3713,21 @@ pub(crate) fn same_genre(app: &AppState, a: &str, b: &str) -> bool {
     vapor_library::is_similar_genre(&ga, &gb)
 }
 
-/// What a track is, for the kind-distance question `vapor_dj` answers.
-///
-/// The resolution is the shell's — a genre may come from a tag, from a lookup,
-/// or from nowhere, and that reads three maps on `AppState`. What is done with
-/// the answer is [`vapor_dj::kind_distance`], along with the two constants that
-/// used to sit here.
-fn kind_of(app: &AppState, href: &str) -> vapor_dj::Kind {
-    vapor_dj::Kind {
-        genre: genre_of(app, href),
-        artist: app
-            .rows
-            .iter()
-            .find(|r| r.href == href)
-            .map(|r| r.artist.trim().to_lowercase())
-            .unwrap_or_default(),
-    }
-}
-
-fn kind_distance(app: &AppState, a: &str, b: &str) -> f32 {
-    vapor_dj::kind_distance(&kind_of(app, a), &kind_of(app, b))
-}
+/* `kind_of` and `kind_distance` were here.
+ *
+ * They resolved a track to a genre-and-artist pair and asked
+ * `vapor_dj::kind_distance` how far apart two of them were, and their only
+ * caller was the hand-written scoring in `mix_candidates_for` — the Stay and
+ * Switch cards, before those became questions put to the planner. Nothing
+ * calls them now: `TrackMeta` carries the artist and the album, and the
+ * planner's own variety term reads them directly, so the shell no longer has
+ * to assemble a `Kind` to ask the question.
+ *
+ * `vapor_dj::kind_distance` itself is left where it is. It is a tested piece of
+ * the cost model with its measurements written down beside it, and deleting a
+ * core crate's public function because the shell stopped calling it is a
+ * decision about that crate rather than about this one.
+ */
 
 /// Build the mixer's beat grid for a track, honouring a manual tempo.
 ///
@@ -5230,7 +5232,10 @@ pub(crate) fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
     // Already offered for this track: hand back the same three, in the same
     // slots. Only `selected` moves. See `AppState::offered`.
     if let Some(held) = app.offered.clone() {
-        if held.playing == current && held.cards.iter().all(|(h, _)| pool.contains_key(h)) {
+        if held.playing == current
+            && held.plan == app.curve_plan
+            && held.cards.iter().all(|(h, _)| pool.contains_key(h))
+        {
             let queued = app.queue.peek_next(None).map(str::to_string);
             return held
                 .cards
@@ -5244,128 +5249,147 @@ pub(crate) fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
         }
     }
 
-    // Everything analysed except the track playing and what it has already
-    // been through: offering the track you just heard is not an option.
-    let played: std::collections::HashSet<&str> = app
-        .queue
-        .tracks()
-        .iter()
-        .take(app.queue.current_index().unwrap_or(0))
-        .map(String::as_str)
-        .collect();
+    // The three exits are three curves, asked the same question the set is
+    // asking. See the module note above `next_track` in `vapor-library`.
+    //
+    // # Why they are not scored by hand any more
+    //
+    // They were: Stay minimised a level difference plus `candidate_cost`,
+    // Switch maximised distance in kind among tracks `exit_between` called a
+    // departure, and neither had ever heard of the curve. So the cards were the
+    // same three records whichever shape the set was following — reported
+    // 2026-09-08, and true: nothing in either expression mentions `Curve`,
+    // `Span` or the step the set is at.
+    //
+    // That is not a scoring bug, it is two systems where there should be one.
+    // The curve buttons and the exit cards both answer "where does this set go
+    // next", and a person pressing Stay is asking for the same thing as a
+    // person pressing Hold Steady — one for a step, the other for the set. So
+    // each card is now literally that: the track the planner would choose under
+    // that curve, from here, at this step.
+    //
+    // * **Follow** — the queue's next track, which the current curve chose.
+    // * **Stay** — what `Curve::Flat` would choose: hold the level.
+    // * **Switch** — the further of what `Build` and `Chill` would choose. A
+    //   departure in either direction, whichever is the bigger change.
+    //
+    // The exits and the set can no longer disagree, because they are computed
+    // by the same function. A card is also the first step of the set its curve
+    // would build, so pressing one is a preview that came true — with one
+    // exception, which is unavoidable and worth stating: each exit is excluded
+    // from the ones asked after it, so that three cards are three records. When
+    // a curve's first choice is already the Follow card — Stay, while the set
+    // is on Hold Steady — the card shows that curve's *second* choice instead.
+    // The alternative is two cards naming one record, which is the fault the
+    // held board was introduced to fix.
+    // Two different questions, so two different places on the curve.
+    //
+    // Follow *continues*: the current curve, at the step the set has actually
+    // reached. Stay and Switch *start* one — pressing a curve button re-seeds
+    // it from the track playing, so `set_curve` plans its first track from step
+    // one of a curve whose origin is here. Asking the cards any other way would
+    // mean the record on the card and the record the button produces are two
+    // different records, which is the fault this whole change is about.
+    let index = app.queue.current_index().unwrap_or(0);
+    let following = curve_step_at(app, index + 1);
+    let origin = app.curve_origin.clone().unwrap_or_else(|| current.clone());
+    /// A curve chosen now begins at the track playing, one step in.
+    const FROM_HERE: usize = 1;
+    let penalties = skip_penalties(app);
+    let span = app.curve_span;
+    let limit = app.settings.vibe_limit;
 
-    // The three exits are filled by different questions, which is the whole
-    // point of the redesign: Follow is *the plan's* next track, not the most
-    // similar one. Asking "which candidate is most Follow-like" is what let the
-    // suggestion and the set disagree.
+    // What the set has already been through. Handed to `next_track` as its
+    // history, which is also how a card is kept from repeating a track: each
+    // exit is added to this before the next one is asked, so the three cannot
+    // collide.
+    let mut taken = recent_before(app, index + 1);
+
     let queued = app.queue.peek_next(None).map(str::to_string);
 
-    // Everything that could be either card. Gathered first so Stay and Switch
-    // are chosen in order rather than in one pass: Switch has to know what Stay
-    // took, or on a small library both land on the same track and the screen is
-    // back to two cards.
-    let candidates: Vec<&TrackMeta> = pool
-        .iter()
-        .filter(|(href, _)| {
-            href.as_str() != current
-                && !played.contains(href.as_str())
-                // Already the Follow card.
-                && queued.as_deref() != Some(href.as_str())
-        })
-        .map(|(_, to)| to)
-        .collect();
-
-    // Stay is a question every candidate can answer — "how little does the
-    // level move" — so it is asked of all of them rather than only of the ones
-    // `exit_between` puts in the Stay band. A library holding nothing within
-    // 8 BPM of what is playing still has a closest track, and showing two cards
-    // because the third did not clear a threshold is the screen withholding an
-    // answer it has.
-    let stay = candidates.iter().copied().min_by(|a, b| {
-        let score = |t: &TrackMeta| {
-            (from.energy_level - t.energy_level).abs() * 100.0
-                + kind_distance(app, &current, &t.href)
-                + candidate_cost(app, from, t, Exit::Stay)
-        };
-        score(a).total_cmp(&score(b))
-    });
-
-    // Switch is not "the most different track" — it is a real exit the engine
-    // can still perform, so among the candidates that are genuinely a departure
-    // it is judged on transition cost.
-    let departing = candidates
-        .iter()
-        .copied()
-        .filter(|t| stay.is_none_or(|s| s.href != t.href))
-        .filter(|t| {
-            vapor_dj::exit_between(from, t, same_genre(app, &current, &t.href)) == Exit::Switch
-        })
-        .min_by(|a, b| {
-            // Rewarded for leaving, not merely permitted to.
-            //
-            // This used to minimise `base + energy_diff * 20`, which among a
-            // set of departures picks the *mildest* one — so Switch offered the
-            // next track on the same album. Subtracting the distance means the
-            // furthest in kind wins, while `base` still keeps it to something
-            // the engine can actually mix into.
-            let score = |t: &TrackMeta| {
-                candidate_cost(app, from, t, Exit::Switch) - kind_distance(app, &current, &t.href)
-            };
-            score(a).total_cmp(&score(b))
-        });
-
-    // And when nothing clears the thresholds there is still a furthest track,
-    // which is a more honest card than no card: the alternative is a screen
-    // that silently offers two exits and gives no reason, which is what it did.
-    let switch = departing.or_else(|| {
-        candidates
-            .iter()
-            .copied()
-            .filter(|t| stay.is_none_or(|s| s.href != t.href))
-            .max_by(|a, b| {
-                let far = |t: &TrackMeta| {
-                    (from.energy_level - t.energy_level).abs() * 100.0 + (from.bpm - t.bpm).abs()
-                };
-                far(a).total_cmp(&far(b))
-            })
-    });
-
-    // Follow is the plan's next track. When there is no plan yet — nothing has
-    // been queued behind what is playing — there is still an answer to "where
-    // would the DJ go from here", and it is the same question `candidate_cost`
-    // asks. Without this the screen opened on two cards and grew a third the
-    // moment anything was queued, which reads as a bug in the DJ rather than an
-    // absent plan.
+    // Follow is the plan's next track, and it is the one card that is read
+    // rather than computed — the queue already holds the current curve's
+    // answer. When there is no plan yet, ask the current curve directly rather
+    // than showing two cards and growing a third the moment anything is queued.
     //
-    // Stay and Switch already do exactly this: both fall back rather than
-    // withhold a card that nothing cleared a threshold for. Follow was the one
-    // exit that could still come back empty.
+    // A queue with nothing after the current track wraps under repeat-all, so
+    // `peek_next` answers with the record already playing; offered as Follow
+    // that is a card reading "next, this again".
     let follow = queued
         .as_deref()
-        // A queue with nothing after the current track wraps under repeat-all,
-        // so `peek_next` answers with the record already playing. Offered as
-        // Follow that is a card saying "next, this again".
         .filter(|h| *h != current.as_str())
-        .and_then(|h| pool.get(h))
-        // Two cards pointing at one track is the same failure wearing a second
-        // label, which the planned case already refuses to do.
-        .filter(|t| stay.is_none_or(|s| s.href != t.href))
-        .filter(|t| switch.is_none_or(|s| s.href != t.href))
+        .filter(|h| pool.contains_key(*h))
+        .map(str::to_string)
         .or_else(|| {
-            candidates
-                .iter()
-                .copied()
-                .filter(|t| stay.is_none_or(|s| s.href != t.href))
-                .filter(|t| switch.is_none_or(|s| s.href != t.href))
-                .min_by(|a, b| {
-                    candidate_cost(app, from, a, Exit::Follow).total_cmp(&candidate_cost(
-                        app,
-                        from,
-                        b,
-                        Exit::Follow,
-                    ))
-                })
+            vapor_library::next_track(
+                &pool,
+                &current,
+                &origin,
+                &taken,
+                vapor_library::Curve::parse(&app.settings.curve),
+                following,
+                &span,
+                limit,
+                &penalties,
+            )
         });
+    if let Some(href) = follow.clone() {
+        taken.insert(0, href);
+    }
+
+    // Stay holds the level. Under Hold Steady this is the curve the set is
+    // already on, so what comes back is the *other* way to hold it — the
+    // second-best, since the best is already the Follow card.
+    let stay = vapor_library::next_track(
+        &pool,
+        &current,
+        &current,
+        &taken,
+        vapor_library::Curve::Flat,
+        FROM_HERE,
+        &span,
+        limit,
+        &penalties,
+    );
+    if let Some(href) = stay.clone() {
+        taken.insert(0, href);
+    }
+
+    // Switch departs, in whichever direction is the bigger change. Both are
+    // asked and the further of the two wins: on a Build the climb is already
+    // the Follow card, so the drop is the real departure, and on a Chill the
+    // reverse — without having to special-case which curve is running.
+    let departure = |curve| {
+        vapor_library::next_track(
+            &pool, &current, &current, &taken, curve, FROM_HERE, &span, limit, &penalties,
+        )
+    };
+    let switch = [
+        departure(vapor_library::Curve::Build),
+        departure(vapor_library::Curve::Chill),
+    ]
+    .into_iter()
+    .flatten()
+    .max_by(|a, b| {
+        // How far this moves the set, in the units the curve is drawn in.
+        // `curve_energy` rather than the raw loudness for the same reason the
+        // curve reads it: a quietly mastered rock record is not a calm one.
+        let moved = |href: &String| {
+            pool.get(href)
+                .map_or(0.0, |t| (from.curve_energy() - t.curve_energy()).abs())
+        };
+        moved(a).total_cmp(&moved(b))
+    });
+
+    let held: Vec<(String, Exit)> = [
+        stay.map(|h| (h, Exit::Stay)),
+        follow.map(|h| (h, Exit::Follow)),
+        switch.map(|h| (h, Exit::Switch)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
     /*
      * The queued card is the Follow card, whatever put it there.
      *
@@ -5383,30 +5407,21 @@ pub(crate) fn mix_candidates_for(app: &mut AppState) -> Vec<MixCandidate> {
      * and the beat-match line, which is what says "this is the one" — a word
      * that duplicates a neighbouring card's is a worse way to say it.
      */
-    let chosen: Vec<(&TrackMeta, Exit)> = [
-        stay.map(|t| (t, Exit::Stay)),
-        follow.map(|t| (t, Exit::Follow)),
-        switch.map(|t| (t, Exit::Switch)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    let cards: Vec<MixCandidate> = chosen
+    let cards: Vec<MixCandidate> = held
         .iter()
+        .filter_map(|(href, exit)| pool.get(href).map(|to| (to, *exit)))
         .map(|(to, exit)| {
             let selected = queued.as_deref() == Some(to.href.as_str());
-            card_for(app, &current, from, to, *exit, selected)
+            card_for(app, &current, from, to, exit, selected)
         })
         .collect();
 
-    // Held until this track is over, so the board does not move under a press.
+    // Held until the track is over or the curve changes, so the board does not
+    // move under a press.
     app.offered = Some(Offered {
         playing: current,
-        cards: chosen
-            .iter()
-            .map(|(to, exit)| (to.href.clone(), *exit))
-            .collect(),
+        plan: app.curve_plan,
+        cards: held,
     });
 
     cards
@@ -7673,6 +7688,42 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// An analysed track, so the cost model can place it.
+    /// An analysis whose *intensity* differs, which `analysed_track` cannot do.
+    ///
+    /// `analysed_track` pins `lufs` at −9.0 for every track it makes, and since
+    /// 2026-08-17 the curve reads `intensity_from_lufs(lufs)` rather than the
+    /// `energy` field — so a pool built with it is uniform in the one dimension
+    /// the four curves are drawn in, whatever `energy` was passed. Any test
+    /// asking whether Build and Chill differ has to vary this instead, or it is
+    /// measuring a flat library and will pass for the wrong reason.
+    fn analysed_intensity(bpm: f32, key: &str, lufs: f32) -> analysis::Analysis {
+        analysis::Analysis {
+            lufs,
+            ..analysed_track(bpm, key, 0.5)
+        }
+    }
+
+    /// A pool with somewhere to go: intensity 0.2 to 0.8, tempo 84 to 168, and
+    /// keys that stay inside one harmonic neighbourhood so the key term cannot
+    /// decide every question on its own.
+    fn a_library_with_range(app: &mut AppState) {
+        const KEYS: [&str; 3] = ["8A", "9A", "8B"];
+        for i in 0..14u32 {
+            let href = format!("/range{i:02}.mp3");
+            app.rows.push(row(&href, &href));
+            app.analysis.insert(
+                href,
+                analysed_intensity(
+                    84.0 + i as f32 * 6.0,
+                    KEYS[i as usize % KEYS.len()],
+                    // −25 to −10 LUFS, which `intensity_from_lufs` maps to
+                    // 0.2 through 0.8.
+                    -25.0 + i as f32 * 1.15,
+                ),
+            );
+        }
+    }
+
     fn analysed_track(bpm: f32, key: &str, energy: f32) -> analysis::Analysis {
         analysis::Analysis {
             bpm,
@@ -8910,15 +8961,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Stay stays in the vibe, not merely at the level.
+    /// Stay holds the level, and is subject to the same variety rule as the set.
     ///
-    /// It was chosen on intensity and transition cost alone, so with genre
-    /// absent — 488 of 534 tracks in Dylan's library carry no genre tag — the
-    /// closest *level* won outright, and a De André ballad was offered as the
-    /// way to stay in a hip hop set. The artist is the signal a
-    /// folder-organised library actually has.
+    /// # This assertion was inverted on 2026-09-08, deliberately
+    ///
+    /// It read `stay_prefers_the_artist_already_playing_when_genre_is_unknown`,
+    /// and required the label-mate: Stay was scored on intensity and transition
+    /// cost alone, so with genre absent the closest *level* won outright and a
+    /// De André ballad was offered as the way to stay in a hip hop set. The
+    /// artist was the only signal a folder-organised library had, so Stay
+    /// reached for it.
+    ///
+    /// Two things replaced that. The planner has a variety term now, because
+    /// preferring the same artist is what produced a set of twelve tracks from
+    /// one album; and the Stay card is no longer scored here at all — it is
+    /// `Curve::Flat` asked of the planner, which is what makes the card and the
+    /// set it produces the same answer.
+    ///
+    /// So Stay is allowed to leave the artist, and the vibe is held by the
+    /// curve rather than by a name. The old rule cannot be kept alongside the
+    /// new one: they disagree about this exact pair, and reinstating it would
+    /// put the album-parking back one card at a time.
     #[test]
-    fn stay_prefers_the_artist_already_playing_when_genre_is_unknown() {
+    fn stay_holds_the_level_rather_than_repeating_the_record() {
         let (mut app, dir) = app();
         let tracks = [
             ("/keem-a.mp3", "KEEM THE CIPHER", 85.0, "9B", 0.55),
@@ -8940,10 +9005,110 @@ mod tests {
             .into_iter()
             .find(|c| c.exit == Exit::Stay)
             .expect("a Stay card");
+        // The level, held: 0.56 against the 0.55 playing, where the label-mate
+        // is 0.60 and a repeat of the artist that is already on.
         assert_eq!(
-            stay.href, "/keem-b.mp3",
-            "Stay left the artist for a closer intensity",
+            stay.href, "/deandre.mp3",
+            "Stay repeated the record already playing rather than holding the level",
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The complaint, as a test: the three cards were the same three records
+    /// whichever curve the set was on.
+    ///
+    /// Reported 2026-09-08 — "regardless of the flow state, it was always Lisa
+    /// Hannigan, Fabrizio De Andre, and Vanilla". Two faults behind it, and
+    /// this pins both: Stay and Switch were scored by hand and had never heard
+    /// of `Curve`, and `Offered` was keyed on the playing track alone so even a
+    /// curve that did reach them could not refresh the board.
+    #[test]
+    fn the_cards_follow_the_curve_the_set_is_on() {
+        let (mut app, dir) = app();
+        app.settings.dj_mode = true;
+        a_library_with_range(&mut app);
+        // Start in the middle, so both directions have somewhere to go.
+        app.queue.set_tracks(vec!["/range07.mp3".to_string()], None);
+        app.playing = Some("/range07.mp3".to_string());
+        app.curve_origin = Some("/range07.mp3".to_string());
+
+        // What pressing a curve does: drop the tail, re-seed from the track
+        // playing, re-plan, then read the board.
+        let under = |app: &mut AppState, curve: &str| -> Vec<String> {
+            let playing = app.playing.clone().expect("something playing");
+            let keep = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
+            let head: Vec<String> = app.queue.tracks().iter().take(keep).cloned().collect();
+            app.queue.set_tracks(head, Some(&playing));
+            app.settings.curve = curve.to_string();
+            app.curve_origin = Some(playing);
+            app.curve_plan = app.curve_plan.wrapping_add(1);
+            app.set_exhausted = None;
+            while extend_set(app) {}
+            mix_candidates_for(app)
+                .into_iter()
+                .map(|c| c.href)
+                .collect()
+        };
+
+        let chilling = under(&mut app, "chill");
+        let building = under(&mut app, "build");
+
+        assert_ne!(
+            chilling, building,
+            "the board did not move when the curve did: {chilling:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And a card is the first step of the set the button would build.
+    ///
+    /// This is what makes the exits and the curves one system rather than two.
+    /// Pressing a curve re-seeds it from the track playing, so the card has to
+    /// be asked the same way — `FROM_HERE`, not the step the current curve has
+    /// reached — or the record on the card and the record the button produces
+    /// are two different records.
+    ///
+    /// Read on a set that is *building*, deliberately. On Hold Steady the Stay
+    /// card and the Follow card are the same question, so Stay shows the second
+    /// choice rather than the first and this correspondence does not hold —
+    /// see the note in `mix_candidates_for`. Every other combination is exact,
+    /// and this is one of them.
+    #[test]
+    fn the_stay_card_is_what_hold_steady_would_play_next() {
+        let (mut app, dir) = app();
+        app.settings.dj_mode = true;
+        a_library_with_range(&mut app);
+        app.queue.set_tracks(vec!["/range07.mp3".to_string()], None);
+        app.playing = Some("/range07.mp3".to_string());
+        app.curve_origin = Some("/range07.mp3".to_string());
+        // Building, so the Stay card is a different question from Follow.
+        app.settings.curve = "build".to_string();
+        while extend_set(&mut app) {}
+
+        let stay = mix_candidates_for(&mut app)
+            .into_iter()
+            .find(|c| c.exit == Exit::Stay)
+            .expect("a Stay card");
+
+        // What `set_curve` does: hold steady, re-seeded from the track playing,
+        // and the tail re-planned from there.
+        let playing = app.playing.clone().expect("something playing");
+        let keep = app.queue.current_index().map(|i| i + 1).unwrap_or(0);
+        let head: Vec<String> = app.queue.tracks().iter().take(keep).cloned().collect();
+        app.queue.set_tracks(head, Some(&playing));
+        app.settings.curve = "flat".to_string();
+        app.curve_origin = Some(playing);
+        app.curve_plan = app.curve_plan.wrapping_add(1);
+        app.set_exhausted = None;
+        assert!(extend_set(&mut app), "the set did not re-plan");
+
+        assert_eq!(
+            app.queue.peek_next(None),
+            Some(stay.href.as_str()),
+            "Hold Steady played something other than the record its card offered"
+        );
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
