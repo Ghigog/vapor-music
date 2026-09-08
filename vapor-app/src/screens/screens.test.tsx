@@ -120,7 +120,8 @@ describe("Library", () => {
 
     await waitFor(() => {
       const view = backend.lastArgs("library_view")?.view as
-        { album?: string } | undefined;
+        | { album?: string }
+        | undefined;
       expect(view?.album).toBe("Windowlicker EP");
     });
 
@@ -894,6 +895,37 @@ describe("Now Playing", () => {
   });
 });
 
+/**
+ * Empty a box and type into it, without assuming the emptying has landed.
+ *
+ * `clear` then `type` reads as one action and is not: the delete and the first
+ * keystroke are two events, and `type` reads the box's *current* value to build
+ * the next one. If React has not yet flushed the empty state to the DOM when
+ * the first character arrives, that character is appended to the old value
+ * instead of replacing it, and the box ends up holding both.
+ *
+ * That is what turned the genre box into "Electronicdrum and bass" and failed
+ * the App workflow on main (run 205, 2026-09-07). It never reproduced locally —
+ * 17 clean runs of the suite — because the window only opens when the runner is
+ * loaded enough to defer the flush past the next event. Waiting for the box to
+ * actually read empty closes it, rather than hoping the two events stay in
+ * order.
+ *
+ * Worth knowing beyond these two tests: the same `clear`-then-`type` pair is
+ * used in Settings, Playlist and SmartGroup, and is latent there for the same
+ * reason. Left alone here — those tests are not failing and are not this
+ * change's to rewrite.
+ */
+async function clearedThen(
+  user: ReturnType<typeof userEvent.setup>,
+  box: HTMLElement,
+  text: string,
+) {
+  await user.clear(box);
+  await waitFor(() => expect(box).toHaveValue(""));
+  await user.type(box, text);
+}
+
 describe("Liner Notes", () => {
   it("shows what is known about a track", async () => {
     useBackend();
@@ -918,8 +950,7 @@ describe("Liner Notes", () => {
     render(<LinerNotes href={A_TRACK} onBack={() => {}} />);
 
     const genre = await screen.findByLabelText(/genre/i);
-    await user.clear(genre);
-    await user.type(genre, "drum and bass");
+    await clearedThen(user, genre, "drum and bass");
     // Committed on blur, not per keystroke: each commit is a settings write and
     // a library re-read, and doing that per letter would rebuild the index
     // thirteen times for this one value.
@@ -948,8 +979,7 @@ describe("Liner Notes", () => {
     ).not.toBeInTheDocument();
 
     const genre = await screen.findByLabelText(/genre/i);
-    await user.clear(genre);
-    await user.type(genre, "neurofunk");
+    await clearedThen(user, genre, "neurofunk");
     await user.tab();
 
     // Now it says whose value it is, and how to go back.
