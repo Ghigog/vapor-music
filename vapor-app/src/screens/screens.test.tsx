@@ -128,8 +128,10 @@ describe("Library", () => {
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
     expect(screen.queryByText("Xtal")).not.toBeInTheDocument();
 
+    // Out of the record and back to the grid. The tab is the way out now —
+    // the crumb that used to sit above the album's name is gone.
     backend.clearAnswer("library_view");
-    await user.click(screen.getByRole("button", { name: /albums/i }));
+    await user.click(screen.getByRole("tab", { name: /^albums$/i }));
     expect(
       await screen.findByText("Selected Ambient Works"),
     ).toBeInTheDocument();
@@ -1806,6 +1808,35 @@ describe("Transport", () => {
 
     await user.click(screen.getByRole("button", { name: /next track/i }));
     await waitFor(() => expect(backend.called("next_track")).toBe(true));
+  });
+
+  /**
+   * The bar names the record, not only the performer.
+   *
+   * It said the artist and nothing else, so the album a track came off was a
+   * thing you could hear and not reach — the one place in the app that is on
+   * screen whatever else you are doing had no way into either. Both are
+   * presses now, and the album is read per track rather than off the poll:
+   * `PlaybackState` does not carry one.
+   */
+  it("names the album and the artist, and opens each", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    const onOpenEntity = vi.fn();
+    const user = userEvent.setup();
+    render(<Transport onOpenEntity={onOpenEntity} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /^windowlicker ep$/i }),
+    );
+    expect(onOpenEntity).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "album", name: "Windowlicker EP" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /^aphex twin$/i }));
+    expect(onOpenEntity).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "artist", name: "Aphex Twin" }),
+    );
   });
 
   /**

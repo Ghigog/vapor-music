@@ -117,20 +117,6 @@ export type Opened = {
   lead: string;
   /** The album's artist, for an artwork search. Empty for an artist tile. */
   artist: string;
-  /**
-   * What was open when this was opened, for an album reached from an
-   * artist's own shelf.
-   *
-   * `opened` holds one record, not a stack, and closing normally clears it
-   * to whatever tab is underneath — correct for a tile opened from a tab or
-   * a Home shelf, since that is where the crumb already says pressing it
-   * lands (see the back button below). An album opened from *inside* an
-   * artist is a level deeper than that: closing it should surface the
-   * artist again, not skip past them to the tab. `via` is that one
-   * remembered level — not a general stack, because nothing today opens a
-   * record from two levels deep.
-   */
-  via?: Opened;
 };
 
 /**
@@ -231,12 +217,6 @@ export function Library({
    * of the round trip. Only typing waits now.
    */
   const [settledQuery, setSettledQuery] = useState("");
-  const [ownOpened, setOwnOpened] = useState<Opened | null>(null);
-  const opened = onOpenedChange ? (controlledOpened ?? null) : ownOpened;
-  const setOpened = (next: Opened | null) => {
-    if (onOpenedChange) onOpenedChange(next);
-    else setOwnOpened(next);
-  };
   /**
    * The picture behind an opened album or artist, for the blurred backdrop.
    *
@@ -246,6 +226,16 @@ export function Library({
    * it would be the same request twice for two halves of one picture.
    */
   const [heroArt, setHeroArt] = useState<string | null>(null);
+  const [ownOpened, setOwnOpened] = useState<Opened | null>(null);
+  const opened = onOpenedChange ? (controlledOpened ?? null) : ownOpened;
+  const setOpened = (next: Opened | null) => {
+    // The wash belongs to what is open. Left standing across a change it
+    // paints the previous record's colours behind the new one's name for as
+    // long as the new picture takes to arrive.
+    setHeroArt(null);
+    if (onOpenedChange) onOpenedChange(next);
+    else setOwnOpened(next);
+  };
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
   const [ownTab, setOwnTab] = useState<Tab>("home");
   const tab = onTabChange ? (controlledTab ?? "home") : ownTab;
@@ -442,6 +432,24 @@ export function Library({
 
   return (
     <div className="library">
+      {/*
+        The picture behind everything above the list.
+
+        It was a rounded card around the opened record's name only, which drew
+        a second panel inside a screen that already has one — the colours of
+        the record stopped at a border a few hundred pixels down, with the
+        title, the search field and the tabs sitting outside it on the plain
+        page. It reaches the top of the window now and fades out over the
+        header, so what you opened colours the whole top of the app.
+
+        Decorative: the same picture is legible, unblurred, in the tile below
+        it, so it is hidden from assistive tech.
+      */}
+      {opened && heroArt && (
+        <div className="library__wash" aria-hidden="true">
+          <img className="library__wash-img" src={heroArt} alt="" />
+        </div>
+      )}
       <header className="library__head">
         <div className="library__sov">
           <span className="library__sov-dot" aria-hidden="true" />
@@ -494,46 +502,33 @@ export function Library({
       {/* Inside an album or an artist: the same table, narrowed to it. */}
       {opened ? (
         <div className="library__body">
-          <div
-            className={
-              "library__opened-head" +
-              (heroArt ? " library__opened-head--art" : "")
-            }
-          >
-            {/* The picture behind the name, blurred and enlarged past its own
-                edges so the blur has nothing sharp to catch on. Purely
-                decorative — the same picture is legible, unblurred, in the
-                tile beside it — so it is hidden from assistive tech. */}
-            {heroArt && (
-              <div className="library__opened-backdrop" aria-hidden="true">
-                <img className="library__opened-backdrop-img" src={heroArt} alt="" />
-              </div>
-            )}
+          <div className="library__opened-head">
             <div className="library__crumb">
-              <button
-                className="library__back"
-                onClick={() => setOpened(opened.via ?? null)}
-              >
-                {/* Named for where pressing it lands, not for what is open.
-                    Closing this returns to the tab underneath, and an album
-                    opened from a home shelf goes back to the shelf — a crumb
-                    reading "Albums" there would be pointing at a tab the
-                    press does not visit. An album opened from an artist's own
-                    shelf (`via`) is the same rule one level deeper: pressing
-                    it surfaces the artist again rather than skipping past
-                    them to a tab. */}
-                ‹{" "}
-                {opened.via
-                  ? opened.via.name
-                  : tab === "home"
-                    ? "Home"
-                    : opened.kind === "album"
-                      ? "Albums"
-                      : opened.kind === "artist"
-                        ? "Artists"
-                        : "Genres"}
-              </button>
               <h2 className="library__opened">{opened.name}</h2>
+              {/*
+                The way to the artist, from the album.
+
+                There was none: an album named its artist nowhere, so the only
+                route to them was back out to the Artists tab and finding them
+                again. Under the title rather than beside it, because it is
+                the album's subtitle — the same shape the tile in the grid
+                has.
+              */}
+              {opened.kind === "album" && opened.artist && (
+                <button
+                  className="library__opened-artist"
+                  onClick={() =>
+                    setOpened({
+                      kind: "artist",
+                      name: opened.artist,
+                      lead: opened.lead,
+                      artist: opened.artist,
+                    })
+                  }
+                >
+                  {opened.artist}
+                </button>
+              )}
             </div>
             {opened.kind === "album" ? (
               <AlbumArtwork
@@ -561,7 +556,7 @@ export function Library({
               {opened.kind === "artist" && (
                 <ArtistAlbums
                   name={opened.name}
-                  onOpen={(album) => setOpened({ ...album, via: opened })}
+                  onOpen={(album) => setOpened(album)}
                   onPlay={(entity) => void playAlbumEntity(entity)}
                 />
               )}

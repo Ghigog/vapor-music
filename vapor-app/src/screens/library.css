@@ -10,6 +10,64 @@
      design's 390px phone frames and left a third of a desktop window empty
      while the grid wrapped to fewer columns than it had room for. */
   width: 100%;
+  /* The containing block for the wash behind an opened record, which is
+     positioned against this rather than against its own header. */
+  position: relative;
+}
+
+/*
+ * The wash behind an opened album or artist.
+ *
+ * The record's own picture, blurred and enlarged past its edges so the blur
+ * has nothing sharp to catch on, reaching the top and both sides of the
+ * content column and fading out before the list starts. It sits behind
+ * everything on the screen — the title, the search field, the tabs and the
+ * opened record's name all read over it — which is why it is a sibling of
+ * them all rather than a background on the header: as a rounded card around
+ * the name alone it drew a second panel inside a screen that already is one.
+ *
+ * The negative insets are `.shell__content`'s padding (app.css), so the wash
+ * reaches the window's edge; `overflow: auto` on that column clips it there.
+ */
+.library__wash {
+  position: absolute;
+  top: -42px;
+  left: -28px;
+  right: -28px;
+  height: 460px;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.library__wash-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Enlarged so the blur samples picture rather than the transparent margin
+     it would otherwise pull in at the edges. */
+  transform: scale(1.25);
+  filter: blur(52px) saturate(160%);
+  opacity: 0.55;
+}
+
+/* Fades the picture into the page, so the list below starts on a plain
+   ground rather than on a wash trailing off under it. */
+.library__wash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 55%, var(--page) 100%);
+}
+
+/* Everything on the screen reads over the wash. Positioned rather than given
+   a background: the wash is meant to be seen through them. */
+.library__head,
+.library__search,
+.library__tabs,
+.library__body {
+  position: relative;
+  z-index: 1;
 }
 
 /* ---- Header ---------------------------------------------------------- */
@@ -467,34 +525,42 @@
 
 .library__crumb {
   display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.library__back {
-  border: 0;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: var(--fs-body);
-  color: var(--accent);
-}
-
-.library__back:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: var(--r-hair);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
 }
 
 .library__opened {
   margin: 0;
   font-family: var(--font-display);
   font-weight: var(--fw-light);
-  font-size: 26px;
-  letter-spacing: -0.02em;
+  font-size: 34px;
+  line-height: 1.1;
+  letter-spacing: -0.024em;
   color: var(--ink);
+}
+
+/* The album's artist, and the way to them. A line of text that happens to be
+   pressable rather than a button that looks like one: it is the subtitle. */
+.library__opened-artist {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--ink-2);
+}
+
+.library__opened-artist:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.library__opened-artist:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--r-hair);
 }
 
 /*
@@ -508,8 +574,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--s-2);
-  padding: 0 0 var(--s-4);
+  gap: 8px;
 }
 
 /*
@@ -576,8 +641,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--s-2);
-  padding: 0 0 var(--s-4);
+  gap: 8px;
 }
 
 .artistart__art {
@@ -598,79 +662,41 @@
 }
 
 /*
- * The picture behind an opened album or artist's name.
+ * The name of the opened record and its picture, over the wash.
  *
- * The same picture the tile beside it draws, blurred and enlarged past its
- * own edges so the blur has nothing sharp to catch on, fading back to the
- * page underneath so the track list below reads on a plain background rather
- * than a wash trailing off under it. Only present once there is a picture —
- * `.library__opened-head--art` is added by the screen once one has loaded,
- * and a library with no artwork yet keeps the plain header it already had.
+ * Nothing of its own: no padding, no border, no clip. It used to be a rounded
+ * card with `overflow: hidden`, which is what cropped the bottom of an
+ * artist's portrait — the circle reached the card's edge and was cut by it.
+ * The gap below is the room the list needs from the picture.
  */
 .library__opened-head {
   position: relative;
-}
-
-.library__opened-head--art {
-  padding: 22px;
-  margin-bottom: 2px;
-  border-radius: var(--r-xl);
-  overflow: hidden;
-}
-
-.library__opened-backdrop {
-  position: absolute;
-  inset: -25% -12%;
-  z-index: 0;
-  pointer-events: none;
-}
-
-.library__opened-backdrop-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: blur(46px) saturate(160%);
-  transform: scale(1.2);
-  opacity: 0.55;
-}
-
-.library__opened-head--art::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: linear-gradient(180deg, transparent 55%, var(--page) 100%);
-  pointer-events: none;
-}
-
-.library__opened-head--art .library__crumb,
-.library__opened-head--art .albumart,
-.library__opened-head--art .artistart {
-  position: relative;
-  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 18px;
 }
 
 /* ---- Narrow layout ---------------------------------------------------
  *
- * The opened-album header stacked a back link, a title and a 132px square on
- * three separate rows, which left the track list starting halfway down the
- * screen with a column of empty space beside the cover. Side by side instead,
- * and the cover smaller: the album is the context here, not the subject.
+ * The opened-album header stacked a title and a 132px square on two separate
+ * rows, which left the track list starting halfway down the screen with a
+ * column of empty space beside the cover. Side by side instead, and the cover
+ * smaller: the album is the context here, not the subject.
  * -------------------------------------------------------------------- */
 
 @media (max-width: 767px) {
   .library__opened-head {
-    display: flex;
+    flex-direction: row;
     align-items: center;
     gap: 14px;
   }
 
-  /* Visual order only. The back control stays first in the DOM, which is the
-     order it is read and tabbed in. */
+  /* Visual order only. The name stays first in the DOM, which is the order it
+     is read in. */
   .library__opened-head .albumart,
   .library__opened-head .artistart {
     order: -1;
-    padding: 0;
   }
 
   .albumart__art,
@@ -679,8 +705,20 @@
     height: 84px;
   }
 
+  .library__opened {
+    font-size: 26px;
+  }
+
   .library__crumb {
     min-width: 0;
+  }
+
+  /* The window's own padding is smaller here, so the wash's reach is too. */
+  .library__wash {
+    top: -18px;
+    left: -16px;
+    right: -16px;
+    height: 360px;
   }
 }
 

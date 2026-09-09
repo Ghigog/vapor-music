@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
+import type { Opened } from "../screens/Library";
 
 /** Four times a second: fast enough that the timecode never visibly jumps a
  *  second, slow enough to be free. */
@@ -26,11 +27,17 @@ const POLL_MS = 250;
 
 export function Transport({
   onOpenNowPlaying,
+  onOpenEntity,
   djMode = false,
   onDjModeChange,
 }: {
   /** Opens the full Now Playing screen. Omitted, the title is plain text. */
   onOpenNowPlaying?: (() => void) | undefined;
+  /**
+   * Opens the album or the artist in the library. Omitted, the line under
+   * the title is plain text — the same arrangement the title itself has.
+   */
+  onOpenEntity?: ((opened: Opened) => void) | undefined;
   /**
    * Whether the DJ is conducting.
    *
@@ -72,6 +79,33 @@ export function Transport({
       void unlisten.then((f) => f());
     };
   }, [refresh]);
+
+  /**
+   * The album, for the line under the title.
+   *
+   * `PlaybackState` carries no album — it is polled four times a second and a
+   * track's fuller record is not — so this is one read per track, keyed on
+   * its href rather than on the poll. Now Playing reads it the same way.
+   */
+  const [album, setAlbum] = useState("");
+  const href = state?.href ?? "";
+  useEffect(() => {
+    let cancelled = false;
+    setAlbum("");
+    if (!href) return;
+    core
+      .trackDetails(href)
+      .then((d) => {
+        if (!cancelled) setAlbum(d.album);
+      })
+      .catch(() => {
+        // The bar names what is playing; a record it cannot read is a line
+        // with one thing on it, not an error worth a banner.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [href]);
 
   if (!state) return null;
 
@@ -119,15 +153,66 @@ export function Transport({
             {state.title || "Nothing playing"}
           </div>
         )}
-        <div className="transport__artist" title={state.artist}>
-          {/* Mixing outranks the artist name here: it is the one moment the
-              app is doing what it exists to do, and it lasts a few seconds. */}
+        <div
+          className="transport__artist"
+          title={album ? `${album} - ${state.artist}` : state.artist}
+        >
+          {/* Mixing outranks the album and the artist here: it is the one
+              moment the app is doing what it exists to do, and it lasts a few
+              seconds. */}
           {state.mixing ? (
             <span className="transport__mixing">mixing</span>
           ) : loading ? (
             "loading…"
           ) : (
-            state.artist || "—"
+            <>
+              {/* Where you are listening from, and the way back to it. The
+                  bar named the artist and nothing else, so the record a track
+                  came off was a thing you could hear and not reach. */}
+              {album && (
+                <>
+                  {onOpenEntity ? (
+                    <button
+                      className="transport__link"
+                      onClick={() =>
+                        onOpenEntity({
+                          kind: "album",
+                          name: album,
+                          lead: href,
+                          artist: state.artist,
+                        })
+                      }
+                    >
+                      {album}
+                    </button>
+                  ) : (
+                    album
+                  )}
+                  {" - "}
+                </>
+              )}
+              {state.artist ? (
+                onOpenEntity ? (
+                  <button
+                    className="transport__link"
+                    onClick={() =>
+                      onOpenEntity({
+                        kind: "artist",
+                        name: state.artist,
+                        lead: href,
+                        artist: state.artist,
+                      })
+                    }
+                  >
+                    {state.artist}
+                  </button>
+                ) : (
+                  state.artist
+                )
+              ) : (
+                "—"
+              )}
+            </>
           )}
         </div>
       </div>

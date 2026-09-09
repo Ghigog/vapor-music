@@ -126,13 +126,14 @@ describe("Library — the home shelves", () => {
   });
 
   /**
-   * Back goes where the crumb says.
+   * An album names its artist, and the name is the way to them.
    *
-   * The crumb read "Albums" whatever you had opened, which was true when the
-   * grid was the only way in. From a shelf it would be pointing at a tab the
-   * press does not visit.
+   * There was a crumb here instead, reading "Home" or "Albums" depending on
+   * where the album had been opened from — a way back out, and no way
+   * onwards. From a shelf the artist was unreachable without leaving the
+   * record and finding them in a tab.
    */
-  it("says the press returns home, because it does", async () => {
+  it("goes from an album opened on a shelf to its artist", async () => {
     useBackend();
     const user = userEvent.setup();
     render(<Library />);
@@ -140,11 +141,12 @@ describe("Library — the home shelves", () => {
     await user.click(
       await screen.findByRole("button", { name: /open the album windowlicker ep/i }),
     );
-    const back = await screen.findByRole("button", { name: /‹ home/i });
-    await user.click(back);
+    await user.click(
+      await screen.findByRole("button", { name: /^aphex twin$/i }),
+    );
 
     expect(
-      await screen.findByRole("heading", { name: /^playlists$/i }),
+      await screen.findByRole("heading", { name: /^aphex twin$/i }),
     ).toBeInTheDocument();
   });
 
