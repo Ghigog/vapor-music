@@ -44,12 +44,13 @@ import { boot } from "./harness";
 /**
  * Open the flat track table.
  *
- * It is a tab inside Library now, not a sidebar destination — the Daylight
- * design never had a Songs screen (docs/FINDINGS.md).
+ * Not a sidebar destination and no longer a tab either — it is the bottom of
+ * the Library screen, under the shelves and the genres. The Daylight design
+ * never had a Songs screen (docs/FINDINGS.md), and the tab bar that replaced
+ * it was five doors onto one room.
  */
 async function openSongs(page: Page) {
   await page.getByRole("button", { name: "Library", exact: true }).click();
-  await page.getByRole("tab", { name: "Songs" }).click();
 }
 
 
@@ -170,6 +171,11 @@ test.describe("Correcting a tempo", () => {
 
     const row = page.getByRole("option").filter({ hasText: "Roygbiv" });
     await expect(row).toBeVisible();
+    // Scrolled to before it is measured. The table is the bottom of one long
+    // library page now, so this row is rendered below the fold — and clicking
+    // it would scroll it into view, which moves it for a reason that has
+    // nothing to do with what selecting does to the layout.
+    await row.scrollIntoViewIfNeeded();
     const before = await row.boundingBox();
 
     // Through the checkbox: a plain click plays now, and this test is about
@@ -438,15 +444,16 @@ test.describe("Going back", () => {
   test("leaves an opened album before it leaves the app", async ({ page }) => {
     await boot(page);
 
-    await page.getByRole("tab", { name: "Albums" }).click();
     await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
-    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Windowlicker EP" })).toBeVisible();
 
     await page.goBack();
 
-    // Back at the grid, with the other albums showing again.
-    await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /‹ albums/i })).toHaveCount(0);
+    // Back at the library, with the other albums showing again.
+    await expect(
+      page.getByRole("button", { name: /open the album selected ambient works/i }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /‹ library/i })).toHaveCount(0);
   });
 });
 
@@ -455,14 +462,13 @@ test.describe("Going back", () => {
  *
  * The library screen opens on shelves of what someone actually listens to,
  * because almost nobody arrives at their own music looking for a particular
- * record — they arrive wanting something on, and the thing they reach for is a
- * playlist they already have. What the shelves are ranked on is the backend's,
- * and what they draw is `Home.test.tsx`'s. What is only true in a real browser
- * is the wiring underneath: a tile on a shelf opens a drill-down App owns, and
- * the way back out is the history stack.
+ * record — they arrive wanting something on. What the shelves are ranked on is
+ * the backend's, and what they draw is `Shelves.test.tsx`'s. What is only true
+ * in a real browser is the wiring underneath: a tile on a shelf opens a
+ * drill-down App owns, and the way back out is the history stack.
  */
-test.describe("The home shelves", () => {
-  test("opens on the shelves, and a playlist tile opens the playlist", async ({
+test.describe("The library's shelves", () => {
+  test("opens on the shelves, and a tile opens a drill-down the app owns", async ({
     page,
   }) => {
     await boot(page, {
@@ -477,16 +483,23 @@ test.describe("The home shelves", () => {
       ],
     });
 
-    await expect(page.getByRole("heading", { name: "Playlists" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Smart groups" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Artists" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Albums" })).toBeVisible();
 
-    await page.getByRole("button", { name: /open the playlist night drive/i }).click();
-    await expect(page.getByRole("heading", { name: "Night Drive" })).toBeVisible();
+    // Playlists and smart groups are in the sidebar, on every screen, where
+    // they are also the drop target for a dragged track. A shelf of them was a
+    // second and worse copy of a list that never leaves the window — and the
+    // playlist above is here to prove its absence rather than its presence.
+    await expect(page.getByRole("heading", { name: "Playlists" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Smart groups" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
+    await expect(page.getByRole("heading", { name: "Windowlicker EP" })).toBeVisible();
 
     // Out again the way the back gesture goes, which is the half that only
     // exists once App owns the drill-down.
     await page.goBack();
-    await expect(page.getByRole("heading", { name: "Smart groups" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Albums" })).toBeVisible();
   });
 
   /**
@@ -507,6 +520,7 @@ test.describe("The home shelves", () => {
         tracks: 1,
         lead: "/dav/Koofr/Music/xtal.m4a",
         plays: 0,
+        score: 0,
         lastPlayed: 0,
       })),
     });
@@ -533,17 +547,22 @@ test.describe("The home shelves", () => {
 });
 
 test.describe("Albums and artists", () => {
-  test("the Albums tab lists albums, not tracks", async ({ page }) => {
+  test("the albums shelf lists albums, not tracks", async ({ page }) => {
     await boot(page);
-    // Asked for, because the screen opens on the home shelves — which draw
-    // albums too, so a test that skipped this would pass without ever
-    // reaching the tab it is named after.
-    await page.getByRole("tab", { name: "Albums" }).click();
 
-    await expect(page.getByText("Windowlicker EP", { exact: true })).toBeVisible();
-    await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
-    // The track of that name belongs under Songs.
-    await expect(page.getByRole("main").getByText("Windowlicker", { exact: true })).toHaveCount(0);
+    // By the tile's own control rather than by text: the track table below the
+    // shelves carries "Windowlicker EP" in the album column of three rows, so
+    // a bare text lookup cannot say which half of the page it found.
+    await expect(
+      page.getByRole("button", { name: /open the album windowlicker ep/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /open the album selected ambient works/i }),
+    ).toBeVisible();
+    // The track of that name is a row in the table, not a tile on the shelf.
+    await expect(
+      page.getByRole("button", { name: /open the album windowlicker$/i }),
+    ).toHaveCount(0);
   });
 
   /*
@@ -562,32 +581,31 @@ test.describe("Albums and artists", () => {
    */
   test("opening an album drills in, and back returns", async ({ page }) => {
     await boot(page);
-    await page.getByRole("tab", { name: "Albums" }).click();
 
     await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
 
-    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /‹ albums/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Windowlicker EP" })).toBeVisible();
+    // One library view, so the crumb names it rather than a tab that is gone.
+    await expect(page.getByRole("button", { name: /‹ library/i })).toBeVisible();
 
-    await page.getByRole("button", { name: /‹ albums/i }).click();
-    await expect(page.getByText("Selected Ambient Works", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /‹ library/i }).click();
+    await expect(
+      page.getByRole("button", { name: /open the album selected ambient works/i }),
+    ).toBeVisible();
   });
 
-  test("an album plays from its card without being opened", async ({ page }) => {
+  test("an album plays from its tile without being opened", async ({ page }) => {
     await boot(page);
-    await page.getByRole("tab", { name: "Albums" }).click();
 
     await page.getByRole("button", { name: /play selected ambient works/i }).click();
 
     await expect(page.locator(".transport__title")).toHaveText("Xtal");
   });
 
-  test("the Artists tab lists artists and opens one", async ({ page }) => {
+  test("the artists shelf lists artists and opens one", async ({ page }) => {
     await boot(page);
-    await page.getByRole("tab", { name: "Artists" }).click();
 
-    // Waited for by its own control rather than by text: the album grid is
-    // still on screen for a beat after the tab is pressed, and two albums there
+    // By its own control rather than by text: two albums on the shelf below
     // carry "Aphex Twin" as their subtitle.
     const tile = page.getByRole("button", { name: /open the artist aphex twin/i });
     await expect(tile).toBeVisible();
@@ -597,7 +615,23 @@ test.describe("Albums and artists", () => {
     // narrowing, and this suite does not run the backend — see the note on the
     // album test above.
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /‹ artists/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /‹ library/i })).toBeVisible();
+  });
+
+  /**
+   * The genres, between the albums and the table.
+   *
+   * A row of pills ranked by what has been played and what has been skipped
+   * under each. What the ranking is belongs to the backend; what is only true
+   * in a browser is that pressing one drills in and the crumb leads back out.
+   */
+  test("a genre pill opens the tracks filed under it", async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole("button", { name: /open the genre electronic/i }).click();
+
+    await expect(page.getByRole("heading", { name: "Electronic" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /‹ library/i })).toBeVisible();
   });
 });
 

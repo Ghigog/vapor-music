@@ -90,7 +90,6 @@ test.describe("The track table at 412px", () => {
       .getByRole("navigation", { name: "Screens" })
       .getByRole("button", { name: "Library", exact: true })
       .click();
-    await page.getByRole("tab", { name: "Songs" }).click();
   }
 
   /**
@@ -156,7 +155,6 @@ test.describe("Sorting does not move the headings", () => {
       .getByRole("navigation", { name: "Screens" })
       .getByRole("button", { name: "Library", exact: true })
       .click();
-    await page.getByRole("tab", { name: "Songs" }).click();
   }
 
   /**
@@ -195,7 +193,6 @@ test.describe("Press and hold a track", () => {
       .getByRole("navigation", { name: "Screens" })
       .getByRole("button", { name: "Library", exact: true })
       .click();
-    await page.getByRole("tab", { name: "Songs" }).click();
   }
 
   /** The gesture: down, wait past the threshold, up. */
@@ -428,8 +425,15 @@ test.describe("Dragging with a finger", () => {
       .getByRole("navigation", { name: "Screens" })
       .getByRole("button", { name: "Library", exact: true })
       .click();
-    await page.getByRole("tab", { name: "Songs" }).click();
     await expect(page.locator(".songrow__title").first()).toBeVisible();
+    // Scrolled to, not merely rendered. The table is the bottom of one long
+    // library page now — two shelves and the genres sit above it — so on a
+    // 412px screen the first row is a long way below the fold. `send` below
+    // finds its target with `elementFromPoint`, which answers null for a
+    // coordinate outside the viewport: every gesture in this describe would
+    // land on `window` and every assertion would pass for having tested
+    // nothing.
+    await page.locator(".songrow").first().scrollIntoViewIfNeeded();
   }
 
   /** Hold a row past the threshold, then lift it by moving. */
@@ -632,7 +636,6 @@ test.describe("The Vibe screen at 412px", () => {
         manualPos: 0,
       })),
     });
-    await page.getByRole("tab", { name: "Songs" }).click();
     await page.getByRole("option").filter({ hasText: "Alpha" }).click();
     await expect(page.locator(".transport__title")).toHaveText("Alpha");
 
@@ -693,8 +696,7 @@ test.describe("The layout fits the screen", () => {
     [
       "Songs",
       async (page: Page) => {
-        await page.getByRole("tab", { name: "Songs" }).click();
-      },
+          },
     ],
     [
       "Settings",
@@ -725,20 +727,25 @@ test.describe("The layout fits the screen", () => {
   }
 
   /**
-   * The tab bar stays one row.
+   * The genre row stays one row.
    *
-   * Four pills fitted a phone and five do not. Playlists stopped being one of
-   * them for exactly this — it wrapped the bar onto two rows and pushed the
-   * grid down the screen — and Home made it five again, so the bar scrolls
-   * sideways instead. Asserted by height, because "wrapped" is not a thing the
-   * DOM will tell you directly: two rows of 36px pills is over 70.
+   * The tab bar this replaces had the same problem and the same answer: four
+   * pills fitted a phone and five did not, so the bar scrolled sideways rather
+   * than wrapping onto a second row and pushing the page down. There is no tab
+   * bar now — one library view needs no doors onto itself — and the genres are
+   * the row of pills that inherited its shape. Asserted by height, because
+   * "wrapped" is not a thing the DOM will tell you directly: two rows of 38px
+   * pills is well over 60.
    */
-  test("the library's five tabs stay on one row", async ({ page }) => {
+  test("the genre row stays on one row", async ({ page }) => {
     await boot(page);
 
-    const bar = page.locator(".library__tabs");
-    await expect(bar.getByRole("tab")).toHaveCount(5);
-    const height = await bar.evaluate((el) => el.getBoundingClientRect().height);
+    // And there is nothing left to be a tab of.
+    await expect(page.getByRole("tab")).toHaveCount(0);
+
+    const row = page.locator(".genres__row");
+    await expect(row).toBeVisible();
+    const height = await row.evaluate((el) => el.getBoundingClientRect().height);
     expect(height).toBeLessThan(60);
   });
 });
