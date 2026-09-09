@@ -198,6 +198,48 @@ describe("Library — album artwork", () => {
       screen.queryByRole("button", { name: /cover of/i }),
     ).not.toBeInTheDocument();
   });
+
+  /// The artist page's own shelf, and the crumb it leaves behind — the one
+  /// thing a flat `opened` slot cannot get right for free, since going back
+  /// from an album reached this way has to surface the artist again rather
+  /// than skip past them to the Artists tab (`Opened.via`).
+  it("opens an album from the artist's own shelf, and back returns to the artist", async () => {
+    useBackend({
+      rows: album(),
+      albums: currents(),
+      artists: [
+        makeEntity({
+          name: "Tame Impala",
+          subtitle: "1 album",
+          tracks: 2,
+          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(await screen.findByRole("tab", { name: /^artists$/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist tame impala/i }),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the album currents/i }),
+    );
+
+    // Inside the album now — its tracks, not the artist's.
+    expect(await screen.findByText("Let It Happen")).toBeInTheDocument();
+    const back = await screen.findByRole("button", { name: /‹ tame impala/i });
+
+    await user.click(back);
+
+    // Back at the artist, not the Artists tab grid.
+    await screen.findByRole("button", { name: /‹ artists/i });
+    expect(
+      screen.queryByRole("button", { name: /open the album currents/i }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("Library — album identity", () => {

@@ -550,7 +550,9 @@ export function LinerNotes({
   );
 }
 
-function Stat({
+/** One figure in a `liner__stats` grid. Also drawn by Now Playing, on the
+ *  same track, so the two screens read the same numbers the same way. */
+export function Stat({
   k,
   v,
   note,
@@ -570,7 +572,9 @@ function Stat({
   );
 }
 
-function clock(seconds: number): string {
+/** m:ss, or "—" for a figure nothing has measured yet. Also used by Now
+ *  Playing's copy of these same stats. */
+export function clock(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "—";
   const total = Math.round(seconds);
   return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;

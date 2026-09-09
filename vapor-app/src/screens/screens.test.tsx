@@ -957,9 +957,12 @@ describe("Now Playing", () => {
     await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
     render(<NowPlaying />);
 
-    expect(
-      await screen.findByText("Aphex Twin - Electronic"),
-    ).toBeInTheDocument();
+    // The artist is a press into their library page now, so the two words
+    // are a button and the sentence they sit inside — not one text node.
+    const artist = await screen.findByRole("button", { name: "Aphex Twin" });
+    expect(artist.closest(".np__artist")).toHaveTextContent(
+      "Aphex Twin - Electronic",
+    );
   });
 
   it("says the genre is unknown when the app has none", async () => {
@@ -979,9 +982,10 @@ describe("Now Playing", () => {
     });
     render(<NowPlaying />);
 
-    expect(
-      await screen.findByText("Willie Wright - unknown genre"),
-    ).toBeInTheDocument();
+    const artist = await screen.findByRole("button", { name: "Willie Wright" });
+    expect(artist.closest(".np__artist")).toHaveTextContent(
+      "Willie Wright - unknown genre",
+    );
   });
 
   /**
@@ -1044,6 +1048,136 @@ describe("Now Playing", () => {
     await user.click(screen.getByRole("button", { name: /previous track/i }));
 
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
+  });
+
+  /*
+   * The title, the artist and the album are each a way into the rest of the
+   * app, not just a caption — the same three presses Liner Notes already
+   * offers, offered from the screen a person is actually looking at while the
+   * track plays.
+   */
+  it("opens the track's liner notes when the title is pressed", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    const onOpen = vi.fn();
+    const user = userEvent.setup();
+    render(<NowPlaying onOpen={onOpen} />);
+
+    await user.click(await screen.findByRole("button", { name: "Windowlicker" }));
+
+    expect(onOpen).toHaveBeenCalledWith(A_TRACK);
+  });
+
+  it("opens the artist's library page when the artist is pressed", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    const onOpenEntity = vi.fn();
+    const user = userEvent.setup();
+    render(<NowPlaying onOpenEntity={onOpenEntity} />);
+
+    await user.click(await screen.findByRole("button", { name: "Aphex Twin" }));
+
+    expect(onOpenEntity).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "artist", name: "Aphex Twin" }),
+    );
+  });
+
+  it("opens the album when it is pressed", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    const onOpenEntity = vi.fn();
+    const user = userEvent.setup();
+    render(<NowPlaying onOpenEntity={onOpenEntity} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Windowlicker EP" }),
+    );
+
+    expect(onOpenEntity).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "album", name: "Windowlicker EP" }),
+    );
+  });
+
+  /*
+   * The same figures Liner Notes shows for this track — tempo, key, energy
+   * and the rest — repeated here rather than left a tap away, since this is
+   * the screen open while the track is actually playing.
+   */
+  it("shows what the analysis heard", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    render(<NowPlaying />);
+
+    await screen.findByText("Windowlicker");
+    expect(await screen.findByText("124 BPM")).toBeInTheDocument();
+    expect(screen.getByText("8A")).toBeInTheDocument();
+  });
+
+  /*
+   * Where next, without leaving the screen — the same three exits Vibe
+   * offers, gated on the DJ actually conducting: off, there is no plan to
+   * steer and nothing here to press.
+   */
+  it("offers the three exits when the DJ is conducting", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    backend.answers("mix_candidates", [
+      {
+        href: "/dav/Koofr/Music/xtal.m4a",
+        title: "Xtal",
+        artist: "Aphex Twin",
+        genre: "Electronic",
+        bpm: 101.7,
+        key: "5A",
+        exit: "follow",
+        label: "FOLLOW",
+        transition: "Filter Sweep",
+        selected: true,
+        cover: null,
+      } satisfies core.MixCandidate,
+    ]);
+    render(<NowPlaying djMode />);
+
+    expect(await screen.findByText("FOLLOW")).toBeInTheDocument();
+  });
+
+  it("offers nothing to choose from when the DJ is off", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    render(<NowPlaying djMode={false} />);
+
+    await screen.findByText("Windowlicker");
+    expect(screen.queryByText("FOLLOW")).not.toBeInTheDocument();
+    expect(screen.queryByText(/where next/i)).not.toBeInTheDocument();
+  });
+
+  it("puts the pressed exit next when the DJ is conducting", async () => {
+    const backend = useBackend();
+    await backend.invoke("play_tracks", { hrefs: [A_TRACK], start: A_TRACK });
+    backend.answers("mix_candidates", [
+      {
+        href: "/dav/Koofr/Music/roygbiv.m4a",
+        title: "Roygbiv",
+        artist: "Boards of Canada",
+        genre: "Electronic",
+        bpm: 91.2,
+        key: "4A",
+        exit: "switch",
+        label: "SWITCH",
+        transition: "Echo Out",
+        selected: false,
+        cover: null,
+      } satisfies core.MixCandidate,
+    ]);
+    const user = userEvent.setup();
+    render(<NowPlaying djMode />);
+
+    await user.click(await screen.findByText("SWITCH"));
+
+    await waitFor(() => expect(backend.called("choose_next")).toBe(true));
+    expect(backend.lastArgs("choose_next")?.href).toBe(
+      "/dav/Koofr/Music/roygbiv.m4a",
+    );
   });
 });
 
