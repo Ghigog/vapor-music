@@ -27,7 +27,14 @@
  * different order per screenful.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "../lib/core";
@@ -89,6 +96,10 @@ interface Column {
 const COLUMNS: readonly Column[] = [
   { id: "title", label: "Title", cell: 3 },
   { id: "artist", label: "Artist", cell: 3 },
+  // Beside the two names rather than out with the measurements, because it is
+  // not one: it is what the table opens on, and a default ordering nobody can
+  // get back to after pressing another heading is a trap rather than a default.
+  { id: "score", label: "Liked", cell: 3 },
   { id: "album", label: "Album", cell: 4 },
   // Beside the album rather than out by the numbers: it is a name, and the
   // mono columns to its right are measurements.
@@ -128,6 +139,8 @@ export function Songs({
   query: externalQuery,
   filter,
   scope,
+  scroller,
+  defaultSort,
 }: {
   onOpen?: ((href: string) => void) | undefined;
   query?: string | undefined;
@@ -148,13 +161,39 @@ export function Songs({
    * turning into the library after one track.
    */
   scope?: string | undefined;
+  /**
+   * The scroll container to virtualize against, when the table is one part of
+   * a longer page rather than the whole screen.
+   *
+   * Library stacks shelves, a genre row and this table in one column, and a
+   * table with its own inner scroller inside that column is two scrollbars for
+   * one list — the shelves stop moving halfway down and the rows take over.
+   * Given a scroller, the table stops scrolling itself and measures where it
+   * sits inside the caller's one instead (`scrollMargin` below), which is what
+   * keeps a fifty thousand row library virtualized on a page that scrolls as a
+   * whole.
+   *
+   * Absent, nothing changes: the table brings its own scroll region, which is
+   * what it does when it fills a screen on its own.
+   */
+  scroller?: RefObject<HTMLElement | null> | undefined;
+  /**
+   * What the table opens sorted by. Title unless the caller says otherwise.
+   *
+   * Library opens it on `"score"` — most liked first — because a flat list of
+   * every track alphabetically answers a question almost nobody arrives with.
+   * The heading controls still work, so this is a starting point rather than a
+   * setting.
+   */
+  defaultSort?: SortKey | undefined;
 }) {
   const embedded = externalQuery !== undefined;
   const [ownQuery, setOwnQuery] = useState("");
   const query = externalQuery ?? ownQuery;
   const setQuery = setOwnQuery;
-  const [sortKey, setSortKey] = useState<SortKey>("title");
-  const [ascending, setAscending] = useState(true);
+  const [sortKey, setSortKey] = useState<SortKey>(defaultSort ?? "title");
+  // Best first for a score, A-first for everything else. See `toggleSort`.
+  const [ascending, setAscending] = useState(sortKey !== "score");
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [page, setPage] = useState<Page>({ offset: 0, rows: [], total: 0 });
   /**
@@ -271,6 +310,42 @@ export function Songs({
   );
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * Where the list starts inside the caller's scroller, in pixels.
+   *
+   * Zero when the table brings its own scroll region, and the whole of what
+   * `scroller` needs when it does not: the virtualizer works in scroller
+   * coordinates, so it has to know how much of the page — a header, two
+   * shelves, a row of genres — sits above the first row. Measured rather than
+   * passed in, because what sits above the table changes height as its covers
+   * arrive, and a number handed down at mount would be wrong a frame later.
+   */
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useLayoutEffect(() => {
+    const outer = scroller?.current;
+    const list = scrollRef.current;
+    if (!outer || !list) return;
+
+    const measure = () => {
+      const top =
+        list.getBoundingClientRect().top -
+        outer.getBoundingClientRect().top +
+        outer.scrollTop;
+      // Guarded, not because the value churns but because this runs from a
+      // ResizeObserver: setting state to the number it already holds on every
+      // observed frame is a render loop with extra steps.
+      setScrollMargin((was) => (Math.abs(was - top) < 1 ? was : top));
+    };
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    // Everything in the column, not only what is above the table: the table's
+    // own spacer grows when a read lands, and on a short library that changes
+    // whether the scroller scrolls at all.
+    for (const child of Array.from(outer.children)) observer.observe(child);
+    observer.observe(outer);
+    return () => observer.disconnect();
+  }, [scroller]);
 
   /**
    * What this table is a view of — everything except which window of it.
@@ -409,7 +484,11 @@ export function Songs({
     // the exact scroll extent rather than an estimate of it — which is what
     // lets the scrollbar be right about a library the table has never seen.
     count: total,
-    getScrollElement: () => scrollRef.current,
+    // The caller's scroller when there is one, otherwise the region below.
+    // `scrollMargin` is what makes the first case work: without it every row
+    // would be placed as though the table began at the top of the page.
+    getScrollElement: () => scroller?.current ?? scrollRef.current,
+    scrollMargin,
     estimateSize: () => ROW_HEIGHT + ROW_GAP,
     // A few rows above and below the viewport, so a fast scroll does not
     // reveal blank space before React commits.
@@ -432,7 +511,11 @@ export function Songs({
     if (id === sortKey) setAscending((a) => !a);
     else {
       setSortKey(id);
-      setAscending(true);
+      // Ascending is the readable direction for a name or a measurement — A
+      // before B, 60 BPM before 180 — and the wrong one for a score. Pressing
+      // "Liked" asks for the tracks this library's owner keeps playing, not
+      // the ones they keep skipping. Pressing it a second time gives those.
+      setAscending(id !== "score");
     }
   }
 
@@ -516,7 +599,7 @@ export function Songs({
   }
 
   return (
-    <div className="songs">
+    <div className={"songs" + (scroller ? " songs--flowing" : "")}>
       {!embedded && (
         <header className="songs__head">
           <h1 className="songs__title">Songs</h1>
@@ -639,7 +722,9 @@ export function Songs({
       )}
 
       <div
-        className="songs__scroll"
+        // Still the listbox and still where the keyboard lives; it just stops
+        // being a scroller when somebody else is doing the scrolling.
+        className={"songs__scroll" + (scroller ? " songs__scroll--flowing" : "")}
         ref={scrollRef}
         tabIndex={0}
         role="listbox"
@@ -745,7 +830,7 @@ export function Songs({
                     left: 0,
                     right: 0,
                     height: ROW_HEIGHT,
-                    transform: `translateY(${item.start}px)`,
+                    transform: `translateY(${item.start - scrollMargin}px)`,
                   }}
                 />
               );
@@ -767,7 +852,7 @@ export function Songs({
                   left: 0,
                   right: 0,
                   height: ROW_HEIGHT,
-                  transform: `translateY(${item.start}px)`,
+                  transform: `translateY(${item.start - scrollMargin}px)`,
                 }}
                 {...hold.handlers}
                 onPointerDown={(e) => {

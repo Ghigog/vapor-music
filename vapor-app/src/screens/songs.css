@@ -154,6 +154,24 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/*
+ * The table as one part of a longer page.
+ *
+ * Library stacks shelves, a genre row and this in one column with a single
+ * scrollbar, so here the table is not a box that fills a screen and not a
+ * scroller: it is as tall as its rows and it scrolls with everything else.
+ * `Songs` measures where it sits inside the caller's scroller and hands the
+ * offset to the virtualizer — see `scrollMargin` there.
+ */
+.songs--flowing {
+  height: auto;
+}
+
+.songs__scroll--flowing {
+  flex: none;
+  overflow: visible;
+}
+
 .songs__empty,
 .songs__error {
   padding: 40px 0;

@@ -171,6 +171,17 @@ pub(crate) struct AppState {
     /// record through twenty tiles has just told the app those are their
     /// twenty favourites.
     pub(crate) plays: std::collections::HashMap<String, Play>,
+    /// How often each track has been passed over, keyed by href.
+    ///
+    /// A skip is pressing Next while the track had not yet earned its play —
+    /// see [`CREDIT_AFTER`] and [`record_track_skip`]. Persisted for the same
+    /// reason `plays` is: the two together are the only evidence the app has
+    /// about what someone actually likes, and evidence that resets every
+    /// morning is not evidence.
+    ///
+    /// Not to be confused with `skips` above, which is a verdict on a
+    /// *transition* and belongs to the DJ. This one is a verdict on a track.
+    pub(crate) track_skips: std::collections::HashMap<String, u32>,
     /// The same, for a playlist or a dynamic group that was played from.
     ///
     /// Keyed `"playlist:<id>"` or `"group:<id>"` — see [`collection_key`] —
@@ -473,6 +484,7 @@ impl AppState {
         }
         let skips = quarantined!("skips").unwrap_or_default();
         let plays = quarantined!("plays").unwrap_or_default();
+        let track_skips = quarantined!("track_skips").unwrap_or_default();
         let collection_plays = quarantined!("collection_plays").unwrap_or_default();
         // The scanned index. Without this the library was rebuilt from the
         // server on every launch: the app opened on "0 tracks" and stayed
@@ -509,6 +521,7 @@ impl AppState {
             analysis,
             skips,
             plays,
+            track_skips,
             collection_plays,
             crediting: None,
             tags,
@@ -594,6 +607,11 @@ impl AppState {
         Ok(())
     }
 
+    pub(crate) fn save_track_skips(&self) -> Result<()> {
+        self.store.save("track_skips", &self.track_skips)?;
+        Ok(())
+    }
+
     pub(crate) fn save_collection_plays(&self) -> Result<()> {
         self.store
             .save("collection_plays", &self.collection_plays)?;
@@ -634,6 +652,37 @@ impl AppState {
         if let Err(e) = self.save_collection_plays() {
             eprintln!("collection play counts could not be saved: {e:?}");
         }
+    }
+
+    /// Record that a track was passed over.
+    ///
+    /// No collection half, deliberately. A skip is a verdict on the track, not
+    /// on the playlist it came up in — someone who loves a playlist still skips
+    /// one song on it, and charging that to the playlist would slowly bury the
+    /// thing they play most.
+    pub(crate) fn credit_skip(&mut self, href: &str) {
+        let n = self.track_skips.entry(href.to_string()).or_insert(0);
+        *n = n.saturating_add(1);
+        if let Err(e) = self.save_track_skips() {
+            eprintln!("skip counts could not be saved: {e:?}");
+        }
+    }
+
+    /// How much this library's owner appears to like a track.
+    ///
+    /// Plays for, skips against, one each. Not a rating and not pretending to
+    /// be one: nobody in this app has ever been asked to score a song, so the
+    /// only honest evidence is what they played through and what they cut
+    /// short. Deliberately the simplest rule that uses both — a weighting
+    /// would be a claim about how much a skip is worth that nothing here can
+    /// support.
+    ///
+    /// Negative is ordinary and meaningful: a track skipped three times and
+    /// never finished is one this library's owner keeps deciding against.
+    pub(crate) fn track_score(&self, href: &str) -> i32 {
+        let plays = self.plays.get(href).map_or(0, |p| p.count) as i32;
+        let skips = self.track_skips.get(href).copied().unwrap_or(0) as i32;
+        plays - skips
     }
 
     /// Record a file's tags, sending its artwork to disk.
@@ -1096,6 +1145,25 @@ fn credit_if_listened(app: &mut AppState) {
     app.credit_play(&pending.href, pending.collection.as_deref());
 }
 
+/// Count a skip against whatever is playing, if it is being passed over.
+///
+/// `crediting` holds the track that has not yet run long enough to count as
+/// listened to (see [`CREDIT_AFTER`]), and it is taken away the moment it has.
+/// So pressing Next while it is still there is someone deciding against this
+/// track, and pressing Next after it has gone is someone moving on from one
+/// they heard. Only the first is a skip, which is the whole reason the count
+/// is taken from here rather than from the press.
+///
+/// Clearing `crediting` is what makes it one verdict per track: holding Next
+/// through five records five skips, not fifteen, and the abandoned track
+/// cannot afterwards be credited with a play it did not earn.
+pub(crate) fn record_track_skip(app: &mut AppState) {
+    let Some(pending) = app.crediting.take() else {
+        return;
+    };
+    app.credit_skip(&pending.href);
+}
+
 /// How often something has been listened to, and when it last was.
 ///
 /// `last` is unix seconds, and it is the tie-break rather than an ordering of
@@ -1382,11 +1450,11 @@ struct LibraryView {
     artist: Option<String>,
 }
 
-/// One album or artist, as the grid draws it.
+/// One album, artist or genre, as a shelf or a pill draws it.
 ///
-/// The Albums tab used to render a card per *track*, grouped under an album
+/// The Albums view used to render a card per *track*, grouped under an album
 /// heading — so "All Melody" was a header with nine tiles under it, none of
-/// which was the album. A tab called Albums shows albums.
+/// which was the album. A shelf of albums shows albums.
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -1409,6 +1477,12 @@ struct LibraryEntity {
     /// title *plus folder*, which is precisely the thing a second copy gets
     /// wrong. See [`entity_shelf`].
     plays: u32,
+    /// Plays of its tracks less skips of them — see [`AppState::track_score`].
+    ///
+    /// What the genre row is ordered by, and on the wire for the same reason
+    /// `plays` is: the members are already gathered here, and adding them up a
+    /// second time somewhere else means keying albums a second time.
+    score: i32,
     /// When one of its tracks was last listened to, unix seconds. 0 for never.
     ///
     /// `number`, not the `bigint` ts-rs gives an `i64` by default. Nothing on
@@ -1696,6 +1770,7 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
                 .map(|p| p.last)
                 .max()
                 .unwrap_or(0);
+            let score: i32 = tracks.iter().map(|r| app.track_score(&r.href)).sum();
 
             // Only albums have a length to fall short of. An artist is not
             // "incomplete" because you do not own their whole catalogue, and a
@@ -1709,6 +1784,7 @@ fn library_entities_for(app: &AppState, view: &LibraryView) -> Vec<LibraryEntity
                 tracks: tracks.len(),
                 lead,
                 plays,
+                score,
                 last_played,
                 total_tracks,
                 record_type: release.map(|r| r.record_type.clone()).unwrap_or_default(),
@@ -1753,8 +1829,17 @@ fn order_entities(by: By, entities: &mut [LibraryEntity]) {
                 .then_with(|| completion(b).total_cmp(&completion(a)))
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         }),
-        // Alphabetical. A genre has no length to be measured against.
-        By::Genre => entities.sort_by_key(|e| e.name.to_lowercase()),
+        // Most liked first: plays for, skips against, added up over the tracks
+        // filed under it. A genre has no length to be measured against and
+        // alphabetical said nothing at all about the person's music — the row
+        // is a claim about what they reach for, and it should be ranked like
+        // one. Name breaks the tie so a library nobody has played yet is still
+        // in a stable, readable order rather than a hash one.
+        By::Genre => entities.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        }),
     }
 }
 
@@ -2655,6 +2740,26 @@ fn shared_document(app: &AppState) -> vapor_library::sync::Shared {
         // document is the only place it will ever hear otherwise.
         deleted: app.tombstones.clone(),
     }
+}
+
+/// The one sort key the index cannot answer. See [`sort_by_score`].
+pub(crate) const SCORE_SORT: &str = "score";
+
+/// Most liked first, by [`AppState::track_score`].
+///
+/// `ascending` is honoured rather than ignored, so the header control behaves
+/// like every other one — pressing it twice shows the tracks this library's
+/// owner keeps skipping, which is a list worth having when it is time to
+/// delete something.
+pub(crate) fn sort_by_score(app: &AppState, rows: &mut [Row], ascending: bool) {
+    rows.sort_by(|a, b| {
+        let (x, y) = (app.track_score(&a.href), app.track_score(&b.href));
+        let by_score = if ascending { x.cmp(&y) } else { y.cmp(&x) };
+        // Title breaks the tie, because in a library nobody has played yet
+        // every score is zero and the whole table would otherwise be in
+        // whatever order the scan happened to find the files.
+        by_score.then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    });
 }
 
 fn parse_sort_key(s: &str) -> Option<SortKey> {
@@ -4786,6 +4891,9 @@ fn handle_media_press(shared: &Shared, app_handle: &tauri::AppHandle, press: med
         }
         media::Press::Next => {
             record_skip_if_reacting_to_a_blend(&mut app);
+            // The media key is the same press as the button on screen, so it
+            // has to leave the same record behind. See `next_track`.
+            record_track_skip(&mut app);
             if let Some(href) = app.queue.next(None).map(str::to_string) {
                 begin_playback(shared, &mut app, href);
             }
@@ -10457,6 +10565,139 @@ mod tests {
 
         // Nothing playing: no length, rather than the last track's.
         assert_eq!(playing_duration(None, None), 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Plays, skips, and what they add up to
+    // -----------------------------------------------------------------------
+
+    /// Plays for, skips against, one each.
+    ///
+    /// The whole of what the app knows about what someone likes. Nobody has
+    /// ever been asked to rate a track here, so what they played through and
+    /// what they cut short is the only evidence there is.
+    #[test]
+    fn a_score_is_plays_less_skips() {
+        let (mut app, dir) = app();
+
+        assert_eq!(app.track_score("/a.mp3"), 0, "never heard is not disliked");
+
+        app.credit_play("/a.mp3", None);
+        app.credit_play("/a.mp3", None);
+        assert_eq!(app.track_score("/a.mp3"), 2);
+
+        app.credit_skip("/a.mp3");
+        assert_eq!(app.track_score("/a.mp3"), 1);
+
+        // Negative is a real answer, not an underflow: a track skipped three
+        // times and never finished is one this library's owner keeps deciding
+        // against.
+        app.credit_skip("/b.mp3");
+        app.credit_skip("/b.mp3");
+        assert_eq!(app.track_score("/b.mp3"), -2);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Pressing Next is only a skip while the track has not been listened to.
+    ///
+    /// `crediting` is the track that has not yet earned its play, and it is
+    /// taken away the moment it has. So the same press means two different
+    /// things either side of [`CREDIT_AFTER`] — deciding against a track, or
+    /// moving on from one you heard — and only the first is a verdict.
+    #[test]
+    fn a_skip_is_next_pressed_before_the_track_was_heard() {
+        let (mut app, dir) = app();
+        app.crediting = Some(Crediting {
+            href: "/a.mp3".to_string(),
+            collection: None,
+        });
+
+        record_track_skip(&mut app);
+        assert_eq!(app.track_skips.get("/a.mp3").copied(), Some(1));
+
+        // One verdict per track. Holding Next through five records five skips,
+        // not fifteen — and the abandoned track cannot afterwards be credited
+        // with a play it never earned.
+        record_track_skip(&mut app);
+        assert_eq!(app.track_skips.get("/a.mp3").copied(), Some(1));
+        assert!(app.crediting.is_none());
+
+        // A track that already earned its play has no `crediting` left, so
+        // pressing Next past its last seconds says nothing about it.
+        app.credit_play("/b.mp3", None);
+        record_track_skip(&mut app);
+        assert_eq!(app.track_skips.get("/b.mp3"), None);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The table opens on this, so it has to put the liked ones first.
+    #[test]
+    fn sorting_by_score_puts_the_most_liked_first() {
+        let (mut app, dir) = app();
+        let mut rows = vec![
+            row("/loved.mp3", "Loved"),
+            row("/skipped.mp3", "Skipped"),
+            row("/unheard.mp3", "Unheard"),
+        ];
+        app.credit_play("/loved.mp3", None);
+        app.credit_play("/loved.mp3", None);
+        app.credit_skip("/skipped.mp3");
+
+        sort_by_score(&app, &mut rows, false);
+        assert_eq!(
+            rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(),
+            ["Loved", "Unheard", "Skipped"],
+        );
+
+        // The other direction is the list worth having when it is time to
+        // delete something, and the header control asks for it.
+        sort_by_score(&app, &mut rows, true);
+        assert_eq!(
+            rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(),
+            ["Skipped", "Unheard", "Loved"],
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Genres are ranked, not alphabetised.
+    ///
+    /// The row is a claim about what this library's owner reaches for.
+    /// Alphabetical put Ambient first for ever in a library whose owner has
+    /// played house every day since March.
+    #[test]
+    fn genres_are_ordered_by_what_is_liked_under_them() {
+        let (mut app, dir) = app();
+        let mut ambient = row("/ambient.mp3", "An Ambient Track");
+        ambient.genres = vec!["Ambient".to_string()];
+        let mut house = row("/house.mp3", "A House Track");
+        house.genres = vec!["House".to_string()];
+        app.rows = vec![ambient, house];
+
+        app.credit_play("/house.mp3", None);
+        app.credit_play("/house.mp3", None);
+        app.credit_skip("/ambient.mp3");
+
+        let view = LibraryView {
+            query: String::new(),
+            sort_key: None,
+            ascending: true,
+            group_by: Some("genre".to_string()),
+            genre: None,
+            album: None,
+            artist: None,
+        };
+        let genres = library_entities_for(&app, &view);
+        assert_eq!(
+            genres.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            ["House", "Ambient"],
+        );
+        assert_eq!(genres[0].score, 2);
+        assert_eq!(genres[1].score, -1);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // -----------------------------------------------------------------------

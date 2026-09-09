@@ -16,11 +16,7 @@ import { listen } from "@tauri-apps/api/event";
 import { VaporMark } from "./components/VaporMark";
 import { Boundary } from "./components/Boundary";
 import { Transport } from "./components/Transport";
-import {
-  Library,
-  type Opened,
-  type Tab as LibraryTab,
-} from "./screens/Library";
+import { Library, type Opened } from "./screens/Library";
 import { Playlist } from "./screens/Playlist";
 import { PlaylistRail } from "./components/PlaylistRail";
 import { TabMenu, type TabMenuItem } from "./components/TabMenu";
@@ -45,7 +41,7 @@ import "./components/tabmenu.css";
 import "./components/draglayer.css";
 import "./components/download.css";
 import "./screens/library.css";
-import "./screens/home.css";
+import "./screens/shelves.css";
 import "./screens/songs.css";
 import "./screens/queue.css";
 import "./screens/vibe.css";
@@ -161,10 +157,6 @@ export function App() {
   const [opened, setOpened] = useState<Opened | null>(null);
   /** The dynamic group being looked at — a drill-down like the others. */
   const [group, setGroup] = useState<string | null>(null);
-  /** Which library tab is showing. Held here, like `opened`, because Library is
-   *  unmounted whenever a drill-down covers it and a remount would otherwise
-   *  land on the default tab rather than the one being returned to. */
-  const [libraryTab, setLibraryTab] = useState<LibraryTab>("home");
   /** Which tab's list is open, if any. Not a place, so not in the history. */
   const [menu, setMenu] = useState<Menu | null>(null);
   /** What the last drop did, or why it would not. */
@@ -229,7 +221,6 @@ export function App() {
       playlist,
       opened,
       group,
-      libraryTab,
     };
     if (firstPlace.current) {
       firstPlace.current = false;
@@ -246,7 +237,7 @@ export function App() {
     // `opened` by value rather than by reference: it is rebuilt on every
     // render that changes it, and a reference dep would push an entry for a
     // re-render that went nowhere.
-  }, [screen, liner?.href, playlist, opened?.kind, opened?.name, group, libraryTab]);
+  }, [screen, liner?.href, playlist, opened?.kind, opened?.name, group]);
 
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
@@ -256,7 +247,6 @@ export function App() {
         playlist: string | null;
         opened: Opened | null;
         group: string | null;
-        libraryTab?: LibraryTab;
       } | null;
       if (!place) return;
       fromPop.current = true;
@@ -264,9 +254,6 @@ export function App() {
       setPlaylist(place.playlist);
       setOpened(place.opened ?? null);
       setGroup(place.group ?? null);
-      // Older entries pushed before the tab was a place have none; the default
-      // is the same one a fresh Library would have picked anyway.
-      setLibraryTab(place.libraryTab ?? "home");
       // A list is not a place, so walking history closes whichever is open
       // rather than restoring it.
       setMenu(null);
@@ -446,16 +433,15 @@ export function App() {
    * Leave Liner Notes for the artist, album or genre it names.
    *
    * The drill-down it opens into lives inside Library, not beside `liner`, so
-   * getting there means clearing every other drill-down and landing on the
-   * matching tab — the same move `go` makes for a nav press, but keeping the
-   * entity to open rather than starting empty.
+   * getting there means clearing every other drill-down — the same move `go`
+   * makes for a nav press, but keeping the entity to open rather than starting
+   * empty.
    */
   function openEntity(entity: Opened) {
     setLiner(null);
     setPlaylist(null);
     setGroup(null);
     setMenu(null);
-    setLibraryTab(entity.kind);
     setOpened(entity);
     setScreen("library");
   }
@@ -614,13 +600,6 @@ export function App() {
                   onOpen={openLiner}
                   opened={opened}
                   onOpenedChange={setOpened}
-                  tab={libraryTab}
-                  onTabChange={setLibraryTab}
-                  // The home shelves open playlists and groups, which are
-                  // drill-downs this component owns — same two functions the
-                  // rails beside it call.
-                  onOpenPlaylist={openPlaylist}
-                  onOpenGroup={openGroup}
                 />
               )}
               {screen === "playing" && (

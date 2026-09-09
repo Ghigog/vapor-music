@@ -58,11 +58,6 @@ function currents(): core.LibraryEntity[] {
 }
 
 async function openTheAlbum(user: ReturnType<typeof userEvent.setup>) {
-  // Via the Albums tab, because the screen opens on the home shelves now and
-  // those draw albums too — with the same accessible name on the same tile.
-  // Without this the artwork tests below would be exercising `Home` while
-  // saying they are about the grid.
-  await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
   // By the accessible name, as a person reaches it: the tile's cover is the
   // button and the title beside it is a label, not a control.
   await user.click(
@@ -188,12 +183,11 @@ describe("Library — album artwork", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("tab", { name: /^artists$/i }));
     await user.click(
       await screen.findByRole("button", { name: /open the artist tame impala/i }),
     );
 
-    await screen.findByRole("button", { name: /‹ artists/i });
+    await screen.findByRole("button", { name: /‹ library/i });
     expect(
       screen.queryByRole("button", { name: /cover of/i }),
     ).not.toBeInTheDocument();
@@ -202,7 +196,7 @@ describe("Library — album artwork", () => {
   /// The artist page's own shelf, and the crumb it leaves behind — the one
   /// thing a flat `opened` slot cannot get right for free, since going back
   /// from an album reached this way has to surface the artist again rather
-  /// than skip past them to the Artists tab (`Opened.via`).
+  /// than skip past them to the library (`Opened.via`).
   it("opens an album from the artist's own shelf, and back returns to the artist", async () => {
     useBackend({
       rows: album(),
@@ -219,7 +213,6 @@ describe("Library — album artwork", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("tab", { name: /^artists$/i }));
     await user.click(
       await screen.findByRole("button", { name: /open the artist tame impala/i }),
     );
@@ -234,8 +227,8 @@ describe("Library — album artwork", () => {
 
     await user.click(back);
 
-    // Back at the artist, not the Artists tab grid.
-    await screen.findByRole("button", { name: /‹ artists/i });
+    // Back at the artist, not out at the library.
+    await screen.findByRole("button", { name: /‹ library/i });
     expect(
       screen.queryByRole("button", { name: /open the album currents/i }),
     ).toBeInTheDocument();
@@ -285,9 +278,7 @@ describe("Library — album identity", () => {
       ],
       covers: true,
     });
-    const user = userEvent.setup();
     render(<Library />);
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Greatest Hits")).toHaveLength(2);
@@ -334,9 +325,7 @@ describe("Library — dragging a tile out", () => {
 
   it("carries an album card as an album", async () => {
     useBackend({ rows: album(), albums: currents(), covers: true });
-    const user = userEvent.setup();
     render(<Library />);
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
     await screen.findByRole("button", { name: /open the album currents/i });
 
     const payload = drag.readDrag(dragFrom(tile(/open the album currents/i)));
@@ -353,9 +342,7 @@ describe("Library — dragging a tile out", () => {
       artists: [makeEntity({ name: "Tame Impala", subtitle: "1 album" })],
       covers: true,
     });
-    const user = userEvent.setup();
     render(<Library />);
-    await user.click(await screen.findByRole("tab", { name: /^artists$/i }));
     await screen.findByRole("button", { name: /open the artist tame impala/i });
 
     const payload = drag.readDrag(dragFrom(tile(/open the artist tame impala/i)));
@@ -371,9 +358,7 @@ describe("Library — dragging a tile out", () => {
    */
   it("is picked up from the cover button inside the card", async () => {
     useBackend({ rows: album(), albums: currents(), covers: true });
-    const user = userEvent.setup();
     render(<Library />);
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
 
     const open = await screen.findByRole("button", {
       name: /open the album currents/i,
@@ -387,28 +372,28 @@ describe("Library — incomplete albums", () => {
    * A single track of a nineteen-track album is not an album you own.
    *
    * Most of this library arrived as one-off downloads filed under the album
-   * they came from, so the Albums tab was mostly tiles that looked like whole
-   * records and were not. The backend decides which is which and puts them in
-   * order; what this grid owns is drawing the line between the two piles and
-   * saying how far off each one is.
+   * they came from. The album *grid* used to sort those into their own
+   * "Incomplete" pile; there is no grid any more — the library opens on
+   * shelves ranked by what has been played — so the surviving place a
+   * shortfall is stated on a tile is an artist's own album shelf, and that is
+   * what this holds onto. The other half, an opened album drawing the tracks
+   * it does not have, is the describe below.
    */
-  it("puts albums with missing tracks under their own heading", async () => {
-    useBackend({
-      rows: album(),
-      albums: [
-        makeEntity({
-          name: "Currents",
-          subtitle: "Tame Impala",
-          tracks: 13,
-          totalTracks: 13,
-          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
+  it("says how much of a record is here, on an artist's own shelf", async () => {
+    const backend = useBackend({
+      rows: [
+        makeRow({
+          href: "/dav/Music/machine-gun.m4a",
+          title: "Machine Gun",
+          artist: "Noisia",
+          album: "Split The Atom",
         }),
+      ],
+      artists: [
         makeEntity({
-          name: "Split The Atom",
-          subtitle: "Noisia",
+          name: "Noisia",
+          subtitle: "1 album",
           tracks: 1,
-          totalTracks: 19,
-          incomplete: true,
           lead: "/dav/Music/machine-gun.m4a",
         }),
       ],
@@ -416,51 +401,27 @@ describe("Library — incomplete albums", () => {
     });
     const user = userEvent.setup();
     render(<Library />);
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
 
-    // Both are on the tab — the incomplete one is separated, not hidden.
-    await screen.findByText("Currents");
-    expect(screen.getByText("Split The Atom")).toBeInTheDocument();
+    // The artist's own shelf is a `library_entities` read narrowed to them,
+    // and this is the answer it gets: one album, most of which is missing.
+    backend.answers("library_entities", [
+      makeEntity({
+        name: "Split The Atom",
+        subtitle: "Noisia",
+        tracks: 1,
+        totalTracks: 19,
+        incomplete: true,
+        lead: "/dav/Music/machine-gun.m4a",
+      }),
+    ]);
 
-    const heading = screen.getByRole("heading", { name: /incomplete/i });
-    expect(heading).toBeInTheDocument();
-    // How many are under it, which is what turns the heading from a note into
-    // a description of the library.
-    expect(heading).toHaveTextContent("1");
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
 
-    // And the shortfall is stated on the card, because "Incomplete" alone
-    // cannot tell 1-of-19 from 12-of-13.
-    expect(screen.getByText(/1 of 19/)).toBeInTheDocument();
-  });
-
-  /*
-   * An unidentified library is not an incomplete one.
-   *
-   * `totalTracks: 0` is "nobody has looked this up", the state every album is
-   * in before the lookup pass runs. Drawing a heading over that would accuse
-   * the whole library of missing tracks on the strength of no evidence.
-   */
-  it("draws no heading when nothing is known to be missing", async () => {
-    useBackend({
-      rows: album(),
-      albums: [
-        makeEntity({
-          name: "Currents",
-          subtitle: "Tame Impala",
-          tracks: 2,
-          lead: "/dav/Music/Tame%20Impala/Currents/01.mp3",
-        }),
-      ],
-      covers: true,
-    });
-    const user = userEvent.setup();
-    render(<Library />);
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
-
-    await screen.findByText("Currents");
-    expect(
-      screen.queryByRole("heading", { name: /incomplete/i }),
-    ).not.toBeInTheDocument();
+    // "Incomplete" alone cannot tell 1-of-19 from 12-of-13, so the tile says
+    // which it is.
+    expect(await screen.findByText(/1 of 19/)).toBeInTheDocument();
   });
 });
 
@@ -505,7 +466,6 @@ describe("Library — an opened album shows what it is missing", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
     await user.click(
       await screen.findByRole("button", { name: /open the album split the atom/i }),
     );
@@ -553,7 +513,6 @@ describe("Library — an opened album shows what it is missing", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
     await user.click(
       await screen.findByRole("button", { name: /open the album currents/i }),
     );

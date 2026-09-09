@@ -131,6 +131,11 @@ pub fn next_track(state: State<'_, Shared>) -> Result<Option<String>> {
     let mut app = shared.lock().map_err(|e| Error(e.to_string()))?;
 
     record_skip_if_reacting_to_a_blend(&mut app);
+    // A verdict on the *track*, where the line above is a verdict on the blend
+    // that brought it in. Both come off the same press and neither replaces
+    // the other: the DJ learns not to make that transition again, and the
+    // library learns this is not a song its owner sits through.
+    record_track_skip(&mut app);
 
     let next = app.queue.next(None).map(str::to_string);
     if let Some(href) = next.clone() {
