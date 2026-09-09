@@ -71,6 +71,23 @@
   color: var(--ink-3);
 }
 
+/* The artist and album names, and a track's genre value below — each a way
+   into the library rather than plain text, since there is somewhere to go. */
+.liner__entity-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.liner__entity-link:hover {
+  text-decoration: underline;
+  color: var(--accent);
+}
+
 .liner__where {
   margin: 4px 0 0;
   display: flex;
@@ -395,6 +412,13 @@
 .liner__fix-input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Genre's value, in the input's place — but it is not one, since it is not
+   editable here. */
+.liner__fix-value {
+  padding: 4px 6px;
+  min-width: 0;
 }
 
 /* Sits under the field it undoes, in the value column. */

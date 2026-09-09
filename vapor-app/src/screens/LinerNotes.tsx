@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import * as core from "../lib/core";
+import type { Opened } from "./Library";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Loading } from "../components/States";
 
@@ -123,9 +124,13 @@ function Correction({
 export function LinerNotes({
   href,
   onBack,
+  onOpenEntity,
 }: {
   href: string;
   onBack: () => void;
+  /** Opens the artist or album view in the library — where genre, among
+   *  other things drawn from the artist's own records, gets corrected. */
+  onOpenEntity: (opened: Opened) => void;
 }) {
   const [track, setTrack] = useState<core.TrackDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -270,11 +275,46 @@ export function LinerNotes({
         </div>
         <div className="liner__names">
           <h1 className="liner__title">{track.title}</h1>
-          <p className="liner__artist">{track.artist || "—"}</p>
+          <p className="liner__artist">
+            {track.artist ? (
+              <button
+                type="button"
+                className="liner__entity-link"
+                onClick={() =>
+                  onOpenEntity({
+                    kind: "artist",
+                    name: track.artist,
+                    lead: href,
+                    artist: "",
+                  })
+                }
+              >
+                {track.artist}
+              </button>
+            ) : (
+              "—"
+            )}
+          </p>
           <p className="liner__album">
-            {[track.album || "—", track.year > 0 ? String(track.year) : null]
-              .filter(Boolean)
-              .join(" · ")}
+            {track.album ? (
+              <button
+                type="button"
+                className="liner__entity-link"
+                onClick={() =>
+                  onOpenEntity({
+                    kind: "album",
+                    name: track.album,
+                    lead: href,
+                    artist: track.artist,
+                  })
+                }
+              >
+                {track.album}
+              </button>
+            ) : (
+              "—"
+            )}
+            {track.year > 0 && ` · ${track.year}`}
           </p>
           {/* What the app thinks this is, and the chance to say otherwise.
               Under the names rather than in a settings screen somewhere: the
@@ -297,14 +337,37 @@ export function LinerNotes({
               manual={track.albumIsManual}
               onSaved={() => setSaved((n) => n + 1)}
             />
-            <Correction
-              label="Genre"
-              field="genre"
-              href={href}
-              value={track.genre}
-              manual={track.genreIsManual}
-              onSaved={() => setSaved((n) => n + 1)}
-            />
+            {/* Not a Correction: genre is not editable per track here.
+                Clicking the value opens the artist view instead, where it
+                gets corrected. */}
+            <div className="liner__fix">
+              <span className="liner__fix-label label">
+                Genre
+                {track.genreIsManual && (
+                  <span className="liner__fix-badge" title="You set this by hand">
+                    yours
+                  </span>
+                )}
+              </span>
+              {track.artist ? (
+                <button
+                  type="button"
+                  className="liner__fix-value liner__entity-link"
+                  onClick={() =>
+                    onOpenEntity({
+                      kind: "artist",
+                      name: track.artist,
+                      lead: href,
+                      artist: "",
+                    })
+                  }
+                >
+                  {track.genre || "—"}
+                </button>
+              ) : (
+                <span className="liner__fix-value">{track.genre || "—"}</span>
+              )}
+            </div>
           </div>
 
           <p className="liner__where">
