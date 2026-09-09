@@ -623,7 +623,13 @@ export function App() {
                   onOpenGroup={openGroup}
                 />
               )}
-              {screen === "playing" && <NowPlaying />}
+              {screen === "playing" && (
+                <NowPlaying
+                  djMode={djMode}
+                  onOpen={openLiner}
+                  onOpenEntity={openEntity}
+                />
+              )}
               {screen === "vibe" && <Vibe djMode={djMode} onOpen={openLiner} />}
               {screen === "data" && <YourData />}
               {screen === "settings" && <Settings />}

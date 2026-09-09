@@ -122,6 +122,15 @@
   white-space: nowrap;
 }
 
+.np__album {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .np__source {
   margin: 2px 0 0;
   display: flex;

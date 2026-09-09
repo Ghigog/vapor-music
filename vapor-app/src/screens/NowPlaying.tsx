@@ -26,12 +26,27 @@ import { listen } from "@tauri-apps/api/event";
 import { VaporMark, type MarkState } from "../components/VaporMark";
 import * as core from "../lib/core";
 import { useThumb } from "../lib/artwork";
-import { artistWithGenre } from "../lib/genre";
+import { artistWithGenre, UNKNOWN_GENRE } from "../lib/genre";
 import { LyricsPanel } from "../components/LyricsPanel";
+import { ErrorNotice, messageOf } from "../components/ErrorNotice";
+import { Stat, clock } from "./LinerNotes";
+import type { Opened } from "./Library";
 
 const POLL_MS = 250;
 
-export function NowPlaying() {
+export function NowPlaying({
+  djMode = false,
+  onOpen,
+  onOpenEntity,
+}: {
+  /** Whether the DJ is conducting — the gate on the "where next" picker
+   *  below the transport, same as the one on the Vibe screen. */
+  djMode?: boolean;
+  /** Opens a track's liner notes — the title's press. */
+  onOpen?: ((href: string) => void) | undefined;
+  /** Opens the artist or album view in the library. */
+  onOpenEntity?: ((opened: Opened) => void) | undefined;
+} = {}) {
   const [state, setState] = useState<core.PlaybackState | null>(null);
   const busy = useRef(false);
 
@@ -62,11 +77,88 @@ export function NowPlaying() {
   // empty state below returns before the tile is rendered.
   const nextArt = useThumb(state?.nextHref ?? "");
 
+  /**
+   * The album, and the same analysis figures Liner Notes shows.
+   *
+   * `PlaybackState` carries no album — it is polled four times a second and a
+   * track's fuller record is not — so this is one read per track, keyed on
+   * its href rather than on the poll.
+   */
+  const [details, setDetails] = useState<core.TrackDetails | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setDetails(null);
+    if (!state?.href) return;
+    core
+      .trackDetails(state.href)
+      .then((d) => {
+        if (!cancelled) setDetails(d);
+      })
+      .catch(() => {
+        if (!cancelled) setDetails(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state?.href]);
+
+  /**
+   * The three ways out of the playing track, and what picking one costs.
+   *
+   * Only polled while the DJ is on: with it off there is no plan to steer,
+   * `mixCandidates` answers empty, and asking four times a second for nothing
+   * is a request this screen does not need to make.
+   */
+  const [candidates, setCandidates] = useState<core.MixCandidate[]>([]);
+  const [blend, setBlend] = useState<core.BlendPreview | null>(null);
+  const [curve, setCurve] = useState<core.Curve>("build");
+  const [mixError, setMixError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!djMode) return;
+    // The curve is the backend's; read once rather than assumed, same as Vibe.
+    core
+      .settings()
+      .then((s) => setCurve(core.asCurve(s.curve)))
+      .catch(() => {});
+  }, [djMode]);
+
+  const refreshMix = useCallback(async () => {
+    const [b, c] = await Promise.allSettled([core.blendPreview(), core.mixCandidates()]);
+    if (b.status === "fulfilled") setBlend(b.value);
+    if (c.status === "fulfilled") setCandidates(c.value);
+  }, []);
+
+  useEffect(() => {
+    if (!djMode) {
+      setCandidates([]);
+      setBlend(null);
+      return;
+    }
+    void refreshMix();
+    const timer = setInterval(() => void refreshMix(), 1000);
+    const unlisten = listen("playback-changed", () => void refreshMix());
+    return () => {
+      clearInterval(timer);
+      void unlisten.then((f) => f());
+    };
+  }, [djMode, refreshMix]);
+
+  async function pickExit(candidate: core.MixCandidate) {
+    setMixError(null);
+    try {
+      await core.chooseNext(candidate.href, curve);
+      await refreshMix();
+    } catch (e: unknown) {
+      setMixError(messageOf(e));
+    }
+  }
+
   if (!state) return null;
 
-  const { title, artist, duration, position, waveform, mixing, level } = state;
+  const { title, artist, href, duration, position, waveform, mixing, level } = state;
   const playing = state.status === "playing";
-  const nothing = !state.href && !state.loading;
+  const nothing = !href && !state.loading;
 
   if (nothing) {
     return (
@@ -101,12 +193,66 @@ export function NowPlaying() {
       <div className="np__meta">
         <div className="np__names">
           <h1 className="np__title" title={title}>
-            {state.loading ? "Loading…" : title || "—"}
+            {/* A press, not just a heading — the same track's liner notes
+                are one tap away rather than a trip through Songs to find the
+                row again. Not while still loading: the title is a placeholder
+                word then, not this track's. */}
+            {href && !state.loading ? (
+              <button
+                type="button"
+                className="liner__entity-link"
+                onClick={() => onOpen?.(href)}
+              >
+                {title || "—"}
+              </button>
+            ) : (
+              (state.loading ? "Loading…" : title || "—")
+            )}
           </h1>
-          {/* Genre beside the artist, not among the analysis figures:
-              it is resolved per artist far more often than per track,
-              so that is where a wrong one is recognisable. */}
-          <p className="np__artist">{artistWithGenre(artist, state.genre)}</p>
+          {/* Genre beside the artist, not among the analysis figures: it is
+              resolved per artist far more often than per track, so that is
+              where a wrong one is recognisable. The artist is a press into
+              their library page; the genre is not — it is corrected there,
+              not typed here. */}
+          <p className="np__artist">
+            {artist ? (
+              <button
+                type="button"
+                className="liner__entity-link"
+                onClick={() =>
+                  onOpenEntity?.({
+                    kind: "artist",
+                    name: artist,
+                    lead: href ?? "",
+                    artist: "",
+                  })
+                }
+              >
+                {artist}
+              </button>
+            ) : (
+              "—"
+            )}
+            {` - ${state.genre || UNKNOWN_GENRE}`}
+          </p>
+          {details && details.album && (
+            <p className="np__album">
+              <button
+                type="button"
+                className="liner__entity-link"
+                onClick={() =>
+                  onOpenEntity?.({
+                    kind: "album",
+                    name: details.album,
+                    lead: href ?? "",
+                    artist,
+                  })
+                }
+              >
+                {details.album}
+              </button>
+            </p>
+          )}
           <p className="np__source">
             <span className="np__dot" aria-hidden="true" />
             <span className="label">on this device</span>
@@ -193,6 +339,84 @@ export function NowPlaying() {
         </button>
       </div>
 
+      {/* The same figures Liner Notes shows for this track, worked out on this
+          device from the audio itself. Repeated here rather than left a tap
+          away: this is the screen open while the track is actually playing,
+          which is when the numbers mean the most. */}
+      {details?.analysed && (
+        <section className="liner__card glass">
+          <h2 className="label">what the analysis heard</h2>
+          <dl className="liner__stats">
+            <Stat k="tempo" v={`${Math.round(details.bpm)} BPM`} />
+            <Stat k="key" v={details.key || "—"} />
+            <Stat k="loudness" v={`${details.lufs.toFixed(1)} LUFS`} />
+            <Stat k="energy" v={`${Math.round(details.energy * 100)}%`} />
+            <Stat k="starts" v={clock(details.cueIn)} />
+            <Stat k="ends" v={clock(details.cueOut)} />
+          </dl>
+        </section>
+      )}
+
+      {/* Where the set is going, right where the decision matters — the same
+          three exits Vibe offers, so choosing does not mean leaving this
+          screen. Gated on the DJ actually conducting: with it off there is no
+          plan to steer and nothing here to press. */}
+      {djMode && (
+        <section className="liner__card glass">
+          <h2 className="label">where next</h2>
+          {candidates.length === 0 ? (
+            <p className="vibe__note">Nothing analysed to choose from yet.</p>
+          ) : (
+            <ul className="vibe__exits">
+              {candidates.map((c) => (
+                <li key={c.href}>
+                  <button
+                    className={
+                      "vibe__exit vibe__exit--" +
+                      c.exit +
+                      (c.selected ? " vibe__exit--on" : "")
+                    }
+                    aria-pressed={c.selected}
+                    onClick={() => void pickExit(c)}
+                  >
+                    <span className="vibe__exit-top">
+                      <span className="vibe__exit-art" aria-hidden="true">
+                        {c.cover && <img src={c.cover} alt="" />}
+                      </span>
+                      <span className="vibe__exit-word">{c.label}</span>
+                    </span>
+                    <span className="vibe__exit-title">{c.title}</span>
+                    <span className="vibe__exit-artist">
+                      {artistWithGenre(c.artist, c.genre)}
+                    </span>
+                    <span className="vibe__exit-facts numeric">
+                      <span>{c.bpm > 0 ? Math.round(c.bpm) : "—"}</span>
+                      <span className="vibe__dot">·</span>
+                      <span>{c.key || "—"}</span>
+                      <span className="vibe__dot">·</span>
+                      <span>{c.transition}</span>
+                    </span>
+                    {c.selected && blend && (
+                      <span
+                        className={
+                          "vibe__exit-blend numeric" +
+                          (blend.matchable ? "" : " vibe__exit-warn")
+                        }
+                      >
+                        {blend.matchable
+                          ? `${blend.shiftPercent >= 0 ? "+" : ""}${blend.shiftPercent.toFixed(1)}% to beat match`
+                          : "no beat match"}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <ErrorNotice error={mixError} onDismiss={() => setMixError(null)} />
+        </section>
+      )}
+
       {/* Up next. The design puts the mark in this card precisely because this
           is where blending is announced. */}
       <div className="np__next glass">
@@ -239,7 +463,7 @@ export function NowPlaying() {
       {/* Below the tile, as asked. The playhead is passed in rather than the
           panel keeping its own clock: seeks, pauses and crossfades all move
           the position, and only the engine knows where it really is. */}
-      <LyricsPanel href={state.href ?? ""} position={position} />
+      <LyricsPanel href={href ?? ""} position={position} />
     </div>
   );
 }

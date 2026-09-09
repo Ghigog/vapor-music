@@ -117,6 +117,20 @@ export type Opened = {
   lead: string;
   /** The album's artist, for an artwork search. Empty for an artist tile. */
   artist: string;
+  /**
+   * What was open when this was opened, for an album reached from an
+   * artist's own shelf.
+   *
+   * `opened` holds one record, not a stack, and closing normally clears it
+   * to whatever tab is underneath — correct for a tile opened from a tab or
+   * a Home shelf, since that is where the crumb already says pressing it
+   * lands (see the back button below). An album opened from *inside* an
+   * artist is a level deeper than that: closing it should surface the
+   * artist again, not skip past them to the tab. `via` is that one
+   * remembered level — not a general stack, because nothing today opens a
+   * record from two levels deep.
+   */
+  via?: Opened;
 };
 
 /**
@@ -223,6 +237,15 @@ export function Library({
     if (onOpenedChange) onOpenedChange(next);
     else setOwnOpened(next);
   };
+  /**
+   * The picture behind an opened album or artist, for the blurred backdrop.
+   *
+   * Held here rather than read a second time: `AlbumArtwork` and
+   * `ArtistArtwork` already fetch the one picture there is to show, and a
+   * second `albumCover`/`artistPortrait` call just to paint the wash behind
+   * it would be the same request twice for two halves of one picture.
+   */
+  const [heroArt, setHeroArt] = useState<string | null>(null);
   const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
   const [ownTab, setOwnTab] = useState<Tab>("home");
   const tab = onTabChange ? (controlledTab ?? "home") : ownTab;
@@ -380,6 +403,28 @@ export function Library({
   }
 
   /**
+   * Play one album from an artist's shelf.
+   *
+   * Not `playEntity`: that reads the ambient tab's `groupBy` to decide
+   * whether an entity is an album or an artist, and a tile on an artist's own
+   * shelf is an album regardless of which tab the artist was opened from.
+   */
+  async function playAlbumEntity(entity: LibraryEntity) {
+    try {
+      const sections = await core.libraryView({
+        groupBy: "none",
+        sortKey: "title",
+        ascending: true,
+        album: entity.name,
+      });
+      const hrefs = sections[0]?.rows.map((r) => r.href) ?? [];
+      await core.playTracks(hrefs, entity.lead, entity.name);
+    } catch (e: unknown) {
+      setPlayError(messageOf(e));
+    }
+  }
+
+  /**
    * How big the library is, for the line under the title.
    *
    * Two sources because the two views read different things. A grouping tab
@@ -449,28 +494,57 @@ export function Library({
       {/* Inside an album or an artist: the same table, narrowed to it. */}
       {opened ? (
         <div className="library__body">
-          <div className="library__opened-head">
+          <div
+            className={
+              "library__opened-head" +
+              (heroArt ? " library__opened-head--art" : "")
+            }
+          >
+            {/* The picture behind the name, blurred and enlarged past its own
+                edges so the blur has nothing sharp to catch on. Purely
+                decorative — the same picture is legible, unblurred, in the
+                tile beside it — so it is hidden from assistive tech. */}
+            {heroArt && (
+              <div className="library__opened-backdrop" aria-hidden="true">
+                <img className="library__opened-backdrop-img" src={heroArt} alt="" />
+              </div>
+            )}
             <div className="library__crumb">
-              <button className="library__back" onClick={() => setOpened(null)}>
+              <button
+                className="library__back"
+                onClick={() => setOpened(opened.via ?? null)}
+              >
                 {/* Named for where pressing it lands, not for what is open.
                     Closing this returns to the tab underneath, and an album
                     opened from a home shelf goes back to the shelf — a crumb
                     reading "Albums" there would be pointing at a tab the
-                    press does not visit. */}
+                    press does not visit. An album opened from an artist's own
+                    shelf (`via`) is the same rule one level deeper: pressing
+                    it surfaces the artist again rather than skipping past
+                    them to a tab. */}
                 ‹{" "}
-                {tab === "home"
-                  ? "Home"
-                  : opened.kind === "album"
-                    ? "Albums"
-                    : opened.kind === "artist"
-                      ? "Artists"
-                      : "Genres"}
+                {opened.via
+                  ? opened.via.name
+                  : tab === "home"
+                    ? "Home"
+                    : opened.kind === "album"
+                      ? "Albums"
+                      : opened.kind === "artist"
+                        ? "Artists"
+                        : "Genres"}
               </button>
               <h2 className="library__opened">{opened.name}</h2>
             </div>
-            {opened.kind === "album" && (
-              <AlbumArtwork album={opened.name} artist={opened.artist} lead={opened.lead} />
-            )}
+            {opened.kind === "album" ? (
+              <AlbumArtwork
+                album={opened.name}
+                artist={opened.artist}
+                lead={opened.lead}
+                onArt={setHeroArt}
+              />
+            ) : opened.kind === "artist" ? (
+              <ArtistArtwork name={opened.name} onArt={setHeroArt} />
+            ) : null}
           </div>
           {opened.kind === "album" ? (
             /* An album knows how long it is supposed to be, so it can show the
@@ -483,17 +557,26 @@ export function Library({
               onError={setPlayError}
             />
           ) : (
-            <Songs
-              onOpen={onOpen}
-              query=""
-              filter={
-                opened.kind === "artist"
-                  ? { artist: opened.name }
-                  : { genre: opened.name }
-              }
-              // Playing from inside an opened record conducts within it.
-              scope={opened.name}
-            />
+            <>
+              {opened.kind === "artist" && (
+                <ArtistAlbums
+                  name={opened.name}
+                  onOpen={(album) => setOpened({ ...album, via: opened })}
+                  onPlay={(entity) => void playAlbumEntity(entity)}
+                />
+              )}
+              <Songs
+                onOpen={onOpen}
+                query=""
+                filter={
+                  opened.kind === "artist"
+                    ? { artist: opened.name }
+                    : { genre: opened.name }
+                }
+                // Playing from inside an opened record conducts within it.
+                scope={opened.name}
+              />
+            </>
           )}
         </div>
       ) : tab === "home" ? (
@@ -689,15 +772,26 @@ function AlbumArtwork({
   album,
   artist,
   lead,
+  onArt,
 }: {
   album: string;
   artist: string;
   lead: string;
+  /** The picture, whenever it changes — for the blurred backdrop behind the
+   *  whole header. Not a second fetch: this is the same one drawn below. */
+  onArt?: ((src: string | null) => void) | undefined;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [chosen, setChosen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onArt?.(src);
+    // Only `src` itself is the backdrop's business — `onArt` is a setter and
+    // re-running this because the caller re-rendered would fire it needlessly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
 
   useEffect(() => {
     let cancelled = false;
@@ -901,22 +995,146 @@ function AlbumTracks({
   );
 }
 
+/**
+ * An opened artist's portrait.
+ *
+ * Read-only, unlike `AlbumArtwork`: there is no per-artist equivalent of
+ * `find_album_art` / `clear_album_art` to hand-correct a wrong one, so this is
+ * only ever what `artist_portrait` already looks up — the same picture `Cover`
+ * falls back to on an artist tile (TD-53), shown here at a size worth looking
+ * at rather than a 78px circle.
+ */
+function ArtistArtwork({
+  name,
+  onArt,
+}: {
+  name: string;
+  /** The picture, whenever it changes — for the blurred backdrop behind the
+   *  whole header. Not a second fetch: this is the same one drawn below. */
+  onArt?: ((src: string | null) => void) | undefined;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    onArt?.(src);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+    core
+      .artistPortrait(name)
+      .then((portrait) => {
+        if (!cancelled) setSrc(portrait);
+      })
+      .catch(() => {
+        if (!cancelled) setSrc(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  return (
+    <div className="artistart">
+      <div className="artistart__art">
+        {src ? (
+          <img className="artistart__img" src={src} alt={`Portrait of ${name}`} />
+        ) : (
+          <div className="card__art-sheen" aria-hidden="true" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An artist's albums, as a shelf above their tracks.
+ *
+ * The same shelf Home draws — a row that scrolls sideways rather than a grid
+ * that wraps — narrowed to one artist instead of ranked across the library.
+ * `library_entities` already does the narrowing (`resolved_rows` filters on
+ * `view.artist` before anything is grouped), so this is one more read of the
+ * same endpoint the Albums tab uses, not a new one.
+ */
+function ArtistAlbums({
+  name,
+  onOpen,
+  onPlay,
+}: {
+  name: string;
+  onOpen: (opened: Opened) => void;
+  onPlay: (entity: LibraryEntity) => void;
+}) {
+  const [albums, setAlbums] = useState<LibraryEntity[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAlbums(null);
+    core
+      .libraryEntities({ groupBy: "album", artist: name, sortKey: "title", ascending: true })
+      .then((list) => {
+        if (!cancelled) setAlbums(list);
+      })
+      .catch(() => {
+        if (!cancelled) setAlbums([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  // No loading state and no empty state: the track list below is about to
+  // paint regardless, and a shelf that flashes "reading" or "no albums"
+  // above a table that is already answering the same question is noise.
+  if (!albums || albums.length === 0) return null;
+
+  return (
+    <section className="shelf">
+      <h2 className="shelf__head label">Albums</h2>
+      <div className="shelf__row shelf__row--of-4">
+        {albums.map((a) => (
+          <EntityCard
+            key={`${a.name} ${a.subtitle}`}
+            entity={a}
+            kind="album"
+            className="shelf__tile"
+            onOpen={() =>
+              onOpen({ kind: "album", name: a.name, lead: a.lead, artist: name })
+            }
+            onPlay={() => onPlay(a)}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function EntityCard({
   entity,
   kind,
   onOpen,
   onPlay,
+  className,
 }: {
   entity: LibraryEntity;
   kind: "album" | "artist" | "genre";
   onOpen: () => void;
   onPlay: () => void;
+  /** Extra classes onto the root, for the shelf this card also draws on
+   *  (`shelf__tile`) — the grid needs nothing extra, so this is optional. */
+  className?: string | undefined;
 }) {
   const noun = kind;
   const pickUp = useEntityDrag(kind, entity.name);
   return (
     <div
-      className={"card card--entity" + (kind === "artist" ? " card--round" : "")}
+      className={
+        "card card--entity" +
+        (kind === "artist" ? " card--round" : "") +
+        (className ? ` ${className}` : "")
+      }
       {...pickUp}
     >
       <button
