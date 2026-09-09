@@ -139,8 +139,24 @@ export type {
   VibePath,
 };
 
+/**
+ * `"score"` is the odd one out: it is not a column on a row.
+ *
+ * Every other key sorts on something the index holds. This one sorts on the
+ * play and skip counts, which live beside the index rather than in it — plays
+ * for a track, skips against it — so the backend answers it from the two maps
+ * instead. See `sort_by_score` in `lib.rs`.
+ */
 export type SortKey =
-  "title" | "artist" | "album" | "genre" | "year" | "bpm" | "key" | "order";
+  | "title"
+  | "artist"
+  | "album"
+  | "genre"
+  | "year"
+  | "bpm"
+  | "key"
+  | "order"
+  | "score";
 
 export type GroupBy = "none" | "artist" | "album" | "genre";
 

@@ -1,22 +1,22 @@
 /**
- * The library's front door: four shelves, most played first.
+ * The top of the library: two shelves, most played first.
  *
  * The album grid used to be what Library opened on, which asked the wrong
  * question. Almost nobody arrives at their own music looking for a particular
- * record — they arrive wanting something *on*, and the thing they reach for is
- * a playlist they already have. Tidal and Spotify both answer this the same
- * way and for the same reason: shelves of what you actually listen to, in the
- * order you actually listen to it, with the browse-by-album view kept for the
- * rare visit where you do know exactly what you want.
+ * record — they arrive wanting something *on*. Tidal and Spotify both answer
+ * this the same way and for the same reason: shelves of what you actually
+ * listen to, in the order you actually listen to it.
  *
- * Four shelves, in the order someone reaches for them: playlists, smart
- * groups, artists, albums. Smart groups are second because they are the thing
- * this app has and the others do not — a saved set of artists and albums that
- * fills itself — and burying a feature nobody else offers under two rows of
- * things everybody offers is how it stays undiscovered.
+ * Two shelves now, artists then albums. Playlists and smart groups were the
+ * first two and are not here any more: both are already in the sidebar, on
+ * every screen, where they are also the drop target for a dragged track — so
+ * the shelves were a second, worse copy of a list that never left the window.
+ * What replaced them, below this component, is the library itself: the genres
+ * and then every track, ranked by what has been played and what has been
+ * skipped. The front door now shows the music rather than the folders.
  *
- * The ranking is `home_shelves_for` in the backend, on four keys, and is
- * tested there. This screen draws what it is handed.
+ * The ranking is `home_shelves_for` in the backend, and is tested there. This
+ * screen draws what it is handed.
  */
 
 import { useEffect, useState } from "react";
@@ -30,47 +30,28 @@ import type { Opened } from "./Library";
 /**
  * The last shelves read, kept across unmounts.
  *
- * Home is unmounted whenever a drill-down covers it — a playlist, an album,
+ * This is unmounted whenever a drill-down covers it — a playlist, an album,
  * liner notes — so coming back used to mean a spinner for a page that had not
  * changed. What is on screen is painted from here first and corrected when the
- * answer arrives. One entry, not a map: there is only one home.
+ * answer arrives. One entry, not a map: there is only one library.
  */
 let remembered: HomeShelves | null = null;
 
 /** Throw it away. Called by whatever changes what a read would return. */
-export function forgetHomeShelves() {
+export function forgetShelves() {
   remembered = null;
 }
 
 /**
  * How many tiles a shelf shows without scrolling.
  *
- * Playlists and groups get three because their titles are sentences someone
- * wrote — "Late night, driving" needs the width. Artists and albums get four:
- * the label is a name, and a wider shelf shows more of the library at a glance.
- * Both drop by one on a phone, which is `home.css`'s half of this.
+ * Four: the label is a name rather than a sentence, and a wider shelf shows
+ * more of the library at a glance. It drops by one on a phone, which is
+ * `shelves.css`'s half of this.
  */
-const PER_ROW = { collection: 3, entity: 4 } as const;
+const PER_ROW = 4;
 
-export function Home({
-  onOpenPlaylist,
-  onOpenGroup,
-  onOpenEntity,
-  onTracks,
-}: {
-  onOpenPlaylist: (id: string) => void;
-  onOpenGroup: (id: string) => void;
-  onOpenEntity: (opened: Opened) => void;
-  /**
-   * How many tracks there are, for the line above this screen.
-   *
-   * Reported upwards because the header belongs to Library and the number
-   * arrives here: home never reads rows, so it has nothing else to count, and
-   * making Library ask for the shelves as well to write one number on itself
-   * would be a second round trip for a page that is already painted.
-   */
-  onTracks: (tracks: number) => void;
-}) {
+export function Shelves({ onOpenEntity }: { onOpenEntity: (opened: Opened) => void }) {
   const [shelves, setShelves] = useState<HomeShelves | null>(remembered);
   const [error, setError] = useState<string | null>(null);
   /** A failure to start playback belongs on screen, not in the console. */
@@ -88,7 +69,7 @@ export function Home({
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     const handler = () => {
-      forgetHomeShelves();
+      forgetShelves();
       setNonce((n) => n + 1);
     };
     window.addEventListener("vapor:library-changed", handler);
@@ -97,10 +78,6 @@ export function Home({
 
   useEffect(() => {
     let cancelled = false;
-    // What was on screen last time, said again before the request goes out —
-    // otherwise the header reads "0 tracks" over shelves that are already
-    // drawn, for as long as the round trip takes.
-    if (remembered) onTracks(remembered.tracks);
     core
       .homeShelves()
       .then((next) => {
@@ -108,7 +85,6 @@ export function Home({
         if (!cancelled) {
           setShelves(next);
           setError(null);
-          onTracks(next.tracks);
         }
       })
       .catch((e: unknown) => {
@@ -119,32 +95,7 @@ export function Home({
     return () => {
       cancelled = true;
     };
-  }, [nonce, onTracks]);
-
-  /**
-   * Play a whole collection, and credit it.
-   *
-   * The tracks are fetched here rather than carried on the tile: a shelf of
-   * twelve playlists would otherwise ship every href in all twelve to draw
-   * twelve covers.
-   */
-  async function playCollection(kind: core.Collection, tile: Shelf) {
-    try {
-      const hrefs =
-        kind === "playlist"
-          ? (await core.playlistRows(tile.id)).map((r) => r.href)
-          : (await core.groupTracks(tile.id)).map((r) => r.href);
-      if (hrefs.length === 0) return;
-      // Scoped to the collection, so the DJ conducts inside it, and credited
-      // to it, so playing from here is what puts it at the front next time.
-      await core.playTracks(hrefs, hrefs[0], tile.title, {
-        kind,
-        id: tile.id,
-      });
-    } catch (e: unknown) {
-      setPlayError(messageOf(e));
-    }
-  }
+  }, [nonce]);
 
   /** Play an artist or an album, from its first track, conducted within it. */
   async function playEntity(kind: "artist" | "album", tile: Shelf) {
@@ -184,14 +135,10 @@ export function Home({
   /*
    * A library with nothing in it at all.
    *
-   * Four empty shelves under four headings is a page that looks broken. One
+   * Two empty shelves under two headings is a page that looks broken. One
    * sentence saying why is not.
    */
-  const anything =
-    shelves.playlists.length > 0 ||
-    shelves.groups.length > 0 ||
-    shelves.artists.length > 0 ||
-    shelves.albums.length > 0;
+  const anything = shelves.artists.length > 0 || shelves.albums.length > 0;
   if (!anything) {
     return (
       <div className="library__body">
@@ -211,29 +158,9 @@ export function Home({
       <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
 
       <ShelfRow
-        title="Playlists"
-        empty="Playlists you make will show up here, most played first."
-        tiles={shelves.playlists}
-        per={PER_ROW.collection}
-        onOpen={(tile) => onOpenPlaylist(tile.id)}
-        onPlay={(tile) => void playCollection("playlist", tile)}
-        opens="playlist"
-      />
-
-      <ShelfRow
-        title="Smart groups"
-        empty="A smart group is a set of artists and albums that fills itself. Make one from the Groups tab."
-        tiles={shelves.groups}
-        per={PER_ROW.collection}
-        onOpen={(tile) => onOpenGroup(tile.id)}
-        onPlay={(tile) => void playCollection("group", tile)}
-        opens="smart group"
-      />
-
-      <ShelfRow
         title="Artists"
         tiles={shelves.artists}
-        per={PER_ROW.entity}
+        per={PER_ROW}
         round
         onOpen={(tile) =>
           onOpenEntity({
@@ -251,7 +178,7 @@ export function Home({
       <ShelfRow
         title="Albums"
         tiles={shelves.albums}
-        per={PER_ROW.entity}
+        per={PER_ROW}
         onOpen={(tile) =>
           onOpenEntity({
             kind: "album",
@@ -283,7 +210,6 @@ function ShelfRow({
   tiles,
   per,
   round,
-  empty,
   opens,
   pickUp,
   onOpen,
@@ -292,54 +218,41 @@ function ShelfRow({
   title: string;
   tiles: Shelf[];
   /** Tiles visible before it scrolls. See `PER_ROW`. */
-  per: 3 | 4;
+  per: 4;
   /** Artists are round, as they are everywhere else in the app. */
   round?: boolean;
-  /**
-   * What to say when there are none, for the two shelves that can be empty in
-   * a library that is otherwise full. An artist shelf with nothing on it means
-   * the library is empty, which is said once, above.
-   */
-  empty?: string;
-  /** The noun for the accessible name: "Open the playlist Late night". */
+  /** The noun for the accessible name: "Open the album Geogaddi". */
   opens: string;
-  /**
-   * The kind these tiles can be picked up as, for the two shelves that hold
-   * entities. A playlist and a group are collections rather than things a
-   * group can hold, so their shelves leave this unset and their tiles do not
-   * drag.
-   */
-  pickUp?: "artist" | "album";
+  /** The kind these tiles can be picked up as — onto a group in the rail, or
+   *  a playlist, which resolves it to the tracks on it. */
+  pickUp: "artist" | "album";
   onOpen: (tile: Shelf) => void;
   onPlay: (tile: Shelf) => void;
 }) {
-  if (tiles.length === 0 && !empty) return null;
+  // An empty shelf means an empty library, which the caller says once, above.
+  // A heading with nothing under it would say it a third time.
+  if (tiles.length === 0) return null;
 
   return (
     <section className="shelf">
       <h2 className="shelf__head label">{title}</h2>
-      {tiles.length === 0 ? (
-        <p className="shelf__empty">{empty}</p>
-      ) : (
-        <div className={`shelf__row shelf__row--of-${per}`}>
-          {tiles.map((tile) => (
-            <ShelfTile
-              /* Id *and* subtitle. Two albums can share a title, and an
-                 album tile's id is its title — so keying on it alone
-                 collides them and React warns about a duplicate key, which
-                 is the same bug the album grid had and for the same
-                 reason. */
-              key={`${tile.id}\u0000${tile.subtitle}`}
-              tile={tile}
-              round={round}
-              opens={opens}
-              pickUp={pickUp}
-              onOpen={() => onOpen(tile)}
-              onPlay={() => onPlay(tile)}
-            />
-          ))}
-        </div>
-      )}
+      <div className={`shelf__row shelf__row--of-${per}`}>
+        {tiles.map((tile) => (
+          <ShelfTile
+            /* Id *and* subtitle. Two albums can share a title, and an album
+               tile's id is its title — so keying on it alone collides them
+               and React warns about a duplicate key, which is the same bug
+               the album grid had and for the same reason. */
+            key={`${tile.id}\u0000${tile.subtitle}`}
+            tile={tile}
+            round={round}
+            opens={opens}
+            pickUp={pickUp}
+            onOpen={() => onOpen(tile)}
+            onPlay={() => onPlay(tile)}
+          />
+        ))}
+      </div>
     </section>
   );
 }
@@ -360,22 +273,20 @@ function ShelfTile({
   onPlay,
 }: {
   tile: Shelf;
-  /* `| undefined` on the optional two because `exactOptionalPropertyTypes` is
-     on: the shelves pass them through whether or not they have one. */
+  /* `| undefined` because `exactOptionalPropertyTypes` is on: the shelves pass
+     it through whether or not they have one. */
   round?: boolean | undefined;
   opens: string;
-  pickUp?: "artist" | "album" | undefined;
+  pickUp: "artist" | "album";
   onOpen: () => void;
   onPlay: () => void;
 }) {
-  // Always called, as a hook must be; the props it returns are only spread on
-  // for the shelves that hold something a group could take.
-  const grab = useEntityDrag(pickUp ?? "artist", tile.title);
+  const grab = useEntityDrag(pickUp, tile.title);
 
   return (
     <div
       className={"card card--entity shelf__tile" + (round ? " card--round" : "")}
-      {...(pickUp ? grab : {})}
+      {...grab}
     >
       <button
         type="button"

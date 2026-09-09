@@ -8,7 +8,7 @@
  */
 import "@testing-library/jest-dom/vitest";
 import { forgetCovers } from "../lib/artwork";
-import { forgetHomeShelves } from "../screens/Home";
+import { forgetShelves } from "../screens/Shelves";
 import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { FakeBackend, type FakeOptions } from "./ipc";
@@ -91,7 +91,7 @@ afterEach(() => {
   // answers the next test's home — including the test that asks what the
   // screen does when the read fails, which found last test's shelves and drew
   // them happily.
-  forgetHomeShelves();
+  forgetShelves();
   // `cleanup` unmounts, which runs each effect's teardown and so unregisters
   // the listeners it registered. Clearing anyway: a listener surviving into the
   // next test would fire on its events and be very hard to explain.

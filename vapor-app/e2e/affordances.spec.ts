@@ -75,10 +75,10 @@ const OPERABLE = [
  */
 const COMPOSITE = '[role="listbox"], [role="grid"], [role="tree"], [role="toolbar"], [role="menu"], [role="tablist"]';
 
-/** The flat table, now a tab inside Library rather than a screen. */
+/** The flat table, which is the bottom of the Library screen rather than a
+ *  screen or a tab of its own. */
 async function openSongs(page: Page) {
   await page.getByRole("button", { name: "Library", exact: true }).click();
-  await page.getByRole("tab", { name: "Songs" }).click();
 }
 
 
@@ -224,9 +224,9 @@ const SCREENS: {
   {
     name: "Vibe (queue)",
     reach: async (page) => {
-      // Filled from Songs rather than from Library, so a broken Library grid
-      // fails Library's own tests and not this screen's too. A cascade of
-      // failures across four screens hides which one is actually wrong.
+      // Filled from the track table rather than from a shelf, so a broken
+      // shelf fails Library's own tests and not this screen's too. A cascade
+      // of failures across four screens hides which one is actually wrong.
       await openSongs(page);
       await page.getByText("Windowlicker", { exact: true }).click();
       await page.getByRole("button", { name: "Vibe DJ", exact: true }).click();
