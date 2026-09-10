@@ -31,29 +31,25 @@ import type * as core from "../lib/core";
 
 const A_TRACK = "/dav/Koofr/Music/windowlicker.m4a";
 
-/** The flat table is a tab, and the default tab is Home. */
-async function openSongsTab(user: ReturnType<typeof userEvent.setup>) {
-  await screen.findByRole("tab", { name: /^songs$/i });
-  await user.click(screen.getByRole("tab", { name: /^songs$/i }));
-}
-
 /**
- * Leave the home shelves for the album grid.
+ * The part of the page under one heading.
  *
- * Every test below that is about the grid has to ask for it now, and asking is
- * not optional politeness: the shelves draw albums too, with the same titles
- * and the same play buttons, so a test that skipped this would go green
- * against `Home` while claiming to be about `Library`'s grid. Two of them
- * already were.
+ * Everything is on one screen now — two shelves, the genres, and the whole
+ * track table — so "Windowlicker EP" is on the albums shelf *and* the tracks
+ * on it are in the table below. A bare `getByText` cannot tell those apart,
+ * and a test that does not say which half it means is a test that passes on
+ * the wrong one.
  */
-async function openAlbumsTab() {
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("tab", { name: /^albums$/i }));
+function section(name: RegExp) {
+  const heading = screen.getByRole("heading", { name });
+  const owner = heading.closest("section");
+  if (!owner) throw new Error(`no section under the heading ${name}`);
+  return within(owner);
 }
 
 describe("Library", () => {
   /**
-   * A tab called Albums lists albums.
+   * The albums shelf lists albums.
    *
    * It used to list *tracks* grouped under an album heading — so "All Melody"
    * was a header with nine tiles beneath it, none of which was the album. That
@@ -63,35 +59,38 @@ describe("Library", () => {
   it("lists albums, not the tracks on them", async () => {
     useBackend();
     render(<Library />);
-    await openAlbumsTab();
 
-    expect(await screen.findByText("Windowlicker EP")).toBeInTheDocument();
-    expect(screen.getByText("Selected Ambient Works")).toBeInTheDocument();
-    // The track of that name is not a card here.
-    expect(screen.queryByText("Windowlicker")).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: /^albums$/i });
+    expect(section(/^albums$/i).getByText("Windowlicker EP")).toBeInTheDocument();
+    expect(
+      section(/^albums$/i).getByText("Selected Ambient Works"),
+    ).toBeInTheDocument();
+    // The track of that name is not a tile on this shelf. It is in the table
+    // below, which is a different claim and a different section.
+    expect(
+      section(/^albums$/i).queryByText("Windowlicker"),
+    ).not.toBeInTheDocument();
   });
 
-  it("lists artists under the Artists tab", async () => {
+  it("lists artists on the artists shelf", async () => {
     useBackend();
-    const user = userEvent.setup();
     render(<Library />);
 
-    await openAlbumsTab();
-    await user.click(screen.getByRole("tab", { name: /artists/i }));
-
-    expect(await screen.findByText("Aphex Twin")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: /^artists$/i });
+    expect(section(/^artists$/i).getByText("Aphex Twin")).toBeInTheDocument();
     // Two albums in the fixture, and the tile says so.
-    expect(screen.getByText(/2 albums/i)).toBeInTheDocument();
+    expect(section(/^artists$/i).getByText(/2 albums/i)).toBeInTheDocument();
   });
 
   /** An album names its artist; a compilation says so rather than picking one. */
   it("names the artist under each album", async () => {
     useBackend();
     render(<Library />);
-    await openAlbumsTab();
 
-    await screen.findByText("Windowlicker EP");
-    expect(screen.getAllByText("Aphex Twin").length).toBeGreaterThan(0);
+    await screen.findByRole("heading", { name: /^albums$/i });
+    expect(
+      section(/^albums$/i).getAllByText("Aphex Twin").length,
+    ).toBeGreaterThan(0);
   });
 
   /*
@@ -105,7 +104,6 @@ describe("Library", () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
-    await openAlbumsTab();
 
     backend.answers(
       "library_view",
@@ -128,22 +126,23 @@ describe("Library", () => {
     expect(await screen.findByText("Windowlicker")).toBeInTheDocument();
     expect(screen.queryByText("Xtal")).not.toBeInTheDocument();
 
-    // Out of the record and back to the grid. The tab is the way out now —
-    // the crumb that used to sit above the album's name is gone.
+    // Out of the record again. There is no crumb to press now, and the
+    // sidebar that leaves one is App's — searching is the way out this
+    // screen owns, and it clears the drill-down on the first keystroke.
     backend.clearAnswer("library_view");
-    await user.click(screen.getByRole("tab", { name: /^albums$/i }));
+    await user.type(screen.getByRole("searchbox"), "a");
+    await user.clear(screen.getByRole("searchbox"));
     expect(
       await screen.findByText("Selected Ambient Works"),
     ).toBeInTheDocument();
   });
 
-  it("plays an album from its card without opening it", async () => {
+  it("plays an album from its tile without opening it", async () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
-    await openAlbumsTab();
 
-    // What the backend would answer for that album. The card queues what it is
+    // What the backend would answer for that album. The tile queues what it is
     // given — that it is given the right thing is the backend's half.
     backend.answers(
       "library_view",
@@ -173,7 +172,6 @@ describe("Library", () => {
     const backend = useBackend();
     const user = userEvent.setup();
     render(<Library />);
-    await openAlbumsTab();
 
     await user.click(
       await screen.findByRole("button", {
@@ -193,8 +191,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
-    await user.click(await screen.findByText("Windowlicker"));
+    await user.click(await section(/^songs$/i).findByText("Windowlicker"));
 
     await waitFor(() => expect(backend.state.status).toBe("playing"));
     expect(backend.lastArgs("play_tracks")?.scope ?? null).toBeNull();
@@ -214,11 +211,7 @@ describe("Library", () => {
       },
     });
     await backend.invoke("look_up_track", { href: A_TRACK, force: false });
-    const user = userEvent.setup();
     render(<Library />);
-
-    await openAlbumsTab();
-    await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     expect(
       await screen.findByAltText(/cover of aphex twin/i),
@@ -228,11 +221,7 @@ describe("Library", () => {
   /** The file's own artwork still wins where it has any. */
   it("does not replace an artist's own artwork with a looked-up one", async () => {
     const backend = useBackend({ covers: true, metadataLookup: true });
-    const user = userEvent.setup();
     render(<Library />);
-
-    await openAlbumsTab();
-    await user.click(screen.getByRole("tab", { name: /artists/i }));
 
     await screen.findByAltText(/cover of aphex twin/i);
     expect(backend.called("artist_portrait")).toBe(false);
@@ -241,7 +230,6 @@ describe("Library", () => {
   it("shows a cover when the file carried one", async () => {
     useBackend({ covers: true });
     render(<Library />);
-    await openAlbumsTab();
 
     const art = await screen.findByAltText(/cover of windowlicker ep/i);
     expect(art).toHaveAttribute("src", expect.stringContaining("data:image"));
@@ -251,30 +239,52 @@ describe("Library", () => {
   it("draws a placeholder rather than a broken image when there is no cover", async () => {
     useBackend({ covers: false });
     render(<Library />);
-    await openAlbumsTab();
 
-    await screen.findByText("Windowlicker EP");
+    await screen.findByRole("heading", { name: /^albums$/i });
     expect(screen.queryByAltText(/cover of/i)).not.toBeInTheDocument();
   });
 
-  it("regroups when a tab is pressed", async () => {
+  /** The genre row is a read of its own, and it has to ask for genres. */
+  it("asks the backend for genres", async () => {
     const backend = useBackend();
-    const user = userEvent.setup();
     render(<Library />);
 
-    await openAlbumsTab();
-    await user.click(screen.getByRole("tab", { name: /artists/i }));
+    await screen.findByRole("heading", { name: /^genres$/i });
+    await waitFor(() =>
+      expect(
+        backend
+          .argsFor("library_entities")
+          .some((args) => (args.view as { groupBy?: string })?.groupBy === "genre"),
+      ).toBe(true),
+    );
+  });
 
+  /**
+   * The table opens on what someone likes, not on the alphabet.
+   *
+   * Plays count for a track and skips against it, and that ordering is the
+   * whole reason the counts are kept. A table opening on "title ascending"
+   * throws it away on the one screen it was collected for.
+   */
+  it("opens the table on the most liked tracks", async () => {
+    const backend = useBackend();
+    render(<Library />);
+
+    await screen.findByRole("heading", { name: /^songs$/i });
     await waitFor(() => {
-      const view = backend.lastArgs("library_entities")?.view as {
-        groupBy?: string;
-      };
-      expect(view?.groupBy).toBe("artist");
+      const asked = backend
+        .argsFor("library_view")
+        .map((args) => args.view as { sortKey?: string; ascending?: boolean });
+      // Descending: most liked first. Ascending would be the tracks this
+      // library's owner keeps skipping.
+      expect(
+        asked.some((v) => v?.sortKey === "score" && v?.ascending === false),
+      ).toBe(true);
     });
   });
 
   /**
-   * The home screen's whole job.
+   * The library's whole job.
    *
    * Library shipped with cards that were an `<article>` with no handler: the
    * first screen anyone sees, showing their music, and pressing a track did
@@ -286,8 +296,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
-    await user.click(await screen.findByText("Windowlicker"));
+    await user.click(await section(/^songs$/i).findByText("Windowlicker"));
 
     await waitFor(() => expect(backend.state.status).toBe("playing"));
     expect(backend.state.current).toBe(A_TRACK);
@@ -299,8 +308,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
-    await user.click(await screen.findByText("Xtal"));
+    await user.click(await section(/^songs$/i).findByText("Xtal"));
 
     await waitFor(() => expect(backend.state.queue.length).toBe(4));
     expect(backend.state.queue).toContain(A_TRACK);
@@ -313,8 +321,7 @@ describe("Library", () => {
     const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
-    await screen.findByText("Windowlicker");
+    await screen.findByRole("heading", { name: /^songs$/i });
 
     backend.answers(
       "library_view",
@@ -344,7 +351,6 @@ describe("Library", () => {
     backend.fail("play_tracks", "That file is no longer on the server.");
     const user = userEvent.setup();
     render(<Library />);
-    await openAlbumsTab();
 
     await user.click(
       await screen.findByRole("button", { name: /play windowlicker ep/i }),
@@ -356,32 +362,28 @@ describe("Library", () => {
   });
 
   /**
-   * The Songs tab is the table, not an ungrouped grid.
+   * The table is on the page, not behind a tab.
    *
-   * Songs and Search were separate sidebar destinations, which the Daylight
-   * design never had: its Library carries the search field and the flat list
-   * as a tab (docs/FINDINGS.md).
+   * Songs and Search were separate sidebar destinations, then a tab. Both were
+   * a door onto the library from inside the library.
    */
-  it("shows the track table under the Songs tab", async () => {
+  it("shows the track table under the shelves", async () => {
     useBackend();
-    const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
-
-    // The table, identifiable by its sortable columns — the grid has none.
+    // The table, identifiable by its sortable columns — a shelf has none.
     expect(
       await screen.findByRole("button", { name: /^album/i }),
     ).toBeInTheDocument();
   });
 
-  /** One search field, at the top, filtering whichever view is open. */
+  /** One search field, at the top, filtering what is under it. */
   it("filters the table with the search field above it", async () => {
     useBackend();
     const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
+    await screen.findByRole("heading", { name: /^songs$/i });
     await user.type(screen.getByRole("searchbox"), "xtal");
 
     await waitFor(() =>
@@ -395,29 +397,24 @@ describe("Library", () => {
   /** Two boxes filtering the same list is a screen nobody can use. */
   it("has exactly one search field", async () => {
     useBackend();
-    const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
-
+    await screen.findByRole("heading", { name: /^songs$/i });
     expect(screen.getAllByRole("searchbox")).toHaveLength(1);
   });
 
-  it("says the library is empty rather than showing a blank grid", async () => {
+  it("says the library is empty rather than showing blank shelves", async () => {
     useBackend({ rows: [] });
     render(<Library />);
-    await openAlbumsTab();
 
-    expect(await screen.findByText(/no albums yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no music yet/i)).toBeInTheDocument();
   });
 
   it("reports a failure to load the track table", async () => {
     const backend = useBackend();
     backend.fail("library_view", "the index would not open");
-    const user = userEvent.setup();
     render(<Library />);
 
-    await openSongsTab(user);
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /would not open/i,
     );

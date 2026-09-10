@@ -114,7 +114,14 @@ pub(crate) fn library_page(app: &AppState, view: &LibraryView, window: &RowWindo
         };
     }
 
-    if let Some(key) = view.sort_key.as_deref().and_then(parse_sort_key) {
+    // Score is not a column and cannot become one: it lives in the play and
+    // skip maps rather than on a row, and `vapor_library` knows only the index.
+    // So it is sorted here, where the counts are, and everything else stays
+    // where it was — one sort key handled apart is cheaper than teaching the
+    // index about listening history it has no business holding.
+    if view.sort_key.as_deref() == Some(SCORE_SORT) {
+        sort_by_score(app, &mut rows, view.ascending);
+    } else if let Some(key) = view.sort_key.as_deref().and_then(parse_sort_key) {
         vapor_library::sort_rows(&mut rows, key, view.ascending);
     }
 

@@ -1,107 +1,31 @@
 /**
- * Library — the home screen.
+ * Library — the whole of it, on one screen.
  *
- * Built from the "Library — home" screen in the Daylight design. The album
- * grid is the default view; the flat track table is the separate Songs screen.
+ * There used to be five: a tab bar reading Home, Albums, Artists, Genres,
+ * Songs, each a different way of laying the same library out, and four of them
+ * were places you went once and never again. What almost every visit wants is
+ * the same three things in the same order — who, what, and then everything —
+ * so that is what this is now, top to bottom: the artists and albums most
+ * played, the genres most liked, and the full track table under them.
  *
  * The header is the design's central claim made literal: a green dot and
  * "N tracks · on this device · no account". That line is the reason `--sov`
  * exists and the only place on this screen it is allowed to appear.
+ *
+ * The page scrolls as one. That is why `Songs` is handed `scroller` rather
+ * than left to bring its own scroll region: a virtualized table with an inner
+ * scroller inside a scrolling column is two scrollbars for one list, and the
+ * shelves would stop moving halfway down while the rows carried on.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as core from "../lib/core";
 import { Cover } from "../components/Cover";
 import { useEntityDrag } from "../components/entityDrag";
-import { Home, forgetHomeShelves } from "./Home";
+import { Shelves, forgetShelves } from "./Shelves";
 import { ErrorNotice, messageOf } from "../components/ErrorNotice";
 import { Songs } from "./Songs";
-import type { AlbumTrack, GroupBy, LibraryEntity, LibrarySection, Row } from "../lib/core";
-
-/**
- * Tabs map onto the index's grouping, so the UI cannot invent a category.
- *
- * "Songs" was called "All" and showed the same card grid ungrouped, while a
- * separate Songs screen in the sidebar held the actual table. The Daylight
- * design has no such screen — its Library tabs are Albums, Songs, Artists,
- * Playlists, and the flat list is one of them (docs/FINDINGS.md). It is one
- * of them here now too, and it renders the table.
- */
-/**
- * Which tab is showing.
- *
- * Playlists were briefly one of these. They are a collection you pick from
- * rather than a way of grouping the library, and they have their own tab in the
- * bar now, which opens a list instead of a screen — five pills also wrapped
- * onto two rows at a phone's width.
- */
-/**
- * Which tab of the library is showing.
- *
- * Exported because App holds it. It is a place — going back from a track's
- * liner notes should return to the tab you left, and when this was local state
- * it could not, because opening liner notes unmounts Library and a remount
- * starts at the default. You left from Songs and came back to Albums.
- *
- * "home" is the one that is not a grouping. It is what the screen opens on and
- * what almost every visit wants — see `Home` — and the four that group the
- * library are what is left for the rare visit that is looking for a particular
- * record.
- */
-export type Tab = "home" | GroupBy;
-
-const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
-  { id: "home", label: "Home" },
-  { id: "album", label: "Albums" },
-  { id: "artist", label: "Artists" },
-  { id: "genre", label: "Genres" },
-  { id: "none", label: "Songs" },
-];
-
-type Load =
-  | { kind: "loading" }
-  | { kind: "ready"; sections: LibrarySection[] }
-  | { kind: "error"; message: string };
-
-/** Which tabs list entities rather than tracks. */
-/**
- * Tabs that list *things* rather than tracks.
- *
- * Genres belongs here and did not: the tab rendered the plain row grid, so
- * "Genres" showed a card per track — every song in the library, captioned with
- * its artist. It had been that way since the port. `library_entities` now
- * groups by genre as well, and this is the other half of it.
- */
-function isEntityTab(group: GroupBy): group is "album" | "artist" | "genre" {
-  return group === "album" || group === "artist" || group === "genre";
-}
-
-/**
- * Whole records, then the ones with gaps in them.
- *
- * A lot of this library arrived as one-off downloads — a single track of a
- * nineteen-track album, filed under that album's name. Shown in the same shape
- * as a complete record, those tiles claim something untrue, and there are
- * enough of them to bury the albums actually owned.
- *
- * The backend has already put them in order and marked them; this only draws
- * the line. It returns a single unheaded group for every other tab, and for an
- * Albums tab where nothing is missing — a heading over the whole list would be
- * a label, not a division.
- */
-function splitByCompleteness(
-  entities: LibraryEntity[],
-): { header: string; items: LibraryEntity[] }[] {
-  const whole = entities.filter((e) => !e.incomplete);
-  const partial = entities.filter((e) => e.incomplete);
-  if (partial.length === 0) return [{ header: "", items: whole }];
-  // `whole` can be empty — a library where every album is a stray track — and
-  // an empty grid above the heading would be a hole on the screen.
-  return [
-    ...(whole.length > 0 ? [{ header: "", items: whole }] : []),
-    { header: "Incomplete", items: partial },
-  ];
-}
+import type { AlbumTrack, LibraryEntity } from "../lib/core";
 
 /**
  * The album or artist being looked inside.
@@ -120,7 +44,7 @@ export type Opened = {
 };
 
 /**
- * The last few library reads, kept across unmounts.
+ * The last few entity reads, kept across unmounts.
  *
  * Library is unmounted whenever a drill-down covers it — liner notes, a
  * playlist, an album — so returning to it used to mean a fresh round trip and
@@ -128,13 +52,11 @@ export type Opened = {
  * painted from here first and corrected when the answer arrives, so going back
  * is instant and still ends up truthful.
  *
- * Bounded for the reason `lib/artwork.ts` bounds its own: a 563-row section
- * list is around a hundred kilobytes, and remembering every query someone
- * typed is how a cache becomes a leak. Insertion order is close enough to
- * least-recently-used for a handful of entries.
+ * Bounded for the reason `lib/artwork.ts` bounds its own: remembering every
+ * read anyone ever asked for is how a cache becomes a leak. Insertion order is
+ * close enough to least-recently-used for a handful of entries.
  */
 const READS = 8;
-const viewCache = new Map<string, LibrarySection[]>();
 const entityCache = new Map<string, LibraryEntity[]>();
 
 /**
@@ -146,17 +68,12 @@ const entityCache = new Map<string, LibraryEntity[]>();
  * deleted track even briefly is the kind of thing that reads as a bug.
  */
 export function forgetLibraryReads() {
-  viewCache.clear();
   entityCache.clear();
   // The shelves are a read of the same library and go stale on the same
   // events. They are remembered in their own screen, so they are dropped from
-  // here rather than kept in the maps above — a `HomeShelves` is not a
-  // `LibrarySection[]` and would need a third cache to pretend otherwise.
-  forgetHomeShelves();
-}
-
-function cacheKey(groupBy: GroupBy, query: string) {
-  return `${groupBy}\u0000${query}`;
+  // here rather than kept in the map above — a `HomeShelves` is not a
+  // `LibraryEntity[]` and would need a second cache to pretend otherwise.
+  forgetShelves();
 }
 
 function remember<T>(cache: Map<string, T>, key: string, value: T) {
@@ -172,10 +89,6 @@ export function Library({
   onOpen,
   opened: controlledOpened,
   onOpenedChange,
-  tab: controlledTab,
-  onTabChange,
-  onOpenPlaylist,
-  onOpenGroup,
 }: {
   /** Opens a track's liner notes — the table's double-click. */
   onOpen?: ((href: string) => void) | undefined;
@@ -192,20 +105,6 @@ export function Library({
    */
   opened?: Opened | null | undefined;
   onOpenedChange?: ((opened: Opened | null) => void) | undefined;
-  /** The open tab, when the caller owns it — same arrangement as `opened`,
-   *  and optional for the same reason: Library still stands alone in a test. */
-  tab?: Tab | undefined;
-  onTabChange?: ((tab: Tab) => void) | undefined;
-  /**
-   * Open a playlist or a smart group from a home shelf.
-   *
-   * Both are drill-downs App owns, like liner notes — they render in front of
-   * this screen rather than inside it, so Library can only ask. Optional, and
-   * absent the tiles are inert: the shelves still draw, which is what a test
-   * that renders Library on its own gets.
-   */
-  onOpenPlaylist?: ((id: string) => void) | undefined;
-  onOpenGroup?: ((id: string) => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
   /**
@@ -236,32 +135,36 @@ export function Library({
     if (onOpenedChange) onOpenedChange(next);
     else setOwnOpened(next);
   };
-  const [entities, setEntities] = useState<LibraryEntity[] | null>(null);
-  const [ownTab, setOwnTab] = useState<Tab>("home");
-  const tab = onTabChange ? (controlledTab ?? "home") : ownTab;
-  const setTab = (next: Tab) => {
-    if (onTabChange) onTabChange(next);
-    else setOwnTab(next);
-  };
+  /** The genres, ranked by how much this library's owner likes what is in
+   *  them. `library_entities` does the ranking; this only draws it. */
+  const [genres, setGenres] = useState<LibraryEntity[] | null>(null);
   /**
-   * The grouping the reads below use.
+   * How big the library is, for the line under the title.
    *
-   * Home is not one, and the two effects that read the library skip it
-   * entirely — a shelf of twelve albums does not need five hundred rows
-   * fetched to draw it. Albums stands in only so this stays a `GroupBy`; on
-   * home nothing looks at it.
+   * Its own read, and the cheapest one there is: a window of nothing is a
+   * count, which the backend answers without sorting or grouping a row. It
+   * used to be reported upwards by whichever view was showing, which meant it
+   * read 0 whenever the page opened straight into an album — a state the back
+   * gesture reaches every time somebody leaves liner notes.
    */
-  const groupBy: GroupBy = tab === "home" ? "album" : tab;
-  const [load, setLoad] = useState<Load>({ kind: "loading" });
+  const [trackCount, setTrackCount] = useState(0);
+  /**
+   * The one scroll region on this screen.
+   *
+   * The table below is virtualized and has to know what it is scrolling
+   * inside; handing it this is what lets the shelves, the genres and fifty
+   * thousand rows share a single scrollbar. See `Songs`.
+   */
+  const scrollerRef = useRef<HTMLDivElement>(null);
   /** A failure to start playback belongs on screen, not in the console. */
   const [playError, setPlayError] = useState<string | null>(null);
 
   /**
    * A scan or a correction while this screen is open.
    *
-   * The reads are keyed on query and tab, so neither effect re-runs when the
-   * *library* changes underneath them. `nonce` is a dependency that exists to
-   * be changed, which is what makes them run again.
+   * The reads are keyed on the query, so they do not re-run when the *library*
+   * changes underneath them. `nonce` is a dependency that exists to be
+   * changed, which is what makes them run again.
    */
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
@@ -281,124 +184,64 @@ export function Library({
     return () => clearTimeout(t);
   }, [query, settledQuery]);
 
+  /**
+   * How many tracks there are.
+   *
+   * A window of zero rows, which the backend short-circuits into a count: no
+   * sort, no grouping, no payload. Not narrowed by the search field, because
+   * the line it feeds says "on this device" — it is a claim about what is
+   * here, not about what matched.
+   */
   useEffect(() => {
-    // Home reads its own shelves and nothing else. Without this the front
-    // door would pull the whole index across on every visit to draw four
-    // rows of pictures — and searching from it hands the query to the Songs
-    // table below, which does its own reading.
-    if (tab === "home") return;
     let cancelled = false;
-    const key = cacheKey(groupBy, settledQuery);
-
-    // Paint what was there before, if anything, rather than a spinner. The
-    // request still goes out — this is the previous answer, not the final one.
-    const known = viewCache.get(key);
-    setLoad(known ? { kind: "ready", sections: known } : { kind: "loading" });
-
     core
-      .libraryView({ query: settledQuery, groupBy, sortKey: "title", ascending: true })
-      .then((sections) => {
-        remember(viewCache, key, sections);
-        if (!cancelled) setLoad({ kind: "ready", sections });
+      .libraryPage({}, { limit: 0 })
+      .then((page) => {
+        if (!cancelled) setTrackCount(page.total);
       })
-      .catch((e: unknown) => {
-        // A failed refresh must not blank a list that is already on screen:
-        // stale is better than empty, and the next attempt corrects it.
-        if (!cancelled && !known) setLoad({ kind: "error", message: messageOf(e) });
-      });
-
+      // A count that could not be read stays as it was. Nothing on this screen
+      // depends on it, and a red box over the title would be out of all
+      // proportion to a number.
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [settledQuery, groupBy, nonce, tab]);
+  }, [nonce]);
 
-  /** The albums or artists for the current tab. */
+  /**
+   * The genres, most liked first.
+   *
+   * Narrowed by the search field like everything else, though the row is
+   * hidden while a search is running — the read is keyed on the query anyway,
+   * so this is one cache entry rather than a special case.
+   */
   useEffect(() => {
-    if (tab === "home" || !isEntityTab(groupBy)) {
-      setEntities(null);
-      return;
-    }
     let cancelled = false;
-    const key = cacheKey(groupBy, settledQuery);
+    const key = `genre\u0000${settledQuery}`;
 
+    // Paint what was there before, if anything, rather than nothing. The
+    // request still goes out — this is the previous answer, not the final one.
     const known = entityCache.get(key);
-    setEntities(known ?? null);
+    setGenres(known ?? null);
 
     core
-      .libraryEntities({ query: settledQuery, groupBy, sortKey: "title", ascending: true })
+      .libraryEntities({ query: settledQuery, groupBy: "genre" })
       .then((list) => {
         remember(entityCache, key, list);
-        if (!cancelled) setEntities(list);
+        if (!cancelled) setGenres(list);
       })
       .catch(() => {
-        // The grid falls back to the row view's error, which is the same
-        // request against the same index.
-        if (!cancelled && !known) setEntities([]);
+        // No error state: the row is one of three things on a page whose other
+        // two are already answering, and a red box where the genres would be
+        // says less than their absence does.
+        if (!cancelled && !known) setGenres([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [settledQuery, groupBy, nonce, tab]);
+  }, [settledQuery, nonce]);
 
-  /**
-   * Play a card, queueing everything currently on screen behind it.
-   *
-   * The same rule as the Songs table: what you can see is what goes in the
-   * queue, in the order you can see it. Library previously had no click
-   * handling at all — the cards were an `<article>` with no interaction, so
-   * the home screen, the first thing anyone sees, could not start a track.
-   */
-  async function play(href: string, section?: LibrarySection) {
-    /*
-     * A grouped tab queues the group, not the screen.
-     *
-     * Genres are the case: the cards are laid out under a heading per genre,
-     * and queueing everything visible meant pressing a house record and
-     * getting the whole library behind it, conducted across all of it. The
-     * heading is the scope, so it is what goes in.
-     */
-    const source =
-      section ??
-      (load.kind === "ready" ? { header: "", rows: load.sections.flatMap((s) => s.rows) } : null);
-    try {
-      await core.playTracks(
-        source?.rows.map((r) => r.href) ?? [],
-        href,
-        source?.header || undefined,
-      );
-    } catch (e: unknown) {
-      setPlayError(messageOf(e));
-    }
-  }
-
-  /**
-   * Play an album or artist from its first track.
-   *
-   * Queues that entity's tracks only. Queueing everything on screen would mean
-   * pressing one album and getting the whole library behind it.
-   */
-  async function playEntity(entity: LibraryEntity) {
-    try {
-      const sections = await core.libraryView({
-        groupBy: "none",
-        sortKey: "title",
-        ascending: true,
-        ...(groupBy === "album" ? { album: entity.name } : { artist: entity.name }),
-      });
-      const hrefs = sections[0]?.rows.map((r) => r.href) ?? [];
-      await core.playTracks(hrefs, entity.lead, entity.name);
-    } catch (e: unknown) {
-      setPlayError(messageOf(e));
-    }
-  }
-
-  /**
-   * Play one album from an artist's shelf.
-   *
-   * Not `playEntity`: that reads the ambient tab's `groupBy` to decide
-   * whether an entity is an album or an artist, and a tile on an artist's own
-   * shelf is an album regardless of which tab the artist was opened from.
-   */
+  /** Play one album from an artist's shelf, conducted within it. */
   async function playAlbumEntity(entity: LibraryEntity) {
     try {
       const sections = await core.libraryView({
@@ -414,22 +257,6 @@ export function Library({
     }
   }
 
-  /**
-   * How big the library is, for the line under the title.
-   *
-   * Two sources because the two views read different things. A grouping tab
-   * has the rows in hand and counts them, which is also why the number narrows
-   * as you type — the count is of what you are looking at. Home never fetches
-   * rows, so its count comes back with the shelves; it is the whole library,
-   * because that is what home is showing you the front of.
-   */
-  const rowCount = useMemo(() => {
-    if (load.kind !== "ready") return 0;
-    return load.sections.reduce((n, s) => n + s.rows.length, 0);
-  }, [load]);
-  const [homeTracks, setHomeTracks] = useState(0);
-  const trackCount = tab === "home" ? homeTracks : rowCount;
-
   return (
     <div className="library">
       {/*
@@ -438,9 +265,9 @@ export function Library({
         It was a rounded card around the opened record's name only, which drew
         a second panel inside a screen that already has one — the colours of
         the record stopped at a border a few hundred pixels down, with the
-        title, the search field and the tabs sitting outside it on the plain
-        page. It reaches the top of the window now and fades out over the
-        header, so what you opened colours the whole top of the app.
+        title and the search field sitting outside it on the plain page. It
+        reaches the top of the window now and fades out over the header, so
+        what you opened colours the whole top of the app.
 
         Decorative: the same picture is legible, unblurred, in the tile below
         it, so it is hidden from assistive tech.
@@ -479,256 +306,171 @@ export function Library({
         />
       </div>
 
-      <div className="library__tabs" role="tablist">
-        {TABS.map((item) => (
-          <button
-            key={item.id}
-            role="tab"
-            aria-selected={tab === item.id}
-            className={
-              "library__tab" + (tab === item.id ? " library__tab--on" : "")
-            }
-            onClick={() => {
-              setTab(item.id);
-              // As does changing tab.
-              setOpened(null);
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
+      <div className="library__scroll" ref={scrollerRef}>
+        {/* Inside an album, an artist or a genre: the same page, narrowed. */}
+        {opened ? (
+          <div className="library__body">
+            <div className="library__opened-head">
+              <div className="library__crumb">
+                <h2 className="library__opened">{opened.name}</h2>
+                {/*
+                  The way to the artist, from the album.
 
-      {/* Inside an album or an artist: the same table, narrowed to it. */}
-      {opened ? (
-        <div className="library__body">
-          <div className="library__opened-head">
-            <div className="library__crumb">
-              <h2 className="library__opened">{opened.name}</h2>
-              {/*
-                The way to the artist, from the album.
-
-                There was none: an album named its artist nowhere, so the only
-                route to them was back out to the Artists tab and finding them
-                again. Under the title rather than beside it, because it is
-                the album's subtitle — the same shape the tile in the grid
-                has.
-              */}
-              {opened.kind === "album" && opened.artist && (
-                <button
-                  className="library__opened-artist"
-                  onClick={() =>
-                    setOpened({
-                      kind: "artist",
-                      name: opened.artist,
-                      lead: opened.lead,
-                      artist: opened.artist,
-                    })
-                  }
-                >
-                  {opened.artist}
-                </button>
-              )}
+                  There was none: an album named its artist nowhere, so the
+                  only route to them was back out to the library and finding
+                  them among the shelves again. Under the title rather than
+                  beside it, because it is the album's subtitle — the same
+                  shape the tile on a shelf has.
+                */}
+                {opened.kind === "album" && opened.artist && (
+                  <button
+                    className="library__opened-artist"
+                    onClick={() =>
+                      setOpened({
+                        kind: "artist",
+                        name: opened.artist,
+                        lead: opened.lead,
+                        artist: opened.artist,
+                      })
+                    }
+                  >
+                    {opened.artist}
+                  </button>
+                )}
+              </div>
+              {opened.kind === "album" ? (
+                <AlbumArtwork
+                  album={opened.name}
+                  artist={opened.artist}
+                  lead={opened.lead}
+                  onArt={setHeroArt}
+                />
+              ) : opened.kind === "artist" ? (
+                <ArtistArtwork name={opened.name} onArt={setHeroArt} />
+              ) : null}
             </div>
             {opened.kind === "album" ? (
-              <AlbumArtwork
+              /* An album knows how long it is supposed to be, so it can show
+                 the tracks it is missing. Everything else falls straight
+                 through to the table — an artist has no length to fall short
+                 of. */
+              <AlbumTracks
                 album={opened.name}
-                artist={opened.artist}
                 lead={opened.lead}
-                onArt={setHeroArt}
+                onOpen={onOpen}
+                onError={setPlayError}
               />
-            ) : opened.kind === "artist" ? (
-              <ArtistArtwork name={opened.name} onArt={setHeroArt} />
-            ) : null}
-          </div>
-          {opened.kind === "album" ? (
-            /* An album knows how long it is supposed to be, so it can show the
-               tracks it is missing. Everything else falls straight through to
-               the table — an artist has no length to fall short of. */
-            <AlbumTracks
-              album={opened.name}
-              lead={opened.lead}
-              onOpen={onOpen}
-              onError={setPlayError}
-            />
-          ) : (
-            <>
-              {opened.kind === "artist" && (
-                <ArtistAlbums
-                  name={opened.name}
-                  onOpen={(album) => setOpened(album)}
-                  onPlay={(entity) => void playAlbumEntity(entity)}
+            ) : (
+              <>
+                {opened.kind === "artist" && (
+                  <ArtistAlbums
+                    name={opened.name}
+                    onOpen={(album) => setOpened(album)}
+                    onPlay={(entity) => void playAlbumEntity(entity)}
+                  />
+                )}
+                <Songs
+                  onOpen={onOpen}
+                  query=""
+                  filter={
+                    opened.kind === "artist"
+                      ? { artist: opened.name }
+                      : { genre: opened.name }
+                  }
+                  // Playing from inside an opened record conducts within it.
+                  scope={opened.name}
+                  scroller={scrollerRef}
                 />
-              )}
+              </>
+            )}
+          </div>
+        ) : query.trim() ? (
+          /* Typing is a search, not a filter of the shelves.
+           *
+           * A shelf holds the first dozen of something ranked by plays, so
+           * narrowing one would answer "you have no such album" for an album
+           * that is right there in the library, thirteenth. Search is its own
+           * result, which is what every other player does with the same field
+           * and the same shelves. The table below does its own reading. */
+          <div className="library__body">
+            <Songs onOpen={onOpen} query={query} scroller={scrollerRef} />
+          </div>
+        ) : (
+          <div className="library__body">
+            <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
+
+            <Shelves onOpenEntity={setOpened} />
+
+            <GenreRow
+              genres={genres}
+              onOpen={(genre) =>
+                setOpened({
+                  kind: "genre",
+                  name: genre.name,
+                  lead: genre.lead,
+                  artist: "",
+                })
+              }
+            />
+
+            <section className="library__songs">
+              <h2 className="shelf__head label">Songs</h2>
+              {/* Most liked first: plays for a track, skips against it. An
+                  alphabetical list of every track answers a question almost
+                  nobody arrives with, and the headings still re-sort it. */}
               <Songs
                 onOpen={onOpen}
                 query=""
-                filter={
-                  opened.kind === "artist"
-                    ? { artist: opened.name }
-                    : { genre: opened.name }
-                }
-                // Playing from inside an opened record conducts within it.
-                scope={opened.name}
+                defaultSort="score"
+                scroller={scrollerRef}
               />
-            </>
-          )}
-        </div>
-      ) : tab === "home" ? (
-        /* Typing on home is a search, not a filter of the shelves.
-         *
-         * A shelf holds the first dozen of something ranked by plays, so
-         * narrowing one would answer "you have no such album" for an album
-         * that is right there in the library, thirteenth. Search is its own
-         * result, which is what every other player does with the same field
-         * and the same shelves. The table is the same one the Songs tab
-         * shows, and it does its own reading. */
-        query.trim() ? (
-          <Songs onOpen={onOpen} query={query} />
-        ) : (
-          <Home
-            onOpenPlaylist={onOpenPlaylist ?? (() => {})}
-            onOpenGroup={onOpenGroup ?? (() => {})}
-            onOpenEntity={setOpened}
-            onTracks={setHomeTracks}
-          />
-        )
-      ) : groupBy === "none" ? (
-        /* The flat list is the table, not an ungrouped grid of cards: the whole
-           point of it is the columns — artist, album, tempo, key — and sorting
-           by them. It gets the search field above rather than one of its own. */
-        <Songs onOpen={onOpen} query={query} />
-      ) : isEntityTab(groupBy) ? (
-        <div className="library__body">
-          <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
-
-          {entities === null && <p className="label">reading library</p>}
-
-          {entities !== null && entities.length === 0 && (
-            <EmptyLibrary query={query} kind={groupBy} />
-          )}
-
-          {entities !== null &&
-            entities.length > 0 &&
-            splitByCompleteness(entities).map(({ header, items }) => (
-              <section key={header || "whole"} className="library__section">
-                {header && (
-                  <h2 className="library__section-head label">
-                    {header} <span className="library__section-count">{items.length}</span>
-                  </h2>
-                )}
-                <div className="library__grid">
-                  {items.map((entity) => (
-                    <EntityCard
-                      /* Name *and* subtitle. Two albums can share a title — the
-                         backend already keeps them apart by artist, so keying on
-                         name alone collided them back together and React warned
-                         about duplicate keys on exactly the case the
-                         album-identity test covers. */
-                      key={`${entity.name}\u0000${entity.subtitle}`}
-                      entity={entity}
-                      kind={groupBy}
-                      onOpen={() =>
-                        setOpened({
-                          kind: groupBy,
-                          name: entity.name,
-                          lead: entity.lead,
-                          artist: groupBy === "album" ? entity.subtitle : entity.name,
-                        })
-                      }
-                      onPlay={() => void playEntity(entity)}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
-        </div>
-      ) : (
-        <div className="library__body">
-          <ErrorNotice error={playError} onDismiss={() => setPlayError(null)} />
-
-          {load.kind === "loading" && <p className="label">reading library</p>}
-
-          {load.kind === "error" && (
-            <div className="library__empty">
-              <p className="library__empty-title">Could not read the library</p>
-              <ErrorNotice error={load.message} />
-            </div>
-          )}
-
-          {load.kind === "ready" && trackCount === 0 && <EmptyLibrary query={query} />}
-
-          {load.kind === "ready" &&
-            trackCount > 0 &&
-            load.sections.map((section) => (
-              <section key={section.header || "all"} className="library__section">
-                {section.header && (
-                  <h2 className="library__section-head label">{section.header}</h2>
-                )}
-                <div className="library__grid">
-                  {section.rows.map((row) => (
-                    <Card
-                      key={row.href}
-                      row={row}
-                      onPlay={() => void play(row.href, section)}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
-        </div>
-      )}
+            </section>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 /**
- * Two empty states, not one.
+ * The genres, as a row of pills that scrolls sideways.
  *
- * "No library yet" and "nothing matched that search" are different problems
- * with different fixes, and collapsing them into one message tells a person
- * with a full library that their music is missing.
+ * Ranked by how much this library's owner likes what is filed under each —
+ * plays for, skips against, added up over the tracks. Alphabetical said
+ * nothing at all about their music: it put Acid Jazz first for ever in a
+ * library whose owner has played four house records a day since March.
+ *
+ * Silent when there are none, which is the ordinary state of a library that
+ * has not been analysed yet. A heading over an empty row would claim the
+ * genres are missing rather than unread.
  */
-function EmptyLibrary({
-  query,
-  kind,
+function GenreRow({
+  genres,
+  onOpen,
 }: {
-  query: string;
-  kind?: "album" | "artist" | "genre";
+  genres: LibraryEntity[] | null;
+  onOpen: (genre: LibraryEntity) => void;
 }) {
-  if (query.trim()) {
-    return (
-      <div className="library__empty">
-        <p className="library__empty-title">Nothing matched “{query}”</p>
-        <p className="library__empty-body">Try a different word.</p>
-      </div>
-    );
-  }
-  // An entity tab can be empty while the library is not: nothing has an album
-  // yet because nothing has been analysed, and the files are not filed in
-  // folders either. Saying "no music yet" there would be false.
-  if (kind) {
-    return (
-      <div className="library__empty">
-        <p className="library__empty-title">
-          {kind === "album" ? "No albums yet" : "No artists yet"}
-        </p>
-        <p className="library__empty-body">
-          Tracks are filed under an {kind} once their folder or their tags say
-          which one. Everything you have is under Songs.
-        </p>
-      </div>
-    );
-  }
+  if (!genres || genres.length === 0) return null;
 
   return (
-    <div className="library__empty">
-      <p className="library__empty-title">No music yet</p>
-      <p className="library__empty-body">
-        Connect your storage in Settings and Vapor will index it here. Nothing
-        leaves your device.
-      </p>
-    </div>
+    <section className="genres">
+      <h2 className="genres__head label">Genres</h2>
+      <div className="genres__row">
+        {genres.map((genre) => (
+          <button
+            key={genre.name}
+            type="button"
+            className="genres__pill"
+            onClick={() => onOpen(genre)}
+            aria-label={`Open the genre ${genre.name}`}
+          >
+            <span className="genres__name">{genre.name}</span>
+            <span className="genres__count numeric">{genre.tracks}</span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1178,44 +920,6 @@ function EntityCard({
         )}
       </div>
     </div>
-  );
-}
-
-function Card({ row, onPlay }: { row: Row; onPlay: () => void }) {
-  // Unknown fields are rendered as a quiet dash rather than "Unknown Artist" —
-  // the index uses the same convention for group headers.
-  const artist = row.artistSource === "unknown" ? "—" : row.artist;
-
-  return (
-    /* A real button, not an `<article>` with an onClick bolted on: it is
-     * focusable, it answers Enter and Space without any code here, and a
-     * screen reader announces it as something that can be pressed. The name
-     * says what pressing it does, because "Adrenaline" alone does not.
-     *
-     * Single click, unlike the Songs table's double click. A grid of cards is
-     * a set of targets rather than a list with a selection, so there is no
-     * second gesture for selecting that a single click would collide with. */
-    <button
-      type="button"
-      className="card"
-      onClick={onPlay}
-      aria-label={`Play ${row.title}${artist === "—" ? "" : ` by ${artist}`}`}
-    >
-      <div className="card__art">
-        <div className="card__art-sheen" aria-hidden="true" />
-        {row.bpm > 0 && (
-          <span className="card__badge numeric">{Math.round(row.bpm)}</span>
-        )}
-      </div>
-      <div className="card__meta">
-        <span className="card__title" title={row.title}>
-          {row.title}
-        </span>
-        <span className="card__sub" title={artist}>
-          {artist}
-        </span>
-      </div>
-    </button>
   );
 }
 

@@ -6,6 +6,10 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* Fills the content column rather than growing past it, so the scroller
+     below it has a height to be measured against. */
+  flex: 1;
+  min-height: 0;
   /* Fills the content column. The 1100px cap was extrapolated from the
      design's 390px phone frames and left a third of a desktop window empty
      while the grid wrapped to fewer columns than it had room for. */
@@ -21,10 +25,10 @@
  * The record's own picture, blurred and enlarged past its edges so the blur
  * has nothing sharp to catch on, reaching the top and both sides of the
  * content column and fading out before the list starts. It sits behind
- * everything on the screen — the title, the search field, the tabs and the
- * opened record's name all read over it — which is why it is a sibling of
- * them all rather than a background on the header: as a rounded card around
- * the name alone it drew a second panel inside a screen that already is one.
+ * everything on the screen — the title, the search field and the opened
+ * record's name all read over it — which is why it is a sibling of them all
+ * rather than a background on the header: as a rounded card around the name
+ * alone it drew a second panel inside a screen that already is one.
  *
  * The negative insets are `.shell__content`'s padding (app.css), so the wash
  * reaches the window's edge; `overflow: auto` on that column clips it there.
@@ -64,7 +68,7 @@
    a background: the wash is meant to be seen through them. */
 .library__head,
 .library__search,
-.library__tabs,
+.library__scroll,
 .library__body {
   position: relative;
   z-index: 1;
@@ -146,86 +150,31 @@
   -webkit-appearance: none;
 }
 
-/* ---- Tabs ------------------------------------------------------------ */
+/* ---- Scroll region --------------------------------------------------- */
 
 /*
- * One row, scrolled rather than wrapped.
+ * One scroller for everything under the title and the search field.
  *
- * Four pills fitted a phone and five do not, which is why Playlists stopped
- * being one of them — it wrapped the bar onto two rows and pushed the grid
- * down the screen. Home is a fifth now and cannot be dropped, so the bar
- * scrolls sideways like the shelves under it instead. There is room for all
- * five on any desktop window, where this does nothing.
- */
-.library__tabs {
-  display: flex;
-  gap: 7px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  /*
-   * The pills carry a focus ring and a shadow; a scroller clipped to their
-   * exact height would shave both. Setting `overflow-x` here computes
-   * `overflow-y` to `auto` too (CSS Overflow §3), which is not `visible` —
-   * so this padding is the only thing standing between the shadow and a
-   * hard clip. `--shadow-sm` reaches about 8px below the pill (2px offset
-   * + 6px blur) and `:focus-visible` reaches 4px on every side (2px
-   * outline + 2px offset); 2px/4px was short of both, and the clipped edge
-   * sat right against the row below it, reading as that row cutting into
-   * the tabs.
-   */
-  padding: 4px 0 10px;
-  scrollbar-width: none;
-}
-
-.library__tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.library__tab {
-  /* A pill in a scrolling row must not be squeezed to fit: without this the
-     row compresses five labels into four widths instead of overflowing. */
-  flex: none;
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 18px;
-  display: flex;
-  align-items: center;
-  font-family: var(--font-ui);
-  font-size: var(--fs-body);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-  cursor: pointer;
-  color: var(--ink-2);
-  background: var(--fill-raised);
-  border: 1px solid var(--glass-rim);
-  transition: background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-/*
- * Not the selected tab.
+ * The *table* is virtualized, and a virtualized list needs a scroll container
+ * it can measure itself against. Left to bring its own, it gave one page two
+ * scrollbars: the shelves stopped moving halfway down while the rows carried
+ * on inside a box. This is the one region, and `Songs` is handed it and
+ * reports its own offset within it.
  *
- * `.library__tab:hover` outranks `.library__tab--on` — a class plus a
- * pseudo-class beats a single class — so hovering the selected tab replaced its
- * accent fill with white and left white text on it. The label disappeared.
- * Worse on a touch screen, where the hover state stays behind after the tap
- * that selected it, so the tab you just chose is the blank one.
+ * The header and the search stay above it rather than scrolling away, which
+ * is what the Songs tab already did — the table filled the screen under a
+ * fixed search field. The table is on every visit now, so that arrangement is
+ * simply the arrangement.
  */
-.library__tab:not(.library__tab--on):hover {
-  background: var(--fill-raised-hover);
-}
-
-.library__tab--on {
-  background: var(--accent-fill);
-  border-color: var(--accent);
-  color: var(--on-accent);
-  box-shadow: var(--shadow-sm);
-}
-
-.library__tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.library__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* Momentum scrolling on WebKit; without it a long list feels stuck. */
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ---- Body ------------------------------------------------------------ */
@@ -812,4 +761,19 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---- The track table, under the shelves ------------------------------- */
+
+/*
+ * A heading and the table, in the flow of the page.
+ *
+ * As tall as its rows, which is the whole point: the scroll extent of the
+ * library is the shelves plus the genres plus every track, and one scrollbar
+ * measures all of it.
+ */
+.library__songs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }

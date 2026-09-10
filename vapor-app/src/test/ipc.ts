@@ -76,6 +76,15 @@ export interface FakeOptions {
   albums?: core.LibraryEntity[];
   artists?: core.LibraryEntity[];
   /**
+   * The genres those tracks group into, already in the order the row draws
+   * them — most liked first, which is `order_entities` in the backend.
+   *
+   * Given rather than ranked here for the reason the two above are given:
+   * a fake that sorts them a second way is a fake that can disagree with the
+   * real one about what the screen was handed.
+   */
+  genres?: core.LibraryEntity[];
+  /**
    * The full tracklist of an opened album, by album title.
    *
    * Absent means the album was never matched to a release — the real backend
@@ -193,6 +202,9 @@ export function makeEntity(
     tracks: 1,
     lead: "/dav/Koofr/Music/track.m4a",
     plays: 0,
+    // Plays less skips. Zero is a library nobody has played from, which is
+    // what almost every test that names an entity is not about.
+    score: 0,
     lastPlayed: 0,
     // A library nobody has identified, which is what the backend reports until
     // the lookup pass has run. Zero means "no idea how long this record is",
@@ -348,6 +360,30 @@ const DEFAULT_ALBUMS: core.LibraryEntity[] = [
   }),
 ];
 
+/**
+ * The genres of `DEFAULT_ROWS`, in the order the backend hands them over.
+ *
+ * Ranked rather than alphabetical, and stated that way here: the row draws
+ * what it is given, and a fake listing them A-first would let a screen that
+ * silently re-sorted them still pass.
+ */
+const DEFAULT_GENRES: core.LibraryEntity[] = [
+  makeEntity({
+    name: "Electronic",
+    subtitle: "2 artists",
+    tracks: 3,
+    score: 4,
+    lead: "/dav/Koofr/Music/xtal.m4a",
+  }),
+  makeEntity({
+    name: "Ambient",
+    subtitle: "1 artist",
+    tracks: 1,
+    score: 1,
+    lead: "/dav/Koofr/Music/roygbiv.m4a",
+  }),
+];
+
 const DEFAULT_ARTISTS: core.LibraryEntity[] = [
   makeEntity({
     name: "Aphex Twin",
@@ -437,6 +473,7 @@ export class FakeBackend {
   private rows: core.Row[];
   private albums: core.LibraryEntity[];
   private artists: core.LibraryEntity[];
+  private genres: core.LibraryEntity[];
   private albumTracklists: Record<string, core.AlbumTrack[]>;
   private scanned: boolean;
   private playlists: core.Playlist[];
@@ -617,6 +654,7 @@ export class FakeBackend {
     const own = options.rows !== undefined;
     this.albums = options.albums ?? (own ? [] : DEFAULT_ALBUMS);
     this.artists = options.artists ?? (own ? [] : DEFAULT_ARTISTS);
+    this.genres = options.genres ?? (own ? [] : DEFAULT_GENRES);
     this.albumTracklists = options.albumTracklists ?? {};
     // A connected library is one that has been scanned; a fresh one has not.
     this.scanned = connected;
@@ -679,6 +717,18 @@ export class FakeBackend {
   /** How many times it was invoked — for asking whether a screen re-read. */
   timesCalled(cmd: Command): number {
     return this.calls.filter((c) => c.cmd === cmd).length;
+  }
+
+  /**
+   * The arguments of every invocation of `cmd`, in the order they were made.
+   *
+   * For a command one screen makes more than one call to. The library screen
+   * reads `library_view` twice on mount — once for the count in its header,
+   * once for the table — and `lastArgs` can only answer about whichever
+   * happened to go last, which is a race a test should not be asserting on.
+   */
+  argsFor(cmd: Command): Record<string, unknown>[] {
+    return this.calls.filter((c) => c.cmd === cmd).map((c) => c.args);
   }
 
   /** The arguments of the last invocation of `cmd`. */
@@ -888,7 +938,9 @@ export class FakeBackend {
       case "library_entities": {
         if (!this.scanned) return [];
         const view = (a.view ?? {}) as core.LibraryView;
-        return view.groupBy === "artist" ? this.artists : this.albums;
+        if (view.groupBy === "artist") return this.artists;
+        if (view.groupBy === "genre") return this.genres;
+        return this.albums;
       }
 
       case "album_tracklist": {

@@ -76,51 +76,6 @@ describe("App — startup damage", () => {
 });
 
 /**
- * Where "back" lands.
- *
- * The library tab was local state inside `Library`, and opening a track's liner
- * notes unmounts `Library` entirely — the shell renders one or the other, not
- * both. So coming back remounted it at its default tab: you left from Songs and
- * returned to Albums, every time.
- *
- * It is a place, so it belongs in the history entry beside `opened` and
- * `playlist`. This is in the component suite rather than the browser one on
- * purpose: it is state routing, not layout, and it costs seconds here against
- * minutes there.
- */
-describe("App — the library tab is a place", () => {
-  it("returns to the tab that was open, not the default one", async () => {
-    useBackend();
-    render(<App />);
-    const user = userEvent.setup();
-
-    await screen.findByRole("navigation", { name: /screens and playlists/i });
-
-    // Albums is where the library starts, so moving to Songs is the change
-    // that has to survive the round trip.
-    await user.click(await screen.findByRole("tab", { name: /^songs$/i }));
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: /^songs$/i })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      ),
-    );
-
-    // Into a track, then back out the way the shell's own control does it.
-    const row = await screen.findByRole("option", { name: /Roygbiv/i });
-    await user.dblClick(row);
-    await user.click(await screen.findByRole("button", { name: /back/i }));
-
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: /^songs$/i })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      ),
-    );
-  });
-});
-
-/**
  * The tab bar as a drop target (POL-7).
  *
  * At the width that shows it there is no sidebar rail, so the tab is the only
