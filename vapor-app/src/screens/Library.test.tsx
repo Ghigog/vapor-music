@@ -651,11 +651,85 @@ describe("Library — an opened artist", () => {
     expect(
       screen.queryByRole("group", { name: /sort the tracks/i }),
     ).not.toBeInTheDocument();
-    // The genre, tempo and key cells with them. `makeRow` gives every row a
-    // genre of Electronic, 128 BPM and 8A.
-    expect(screen.queryByText(/electronic/i)).not.toBeInTheDocument();
+    // The tempo and key cells with them. `makeRow` gives every row 128 BPM
+    // and 8A.
     expect(screen.queryByText("128")).not.toBeInTheDocument();
     expect(screen.queryByText("8A")).not.toBeInTheDocument();
+    // The genre is not gone from the screen, it has moved: once under the
+    // artist's name rather than once per row. Both rows carry Electronic.
+    expect(screen.getAllByText(/electronic/i)).toHaveLength(1);
+  });
+
+  /**
+   * The genre, under the artist's name.
+   *
+   * It used to be a column, repeated down every one of their tracks. It is a
+   * fact about the artist, so it is said once, where their name is.
+   *
+   * Counted over their tracks rather than read off the first: the fixture
+   * gives two rows one genre each and a third that carries two, so the line
+   * can only be right by counting.
+   */
+  it("names what the artist is filed under, under their name", async () => {
+    const backend = useBackend({
+      artists: [
+        makeEntity({ name: "Noisia", subtitle: "2 albums", tracks: 3, lead: MACHINE_GUN }),
+      ],
+    });
+    backend.answers(
+      "library_view",
+      makePage([
+        {
+          header: "Split The Atom",
+          rows: [
+            makeRow({ href: MACHINE_GUN, title: "Machine Gun", artist: "Noisia", genres: ["Drum & Bass"] }),
+            makeRow({ href: CIRCULARITY, title: "Circularity", artist: "Noisia", genres: ["Drum & Bass", "Neurofunk"] }),
+          ],
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+
+    // Both, most of their music first — and not a third line of genre for a
+    // genre only one track carries.
+    expect(
+      await screen.findByText("Drum & Bass · Neurofunk"),
+    ).toBeInTheDocument();
+  });
+
+  /// An artist whose tracks carry no genre says nothing, rather than reserving
+  /// an empty line under their name.
+  it("says nothing when the tracks carry no genre", async () => {
+    const backend = useBackend({
+      artists: [
+        makeEntity({ name: "Noisia", subtitle: "2 albums", tracks: 1, lead: MACHINE_GUN }),
+      ],
+    });
+    backend.answers(
+      "library_view",
+      makePage([
+        {
+          header: "Split The Atom",
+          rows: [
+            makeRow({ href: MACHINE_GUN, title: "Machine Gun", artist: "Noisia", genres: [] }),
+          ],
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+
+    await screen.findByRole("button", { name: "Machine Gun" });
+    expect(document.querySelector(".library__opened-genres")).toBeNull();
   });
 
   /// One list, not one per record: the queue is what is on the screen.
