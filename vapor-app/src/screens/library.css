@@ -42,6 +42,38 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
+  /*
+   * Faded out by a mask rather than by a colour laid over it.
+   *
+   * The fade used to be an `::after` ramping to `var(--page)`, which is the
+   * flat fallback — but what is actually behind this is `--page-gradient`,
+   * and by 460px down the window that gradient is not `--page` any more. So
+   * the wash ended in a straight line of very slightly the wrong grey, right
+   * across the content column. A mask paints no colour of its own and cannot
+   * disagree with the ground: whatever is behind simply comes through.
+   *
+   * `currentColor` rather than a colour of its own: a mask reads alpha and
+   * ignores hue, so any opaque value does, and naming one here would be a
+   * colour outside tokens.css. `-webkit-` as well as the standard property,
+   * for the WKWebView the macOS build runs in.
+   */
+  -webkit-mask-image: linear-gradient(180deg, currentColor 52%, transparent 100%);
+  mask-image: linear-gradient(180deg, currentColor 52%, transparent 100%);
+}
+
+/*
+ * The wash with no picture behind it.
+ *
+ * An artist with no portrait is the ordinary case, not a failure — nothing
+ * looks one up unless a service has been asked — and drawing no wash at all
+ * left the top of the window a shade apart from the page under it, with a
+ * visible edge between them. This is the same material `--art-fill` gives the
+ * placeholder sleeve, at window scale and low enough to read as ground rather
+ * than as a panel: what an opened record with no cover has instead of colours.
+ */
+.library__wash--plain {
+  background: var(--art-fill);
+  opacity: 0.55;
 }
 
 .library__wash-img {
@@ -53,15 +85,6 @@
   transform: scale(1.25);
   filter: blur(52px) saturate(160%);
   opacity: 0.55;
-}
-
-/* Fades the picture into the page, so the list below starts on a plain
-   ground rather than on a wash trailing off under it. */
-.library__wash::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, transparent 55%, var(--page) 100%);
 }
 
 /* Everything on the screen reads over the wash. Positioned rather than given
@@ -513,6 +536,20 @@
 }
 
 /*
+ * What an artist is filed under, in the same slot an album names its artist.
+ *
+ * Not pressable, unlike the line above it: an album's artist is a place to
+ * go, and a genre here is a fact about who you are looking at. The Genres row
+ * on the library screen is where a genre is a destination.
+ */
+.library__opened-genres {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--ink-2);
+}
+
+/*
  * An opened album's artwork, and the control that goes looking for the right
  * one. Sits under the breadcrumb, above the track table.
  *
@@ -761,6 +798,79 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---- An opened artist's tracks --------------------------------------- */
+
+/*
+ * An artist's records, one after another.
+ *
+ * No columns and no sort controls: an artist page repeats the artist on every
+ * row, its albums are the headings, and BPM and key are the DJ's numbers
+ * rather than anything to do with reading what somebody released. What is
+ * left is titles under album headings, oldest record first.
+ */
+.artisttracks {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.artisttracks__album {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+ * The album title, and the year beside it.
+ *
+ * `baseline` rather than `center`, so the small year sits on the line of the
+ * title instead of floating in the middle of it. The year is what the order
+ * of these sections means, which is why it is on the heading and not hidden
+ * in a tooltip.
+ */
+.artisttracks__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.artisttracks__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artisttracks__year {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.artisttracks__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * One track. No grid: there is one thing in it.
+ *
+ * The opened album's rows carry a position number and so need two columns;
+ * these have none to carry — a library row knows its album, not its place on
+ * it — so a number column here would be a column of dashes.
+ */
+.artisttracks__row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
 }
 
 /* ---- The track table, under the shelves ------------------------------- */

@@ -125,13 +125,24 @@ export function Library({
    * it would be the same request twice for two halves of one picture.
    */
   const [heroArt, setHeroArt] = useState<string | null>(null);
+  /**
+   * What an opened artist is filed under, for the line beneath their name.
+   *
+   * Reported up by `ArtistTracks` rather than read again: it has already
+   * fetched every track of theirs, and each row carries its genres. A second
+   * round trip to count what is in hand would be the same read twice.
+   */
+  const [artistGenres, setArtistGenres] = useState<string[]>([]);
   const [ownOpened, setOwnOpened] = useState<Opened | null>(null);
   const opened = onOpenedChange ? (controlledOpened ?? null) : ownOpened;
   const setOpened = (next: Opened | null) => {
     // The wash belongs to what is open. Left standing across a change it
     // paints the previous record's colours behind the new one's name for as
-    // long as the new picture takes to arrive.
+    // long as the new picture takes to arrive. The genre line is the same
+    // hazard one line down: it would name the last artist under this one's
+    // name until the read lands.
     setHeroArt(null);
+    setArtistGenres([]);
     if (onOpenedChange) onOpenedChange(next);
     else setOwnOpened(next);
   };
@@ -269,12 +280,26 @@ export function Library({
         reaches the top of the window now and fades out over the header, so
         what you opened colours the whole top of the app.
 
+        Drawn for every opened record, with or without a picture. A record
+        nobody has a cover for — an artist with no portrait is the ordinary
+        case — used to get no wash at all, so the top of the window ended in a
+        visible line where the page's own horizon ran out and the flat ground
+        began. The plain variant carries the placeholder sleeve's material
+        instead, which is the same answer the empty tile below it gives.
+
         Decorative: the same picture is legible, unblurred, in the tile below
         it, so it is hidden from assistive tech.
       */}
-      {opened && heroArt && (
-        <div className="library__wash" aria-hidden="true">
-          <img className="library__wash-img" src={heroArt} alt="" />
+      {opened && (
+        <div
+          className={
+            "library__wash" + (heroArt ? "" : " library__wash--plain")
+          }
+          aria-hidden="true"
+        >
+          {heroArt && (
+            <img className="library__wash-img" src={heroArt} alt="" />
+          )}
         </div>
       )}
       <header className="library__head">
@@ -337,6 +362,24 @@ export function Library({
                     {opened.artist}
                   </button>
                 )}
+                {/*
+                  What an artist is filed under, in the album's subtitle slot.
+
+                  An artist's genre used to be a column repeated down every one
+                  of their tracks, which said the same thing eighty times and
+                  said it nowhere a person looks for it. It belongs to the
+                  artist, so it goes under their name — once.
+
+                  Silent until the read lands, and silent for an artist whose
+                  tracks carry no genre at all: an empty line reserving its own
+                  height under the title reads as something that failed to
+                  load.
+                */}
+                {opened.kind === "artist" && artistGenres.length > 0 && (
+                  <p className="library__opened-genres">
+                    {artistGenres.join(" · ")}
+                  </p>
+                )}
               </div>
               {opened.kind === "album" ? (
                 <AlbumArtwork
@@ -360,28 +403,30 @@ export function Library({
                 onOpen={onOpen}
                 onError={setPlayError}
               />
-            ) : (
+            ) : opened.kind === "artist" ? (
+              /* An artist is their records, in the order they made them.
+                 The sortable table is gone from here — see `ArtistTracks`. */
               <>
-                {opened.kind === "artist" && (
-                  <ArtistAlbums
-                    name={opened.name}
-                    onOpen={(album) => setOpened(album)}
-                    onPlay={(entity) => void playAlbumEntity(entity)}
-                  />
-                )}
-                <Songs
-                  onOpen={onOpen}
-                  query=""
-                  filter={
-                    opened.kind === "artist"
-                      ? { artist: opened.name }
-                      : { genre: opened.name }
-                  }
-                  // Playing from inside an opened record conducts within it.
-                  scope={opened.name}
-                  scroller={scrollerRef}
+                <ArtistAlbums
+                  name={opened.name}
+                  onOpen={(album) => setOpened(album)}
+                  onPlay={(entity) => void playAlbumEntity(entity)}
+                />
+                <ArtistTracks
+                  name={opened.name}
+                  onError={setPlayError}
+                  onGenres={setArtistGenres}
                 />
               </>
+            ) : (
+              <Songs
+                onOpen={onOpen}
+                query=""
+                filter={{ genre: opened.name }}
+                // Playing from inside an opened record conducts within it.
+                scope={opened.name}
+                scroller={scrollerRef}
+              />
             )}
           </div>
         ) : query.trim() ? (
@@ -845,6 +890,170 @@ function ArtistAlbums({
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * An artist's tracks, as their records rather than as a table.
+ *
+ * The sortable table used to sit here, and every column on it answered a
+ * question the page had already answered. Artist repeats the heading on every
+ * row. Album and genre are what the page is: an artist's albums are the
+ * headings, and their genre belongs beside their name, not down a column of
+ * their own. BPM and key are the DJ's numbers and have no bearing on reading
+ * what somebody released.
+ *
+ * So: no columns, no sort controls. Tracks grouped by album, albums in the
+ * order they came out — `year`, which is what the file's tags or the folder
+ * name say. Albums whose year nobody knows sink to the end rather than
+ * claiming 1970; that rule is `sort_rows`, not this screen's.
+ *
+ * One read for the whole artist, unwindowed. The flat table is windowed
+ * because it is fifty thousand rows; an artist is dozens, and paging a list
+ * that fits on two screens costs a round trip per scroll to save nothing.
+ */
+function ArtistTracks({
+  name,
+  onError,
+  onGenres,
+}: {
+  name: string;
+  onError: (message: string) => void;
+  /** What this artist is filed under, for the line under their name. */
+  onGenres: (genres: string[]) => void;
+}) {
+  const [sections, setSections] = useState<core.LibrarySection[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** Bumped by Retry, which is the only thing that re-reads. */
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSections(null);
+    setError(null);
+    core
+      .libraryView({
+        artist: name,
+        groupBy: "album",
+        sortKey: "year",
+        ascending: true,
+      })
+      .then((got) => {
+        if (cancelled) return;
+        setSections(got);
+        onGenres(topGenres(got));
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(messageOf(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `onGenres` is a setter and stable; listing it would re-read the artist
+    // whenever the screen above re-renders for any other reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, revision]);
+
+  if (error) {
+    return (
+      <ErrorNotice error={error} onRetry={() => setRevision((r) => r + 1)} />
+    );
+  }
+  if (sections === null) return <p className="label">reading tracks</p>;
+
+  /**
+   * Play `href`, queueing the artist behind it in the order shown.
+   *
+   * Every track, not the album the press landed in: the list is one list, and
+   * a queue that stopped at the end of a record would be a different answer
+   * from the one on screen. `name` is the scope, so the DJ conducts within
+   * the artist — the same thing an opened album does with its own.
+   */
+  async function play(href: string) {
+    const hrefs = (sections ?? []).flatMap((s) => s.rows.map((r) => r.href));
+    try {
+      await core.playTracks(hrefs, href, name);
+    } catch (e: unknown) {
+      onError(messageOf(e));
+    }
+  }
+
+  return (
+    <div className="artisttracks">
+      {sections.map((section) => (
+        <section className="artisttracks__album" key={section.header}>
+          <h3 className="artisttracks__head">
+            {/* The header is the album title, or "—" for tracks whose album
+                nobody knows — one heading for all of them, which is what
+                `group_rows` sends. */}
+            <span className="artisttracks__name">{section.header}</span>
+            {yearOf(section) > 0 && (
+              <span className="artisttracks__year numeric">
+                {yearOf(section)}
+              </span>
+            )}
+          </h3>
+          <ol className="artisttracks__list">
+            {section.rows.map((row) => (
+              <li className="artisttracks__row" key={row.href}>
+                {/* The same control an opened album's tracklist uses: a real
+                    button, so it focuses and answers Enter and Space. */}
+                <button
+                  type="button"
+                  className="tracklist__title"
+                  onClick={() => void play(row.href)}
+                >
+                  {row.title}
+                </button>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What an artist is filed under, most of their music first.
+ *
+ * Counted over their tracks rather than taken from the first one: a rock
+ * artist with two ambient B-sides is a rock artist, and the first track
+ * alphabetically has no claim to speak for the rest. Three at most — a line
+ * naming nine genres is a list, and the point of putting it under the name is
+ * that it can be read at a glance.
+ *
+ * A track can be filed under several, and each of them counts. Ties keep the
+ * order they were met in, which for equal counts is as good an answer as
+ * there is and at least a stable one.
+ */
+function topGenres(sections: core.LibrarySection[], limit = 3): string[] {
+  const counts = new Map<string, number>();
+  for (const section of sections) {
+    for (const row of section.rows) {
+      for (const genre of row.genres) {
+        counts.set(genre, (counts.get(genre) ?? 0) + 1);
+      }
+    }
+  }
+  return [...counts]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([genre]) => genre);
+}
+
+/**
+ * When a section's album came out, or 0 when nothing says.
+ *
+ * The earliest year its tracks carry rather than the first row's: a folder
+ * can hold one mistagged file, and one wrong number should not re-date the
+ * record. 0 means unknown and is not drawn — a heading reading "0" would be
+ * a claim, and so would the year of a reissue nobody entered.
+ */
+function yearOf(section: core.LibrarySection): number {
+  return section.rows.reduce(
+    (year, row) => (row.year > 0 && (year === 0 || row.year < year) ? row.year : year),
+    0,
   );
 }
 
