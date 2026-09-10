@@ -621,6 +621,7 @@ export function App() {
             playback outlives whichever screen started it. */}
         <Transport
           onOpenNowPlaying={() => go("playing")}
+          onOpenEntity={openEntity}
           djMode={djMode}
           onDjModeChange={setDjModePersisted}
         />

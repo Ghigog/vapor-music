@@ -156,12 +156,13 @@ describe("Library — one screen, top to bottom", () => {
   });
 
   /**
-   * Back goes where the crumb says.
+   * An album names its artist, and the name is the way to them.
    *
-   * The crumb used to name a tab, which is a place that no longer exists.
-   * There is one view to return to and it says so.
+   * There was a crumb here instead — a way back to the library, and no way
+   * onwards. From a shelf the artist was unreachable without leaving the
+   * record and finding them among the tiles again.
    */
-  it("says the press returns to the library, because it does", async () => {
+  it("goes from an album opened on a shelf to its artist", async () => {
     useBackend();
     const user = userEvent.setup();
     render(<Library />);
@@ -169,11 +170,12 @@ describe("Library — one screen, top to bottom", () => {
     await user.click(
       await screen.findByRole("button", { name: /open the album windowlicker ep/i }),
     );
-    const back = await screen.findByRole("button", { name: /‹ library/i });
-    await user.click(back);
+    await user.click(
+      await screen.findByRole("button", { name: /^aphex twin$/i }),
+    );
 
     expect(
-      await screen.findByRole("heading", { name: /^albums$/i }),
+      await screen.findByRole("heading", { name: /^aphex twin$/i }),
     ).toBeInTheDocument();
   });
 

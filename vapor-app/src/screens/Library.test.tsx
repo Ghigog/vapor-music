@@ -187,17 +187,17 @@ describe("Library — album artwork", () => {
       await screen.findByRole("button", { name: /open the artist tame impala/i }),
     );
 
-    await screen.findByRole("button", { name: /‹ library/i });
+    await screen.findByRole("heading", { name: /^tame impala$/i });
     expect(
       screen.queryByRole("button", { name: /cover of/i }),
     ).not.toBeInTheDocument();
   });
 
-  /// The artist page's own shelf, and the crumb it leaves behind — the one
-  /// thing a flat `opened` slot cannot get right for free, since going back
-  /// from an album reached this way has to surface the artist again rather
-  /// than skip past them to the library (`Opened.via`).
-  it("opens an album from the artist's own shelf, and back returns to the artist", async () => {
+  /// The artist page's own shelf, and the way back out of an album it opens.
+  /// There is no crumb any more: an album names its artist under its title,
+  /// and pressing that name is the route to them — from anywhere the album
+  /// was opened, not only from the artist's own shelf.
+  it("opens an album from the artist's own shelf, and its artist line returns", async () => {
     useBackend({
       rows: album(),
       albums: currents(),
@@ -223,14 +223,16 @@ describe("Library — album artwork", () => {
 
     // Inside the album now — its tracks, not the artist's.
     expect(await screen.findByText("Let It Happen")).toBeInTheDocument();
-    const back = await screen.findByRole("button", { name: /‹ tame impala/i });
+    await screen.findByRole("heading", { name: /^currents$/i });
 
-    await user.click(back);
+    await user.click(
+      await screen.findByRole("button", { name: /^tame impala$/i }),
+    );
 
-    // Back at the artist, not out at the library.
-    await screen.findByRole("button", { name: /‹ library/i });
+    // Back at the artist, not out at the library: their own shelf is here.
+    await screen.findByRole("heading", { name: /^tame impala$/i });
     expect(
-      screen.queryByRole("button", { name: /open the album currents/i }),
+      await screen.findByRole("button", { name: /open the album currents/i }),
     ).toBeInTheDocument();
   });
 });

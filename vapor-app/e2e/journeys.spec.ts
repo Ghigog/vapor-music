@@ -453,7 +453,9 @@ test.describe("Going back", () => {
     await expect(
       page.getByRole("button", { name: /open the album selected ambient works/i }),
     ).toBeVisible();
-    await expect(page.getByRole("button", { name: /‹ library/i })).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Windowlicker EP" }),
+    ).toHaveCount(0);
   });
 });
 
@@ -575,23 +577,28 @@ test.describe("Albums and artists", () => {
    * and the claim went with it rather than being propped up.
    *
    * What survives is what this suite can honestly witness: the drill-down
-   * opens, and the way back out works in a real browser with real history.
-   * That the right rows arrive is covered in `Library.test.tsx`, which asserts
-   * the album reached the request, and in the backend's own tests.
+   * opens, the artist named under its title is a way onwards, and the way
+   * back out works in a real browser with real history. That the right rows
+   * arrive is covered in `Library.test.tsx`, which asserts the album reached
+   * the request, and in the backend's own tests.
    */
-  test("opening an album drills in, and back returns", async ({ page }) => {
+  test("opening an album drills in, and its artist is the way onwards", async ({
+    page,
+  }) => {
     await boot(page);
 
     await page.getByRole("button", { name: /open the album windowlicker ep/i }).click();
 
+    await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Windowlicker EP" })).toBeVisible();
-    // One library view, so the crumb names it rather than a tab that is gone.
-    await expect(page.getByRole("button", { name: /‹ library/i })).toBeVisible();
 
-    await page.getByRole("button", { name: /‹ library/i }).click();
-    await expect(
-      page.getByRole("button", { name: /open the album selected ambient works/i }),
-    ).toBeVisible();
+    // The album names its artist, and the name opens them.
+    await page.locator(".library__opened-artist").click();
+    await expect(page.getByRole("heading", { name: "Aphex Twin" })).toBeVisible();
+
+    // History still leaves a drill-down, now one level deeper.
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: "Windowlicker EP" })).toBeVisible();
   });
 
   test("an album plays from its tile without being opened", async ({ page }) => {
@@ -615,7 +622,7 @@ test.describe("Albums and artists", () => {
     // narrowing, and this suite does not run the backend — see the note on the
     // album test above.
     await expect(page.getByText("Windowlicker", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /‹ library/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Aphex Twin" })).toBeVisible();
   });
 
   /**
@@ -623,7 +630,7 @@ test.describe("Albums and artists", () => {
    *
    * A row of pills ranked by what has been played and what has been skipped
    * under each. What the ranking is belongs to the backend; what is only true
-   * in a browser is that pressing one drills in and the crumb leads back out.
+   * in a browser is that pressing one drills in and names what it opened.
    */
   test("a genre pill opens the tracks filed under it", async ({ page }) => {
     await boot(page);
@@ -631,7 +638,6 @@ test.describe("Albums and artists", () => {
     await page.getByRole("button", { name: /open the genre electronic/i }).click();
 
     await expect(page.getByRole("heading", { name: "Electronic" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /‹ library/i })).toBeVisible();
   });
 });
 
