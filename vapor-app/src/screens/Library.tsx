@@ -360,28 +360,26 @@ export function Library({
                 onOpen={onOpen}
                 onError={setPlayError}
               />
-            ) : (
+            ) : opened.kind === "artist" ? (
+              /* An artist is their records, in the order they made them.
+                 The sortable table is gone from here — see `ArtistTracks`. */
               <>
-                {opened.kind === "artist" && (
-                  <ArtistAlbums
-                    name={opened.name}
-                    onOpen={(album) => setOpened(album)}
-                    onPlay={(entity) => void playAlbumEntity(entity)}
-                  />
-                )}
-                <Songs
-                  onOpen={onOpen}
-                  query=""
-                  filter={
-                    opened.kind === "artist"
-                      ? { artist: opened.name }
-                      : { genre: opened.name }
-                  }
-                  // Playing from inside an opened record conducts within it.
-                  scope={opened.name}
-                  scroller={scrollerRef}
+                <ArtistAlbums
+                  name={opened.name}
+                  onOpen={(album) => setOpened(album)}
+                  onPlay={(entity) => void playAlbumEntity(entity)}
                 />
+                <ArtistTracks name={opened.name} onError={setPlayError} />
               </>
+            ) : (
+              <Songs
+                onOpen={onOpen}
+                query=""
+                filter={{ genre: opened.name }}
+                // Playing from inside an opened record conducts within it.
+                scope={opened.name}
+                scroller={scrollerRef}
+              />
             )}
           </div>
         ) : query.trim() ? (
@@ -845,6 +843,134 @@ function ArtistAlbums({
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * An artist's tracks, as their records rather than as a table.
+ *
+ * The sortable table used to sit here, and every column on it answered a
+ * question the page had already answered. Artist repeats the heading on every
+ * row. Album and genre are what the page is: an artist's albums are the
+ * headings, and their genre belongs beside their name, not down a column of
+ * their own. BPM and key are the DJ's numbers and have no bearing on reading
+ * what somebody released.
+ *
+ * So: no columns, no sort controls. Tracks grouped by album, albums in the
+ * order they came out — `year`, which is what the file's tags or the folder
+ * name say. Albums whose year nobody knows sink to the end rather than
+ * claiming 1970; that rule is `sort_rows`, not this screen's.
+ *
+ * One read for the whole artist, unwindowed. The flat table is windowed
+ * because it is fifty thousand rows; an artist is dozens, and paging a list
+ * that fits on two screens costs a round trip per scroll to save nothing.
+ */
+function ArtistTracks({
+  name,
+  onError,
+}: {
+  name: string;
+  onError: (message: string) => void;
+}) {
+  const [sections, setSections] = useState<core.LibrarySection[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** Bumped by Retry, which is the only thing that re-reads. */
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSections(null);
+    setError(null);
+    core
+      .libraryView({
+        artist: name,
+        groupBy: "album",
+        sortKey: "year",
+        ascending: true,
+      })
+      .then((got) => {
+        if (!cancelled) setSections(got);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(messageOf(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name, revision]);
+
+  if (error) {
+    return (
+      <ErrorNotice error={error} onRetry={() => setRevision((r) => r + 1)} />
+    );
+  }
+  if (sections === null) return <p className="label">reading tracks</p>;
+
+  /**
+   * Play `href`, queueing the artist behind it in the order shown.
+   *
+   * Every track, not the album the press landed in: the list is one list, and
+   * a queue that stopped at the end of a record would be a different answer
+   * from the one on screen. `name` is the scope, so the DJ conducts within
+   * the artist — the same thing an opened album does with its own.
+   */
+  async function play(href: string) {
+    const hrefs = (sections ?? []).flatMap((s) => s.rows.map((r) => r.href));
+    try {
+      await core.playTracks(hrefs, href, name);
+    } catch (e: unknown) {
+      onError(messageOf(e));
+    }
+  }
+
+  return (
+    <div className="artisttracks">
+      {sections.map((section) => (
+        <section className="artisttracks__album" key={section.header}>
+          <h3 className="artisttracks__head">
+            {/* The header is the album title, or "—" for tracks whose album
+                nobody knows — one heading for all of them, which is what
+                `group_rows` sends. */}
+            <span className="artisttracks__name">{section.header}</span>
+            {yearOf(section) > 0 && (
+              <span className="artisttracks__year numeric">
+                {yearOf(section)}
+              </span>
+            )}
+          </h3>
+          <ol className="artisttracks__list">
+            {section.rows.map((row) => (
+              <li className="artisttracks__row" key={row.href}>
+                {/* The same control an opened album's tracklist uses: a real
+                    button, so it focuses and answers Enter and Space. */}
+                <button
+                  type="button"
+                  className="tracklist__title"
+                  onClick={() => void play(row.href)}
+                >
+                  {row.title}
+                </button>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * When a section's album came out, or 0 when nothing says.
+ *
+ * The earliest year its tracks carry rather than the first row's: a folder
+ * can hold one mistagged file, and one wrong number should not re-date the
+ * record. 0 means unknown and is not drawn — a heading reading "0" would be
+ * a claim, and so would the year of a reissue nobody entered.
+ */
+function yearOf(section: core.LibrarySection): number {
+  return section.rows.reduce(
+    (year, row) => (row.year > 0 && (year === 0 || row.year < year) ? row.year : year),
+    0,
   );
 }
 

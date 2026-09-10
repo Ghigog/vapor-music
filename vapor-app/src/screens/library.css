@@ -763,6 +763,79 @@
   border: 0;
 }
 
+/* ---- An opened artist's tracks --------------------------------------- */
+
+/*
+ * An artist's records, one after another.
+ *
+ * No columns and no sort controls: an artist page repeats the artist on every
+ * row, its albums are the headings, and BPM and key are the DJ's numbers
+ * rather than anything to do with reading what somebody released. What is
+ * left is titles under album headings, oldest record first.
+ */
+.artisttracks {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.artisttracks__album {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+ * The album title, and the year beside it.
+ *
+ * `baseline` rather than `center`, so the small year sits on the line of the
+ * title instead of floating in the middle of it. The year is what the order
+ * of these sections means, which is why it is on the heading and not hidden
+ * in a tooltip.
+ */
+.artisttracks__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.artisttracks__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artisttracks__year {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.artisttracks__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * One track. No grid: there is one thing in it.
+ *
+ * The opened album's rows carry a position number and so need two columns;
+ * these have none to carry — a library row knows its album, not its place on
+ * it — so a number column here would be a column of dashes.
+ */
+.artisttracks__row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
 /* ---- The track table, under the shelves ------------------------------- */
 
 /*

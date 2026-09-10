@@ -14,7 +14,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { useBackend } from "../test/setup";
-import { makeEntity, makeRow } from "../test/ipc";
+import { makeEntity, makePage, makeRow } from "../test/ipc";
 import * as drag from "../lib/drag";
 import type * as core from "../lib/core";
 
@@ -522,5 +522,161 @@ describe("Library — an opened album shows what it is missing", () => {
     // The tracks are still listed — via Songs — and nothing claims a shortfall.
     await screen.findByText("Let It Happen");
     expect(screen.queryByText(/not in your library/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * An opened artist is their records, not a table of their tracks.
+ *
+ * The sortable table used to sit here, and every column on it restated
+ * something the page had already said or had nothing to do with it: the
+ * artist is the heading, the albums are the headings under it, and BPM and
+ * key are the DJ's numbers. What is left is titles under album headings,
+ * oldest record first.
+ */
+describe("Library — an opened artist", () => {
+  const MACHINE_GUN = "/dav/Music/Noisia/Split%20The%20Atom/01.mp3";
+  const CIRCULARITY = "/dav/Music/Noisia/Outer%20Edges/01.mp3";
+
+  /**
+   * Two records, the older first — which is the answer, not the arrangement.
+   *
+   * The order is the backend's: `sortKey: "year"` with `groupBy: "album"`, and
+   * `vapor_library` tests that it sorts. What is tested here is that the
+   * screen asks for that and draws what comes back in the order it comes back
+   * in, rather than re-sorting it into an opinion of its own.
+   */
+  function records(): core.LibraryPage {
+    return makePage([
+      {
+        header: "Split The Atom",
+        rows: [
+          makeRow({
+            href: MACHINE_GUN,
+            title: "Machine Gun",
+            artist: "Noisia",
+            album: "Split The Atom",
+            year: 2010,
+          }),
+        ],
+      },
+      {
+        header: "Outer Edges",
+        rows: [
+          makeRow({
+            href: CIRCULARITY,
+            title: "Circularity",
+            artist: "Noisia",
+            album: "Outer Edges",
+            year: 2016,
+          }),
+        ],
+      },
+    ]);
+  }
+
+  function openNoisia() {
+    const backend = useBackend({
+      artists: [
+        makeEntity({
+          name: "Noisia",
+          subtitle: "2 albums",
+          tracks: 2,
+          lead: MACHINE_GUN,
+        }),
+      ],
+    });
+    backend.answers("library_view", records());
+    return backend;
+  }
+
+  it("lists the tracks under their albums, in the order the records came out", async () => {
+    openNoisia();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+
+    await screen.findByRole("heading", { name: /split the atom/i });
+    // The album name and its year are two spans in one heading, so the text
+    // runs together. Both are asserted here because the year is what the
+    // order of the headings means.
+    expect(
+      screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+    ).toEqual(["Split The Atom2010", "Outer Edges2016"]);
+    expect(screen.getByRole("button", { name: "Machine Gun" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Circularity" })).toBeInTheDocument();
+  });
+
+  it("asks for the artist grouped by album and ordered by year", async () => {
+    const backend = openNoisia();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+    await screen.findByRole("heading", { name: /split the atom/i });
+
+    expect(
+      backend.argsFor("library_view").some((args) => {
+        const view = args.view as core.LibraryView;
+        return (
+          view.artist === "Noisia" &&
+          view.groupBy === "album" &&
+          view.sortKey === "year" &&
+          view.ascending === true
+        );
+      }),
+    ).toBe(true);
+  });
+
+  /// No columns and nothing to sort by: the table's chrome is gone, not hidden.
+  it("carries none of the table's columns", async () => {
+    openNoisia();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    // On the way in they are there, which is what makes their absence a change
+    // rather than a screen that never had them.
+    await screen.findByRole("group", { name: /sort the tracks/i });
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+    await screen.findByRole("heading", { name: /split the atom/i });
+
+    expect(
+      screen.queryByRole("group", { name: /sort the tracks/i }),
+    ).not.toBeInTheDocument();
+    // The genre, tempo and key cells with them. `makeRow` gives every row a
+    // genre of Electronic, 128 BPM and 8A.
+    expect(screen.queryByText(/electronic/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("128")).not.toBeInTheDocument();
+    expect(screen.queryByText("8A")).not.toBeInTheDocument();
+  });
+
+  /// One list, not one per record: the queue is what is on the screen.
+  it("plays the whole artist from the track pressed", async () => {
+    const backend = openNoisia();
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Machine Gun" }),
+    );
+
+    expect(backend.lastArgs("play_tracks")?.hrefs).toEqual([
+      MACHINE_GUN,
+      CIRCULARITY,
+    ]);
+    expect(backend.lastArgs("play_tracks")?.start).toBe(MACHINE_GUN);
+    // Scoped to the artist, so the DJ conducts within them.
+    expect(backend.lastArgs("play_tracks")?.scope).toBe("Noisia");
   });
 });
