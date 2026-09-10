@@ -321,8 +321,34 @@ export function Songs({
    * arrive, and a number handed down at mount would be wrong a frame later.
    */
   const [scrollMargin, setScrollMargin] = useState(0);
+
+  /**
+   * The caller's scroller, as an element rather than a ref.
+   *
+   * React attaches refs child-first, so on the mount pass a child's layout
+   * effect runs *before* its parent's ref is set: `scroller.current` was null
+   * exactly when the measurement below wanted it, and `[scroller]` — a ref
+   * object, stable for the life of the screen — never changed to ask again.
+   * `scrollMargin` therefore stayed 0 for as long as the screen was open.
+   *
+   * That is not a small offset error. At 0 the virtualizer reads the page's
+   * `scrollTop` as though the table began at the top of the page, so it picks
+   * the rows a screenful further down than the ones it then draws at the top
+   * of the list: scroll to the table and every row is blank with a single one
+   * clinging to the bottom edge. Fixed 2026-09-10.
+   *
+   * Held in state, because the element arriving is what has to trigger the
+   * measurement. The effect has no dependency array on purpose — it asks after
+   * every render until the answer is not null, and `setState` to the value it
+   * already holds does not re-render.
+   */
+  const [outerEl, setOuterEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setOuterEl(scroller?.current ?? null);
+  });
+
   useLayoutEffect(() => {
-    const outer = scroller?.current;
+    const outer = outerEl;
     const list = scrollRef.current;
     if (!outer || !list) return;
 
@@ -345,7 +371,7 @@ export function Songs({
     for (const child of Array.from(outer.children)) observer.observe(child);
     observer.observe(outer);
     return () => observer.disconnect();
-  }, [scroller]);
+  }, [outerEl]);
 
   /**
    * What this table is a view of — everything except which window of it.
@@ -487,7 +513,11 @@ export function Songs({
     // The caller's scroller when there is one, otherwise the region below.
     // `scrollMargin` is what makes the first case work: without it every row
     // would be placed as though the table began at the top of the page.
-    getScrollElement: () => scroller?.current ?? scrollRef.current,
+    //
+    // `outerEl`, not `scroller.current`, so the element being scrolled and the
+    // margin measured against it are always the same element in the same
+    // commit — the two disagreeing for even one render is the bug above.
+    getScrollElement: () => outerEl ?? scrollRef.current,
     scrollMargin,
     estimateSize: () => ROW_HEIGHT + ROW_GAP,
     // A few rows above and below the viewport, so a fast scroll does not

@@ -12,6 +12,7 @@
  * rule exists to prevent.
  */
 import { describe, expect, it } from "vitest";
+import { useRef } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Songs } from "./Songs";
@@ -724,5 +725,131 @@ describe("Songs — gestures", () => {
     await user.keyboard("{/Meta}");
 
     expect(await screen.findByText(/2 selected/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Where the rows are drawn, when the page does the scrolling.
+ *
+ * Library stacks a header, two shelves and a row of genres above this table
+ * and scrolls the whole column with one scrollbar, so the table is handed that
+ * scroller and has to know how far down the column it starts —
+ * `scrollMargin`. Get that number wrong and the virtualizer picks one set of
+ * rows while the list draws them at another set of offsets.
+ *
+ * It was 0 for the life of the screen. React attaches refs child-first, so
+ * this table's layout effect ran before Library's `ref` was set, the
+ * measurement returned early, and its only dependency was the ref object
+ * itself — stable, so it never asked again. Scrolling to the table showed a
+ * blank list with one row hanging off the bottom.
+ */
+describe("Songs — inside a page that scrolls", () => {
+  /** How far down the scrolling column the table starts. */
+  const ABOVE = 5000;
+  /** The scroller's height, and how far down the column it has been scrolled. */
+  const VIEW = 700;
+  const SCROLLED = 6000;
+  /** `ROW_HEIGHT + ROW_GAP` in Songs.tsx. */
+  const PITCH = 70;
+
+  /** A rect `height` tall whose top edge is at `top`. */
+  function rectAt(top: number): DOMRect {
+    return {
+      top,
+      bottom: top + VIEW,
+      height: VIEW,
+      left: 0,
+      right: 1024,
+      width: 1024,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    } as DOMRect;
+  }
+
+  /**
+   * Geometry, since jsdom has none.
+   *
+   * Installed before the render rather than patched onto the nodes after it,
+   * because the measurement runs at mount: a number handed over afterwards
+   * would be read by nothing. The column's top edge is the viewport's, and the
+   * list begins `ABOVE` into the column — so where it lands on screen is a
+   * function of the live `scrollTop`, which is what makes the measured margin
+   * come out the same at any scroll position.
+   */
+  function giveEveryoneASize() {
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function patched(
+      this: Element,
+    ): DOMRect {
+      const column = document.querySelector<HTMLElement>(
+        '[data-testid="column"]',
+      );
+      if (this === column) return rectAt(0);
+      if (this.classList.contains("songs__scroll")) {
+        return rectAt(ABOVE - (column?.scrollTop ?? 0));
+      }
+      return original.call(this);
+    };
+    return () => {
+      Element.prototype.getBoundingClientRect = original;
+    };
+  }
+
+  /** Library's column: something tall above, the table below, one scrollbar. */
+  function Column() {
+    const scroller = useRef<HTMLDivElement>(null);
+    return (
+      <div data-testid="column" ref={scroller}>
+        <div data-testid="above" style={{ height: ABOVE }} />
+        <Songs scroller={scroller} />
+      </div>
+    );
+  }
+
+  it("draws the rows the scroll position is actually over", async () => {
+    // Enough rows that both answers — the right one and the wrong one — name a
+    // row that exists, rather than being clamped back to the top of the list.
+    useBackend({
+      rows: Array.from({ length: 400 }, (_, i) =>
+        makeRow({ title: `Track ${i}`, href: `/music/${i}.flac` }),
+      ),
+    });
+    const restore = giveEveryoneASize();
+
+    try {
+      render(<Column />);
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+
+      const column = screen.getByTestId("column");
+      column.scrollTop = SCROLLED;
+      await act(async () => {
+        column.dispatchEvent(new Event("scroll"));
+      });
+
+      /*
+       * 1000px past the top of the list, so the rows over the viewport are the
+       * ones about fourteen deep. Read from the top of the page instead — the
+       * whole 6000 — and it is row 85, a thousand rows of nothing between the
+       * two.
+       *
+       * A range rather than an index: how far above the viewport the
+       * virtualizer reaches is its overscan and its business. What is this
+       * table's business is which end it counts from.
+       */
+      const first = Math.min(
+        ...rows().map((row) => Number(row.id.replace("row-", ""))),
+      );
+      const expected = Math.floor((SCROLLED - ABOVE) / PITCH);
+
+      expect(first).toBeGreaterThanOrEqual(Math.max(0, expected - 8));
+      expect(first).toBeLessThanOrEqual(expected);
+      // And the row it drew is a row it holds. Blank placeholders where the
+      // fetched window does not reach were the other half of what this looked
+      // like on screen.
+      expect(screen.getByText(`Track ${first}`)).toBeInTheDocument();
+    } finally {
+      restore();
+    }
   });
 });

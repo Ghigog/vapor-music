@@ -95,12 +95,10 @@
     --per: 3;
   }
 
-  /* Eight genre pills across a 390px phone is four characters each. The row
-     is the same affordance at any width — it scrolls — so it simply shows
-     fewer whole ones before it does. */
-  .genres__row {
-    --per: 3;
-  }
+  /* Nothing for the genre row: its pills are as wide as the words in them at
+     every width, so a narrow screen simply fits fewer of them before the row
+     scrolls. It was `--per: 3` here, back when they were forced to a column
+     width — see the note on `.genres__row` below. */
 }
 
 /* ---- Genres ----------------------------------------------------------
@@ -109,8 +107,9 @@
  *
  * Between the albums and the track table, which is where it belongs in the
  * question someone is asking: an artist, then a record, then a mood, then
- * everything. Eight across, because a genre is one or two words and a tile's
- * worth of width for "House" would be a shelf pretending to be a grid.
+ * everything. Each pill is as wide as the genre it names, because a tile's
+ * worth of width for "House" would be a shelf pretending to be a grid — and a
+ * column's worth of width for "drum and bass" is "dru...", which is worse.
  * -------------------------------------------------------------------- */
 
 .genres {
@@ -124,24 +123,31 @@
 }
 
 /*
- * Sideways, by whole pills, with the same sliver of the next one showing that
- * `.shelf__row` leaves — a row ending flush with its last whole item looks
- * like a row with nothing more in it.
+ * Sideways, by the width of the words.
+ *
+ * This was a grid of eight equal columns, one pill per column, and eight
+ * columns of a content width is not eight pills — it is eight pills the same
+ * width as each other whatever they say. On a real library that read
+ * "am... 156  dru... 40  elect... 59  boo... 22", four characters and an
+ * ellipsis each, so the row named almost nothing in it and the one thing a
+ * genre pill has to do is say which genre it is.
+ *
+ * A flex row sizes each to its own name and lets the row overflow, which is
+ * the affordance it already had: it scrolls. The sliver of the next pill that
+ * the old `- 10px` bought deliberately comes free here — a row of intrinsic
+ * widths almost never ends flush with the edge.
  */
 .genres__row {
-  --per: 8;
   align-items: center;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: calc((100% - (var(--per) - 1) * 8px) / var(--per) - 10px);
+  display: flex;
   gap: 8px;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x proximity;
-  /* Room for the focus ring and the shadow, which a scroller clipped to the
-     pills' exact height would shave off. `overflow-x` computes `overflow-y`
-     to `auto` rather than `visible` (CSS Overflow §3), so this padding is the
-     only thing between the ring and a hard clip. */
+  /* Room for the focus ring, which a scroller clipped to the pills' exact
+     height would shave off. `overflow-x` computes `overflow-y` to `auto`
+     rather than `visible` (CSS Overflow §3), so this padding is the only
+     thing between the ring and a hard clip. */
   padding: 4px 0 10px;
   scrollbar-width: none;
   overscroll-behavior-x: contain;
@@ -152,35 +158,61 @@
 }
 
 /*
- * A pill, the same shape the tab bar above this used to be.
+ * A pill, the same shape the tab bar above this used to be, in the tint the
+ * design system uses for a tag.
  *
  * That bar is gone — there is one library view now, not five — and the shape
  * it left behind is the right one for this: a short name you press, in a row
- * you sweep along. Reusing it means the one horizontal row of words on the
- * screen still looks like the one horizontal row of words it replaced.
+ * you sweep along.
+ *
+ * What it is no longer is a small raised card. `--fill-raised` and
+ * `--shadow-sm` are what a shelf tile is made of, and a row of twelve
+ * miniature white tiles under a row of album covers read as a row of things
+ * the covers had failed to load into. A genre is a label, so it is drawn as
+ * one: the accent as a tinted surface with a hairline rim of the same hue,
+ * which is `ACCENT_SURFACE` in `docs/DESIGN_LANGUAGE.md` and the same
+ * treatment the design file gives its FRESH tag and a selected row.
+ *
+ * One tint and not a palette per genre, however tempting a row of colours is
+ * — "a single, professional cool blue, no secondary accent competes for
+ * attention" is the colour system's first rule, and colour in this app is
+ * atmospheric rather than decorative. In Lamplight the accent is the lamp, so
+ * the row warms with the theme without naming a second colour.
+ *
+ * The name stays `--ink`: it is the content, at body size, and the design
+ * tints a tag's *label* only where that label is nine points of tracked-out
+ * mono. The colour lands on the ground, the rim, and the count.
  */
 .genres__pill {
   scroll-snap-align: start;
-  min-width: 0;
+  /* As wide as its name, up to a cap: long enough for "progressive house"
+     whole, short enough that one unhelpful genre string — and a file's genre
+     tag can say anything at all — cannot take the row with it. The cap holds
+     without a `min-width` of its own, because a flex item's automatic minimum
+     is itself clamped by `max-width` (CSS Flexbox §4.5); the `min-width: 0`
+     that has to be stated is the *name's*, one rule down. */
+  flex: none;
+  max-width: 220px;
   display: flex;
   align-items: baseline;
   gap: 8px;
   height: 38px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 19px;
-  background: var(--fill-raised);
-  box-shadow: var(--shadow-sm);
+  padding: 0 15px;
+  border: 1px solid rgba(var(--accent-rgb), 0.26);
+  border-radius: var(--r-pill);
+  background: rgba(var(--accent-rgb), 0.1);
   cursor: pointer;
   text-align: left;
   transition:
     background var(--dur-fast) var(--ease),
-    transform var(--dur-fast) var(--ease);
+    border-color var(--dur-fast) var(--ease);
 }
 
+/* Deeper, not lifted. A tag sits in the page; lifting it off the page is the
+   gesture that belongs to the cards above. */
 .genres__pill:hover {
-  background: var(--fill-raised-hover);
-  transform: translateY(-1px);
+  background: rgba(var(--accent-rgb), 0.17);
+  border-color: rgba(var(--accent-rgb), 0.42);
 }
 
 .genres__pill:focus-visible {
@@ -192,15 +224,20 @@
   font-family: var(--font-ui);
   font-size: var(--fs-body);
   color: var(--ink);
-  max-width: 100%;
+  /* Shrinks, and is the only thing in the pill that may: a name clipped at
+     220px still reads, and a clipped count is a wrong number. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* `--accent-dim` is the accent as text on an accent-tinted chip, which is
+   this exact pairing and the reason that token exists. */
 .genres__count {
+  flex: none;
   font-family: var(--font-mono);
   font-size: var(--fs-label);
   letter-spacing: var(--ls-label);
-  color: var(--ink-3);
+  color: var(--accent-dim);
 }
