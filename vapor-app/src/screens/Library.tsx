@@ -280,26 +280,17 @@ export function Library({
         reaches the top of the window now and fades out over the header, so
         what you opened colours the whole top of the app.
 
-        Drawn for every opened record, with or without a picture. A record
-        nobody has a cover for — an artist with no portrait is the ordinary
-        case — used to get no wash at all, so the top of the window ended in a
-        visible line where the page's own horizon ran out and the flat ground
-        began. The plain variant carries the placeholder sleeve's material
-        instead, which is the same answer the empty tile below it gives.
+        Only when there is a picture to show. A flat placeholder tint here
+        (tried once, see history) still ended in an edge of its own a few
+        hundred pixels down — the plain page beneath it is the one background
+        that never draws a line against anything.
 
         Decorative: the same picture is legible, unblurred, in the tile below
         it, so it is hidden from assistive tech.
       */}
-      {opened && (
-        <div
-          className={
-            "library__wash" + (heroArt ? "" : " library__wash--plain")
-          }
-          aria-hidden="true"
-        >
-          {heroArt && (
-            <img className="library__wash-img" src={heroArt} alt="" />
-          )}
+      {opened && heroArt && (
+        <div className="library__wash" aria-hidden="true">
+          <img className="library__wash-img" src={heroArt} alt="" />
         </div>
       )}
       <header className="library__head">
