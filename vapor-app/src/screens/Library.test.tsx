@@ -10,7 +10,7 @@
  * different cover, change their mind and tap again.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Library } from "./Library";
 import { useBackend } from "../test/setup";
@@ -696,10 +696,50 @@ describe("Library — an opened artist", () => {
     );
 
     // Both, most of their music first — and not a third line of genre for a
-    // genre only one track carries.
+    // genre only one track carries. Each is its own press through to the
+    // genre view, so it is two buttons joined by the separator, not one run
+    // of text.
+    const genreLine = (await screen.findByRole("button", { name: "Drum & Bass" }))
+      .closest("p");
+    expect(genreLine).toHaveTextContent("Drum & Bass · Neurofunk");
     expect(
-      await screen.findByText("Drum & Bass · Neurofunk"),
+      within(genreLine as HTMLElement).getByRole("button", { name: "Neurofunk" }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * An artist's genre is a press, not just a fact.
+   *
+   * It used to sit here mute — a place the Genres row alone could take you.
+   * Two ways to the same place is worse than one, so the line under an
+   * artist's name goes there too.
+   */
+  it("opens the genre view from under the artist's name", async () => {
+    const backend = useBackend({
+      artists: [
+        makeEntity({ name: "Noisia", subtitle: "2 albums", tracks: 2, lead: MACHINE_GUN }),
+      ],
+    });
+    backend.answers(
+      "library_view",
+      makePage([
+        {
+          header: "Split The Atom",
+          rows: [
+            makeRow({ href: MACHINE_GUN, title: "Machine Gun", artist: "Noisia", genres: ["Drum & Bass"] }),
+          ],
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    render(<Library />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /open the artist noisia/i }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Drum & Bass" }));
+
+    expect(await screen.findByRole("heading", { name: "Drum & Bass" })).toBeInTheDocument();
   });
 
   /// An artist whose tracks carry no genre says nothing, rather than reserving

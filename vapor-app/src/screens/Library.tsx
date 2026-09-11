@@ -335,7 +335,12 @@ export function Library({
         {/* Inside an album, an artist or a genre: the same page, narrowed. */}
         {opened ? (
           <div className="library__body">
-            <div className="library__opened-head">
+            <div
+              className={
+                "library__opened-head" +
+                (opened.kind === "artist" ? " library__opened-head--artist" : "")
+              }
+            >
               <div className="library__crumb">
                 <h2 className="library__opened">{opened.name}</h2>
                 {/*
@@ -370,6 +375,11 @@ export function Library({
                   said it nowhere a person looks for it. It belongs to the
                   artist, so it goes under their name — once.
 
+                  Each name is the same destination the Genres row on this
+                  screen gives it, not just a fact about who you are looking
+                  at — there was no reason to make it a second, mute way of
+                  saying what a press already says elsewhere.
+
                   Silent until the read lands, and silent for an artist whose
                   tracks carry no genre at all: an empty line reserving its own
                   height under the title reads as something that failed to
@@ -377,7 +387,20 @@ export function Library({
                 */}
                 {opened.kind === "artist" && artistGenres.length > 0 && (
                   <p className="library__opened-genres">
-                    {artistGenres.join(" · ")}
+                    {artistGenres.map((genre, i) => (
+                      <span key={genre}>
+                        {i > 0 && " · "}
+                        <button
+                          type="button"
+                          className="library__opened-genre"
+                          onClick={() =>
+                            setOpened({ kind: "genre", name: genre, lead: "", artist: "" })
+                          }
+                        >
+                          {genre}
+                        </button>
+                      </span>
+                    ))}
                   </p>
                 )}
               </div>
