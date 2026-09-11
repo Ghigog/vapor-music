@@ -61,21 +61,6 @@
   mask-image: linear-gradient(180deg, currentColor 52%, transparent 100%);
 }
 
-/*
- * The wash with no picture behind it.
- *
- * An artist with no portrait is the ordinary case, not a failure — nothing
- * looks one up unless a service has been asked — and drawing no wash at all
- * left the top of the window a shade apart from the page under it, with a
- * visible edge between them. This is the same material `--art-fill` gives the
- * placeholder sleeve, at window scale and low enough to read as ground rather
- * than as a panel: what an opened record with no cover has instead of colours.
- */
-.library__wash--plain {
-  background: var(--art-fill);
-  opacity: 0.55;
-}
-
 .library__wash-img {
   width: 100%;
   height: 100%;
