@@ -538,15 +538,35 @@
 /*
  * What an artist is filed under, in the same slot an album names its artist.
  *
- * Not pressable, unlike the line above it: an album's artist is a place to
- * go, and a genre here is a fact about who you are looking at. The Genres row
- * on the library screen is where a genre is a destination.
+ * Pressable, like the line above it: each name is the same destination the
+ * Genres row on this screen gives it, so there is one way to a genre, not a
+ * second mute copy of it sitting under an artist's name.
  */
 .library__opened-genres {
   margin: 0;
   font-family: var(--font-ui);
   font-size: var(--fs-body);
   color: var(--ink-2);
+}
+
+.library__opened-genre {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.library__opened-genre:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.library__opened-genre:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--r-hair);
 }
 
 /*
@@ -661,6 +681,30 @@
   flex-direction: column;
   gap: 14px;
   padding-bottom: 18px;
+}
+
+/*
+ * An artist's header, picture beside the name rather than under it.
+ *
+ * An album stays title-above-cover: the record is the subject, and the cover
+ * is what most of the screen is about. An artist's portrait is not the
+ * subject the same way — nobody opened this screen to look at a circle — so
+ * the name reads first, beside it, the way the narrow layout below already
+ * put both kinds of header for a different reason (room, not emphasis).
+ */
+.library__opened-head--artist {
+  flex-direction: row;
+  align-items: center;
+}
+
+.library__opened-head--artist .artistart {
+  order: -1;
+}
+
+/* A flex row item's default min-width is its content's, so a long name would
+   push the portrait out past the column rather than wrapping under it. */
+.library__opened-head--artist .library__crumb {
+  min-width: 0;
 }
 
 /* ---- Narrow layout ---------------------------------------------------
