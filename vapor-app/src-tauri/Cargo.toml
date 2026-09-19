@@ -32,7 +32,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # clock of the person reading it.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
-base64 = "0.22"
+base64 = "0.23"
 # keyring's platform backends are opt-in features, and with none of them
 # enabled version 3 silently falls back to a *mock* store: `set_password`
 # returns `Ok(())` and keeps the secret inside that one `Entry` object. The app
