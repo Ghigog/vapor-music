@@ -516,7 +516,9 @@ Decisions, not oversights. Each is recorded where it was made.
 - [x] ~~Version agreed across all three files.~~ 2.0.0 in `package.json`,
       `tauri.conf.json` and `Cargo.toml`; the `verify` job now gates it against
       the tag on every release.
-- [ ] Reconsider TD-56 — the LAN decision was made for a single trusted network.
+- [x] ~~Reconsider TD-56 — the LAN decision was made for a single trusted network.~~
+      Decided 2026-10-05: **LAN sync is out of the friends-and-family beta** —
+      left off rather than offered. See TD-56.
 - [x] ~~Run on a real iOS device, or state plainly that iOS is unsupported.~~
       Stated plainly 2026-08-24: **iOS is not in the first release.** See §4.
       This is the "state plainly" half, not the "run it" half — the run is still

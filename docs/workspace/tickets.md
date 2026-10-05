@@ -2640,6 +2640,10 @@ eavesdropping, not impersonation.
 given to anyone else. The fix does not change: TLS with the pairing PIN
 establishing a pre-shared key, via `rustls`, not a hand-rolled handshake.
 
+**Decided 2026-10-05: out of the friends-and-family beta.** That condition is
+now live — the build is going to friends — and this is the answer to it. Sync is
+left off and not offered, so nothing unencrypted crosses anyone else's network.
+
 **Waiting for:** Nothing. Closed as a decision.
 
 **Where:** SYNC-002
