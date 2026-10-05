@@ -383,7 +383,7 @@ Recorded so nobody assumes coverage that does not exist.
 | **macOS desktop** | The only genuinely exercised target. |
 | **Android** | Compiles, installs, launches. Barely used. Audio path unvalidated on device — TD-24. |
 | **iOS** | Never built, never run. `cpal` unvalidated there. TD-24. **Not in the first release** — decided 2026-08-24. There is no `gen/ios`, and the blocker is not the code: no route exists to put an iOS build on somebody else's phone without a paid Apple Developer account. Ad-hoc provisioning needs each device's UDID, TestFlight needs the same membership, and an unsigned `.ipa` needs every recipient to re-sign it with their own Apple ID every seven days. |
-| **Sync between devices** | Exercised only in-process. Nothing has crossed a real network. TD-55. |
+| **Sync between devices** | Exercised between machines, lightly. TD-55. |
 
 The sync gap has a specific shape worth restating: both sides are compiled from
 the same enum, so the one bug class the tests cannot catch is a **wire-format
