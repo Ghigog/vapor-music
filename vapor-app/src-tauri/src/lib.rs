@@ -3431,6 +3431,97 @@ pub(crate) fn file_is_gone(reason: &str) -> bool {
     reason.contains(webdav::MISSING_FILE)
 }
 
+/// Whether a failed load means *this track* cannot be played, as opposed to the
+/// session being unable to play anything at all.
+///
+/// The sibling of [`file_is_gone`], and the same kind of judgement: it decides
+/// what a sentence means, and therefore what to do about it. A decode failure
+/// is a fact about one file's bytes, so the set steps over it and carries on —
+/// a person is listening to a room, not to one record, and silence because an
+/// album has one broken track in it is the worst answer available. A refused
+/// credential, a dead audio device or a decoder thread that would not start is
+/// a fact about the session, and walking the library one silent track at a time
+/// is not a recovery.
+///
+/// The spellings are `vapor_dsp::decode::DecodeError`'s own `Display`
+/// prefixes. The whole-file path and the streaming path reach the same `open`,
+/// so a track refused at play time is refused in exactly these words — this is
+/// the sentence the reported bug carried, `unsupported: no decodable audio
+/// track`.
+pub(crate) fn track_is_unplayable(reason: &str) -> bool {
+    reason.starts_with("unsupported: ")
+        || reason.starts_with("decode: ")
+        || reason == "decoded to zero samples"
+}
+
+/// Step to the next track after one this session could not play, or stop.
+///
+/// The single place a "this track failed, not the session" verdict turns into
+/// an advance. It is shared by every way that can happen — a file that has
+/// moved, bytes the codec refuses, a stream that decodes to nothing, and a
+/// track already on the failure list — because the answer is the same for all
+/// four. Three of them used to stop the music instead, which is the defect this
+/// exists to close: one unplayable track is not a reason to end a set.
+///
+/// Bounded by [`MAX_MISSING_SKIPS`]. The counter is shared deliberately — it
+/// means "tracks in a row this session could not play" — because a server that
+/// has gone away and a folder of broken files answer that way for everything,
+/// and walking the whole queue to prove it again is noise.
+fn step_over_unplayable(shared: &Shared, app: &mut AppState, href: &str, predicate: &str) {
+    let name = app
+        .rows
+        .iter()
+        .find(|r| r.href == href)
+        .map(|r| r.title.clone())
+        .unwrap_or_else(|| href.to_string());
+
+    if app.missing_skips >= MAX_MISSING_SKIPS {
+        // Everything is failing this way, which is a server that has gone away
+        // or a shelf of broken files rather than one bad track. Walking the
+        // rest of the queue to discover that again is noise.
+        app.playing = None;
+        app.playback_error = Some(format!(
+            "Stopped after {MAX_MISSING_SKIPS} tracks in a row would not play. \
+             Re-scan your library in Settings."
+        ));
+        return;
+    }
+    app.missing_skips += 1;
+
+    // Seeded from the track that failed rather than from whatever played before
+    // it. Its tempo, key and energy are all still in the analysis and are what
+    // the next track should follow; only its bytes are unusable.
+    app.playing = Some(href.to_string());
+
+    // Where the next track comes from, in the order the ending of an ordinary
+    // track would ask: the queue first, and the DJ only once it has run out.
+    // That second case matters most here, because a Vibe session started from a
+    // single track has a queue one long, and "skip to the next one" would
+    // otherwise mean "stop".
+    let next = match app.queue.next(None).map(str::to_string) {
+        Some(next) => Some(next),
+        None if extend_set(app) => app.queue.next(None).map(str::to_string),
+        None => None,
+    };
+    app.playing = None;
+
+    match next {
+        Some(next) => {
+            begin_playback(shared, app, next);
+            // After the call, not before: `begin_playback` clears the error as
+            // it starts a track, so a note set first would be wiped by the very
+            // thing it is explaining.
+            app.playback_error = Some(format!("Skipped “{name}” — it {predicate}."));
+        }
+        None => {
+            app.playback_error = Some(format!(
+                "“{name}” {predicate}, and there is nothing after it. \
+                 Re-scan your library in Settings."
+            ));
+        }
+    }
+}
+
 pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) {
     // A new track is a new listen to earn. Whatever the previous one had
     // accrued is dropped rather than banked: it did not reach `CREDIT_AFTER`,
@@ -3451,13 +3542,16 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
         return;
     };
 
-    // Already known to be unusable, so say so now rather than after fetching it
-    // again and failing in the same way (TD-12). The record is cleared the
-    // moment a later analysis pass succeeds on it.
-    if let Some(reason) = app.failures.get(&href) {
-        app.playback_error = Some(format!("This track cannot be played: {reason}"));
-        app.playing = None;
+    // Already known to be unusable, so do not fetch it again only to fail in
+    // the same way (TD-12). The record is cleared the moment a later analysis
+    // pass succeeds on it, so this is a step over, not an exile.
+    //
+    // Stepped over rather than stopped on: everything in `failures` is about
+    // one track — an analysis that could not decode it, or a stream that
+    // decoded to nothing — which is why it behaves like a file that has moved.
+    if app.failures.contains_key(&href) {
         app.loading = false;
+        step_over_unplayable(shared, app, &href, "cannot be played");
         return;
     }
 
@@ -3561,13 +3655,14 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
             // It has to say so rather than present as a track that plays
             // silently for its whole duration.
             Ok(_) => {
-                app.playback_error = Some("That track contains no playable audio.".to_string());
-                app.playing = None;
                 // Learned the hard way; remember it so the next attempt is
                 // instant rather than another download (TD-12).
                 app.failures
                     .insert(href.clone(), "decodes to no audio".to_string());
                 let _ = app.save_failures();
+                // A fact about this file, so the set steps over it exactly as it
+                // does a file whose bytes the codec refuses.
+                step_over_unplayable(&shared, &mut app, &href, "contains no playable audio");
             }
             Err(_) if gone => {
                 // The library is describing a file that is not there any more.
@@ -3584,68 +3679,25 @@ pub(crate) fn begin_playback(shared: &Shared, app: &mut AppState, href: String) 
                 // put right. Remembered here; announced by the supervisor,
                 // which has the `AppHandle` this thread does not.
                 app.missing_files.insert(href.clone());
-
-                let name = app
-                    .rows
-                    .iter()
-                    .find(|r| r.href == href)
-                    .map(|r| r.title.clone())
-                    .unwrap_or_else(|| href.clone());
-
-                if app.missing_skips >= MAX_MISSING_SKIPS {
-                    // Everything is failing this way, which is a server that
-                    // has gone away rather than a file that moved. Walking the
-                    // rest of the queue to discover that again is noise.
-                    app.playing = None;
-                    app.playback_error = Some(format!(
-                        "Stopped after {MAX_MISSING_SKIPS} tracks in a row were \
-                         not where your library says they are. Re-scan your \
-                         library in Settings."
-                    ));
-                    return;
-                }
-                app.missing_skips += 1;
-
-                /*
-                 * Where the next track comes from, in the order the ending of
-                 * an ordinary track would ask.
-                 *
-                 * The queue first. If it has run out, the DJ is asked to extend
-                 * the set exactly as the supervisor does when a track finishes
-                 * — which is the case that matters most here, because a Vibe DJ
-                 * session started from one track has a queue one long, and
-                 * "skip to the next one" would otherwise mean "stop".
-                 *
-                 * `extend_set` plans from `app.playing`, so it is still the
-                 * track that failed at this point. That is the right seed: the
-                 * file has gone but its tempo, key and energy are all still on
-                 * file, and they are what the next track should follow.
-                 */
-                let next = match app.queue.next(None).map(str::to_string) {
-                    Some(next) => Some(next),
-                    None if extend_set(&mut app) => app.queue.next(None).map(str::to_string),
-                    None => None,
-                };
-                app.playing = None;
-
-                match next {
-                    Some(next) => {
-                        begin_playback(&shared, &mut app, next);
-                        // After the call, not before: `begin_playback` clears
-                        // the error as it starts a track, so a note set first
-                        // would be wiped by the very thing it is explaining.
-                        app.playback_error = Some(format!(
-                            "Skipped “{name}” — it is not where your \
-                             library says it is."
-                        ));
-                    }
-                    None => {
-                        app.playback_error = Some(format!(
-                            "“{name}” is not where your library says it is, and \
-                             there is nothing after it. Re-scan your library in Settings."
-                        ));
-                    }
-                }
+                step_over_unplayable(
+                    &shared,
+                    &mut app,
+                    &href,
+                    "is not where your library says it is",
+                );
+            }
+            // The ways a load can fail are told apart by what they are about. A
+            // file that is not there is `gone`, above. A track whose bytes will
+            // not decode is about *this* track, and the set steps over it — this
+            // is the branch the reported bug landed in, the DJ having chosen a
+            // track that answered `unsupported: no decodable audio track`.
+            // Everything else — a refused credential, a dead device, a decoder
+            // thread that would not start — is about the session, and stopping
+            // is the honest answer, because the next track fails the same way.
+            Err(e) if track_is_unplayable(&e) => {
+                app.failures.insert(href.clone(), e);
+                let _ = app.save_failures();
+                step_over_unplayable(&shared, &mut app, &href, "could not be decoded");
             }
             Err(e) => {
                 app.playback_error = Some(e);
@@ -7249,6 +7301,40 @@ mod tests {
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         (AppState::load(Store::new(dir.clone())), dir)
+    }
+
+    /// A decode failure names one track; a credential failure names the session.
+    ///
+    /// This is the whole of what `track_is_unplayable` decides, and it was the
+    /// difference between the DJ carrying on and the music stopping: a track
+    /// the codec refuses is stepped over, where a refused password is not.
+    #[test]
+    fn a_decode_failure_is_about_one_track_where_a_credential_is_about_the_session() {
+        // The exact sentence the reported bug carried.
+        assert!(track_is_unplayable("unsupported: no decodable audio track"));
+        assert!(track_is_unplayable(
+            "decode: the decoder failed on this file — it is malformed in a way the \
+             codec cannot handle"
+        ));
+        assert!(track_is_unplayable("decoded to zero samples"));
+
+        // Facts about the session, which must still stop rather than walk the
+        // library one silent track at a time.
+        assert!(!track_is_unplayable(
+            "the server refused the request — check the library username and password"
+        ));
+        assert!(!track_is_unplayable(
+            "server returned 500 Internal Server Error"
+        ));
+        assert!(!track_is_unplayable("The audio device stopped responding."));
+        assert!(!track_is_unplayable(
+            "could not start the decoder thread: nope"
+        ));
+
+        // The two classifiers answer about disjoint kinds of failure, so a
+        // moved file is never mistaken for a broken one.
+        assert!(file_is_gone(webdav::MISSING_FILE));
+        assert!(!track_is_unplayable(webdav::MISSING_FILE));
     }
 
     /// A stalled track is outstanding work; a condemned one is not.
