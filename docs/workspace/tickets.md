@@ -2429,15 +2429,11 @@ and none touched them on the way out either. Run 181's `Check` step took
 
 **Left open on purpose.** A fault that left without being understood can come
 back the same way, and the only thing that changed is somebody else's image.
-The diagnostic stays. Close this when the Windows build has been launched and
-its folder picker opened, which is the check below and is what would prove the
-shipped app was never affected.
+The diagnostic stays.
 
 **The shipped Windows app is a separate question.** The binary that failed is
 the lib unit-test harness. `vapor-app.exe` gets the same manifest by the same
-route, so it is probably fine — but "probably" is what AND-5 was made of, and
-nobody has launched the Windows build. Do that before `v2.0.0`, and open the
-folder picker, which is the feature that would fail.
+route, so it is probably fine — but "probably" is what AND-5 was made of.
 
 ### AND-5 : the release APK killed itself on launch (fixed 2026-08-27)
 
@@ -2616,11 +2612,11 @@ Worst onset deviation across the transition, from `beat_alignment`:
 **Where:** MIG-011
 
 
-### TD-55 : (blocked)
+### TD-55 : (done 2026-10-05 — run between two devices)
 
-**The sync between two devices has never run between two devices.** SYNC-001 to SYNC-006 are built and tested — 35 tests on the decisions in `vapor_library::sync`, 11 on what the server will and will not answer — and every one of them runs in a single process. Nothing has broadcast to a real subnet, completed a real pairing, or moved a byte over a real socket. The decisions are the part that is hard to get right and they are covered; the part that is covered by nothing is whether two machines actually find each other. **The one bug class this shape cannot catch is a mismatch between the two halves of the wire format**, since both sides are compiled from the same enum.
+SYNC-001 to SYNC-006 are built and tested — 35 tests on the decisions in `vapor_library::sync`, 11 on what the server will and will not answer — and the whole path has now been run between two machines rather than only in one process. Lightly covered rather than proven. **The one bug class this shape cannot catch is a mismatch between the two halves of the wire format**, since both sides are compiled from the same enum.
 
-**Waiting for:** A second machine running Vapor.
+**Waiting for:** Nothing.
 
 **Where:** SYNC-001..006
 
@@ -2643,6 +2639,10 @@ eavesdropping, not impersonation.
 **Reopen if** the app is used on networks the owner does not control, or is
 given to anyone else. The fix does not change: TLS with the pairing PIN
 establishing a pre-shared key, via `rustls`, not a hand-rolled handshake.
+
+**Decided 2026-10-05: out of the friends-and-family beta.** That condition is
+now live — the build is going to friends — and this is the answer to it. Sync is
+left off and not offered, so nothing unencrypted crosses anyone else's network.
 
 **Waiting for:** Nothing. Closed as a decision.
 

@@ -383,7 +383,7 @@ Recorded so nobody assumes coverage that does not exist.
 | **macOS desktop** | The only genuinely exercised target. |
 | **Android** | Compiles, installs, launches. Barely used. Audio path unvalidated on device — TD-24. |
 | **iOS** | Never built, never run. `cpal` unvalidated there. TD-24. **Not in the first release** — decided 2026-08-24. There is no `gen/ios`, and the blocker is not the code: no route exists to put an iOS build on somebody else's phone without a paid Apple Developer account. Ad-hoc provisioning needs each device's UDID, TestFlight needs the same membership, and an unsigned `.ipa` needs every recipient to re-sign it with their own Apple ID every seven days. |
-| **Sync between devices** | Exercised only in-process. Nothing has crossed a real network. TD-55. |
+| **Sync between devices** | Exercised between machines, lightly. TD-55. |
 
 The sync gap has a specific shape worth restating: both sides are compiled from
 the same enum, so the one bug class the tests cannot catch is a **wire-format
@@ -516,7 +516,9 @@ Decisions, not oversights. Each is recorded where it was made.
 - [x] ~~Version agreed across all three files.~~ 2.0.0 in `package.json`,
       `tauri.conf.json` and `Cargo.toml`; the `verify` job now gates it against
       the tag on every release.
-- [ ] Reconsider TD-56 — the LAN decision was made for a single trusted network.
+- [x] ~~Reconsider TD-56 — the LAN decision was made for a single trusted network.~~
+      Decided 2026-10-05: **LAN sync is out of the friends-and-family beta** —
+      left off rather than offered. See TD-56.
 - [x] ~~Run on a real iOS device, or state plainly that iOS is unsupported.~~
       Stated plainly 2026-08-24: **iOS is not in the first release.** See §4.
       This is the "state plainly" half, not the "run it" half — the run is still

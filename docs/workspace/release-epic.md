@@ -311,10 +311,10 @@ which is the same condition TD-55 and TD-24 are already waiting on.
   than waiting: every day the repository sat public with contributions
   unsettled was a day somebody could hand over copyright nobody could give
   back.
-* **Sync between two real devices (TD-55)** — Dylan will test it once the
-  feature work is done. Worth knowing it got harder rather than easier:
-  AUD-7 landed a key exchange, so **every existing pairing is now invalid** and
-  the first two-device test is also a first-pairing test.
+* **Sync between two real devices (TD-55)** — run between two machines on
+  2026-10-05. Worth knowing it got harder rather than easier: AUD-7 landed a key
+  exchange, so **every existing pairing was invalidated**, and that first run was
+  also a first-pairing run.
 
 ## Found on the way, and not in any ticket
 
