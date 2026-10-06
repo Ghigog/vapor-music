@@ -146,8 +146,17 @@ keeps `com.dylangrowcoot.vapormusic.**` whole and every `native` method name.
 
 `~/.keys/vapor-upload.jks`, `chmod 600`, **outside the repository** so it cannot
 be committed by accident. The backup that matters is a copy in a password
-manager as a file attachment — not iCloud Drive or Dropbox in the clear, and not
-the repo even when gitignored.
+manager — an attachment where the plan has them, and the same material as text
+in the item where it does not (the free tier in use has no attachments) — not
+iCloud Drive or Dropbox in the clear, and not the repo even when gitignored.
+
+**Backed up 2026-10-05.** The Proton Pass item *Vapor Music — release signing
+keys* carries the key material: the `.jks` as base64, the updater key verbatim, a
+sha256 beside each, and the steps that put them back. The raw files are also
+bundled at `~/.keys/vapor-keys-backup.zip`, `chmod 600`, which is the copy to
+drop into encrypted file storage. The passwords stay out of that bundle on
+purpose: the `.jks` is inert without them, so they belong in the manager and
+nowhere that travels with the file.
 
 The stakes depend entirely on how it ships, and this was overstated once already:
 
@@ -172,10 +181,11 @@ any of this:
 | Password | none — one fewer secret to hold in CI, and the file never leaves the machine or GitHub's secret store |
 | Public key | compiled into every desktop binary via `plugins.updater.pubkey` in `tauri.conf.json` |
 
-**Back it up the same way as the Android key** — a file attachment in a password
-manager. Losing it is the fatal kind: the public key is already inside every
-build that has gone out, and only the matching private key can sign an update
-those builds will accept. A new keypair means everyone reinstalls by hand.
+**Back it up the same way as the Android key** — a copy in a password manager,
+in whichever shape that manager allows (§1). Losing it is the fatal kind: the
+public key is already inside every build that has gone out, and only the
+matching private key can sign an update those builds will accept. A new keypair
+means everyone reinstalls by hand.
 
 **Resolved 2026-08-24.** On 2026-08-22 a session printed the private key into a
 transcript and rotated it, leaving the new pair at
@@ -215,8 +225,13 @@ and every tag since has produced a `.sig` beside each bundle — which is what
 proves the value decodes, as opposed to merely being non-empty.
 
 **The backup is the half no session can check.** The key file belongs in a
-password manager as a file attachment. The public half is compiled into every
-copy handed out, so a lost private half means everyone reinstalls by hand.
+password manager, as an attachment or as text — both shapes hold the same 348
+bytes. The public half is compiled into every copy handed out, so a lost private
+half means everyone reinstalls by hand.
+
+**Backed up 2026-10-05**, into the same Proton Pass item, verbatim: 348 bytes of
+text survives a paste where a binary would not, and the sha256 beside it is what
+proves a restore worked rather than merely happened.
 
 To release, CI needs the private key as a repository secret. The two names are
 Tauri's own, read by `tauri build` without further configuration:
@@ -476,19 +491,23 @@ Decisions, not oversights. Each is recorded where it was made.
       Done 2026-08-24. `v2.0.0-rc.7` published the first signed release APK on
       2026-08-25, and rc.10's measured 41 MB against the 591 MB of the debug
       build — so the size question is answered as well. See §1.
-- [ ] **Android keystore backed up** to a password manager as a file
-      attachment. Dylan's, and the one part no session can verify. §1 has the
-      stakes: with Play App Signing a lost key is a support ticket, without it
-      the app can never be updated again.
+- [ ] **Android keystore backed up.** The `.jks` went into a password manager on
+      2026-10-05 as base64 text, because the free tier has no attachments. What
+      that copy still needs is not the key but the store password, which the file
+      does not carry — so whether it is complete is Dylan's to say, which is the
+      one part no session can verify. §1 has the stakes: with Play App Signing a
+      lost key is a support ticket, without it the app can never be updated
+      again.
 - [x] ~~**A fresh updater keypair, and the public half into
       `tauri.conf.json`.**~~ Done 2026-08-24: `5BA4A4817CBE6728`, generated
       with an empty password after the rotated pair's could not be reproduced.
       `verify` fails the run if the 2026-08-22 key ever returns. See §1.
-- [ ] **Updater key backed up** — `~/.tauri/vapor-music-updater.key` copied into
-      a password manager as a file attachment. Costs nothing to lose before the
-      first build goes out and cannot be replaced after it, because the matching
-      public key is compiled into every copy already handed over. Dylan's to do;
-      no session can do it for him. See §1.
+- [x] ~~**Updater key backed up** — `~/.tauri/vapor-music-updater.key` copied into
+      a password manager.~~ Done 2026-10-05, as text in the item rather than an
+      attachment, with its sha256 beside it. This is the pair where the backup is
+      the whole story: the public half is compiled into every copy already handed
+      over, so the private half cannot be replaced after the first build goes
+      out. See §1.
 - [ ] Play App Signing enrolled, if Play.
 - [ ] Privacy declaration covering the lookup services; lookups still off by
       default.
