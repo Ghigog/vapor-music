@@ -81,7 +81,7 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 # for this target — declared here too because this crate uses them directly,
 # and an inherited dependency is one `cargo update` away from disappearing.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"
 
 # The same two, optional, for every other target.
