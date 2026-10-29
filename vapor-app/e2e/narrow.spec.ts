@@ -136,14 +136,17 @@ test.describe("The track table at 412px", () => {
     expect(clipped).toBe(false);
   });
 
-  test("shows the title and nothing else", async ({ page }) => {
+  test("shows the title, artist and album", async ({ page }) => {
     await boot(page);
     await openSongs(page);
 
-    await expect(page.locator(".songrow__title").first()).toBeVisible();
-    // Artist, tempo, key and the sleeve are all off the row; the sleeve never
-    // loaded a picture in the first place.
-    for (const gone of ["__artist", "__meta", "__art", "__info"]) {
+    // The sleeve, artist and album line sit beside the title. Tempo and key
+    // stay off the row (they fit no third sub-line), and so does the separate
+    // album cell and the liner-notes info.
+    for (const shown of ["__title", "__artist", "__album-inline", "__art"]) {
+      await expect(page.locator(`.songrow${shown}`).first()).toBeVisible();
+    }
+    for (const gone of ["__meta", "__album", "__info"]) {
       await expect(page.locator(`.songrow${gone}`).first()).toBeHidden();
     }
   });

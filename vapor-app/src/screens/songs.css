@@ -573,9 +573,11 @@
 
   .songrow__names {
     gap: 1px;
+    justify-content: center;
   }
 
   .songrow__title {
+    font-size: var(--fs-body);
     line-height: 20px;
   }
 
@@ -583,14 +585,6 @@
   .songrow__album-inline {
     font-size: var(--fs-sm);
     line-height: 16px;
-  }
-
-  .songrow__names {
-    justify-content: center;
-  }
-
-  .songrow__title {
-    font-size: var(--fs-body);
   }
 
   /*
