@@ -1068,8 +1068,11 @@ function SongRow({
         <span className="songrow__artist" title={artist}>
           {artist}
         </span>
-        {/* Shown only below the tablet breakpoint; the wide table has columns
-            for both of these and would be saying it twice. */}
+        {/* Album and tempo/key are shown only below the tablet breakpoint; the
+            wide table has columns for them and would be saying it twice. */}
+        <span className="songrow__album-inline" title={album}>
+          {album}
+        </span>
         {meta && <span className="songrow__meta">{meta}</span>}
       </div>
       <span className="songrow__album" title={album}>
