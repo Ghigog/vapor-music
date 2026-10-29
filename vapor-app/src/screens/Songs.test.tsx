@@ -70,6 +70,61 @@ describe("Songs — showing the library", () => {
     expect(document.querySelectorAll(".songrow__art-image").length).toBe(0);
   });
 
+  // jsdom evaluates no media queries, so these assert on what the row renders
+  // and on the class that the narrow layout shows it by, not on visibility.
+  it("puts the album in the names cell for the narrow layout, beside the artist", async () => {
+    useBackend({
+      covers: true,
+      rows: [
+        makeRow({
+          href: "/a.m4a",
+          title: "Minipops 67",
+          artist: "Aphex Twin",
+          album: "Geogaddi",
+        }),
+      ],
+    });
+    render(<Songs />);
+
+    const row = (await screen.findByText("Minipops 67")).closest(
+      "[role=option]",
+    ) as HTMLElement;
+    const names = row.querySelector(".songrow__names") as HTMLElement;
+
+    expect(within(names).getByText("Aphex Twin")).toBeInTheDocument();
+    const inline = names.querySelector(".songrow__album-inline");
+    expect(inline).toHaveTextContent("Geogaddi");
+    // The wide table's own album column is still there, so it is not lost.
+    expect(row.querySelector(".songrow__album")).toHaveTextContent("Geogaddi");
+    await waitFor(() =>
+      expect(row.querySelector(".songrow__art-image")).not.toBeNull(),
+    );
+  });
+
+  it("shows a dash for an unknown artist or album in the names cell", async () => {
+    useBackend({
+      rows: [
+        makeRow({
+          href: "/b.m4a",
+          title: "Mystery",
+          artistSource: "unknown",
+          albumSource: "unknown",
+        }),
+      ],
+    });
+    render(<Songs />);
+
+    const row = (await screen.findByText("Mystery")).closest(
+      "[role=option]",
+    ) as HTMLElement;
+    const names = row.querySelector(".songrow__names") as HTMLElement;
+
+    expect(names.querySelector(".songrow__artist")).toHaveTextContent("—");
+    expect(names.querySelector(".songrow__album-inline")).toHaveTextContent(
+      "—",
+    );
+  });
+
   it("lists what the backend returned", async () => {
     useBackend();
     render(<Songs />);

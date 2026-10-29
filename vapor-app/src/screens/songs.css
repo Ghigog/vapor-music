@@ -237,6 +237,7 @@
 .songrow__title,
 .songrow__artist,
 .songrow__album,
+.songrow__album-inline,
 .songrow__genre {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -255,13 +256,15 @@
 }
 
 .songrow__album,
+.songrow__album-inline,
 .songrow__genre {
   font-size: var(--fs-sm);
   color: var(--ink-3);
   min-width: 0;
 }
 
-.songrow__meta {
+.songrow__meta,
+.songrow__album-inline {
   display: none;
 }
 
@@ -503,11 +506,8 @@
  * useless at the one width where a list would have done.
  *
  * So below the tablet breakpoint there are three: pick, artwork, names. Album,
- * BPM and key leave the grid and the last two come back as a sub-line under the
- * artist, which is the row the design's own mobile study uses
- * ("Aeriform · 122 BPM · 9A"). Album is the one dropped outright: inside an
- * album view it repeats the heading, and in the flat table it is the least
- * asked-for of the four.
+ * BPM and key leave the grid; the album comes back as a sub-line under the
+ * artist inside the names cell. Tempo and key are left to the sheet.
  *
  * The cost, stated plainly: you cannot sort by album, BPM or key from a phone,
  * because those controls are the column headings and the columns are gone.
@@ -517,40 +517,26 @@
   .songs__cols,
   .songrow {
     /*
-     * Three columns still, with the artwork's collapsed to nothing.
+     * Three columns still, with the artwork's at full width.
      *
      * The header pins its names cell to grid column 3 with an inline
      * `grid-column`, which a stylesheet cannot outrank. Dropping to two
      * columns therefore did not move that cell down to 2 — it opened an
      * implicit fourth column and parked the headings against the right edge,
-     * far from the titles they sort. Keeping the column and giving it no width
-     * keeps both grids counting the same way.
+     * far from the titles they sort. Keeping the column keeps both grids
+     * counting the same way.
      */
-    grid-template-columns: 22px 0 minmax(0, 1fr);
+    grid-template-columns: 22px 48px minmax(0, 1fr);
     gap: 10px;
   }
 
   /*
-   * No artwork on a track row.
-   *
-   * It never loaded one: the row renders a gradient and no `<img>` at all, on
-   * every platform, so at 412px it was 48px of decoration standing where the
-   * title needed to be. The sleeve still belongs to an album, which has one
-   * of its own at the top of the opened view.
+   * The artwork keeps a real size here: 48px, as on the wide table, which
+   * leaves 9px above and below inside the row's 66px ROW_HEIGHT. It stays a
+   * grid item either way, so the names cell never slides into its column.
    */
   .songrow__art {
-    /*
-     * Zero-sized, not `display: none`.
-     *
-     * Removing it takes it out of the grid, and the row's children are
-     * auto-placed — so the names cell slid into the collapsed artwork column
-     * and the title rendered at zero width. It has to stay an item and simply
-     * occupy nothing.
-     */
-    visibility: hidden;
-    width: 0;
-    height: 0;
-    box-shadow: none;
+    visibility: visible;
   }
 
   /* The header pins its cells with an inline `grid-column`, so hiding the
@@ -573,15 +559,30 @@
   }
 
   /*
-   * The title, and nothing else.
-   *
-   * Artist, album, tempo and key are behind a press and hold — see
-   * `TrackSheet`. A row that tries to carry four more facts at this width ends
-   * up carrying none of them legibly, which is what "Car…" over "Ins…" was.
+   * Title, artist and album: three lines, with the row's 66px ROW_HEIGHT in
+   * mind. Tempo and key do not fit a third sub-line, so `.songrow__meta` stays
+   * hidden and they are behind a press and hold — see `TrackSheet`.
    */
+  .songrow__artist {
+    display: block;
+  }
+
+  .songrow__album-inline {
+    display: block;
+  }
+
+  .songrow__names {
+    gap: 1px;
+  }
+
+  .songrow__title {
+    line-height: 20px;
+  }
+
   .songrow__artist,
-  .songrow__meta {
-    display: none;
+  .songrow__album-inline {
+    font-size: var(--fs-sm);
+    line-height: 16px;
   }
 
   .songrow__names {
