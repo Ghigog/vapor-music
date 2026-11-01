@@ -194,7 +194,9 @@
   flex: none;
   max-width: 220px;
   display: flex;
-  align-items: baseline;
+  /* Centred, not baseline: in a fixed-height pill, baseline alignment packs
+     the name and count against the top edge. */
+  align-items: center;
   gap: 8px;
   height: 38px;
   padding: 0 15px;
